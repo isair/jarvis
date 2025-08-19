@@ -1,0 +1,23 @@
+---
+alwaysApply: true
+---
+
+# Project Specific Rules
+
+Data privacy comes first, always.
+
+## Architecture Decisions
+
+### Tool-Profile Separation of Concerns
+
+**Decision**: Separate "when/how to use tools" from "what to do after tools execute" into distinct layers.
+
+**Implementation**:
+- **Tool Descriptions** (`src/jarvis/tools.py`): Specify when and how tools should be used
+  - LOG_MEAL: "when the user mentions eating or drinking something specific"
+  - FETCH_MEALS: "when the user asks about their eating history"
+  - Include clear examples and usage patterns
+
+- **Profile System Prompts** (`src/jarvis/profiles.py`): Focus on post-tool behavior and personality
+  - Life profile: "After logging meals: Follow up with healthy suggestions..."
+  - Life profile: "After fetching meal history: Provide a brief recap with recommendations..."
