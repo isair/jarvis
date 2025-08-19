@@ -526,6 +526,9 @@ class VoiceListener(threading.Thread):
                     print(f"[debug] audio too short ({audio_duration:.2f}s < {min_duration}s), ignoring", file=sys.stderr)
                 except Exception:
                     pass
+            # Check if hot window should expire even when audio is filtered
+            if self._should_expire_hot_window():
+                self._expire_hot_window()
             return
         
         # Decode with Whisper (no internal VAD since we already segmented)
@@ -542,6 +545,9 @@ class VoiceListener(threading.Thread):
         
         # Basic empty text check
         if not text or not text.strip():
+            # Check if hot window should expire even when text is filtered
+            if self._should_expire_hot_window():
+                self._expire_hot_window()
             return
             
         self._handle_transcript(text)
