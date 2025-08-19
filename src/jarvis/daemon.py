@@ -426,6 +426,90 @@ class VoiceListener(threading.Thread):
         except Exception:
             return False
 
+    def _filter_noisy_segments(self, segments):
+        """Filter out Whisper segments that are likely noise based on confidence scores."""
+        min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.7)
+        filtered = []
+        
+        for seg in segments:
+            # Check if segment has confidence attribute (faster_whisper should have this)
+            if hasattr(seg, 'avg_logprob'):
+                # Convert log probability to confidence-like score (0-1 range)
+                # avg_logprob is typically negative, so we transform it
+                confidence = min(1.0, max(0.0, (seg.avg_logprob + 1.0)))
+                if confidence < min_confidence:
+                    if self.cfg.voice_debug:
+                        try:
+                            print(f"[debug] low confidence segment filtered: '{seg.text}' (conf: {confidence:.3f})", file=sys.stderr)
+                        except Exception:
+                            pass
+                    continue
+            elif hasattr(seg, 'no_speech_prob'):
+                # Alternative: use no_speech_prob (higher = more likely to be noise)
+                confidence = 1.0 - seg.no_speech_prob
+                if confidence < min_confidence:
+                    if self.cfg.voice_debug:
+                        try:
+                            print(f"[debug] low confidence segment filtered: '{seg.text}' (conf: {confidence:.3f})", file=sys.stderr)
+                        except Exception:
+                            pass
+                    continue
+            
+            filtered.append(seg)
+        
+        return filtered
+
+    def _is_valid_transcription(self, text: str) -> bool:
+        """Check if transcription is valid or likely noise."""
+        if not text or not text.strip():
+            return False
+        
+        # Check minimum word length
+        min_word_length = getattr(self.cfg, "whisper_min_word_length", 2)
+        words = text.strip().split()
+        
+        # Filter out single character words and very short words
+        valid_words = [w for w in words if len(w.strip(".,!?;:()[]{}\"'`-_/")) >= min_word_length]
+        
+        # Require at least one valid word
+        if not valid_words:
+            return False
+        
+        # Filter out common noise transcriptions that Whisper produces
+        noise_patterns = [
+            "you", "okay", "yeah", "oh", "um", "uh", "hmm", "mm", "ah", "eh", 
+            "he", "she", "it", "i", "a", "and", "the", "to", "of", "in", "is"
+        ]
+        
+        # If transcription only contains noise patterns, reject it
+        text_lower = text.lower().strip()
+        for pattern in noise_patterns:
+            if text_lower == pattern or text_lower == pattern + ".":
+                return False
+        
+        return True
+
+    def _check_query_timeout(self) -> None:
+        """Check if there's a pending query that has timed out and should be processed."""
+        if not self._is_collecting:
+            return
+        
+        current_time = time.time()
+        silence_timeout = current_time - self._last_voice_time >= float(self.cfg.voice_collect_seconds)
+        max_timeout = current_time - self._collect_start_time >= float(getattr(self.cfg, "voice_max_collect_seconds", 6.0))
+        
+        if silence_timeout or max_timeout:
+            final_query = self._pending_query.strip() or "what should i do next?"
+            if self.cfg.voice_debug:
+                try:
+                    timeout_type = "silence" if silence_timeout else "max"
+                    print(f"[debug] query collected ({timeout_type} timeout): '{final_query}'", file=sys.stderr)
+                except Exception:
+                    pass
+            _run_coach_on_text(self.db, self.cfg, self.tts, final_query)
+            self._pending_query = ""
+            self._is_collecting = False
+
     def _finalize_utterance(self) -> None:
         if np is None or not self._utterance_frames:
             # Reset state
@@ -444,13 +528,39 @@ class VoiceListener(threading.Thread):
         self._utterance_frames = []
         if audio is None or audio.size == 0:  # type: ignore[union-attr]
             return
+        
+        # Check audio duration to filter out very short segments (likely noise)
+        audio_duration = len(audio) / self._samplerate
+        min_duration = getattr(self.cfg, "whisper_min_audio_duration", 0.3)
+        if audio_duration < min_duration:
+            if self.cfg.voice_debug:
+                try:
+                    print(f"[debug] audio too short ({audio_duration:.2f}s < {min_duration}s), ignoring", file=sys.stderr)
+                except Exception:
+                    pass
+            return
+        
         # Decode with Whisper (no internal VAD since we already segmented)
         try:
             segments, _info = self.model.transcribe(audio, language="en", vad_filter=False)  # type: ignore[union-attr]
-            text = " ".join(seg.text for seg in segments).strip()
+            # Filter segments by confidence and apply noise filtering
+            filtered_segments = self._filter_noisy_segments(segments)
+            text = " ".join(seg.text for seg in filtered_segments).strip()
         except TypeError:
             segments, _info = self.model.transcribe(audio, language="en")  # type: ignore[union-attr]
-            text = " ".join(seg.text for seg in segments).strip()
+            # Filter segments by confidence and apply noise filtering
+            filtered_segments = self._filter_noisy_segments(segments)
+            text = " ".join(seg.text for seg in filtered_segments).strip()
+        
+        # Additional text-level filtering
+        if not self._is_valid_transcription(text):
+            if self.cfg.voice_debug:
+                try:
+                    print(f"[debug] transcription filtered out: '{text}'", file=sys.stderr)
+                except Exception:
+                    pass
+            return
+            
         self._handle_transcript(text)
 
     def _handle_transcript(self, text: str) -> None:
@@ -536,6 +646,8 @@ class VoiceListener(threading.Thread):
             fragment = text_lower
             for alias in aliases:
                 fragment = fragment.replace(alias, " ")
+            # Clean up punctuation that might be left after wake word removal
+            fragment = fragment.strip().lstrip(",.!?;:")
             fragment = fragment.strip()
             if fragment:
                 self._pending_query = (self._pending_query + " " + fragment).strip()
@@ -549,12 +661,7 @@ class VoiceListener(threading.Thread):
             # Accept even single words to avoid dropping short intents
             self._pending_query = (self._pending_query + " " + text_lower).strip()
             self._last_voice_time = time.time()
-            # If silence window elapsed, or we hit max window, process now
-            if ((time.time() - self._last_voice_time) >= float(self.cfg.voice_collect_seconds) or (time.time() - self._collect_start_time) >= float(getattr(self.cfg, "voice_max_collect_seconds", 6.0))):
-                final_query = self._pending_query.strip() or "what should i do next?"
-                _run_coach_on_text(self.db, self.cfg, self.tts, final_query)
-                self._pending_query = ""
-                self._is_collecting = False
+            # Note: timeout check is now handled in _check_query_timeout() called from audio loop
 
     def run(self) -> None:
         if WhisperModel is None or sd is None:
@@ -679,6 +786,9 @@ class VoiceListener(threading.Thread):
                             if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= max_utt_frames:
                                 self._finalize_utterance()
                                 self._pre_roll.clear()
+                        
+                        # Check for pending query timeout even when there's no voice activity
+                        self._check_query_timeout()
                 # Keep any tail smaller than a full frame by pushing it back at next callback via pre-roll
                 if offset < total:
                     tail = mono[offset:]

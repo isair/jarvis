@@ -54,6 +54,9 @@ class Settings:
     location_ip_address: str | None
     location_auto_detect: bool
     web_search_enabled: bool
+    whisper_min_confidence: float
+    whisper_min_audio_duration: float
+    whisper_min_word_length: int
     
 
 
@@ -135,6 +138,9 @@ def get_default_config() -> Dict[str, Any]:
         "location_ip_address": None,
         "location_auto_detect": True,
         "web_search_enabled": True,
+        "whisper_min_confidence": 0.3,
+        "whisper_min_audio_duration": 0.15,
+        "whisper_min_word_length": 1,
     }
 
 
@@ -218,6 +224,9 @@ def load_settings() -> Settings:
     location_ip_address = None if location_ip_address_val in (None, "", "null") else str(location_ip_address_val)
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
+    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.7))
+    whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
+    whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
 
     return Settings(
         db_path=db_path,
@@ -260,4 +269,7 @@ def load_settings() -> Settings:
         location_ip_address=location_ip_address,
         location_auto_detect=location_auto_detect,
         web_search_enabled=web_search_enabled,
+        whisper_min_confidence=whisper_min_confidence,
+        whisper_min_audio_duration=whisper_min_audio_duration,
+        whisper_min_word_length=whisper_min_word_length,
     )

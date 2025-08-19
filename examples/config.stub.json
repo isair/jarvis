@@ -63,5 +63,8 @@
   "location_cache_minutes": 60,
   "location_ip_address": null,
   "location_auto_detect": true,
-  "web_search_enabled": true
+  "web_search_enabled": true,
+  "whisper_min_confidence": 0.3,
+  "whisper_min_audio_duration": 0.15,
+  "whisper_min_word_length": 1
 }
