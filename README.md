@@ -38,8 +38,6 @@ An offline, completely private AI assistant with unlimited memory that understan
 - **Hot window mode**: After responding, stays active for follow-ups without repeating the wake word.
 - **Interruptible responses**: You can shush it or tell it to shut up and it will comply, no hard feelings.
 
----
-
 ## Quick Start
 
 ### Prerequisites
@@ -93,9 +91,6 @@ scripts\run_windows.bat
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
-
----
-
 ## Privacy, storage, and search
 - **Redaction first**: Before saving or using any text, Jarvis replaces emails, tokens, cards, JWTs, 6‑digit OTPs, and long hex with placeholders.
 - **Intelligent search architecture**: Triple-layered retrieval combines SQLite FTS5 (full-text), vector embeddings (semantic), and fuzzy matching (typo-tolerant) for superior context discovery across both recent dialogue and historical conversations.
@@ -106,8 +101,6 @@ If you install `sqlite-vss`, set `sqlite_vss_path` in your JSON config to the ab
 { "sqlite_vss_path": "/absolute/path/to/vss0.dylib" }
 ```
 Without it, regular full‑text search still works well.
-
----
 
 ## Location awareness (optional)
 
@@ -181,8 +174,6 @@ python scripts/setup_geolocation.py
 
 **Note**: If automatic detection fails, you can manually set `location_ip_address` by visiting https://whatismyipaddress.com
 
----
-
 ## Configuration (advanced)
 Most settings now come from a JSON file. Environment variables are kept only for debug toggles.
 
@@ -244,8 +235,6 @@ Example `config.json`:
 - `JARVIS_CONFIG_PATH` — absolute path to JSON config
 - `JARVIS_VOICE_DEBUG` — `1` to print voice debug info
 
----
-
 ## What's inside (for developers)
 - Python core: deterministic redaction, SQLite (FTS5 + optional VSS), embeddings, hybrid retrieval, triggers, multi‑profile coach, voice wake word, and TTS.
 - Tools: one‑shot interactive screenshot OCR (macOS `screencapture` + Tesseract) and optional nutrition logging.
@@ -262,8 +251,6 @@ This updates configuration examples and provides updated JSON for the README.
 - Keep prompts focused for speed.
 - Chunk size ~500–900 chars for embedding.
 - Start with `gpt-oss:20b`; adjust model/context to fit your machine.
-
----
 
 ## Licensing
 
@@ -285,8 +272,6 @@ Commercial use requires a separate license. This includes:
 For commercial licensing, please contact: [baris@writeme.com]
 
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
-
----
 
 ## Roadmap
 - Cross-platform desktop UI.
