@@ -592,22 +592,54 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
                         links = soup.find_all('a', href=True)
                         result_count = 0
                         
-                        for link in links:
+                        if getattr(cfg, "voice_debug", False):
+                            try:
+                                print(f"[debug] WEB_SEARCH: Found {len(links)} total links on DDG page", file=sys.stderr)
+                            except Exception:
+                                pass
+                        
+                        for i, link in enumerate(links):
                             if result_count >= 5:  # Limit to top 5 results
                                 break
                                 
                             href = link.get('href', '')
                             title = link.get_text().strip()
                             
+                            # Debug: show first few links for troubleshooting
+                            if getattr(cfg, "voice_debug", False) and i < 10:
+                                try:
+                                    print(f"[debug] WEB_SEARCH: Link {i}: href='{href[:50]}...', title='{title[:50]}...'", file=sys.stderr)
+                                except Exception:
+                                    pass
+                            
+                            # Extract actual URL from DuckDuckGo redirect if needed
+                            actual_url = href
+                            if href.startswith('//duckduckgo.com/l/') and 'uddg=' in href:
+                                try:
+                                    import urllib.parse
+                                    # Extract the actual URL from the uddg parameter
+                                    parsed = urllib.parse.urlparse(href)
+                                    query_params = urllib.parse.parse_qs(parsed.query)
+                                    if 'uddg' in query_params:
+                                        actual_url = urllib.parse.unquote(query_params['uddg'][0])
+                                except Exception:
+                                    actual_url = href
+                            
                             # Filter for actual result links (not navigation)
-                            if (href.startswith('http') and 
+                            if ((href.startswith('http') or href.startswith('//duckduckgo.com/l/')) and 
                                 len(title) > 10 and
                                 not any(skip in title.lower() for skip in ['settings', 'privacy', 'about', 'help'])):
                                 
                                 result_count += 1
                                 search_results.append(f"{result_count}. **{title}**")
-                                search_results.append(f"   Link: {href}")
+                                search_results.append(f"   Link: {actual_url}")
                                 search_results.append("")
+                                
+                                if getattr(cfg, "voice_debug", False):
+                                    try:
+                                        print(f"[debug] WEB_SEARCH: Accepted result {result_count}: '{title[:50]}...'", file=sys.stderr)
+                                    except Exception:
+                                        pass
                         
                         if getattr(cfg, "voice_debug", False):
                             try:
@@ -948,60 +980,46 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
                                     content_summary += f"Source {i+1}: {source_content}\n\n"
                             
                             if content_summary:
-                                # Create a natural synthesis based on the content
-                                synthesized_content = f"Based on my web search for '{search_query}', here's what I found:\n\n"
+                                if getattr(cfg, "voice_debug", False):
+                                    try:
+                                        print(f"[debug] WEB_SEARCH: using LLM to synthesize response from {len(fetched_content)} sources", file=sys.stderr)
+                                    except Exception:
+                                        pass
                                 
-                                # Simple content analysis and extraction
-                                combined_text = content_summary.lower()
+                                # Let the LLM synthesize the response naturally
+                                synthesis_prompt = f"""Based on the following web search results for "{search_query}", provide a helpful and accurate response to the user.
+
+Web content found:
+{content_summary[:3000]}
+
+User's original question/context: {original_prompt}
+
+Please synthesize this information into a clear, helpful response. Focus on directly answering what the user asked for."""
                                 
-                                # Weather-specific extraction
-                                if any(word in search_query.lower() for word in ['weather', 'temperature', 'forecast', 'climate']):
-                                    import re
+                                try:
+                                    from .coach import ask_coach
+                                    synthesized_response = ask_coach(
+                                        cfg.ollama_base_url, 
+                                        cfg.ollama_chat_model, 
+                                        "You are a helpful assistant that synthesizes web search results into clear, accurate responses.", 
+                                        synthesis_prompt,
+                                        include_location=False
+                                    )
                                     
-                                    # Look for temperature
-                                    temp_patterns = [
-                                        r'(\d+)\s*[°]?\s*[cf]\b',
-                                        r'temperature[:\s]*(\d+)',
-                                        r'(\d+)\s*degrees'
-                                    ]
-                                    
-                                    temps = []
-                                    for pattern in temp_patterns:
-                                        temps.extend(re.findall(pattern, combined_text))
-                                    
-                                    if temps:
-                                        synthesized_content += f"The temperature is around {temps[0]}°. "
-                                    
-                                    # Look for conditions
-                                    weather_conditions = []
-                                    condition_words = [
-                                        'sunny', 'clear', 'cloudy', 'overcast', 'partly cloudy',
-                                        'rainy', 'rain', 'drizzle', 'showers',
-                                        'snowy', 'snow', 'windy', 'foggy', 'humid'
-                                    ]
-                                    
-                                    for condition in condition_words:
-                                        if condition in combined_text:
-                                            weather_conditions.append(condition)
-                                    
-                                    if weather_conditions:
-                                        unique_conditions = list(set(weather_conditions[:3]))  # Remove duplicates, limit to 3
-                                        synthesized_content += f"Current conditions include {', '.join(unique_conditions)}. "
-                                
-                                # For general topics, extract key facts
-                                else:
-                                    # Take the first substantial paragraph from the first source
-                                    source_lines = content_summary.split('\n')
-                                    for line in source_lines:
-                                        line = line.strip()
-                                        if len(line) > 100 and not line.startswith('Source'):
-                                            # Clean up the line and add it
-                                            clean_line = re.sub(r'\s+', ' ', line)  # Normalize whitespace
-                                            synthesized_content += f"{clean_line[:400]}..."
-                                            break
-                                
-                                # Add a note about the sources being web-based for transparency
-                                synthesized_content += f"\n\n(Information gathered from web sources via search)"
+                                    if synthesized_response and synthesized_response.strip():
+                                        synthesized_content = synthesized_response.strip()
+                                    else:
+                                        # Fallback to raw content if LLM synthesis fails
+                                        synthesized_content = f"Based on my web search for '{search_query}', here's what I found:\n\n{content_summary[:1000]}..."
+                                        
+                                except Exception as llm_error:
+                                    if getattr(cfg, "voice_debug", False):
+                                        try:
+                                            print(f"[debug] WEB_SEARCH: LLM synthesis failed: {llm_error}", file=sys.stderr)
+                                        except Exception:
+                                            pass
+                                    # Fallback to raw content
+                                    synthesized_content = f"Based on my web search for '{search_query}', here's what I found:\n\n{content_summary[:1000]}..."
                                 
                                 if getattr(cfg, "voice_debug", False):
                                     try:
