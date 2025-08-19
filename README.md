@@ -40,40 +40,58 @@ An offline, completely private AI assistant with unlimited memory that understan
 
 ---
 
-## Quick start (macOS)
+## Quick Start
 
-Prerequisites:
-- Python 3.11+
-- Ollama running locally
+### Prerequisites
+- **Python 3.11+**
+- **macOS, Linux, or Windows**
 
-1) Install dependencies
+### Step 1: Install Ollama
+Download and install Ollama from [https://ollama.com/download](https://ollama.com/download)
+
+After installation, verify it's running:
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+ollama --version
 ```
 
-2) Try the demo (simulates a test failure)
-```bash
-bash scripts/run_stub.sh
-```
+### Step 2: Download AI Models
+Install the recommended models for Jarvis:
 
-3) Always‑on mode with voice
-```bash
-source .venv/bin/activate
-python -m jarvis.daemon
-```
-Say “jarvis …” and speak your request. Replies are spoken via the OS (macOS `say`, Windows SAPI, or Linux `spd-say`/`espeak`). Microphone access may be required.
-
-### Models for Ollama
-- **Chat model (recommended)**
+**Chat model (required):**
 ```bash
 ollama pull gpt-oss:20b
 ```
-- **Embedding model (for better memory search)**
+
+**Embedding model (recommended for better memory search):**
 ```bash
-ollama pull nomic-embed-text    # or: mxbai-embed-large, bge-m3
+ollama pull nomic-embed-text
 ```
+
+### Step 3: Install and Run Jarvis
+Clone the project and run the setup script for your platform:
+
+**macOS:**
+```bash
+git clone git@github.com:isair/jarvis.git
+cd jarvis
+bash scripts/run_macos.sh
+```
+
+**Linux:**
+```bash
+git clone git@github.com:isair/jarvis.git
+cd jarvis
+bash scripts/run_linux.sh
+```
+
+**Windows:**
+```cmd
+git clone git@github.com:isair/jarvis.git
+cd jarvis
+scripts\run_windows.bat
+```
+
+The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
 
 ---
@@ -173,7 +191,7 @@ Jarvis looks for a JSON config at:
 - `JARVIS_CONFIG_PATH` if set, otherwise
 - `~/.config/jarvis/config.json` (or `$XDG_CONFIG_HOME/jarvis/config.json`)
 
-Example `config.json` (see `examples/config.stub.json` for complete example):
+Example `config.json`:
 ```json
 {
   "db_path": "~/.local/share/jarvis/jarvis.db",
@@ -231,14 +249,14 @@ Example `config.json` (see `examples/config.stub.json` for complete example):
 ## What's inside (for developers)
 - Python core: deterministic redaction, SQLite (FTS5 + optional VSS), embeddings, hybrid retrieval, triggers, multi‑profile coach, voice wake word, and TTS.
 - Tools: one‑shot interactive screenshot OCR (macOS `screencapture` + Tesseract) and optional nutrition logging.
-- Scripts: `scripts/run_stub.sh` (demo) and `scripts/run_macos.sh` (daemon + mac helper scaffold).
+- Scripts: Platform-specific launchers (`run_macos.sh`, `run_linux.sh`, `run_windows.bat`) that handle setup and start the daemon.
 
 ### Maintaining configuration examples
 Configuration defaults are defined once in `src/jarvis/config.py`. To update example files after changing defaults:
 ```bash
 python scripts/generate_config_examples.py
 ```
-This regenerates `examples/config.stub.json` and provides updated JSON for the README.
+This updates configuration examples and provides updated JSON for the README.
 
 ### Notes on performance
 - Keep prompts focused for speed.
