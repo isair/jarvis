@@ -109,10 +109,10 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
     "WEB_SEARCH": ToolSpec(
         name="WEB_SEARCH",
         summary=(
-            "Search the web for information using privacy-friendly sources (Wikipedia and DuckDuckGo). "
-            "Use this for: educational topics, factual information, current news, weather, "
-            "stock prices, sports scores, recent events, breaking news, or any question requiring "
-            "real-time/recent information that may not be in your knowledge base. "
+            "Search the web using DuckDuckGo to find current information on any topic. "
+            "Use this for: educational topics, current news, weather, stock prices, sports scores, "
+            "recent events, breaking news, or any question requiring information that may not be in your knowledge base. "
+            "Automatically fetches and synthesizes content from the most relevant results. "
             "Note: This feature can be disabled in configuration if desired."
         ),
         usage_line="TOOL:WEB_SEARCH {json}",
@@ -120,7 +120,7 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "JSON with required field: search_query (the search terms to use). "
             "Make search queries specific and include relevant keywords for better results."
         ),
-        example="TOOL:WEB_SEARCH {\"search_query\":\"artificial intelligence trends 2024\"}",
+        example="TOOL:WEB_SEARCH {\"search_query\":\"weather London today\"}",
     ),
 }
 
@@ -544,12 +544,12 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
                 try:
                     ddg_instant_url = "https://api.duckduckgo.com/"
                     ddg_instant_params = {
-                        "q": search_query,
-                        "format": "json",
-                        "no_html": "1",
-                        "skip_disambig": "1"
-                    }
-                    
+                    "q": search_query,
+                    "format": "json",
+                    "no_html": "1",
+                    "skip_disambig": "1"
+                }
+                
                     instant_response = requests.get(ddg_instant_url, params=ddg_instant_params, timeout=5)
                     instant_response.raise_for_status()
                     instant_data = instant_response.json()
@@ -568,110 +568,483 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
                 except Exception:
                     pass  # Continue to web search if instant answers fail
                 
-                # Try multiple search methods for comprehensive results
+                # Use DuckDuckGo search for everything - it includes Wikipedia and other sources
                 search_results = []
-                
-                # Method 1: Try Wikipedia search for educational/factual queries
-                wikipedia_results = []
                 try:
                     import urllib.parse
+                    from bs4 import BeautifulSoup
                     
                     encoded_query = urllib.parse.quote_plus(search_query)
                     
-                    # Try Wikipedia search first
-                    wiki_search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
+                    # Try DuckDuckGo lite search for reliable results
+                    ddg_lite_url = f"https://lite.duckduckgo.com/lite/?q={encoded_query}"
                     
-                    wiki_response = requests.get(wiki_search_url, timeout=5)
-                    if wiki_response.status_code == 200:
-                        wiki_data = wiki_response.json()
-                        search_results_data = wiki_data.get('query', {}).get('search', [])
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                    
+                    ddg_response = requests.get(ddg_lite_url, headers=headers, timeout=10)
+                    
+                    if ddg_response.status_code == 200:
+                        soup = BeautifulSoup(ddg_response.content, 'html.parser')
                         
-                        for i, result in enumerate(search_results_data):
-                            title = result.get('title', '')
-                            snippet = result.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')
-                            page_id = result.get('pageid', '')
+                        # Extract search results from DuckDuckGo lite
+                        links = soup.find_all('a', href=True)
+                        result_count = 0
+                        
+                        for link in links:
+                            if result_count >= 5:  # Limit to top 5 results
+                                break
+                                
+                            href = link.get('href', '')
+                            title = link.get_text().strip()
                             
-                            if title and snippet:
-                                wikipedia_results.append(f"{i+1}. **{title}** (Wikipedia)")
-                                wikipedia_results.append(f"   {snippet}...")
-                                wikipedia_results.append(f"   Link: https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}")
-                                wikipedia_results.append("")
+                            # Filter for actual result links (not navigation)
+                            if (href.startswith('http') and 
+                                len(title) > 10 and
+                                not any(skip in title.lower() for skip in ['settings', 'privacy', 'about', 'help'])):
+                                
+                                result_count += 1
+                                search_results.append(f"{result_count}. **{title}**")
+                                search_results.append(f"   Link: {href}")
+                                search_results.append("")
                         
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] WEB_SEARCH: Wikipedia found {len(search_results_data)} results", file=sys.stderr)
+                                print(f"[debug] WEB_SEARCH: DuckDuckGo found {result_count} results", file=sys.stderr)
+                            except Exception:
+                                pass
+                    else:
+                        if getattr(cfg, "voice_debug", False):
+                            try:
+                                print(f"[debug] WEB_SEARCH: DuckDuckGo returned status {ddg_response.status_code}", file=sys.stderr)
                             except Exception:
                                 pass
                 
-                except Exception as wiki_error:
+                except ImportError:
                     if getattr(cfg, "voice_debug", False):
                         try:
-                            print(f"[debug] WEB_SEARCH: Wikipedia search failed: {wiki_error}", file=sys.stderr)
+                            print(f"[debug] WEB_SEARCH: BeautifulSoup not available", file=sys.stderr)
+                        except Exception:
+                            pass
+                except Exception as ddg_error:
+                    if getattr(cfg, "voice_debug", False):
+                        try:
+                            print(f"[debug] WEB_SEARCH: DuckDuckGo search failed: {ddg_error}", file=sys.stderr)
                         except Exception:
                             pass
                 
-                # Method 2: Try a simple web search API alternative (JSONPlaceholder-style)
-                # This is a fallback for when we need current/news information
-                web_search_results = []
-                if not wikipedia_results or any(word in search_query.lower() for word in ['news', 'latest', 'current', 'today', 'recent', 'weather']):
-                    try:
-                        # For current information, provide helpful guidance
-                        current_info_keywords = ['weather', 'news', 'stock', 'price', 'today', 'latest', 'current', 'recent']
-                        if any(keyword in search_query.lower() for keyword in current_info_keywords):
-                            web_search_results.append("🔍 **Current Information Search**")
-                            web_search_results.append(f"   For real-time information about '{search_query}', I recommend:")
-                            web_search_results.append("")
-                            
-                            if 'weather' in search_query.lower():
-                                web_search_results.append("   • Check weather.com or your local weather app")
-                                web_search_results.append("   • Search 'weather [your location]' on any search engine")
-                            elif any(word in search_query.lower() for word in ['news', 'latest', 'current']):
-                                web_search_results.append("   • Visit news.google.com for latest news")
-                                web_search_results.append("   • Check reliable news sources like BBC, Reuters, or AP News")
-                            elif any(word in search_query.lower() for word in ['stock', 'price']):
-                                web_search_results.append("   • Visit finance.yahoo.com or google finance")
-                                web_search_results.append("   • Check your brokerage app for real-time prices")
-                            else:
-                                web_search_results.append(f"   • Search '{search_query}' on Google, DuckDuckGo, or Bing")
-                                web_search_results.append("   • Try specific websites related to your query")
-                            
-                            web_search_results.append("")
-                            web_search_results.append("   Note: Many search engines block automated requests, so manual searching")
-                            web_search_results.append("   may be more effective for current information.")
-                            web_search_results.append("")
+                # If DuckDuckGo search failed, fall back to Wikipedia for reliable content
+                if not search_results:
+                    if getattr(cfg, "voice_debug", False):
+                        try:
+                            print(f"[debug] WEB_SEARCH: DuckDuckGo blocked, trying Wikipedia fallback", file=sys.stderr)
+                        except Exception:
+                            pass
                     
-                    except Exception as web_error:
+                    try:
+                        # Wikipedia fallback for when search engines block us
+                        wiki_search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
+                        
+                        wiki_response = requests.get(wiki_search_url, timeout=5)
+                        if wiki_response.status_code == 200:
+                            wiki_data = wiki_response.json()
+                            search_results_data = wiki_data.get('query', {}).get('search', [])
+                            
+                            for i, result in enumerate(search_results_data):
+                                title = result.get('title', '')
+                                snippet = result.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')
+                                
+                                if title and snippet:
+                                    search_results.append(f"{i+1}. **{title}** (Wikipedia)")
+                                    search_results.append(f"   {snippet}...")
+                                    search_results.append(f"   Link: https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}")
+                                    search_results.append("")
+                            
+                            if getattr(cfg, "voice_debug", False):
+                                try:
+                                    print(f"[debug] WEB_SEARCH: Wikipedia fallback found {len(search_results_data)} results", file=sys.stderr)
+                                except Exception:
+                                    pass
+                    
+                    except Exception as wiki_error:
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] WEB_SEARCH: Web search guidance failed: {web_error}", file=sys.stderr)
+                                print(f"[debug] WEB_SEARCH: Wikipedia fallback failed: {wiki_error}", file=sys.stderr)
                             except Exception:
                                 pass
                 
-                # Combine all results
-                if wikipedia_results:
-                    search_results.extend(wikipedia_results)
+                # If still no results, provide helpful guidance
+                if not search_results:
+                    search_results.append("🔍 **Search Information**")
+                    search_results.append(f"   I wasn't able to find current results for '{search_query}'.")
+                    search_results.append("   This could be due to:")
+                    search_results.append("   • Search engines blocking automated requests")
+                    search_results.append("   • Network limitations")
+                    search_results.append("   • The topic requiring very recent information")
+                    search_results.append("")
+                    search_results.append("   For current information, you might try:")
+                    search_results.append("   • Searching manually on DuckDuckGo, Google, or Bing")
+                    search_results.append("   • Visiting specific websites related to your query")
+                    search_results.append("")
                 
-                if web_search_results:
-                    if wikipedia_results:
-                        search_results.append("=" * 40)
-                        search_results.append("")
-                    search_results.extend(web_search_results)
+                # Try to fetch and synthesize content from top results for a natural response
+                synthesized_content = None
+                try:
+                    if search_results and any("**" in result for result in search_results[:10]):  # Has actual results
+                        # Extract URLs from search results
+                        urls_to_fetch = []
+                        for line in search_results:
+                            if line.strip().startswith("Link: https://"):
+                                url = line.replace("Link: ", "").strip()
+                                if url.startswith("https://") and len(urls_to_fetch) < 2:  # Limit to top 2 URLs
+                                    urls_to_fetch.append(url)
+                        
+                        # Fetch content from top URLs
+                        fetched_content = []
+                        if urls_to_fetch:
+                            from bs4 import BeautifulSoup
+                            
+                            for url in urls_to_fetch:
+                                try:
+                                    if getattr(cfg, "voice_debug", False):
+                                        try:
+                                            print(f"[debug] WEB_SEARCH: fetching content from {url}", file=sys.stderr)
+                                        except Exception:
+                                            pass
+                                    
+                                    headers = {
+                                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                    }
+                                    
+                                    # Try intelligent content extraction with markdown conversion
+                                    content_text = None
+                                    
+                                    # Method 1: Try html2text for clean markdown conversion
+                                    try:
+                                        import html2text
+                                        
+                                        content_response = requests.get(url, headers=headers, timeout=8)
+                                        if content_response.status_code == 200:
+                                            # Configure html2text for clean output
+                                            h = html2text.HTML2Text()
+                                            h.ignore_links = False
+                                            h.ignore_images = True
+                                            h.ignore_emphasis = False
+                                            h.body_width = 0  # No line wrapping
+                                            h.skip_internal_links = True
+                                            
+                                            # Convert HTML to markdown
+                                            markdown_content = h.handle(content_response.text)
+                                            
+                                            # Clean up the markdown
+                                            lines = markdown_content.split('\n')
+                                            cleaned_lines = []
+                                            
+                                            for line in lines:
+                                                line = line.strip()
+                                                # Skip navigation, ads, and other unwanted content
+                                                if (len(line) > 15 and 
+                                                    not line.lower().startswith(('cookie', 'privacy', 'subscribe', 'advertisement', 'menu', 'navigation')) and
+                                                    not line.startswith('##') and  # Skip headers for now
+                                                    not line.startswith('[') and   # Skip link definitions
+                                                    not line.startswith('*') and   # Skip bullet points that are usually navigation
+                                                    '©' not in line and           # Skip copyright
+                                                    'javascript' not in line.lower()):
+                                                    cleaned_lines.append(line)
+                                            
+                                            # Take meaningful content
+                                            useful_content = ' '.join(cleaned_lines)
+                                            
+                                            # Remove excessive whitespace
+                                            import re
+                                            useful_content = re.sub(r'\s+', ' ', useful_content).strip()
+                                            
+                                            if len(useful_content) > 1500:
+                                                useful_content = useful_content[:1500] + "..."
+                                            
+                                            if len(useful_content) > 200:
+                                                content_text = useful_content
+                                                
+                                                if getattr(cfg, "voice_debug", False):
+                                                    try:
+                                                        print(f"[debug] WEB_SEARCH: html2text extracted {len(useful_content)} chars from {url}", file=sys.stderr)
+                                                    except Exception:
+                                                        pass
+                                    
+                                    except ImportError:
+                                        if getattr(cfg, "voice_debug", False):
+                                            try:
+                                                print(f"[debug] WEB_SEARCH: html2text not available, falling back to BeautifulSoup", file=sys.stderr)
+                                            except Exception:
+                                                pass
+                                    except Exception as html2text_error:
+                                        if getattr(cfg, "voice_debug", False):
+                                            try:
+                                                print(f"[debug] WEB_SEARCH: html2text failed for {url}: {html2text_error}", file=sys.stderr)
+                                            except Exception:
+                                                pass
+                                    
+                                    # Method 2: Fallback to BeautifulSoup if html2text failed
+                                    if not content_text:
+                                        try:
+                                            if 'content_response' not in locals():
+                                                content_response = requests.get(url, headers=headers, timeout=8)
+                                            
+                                            if content_response.status_code == 200:
+                                                soup = BeautifulSoup(content_response.content, 'html.parser')
+                                                
+                                                # Remove unwanted elements
+                                                for element in soup(["script", "style", "nav", "header", "footer", "aside", "form", "button"]):
+                                                    element.decompose()
+                                                
+                                                # Try main content selectors
+                                                content_selectors = [
+                                                    'main', 'article', '.content', '.main-content', 
+                                                    '#content', '#main', '.entry-content', '.post-content',
+                                                    '.mw-parser-output'  # Wikipedia
+                                                ]
+                                                
+                                                extracted_text = ""
+                                                for selector in content_selectors:
+                                                    content_elem = soup.select_one(selector)
+                                                    if content_elem:
+                                                        extracted_text = content_elem.get_text()
+                                                        break
+                                                
+                                                # Fallback to body
+                                                if not extracted_text:
+                                                    extracted_text = soup.get_text()
+                                                
+                                                # Clean the text
+                                                lines = extracted_text.split('\n')
+                                                cleaned_lines = []
+                                                for line in lines:
+                                                    line = line.strip()
+                                                    if (len(line) > 10 and 
+                                                        not line.lower().startswith(('cookie', 'privacy', 'subscribe', 'advertisement'))):
+                                                        cleaned_lines.append(line)
+                                                
+                                                useful_content = ' '.join(cleaned_lines)
+                                                if len(useful_content) > 1500:
+                                                    useful_content = useful_content[:1500] + "..."
+                                                
+                                                if len(useful_content) > 200:
+                                                    content_text = useful_content
+                                                    
+                                                    if getattr(cfg, "voice_debug", False):
+                                                        try:
+                                                            print(f"[debug] WEB_SEARCH: BeautifulSoup extracted {len(useful_content)} chars from {url}", file=sys.stderr)
+                                                        except Exception:
+                                                            pass
+                                        
+                                        except Exception as bs_error:
+                                            if getattr(cfg, "voice_debug", False):
+                                                try:
+                                                    print(f"[debug] WEB_SEARCH: BeautifulSoup failed for {url}: {bs_error}", file=sys.stderr)
+                                                except Exception:
+                                                    pass
+                                    
+                                    # Method 3: Try playwright for JavaScript-heavy sites (if other methods failed)
+                                    if not content_text and 'weather' in search_query.lower():
+                                        try:
+                                            from playwright.sync_api import sync_playwright
+                                            
+                                            if getattr(cfg, "voice_debug", False):
+                                                try:
+                                                    print(f"[debug] WEB_SEARCH: trying playwright for {url}", file=sys.stderr)
+                                                except Exception:
+                                                    pass
+                                            
+                                            with sync_playwright() as p:
+                                                browser = p.chromium.launch(headless=True)
+                                                page = browser.new_page()
+                                                page.goto(url, timeout=10000)
+                                                
+                                                # Wait for content to load
+                                                page.wait_for_timeout(2000)
+                                                
+                                                # Get the page content after JS execution
+                                                page_content = page.content()
+                                                browser.close()
+                                                
+                                                # Process with html2text
+                                                try:
+                                                    import html2text
+                                                    h = html2text.HTML2Text()
+                                                    h.ignore_links = False
+                                                    h.ignore_images = True
+                                                    h.body_width = 0
+                                                    
+                                                    markdown_content = h.handle(page_content)
+                                                    
+                                                    # Clean markdown content
+                                                    lines = markdown_content.split('\n')
+                                                    cleaned_lines = []
+                                                    for line in lines:
+                                                        line = line.strip()
+                                                        if (len(line) > 15 and 
+                                                            'cookie' not in line.lower() and
+                                                            'advertisement' not in line.lower()):
+                                                            cleaned_lines.append(line)
+                                                    
+                                                    useful_content = ' '.join(cleaned_lines)[:1500]
+                                                    if len(useful_content) > 200:
+                                                        content_text = useful_content
+                                                        
+                                                        if getattr(cfg, "voice_debug", False):
+                                                            try:
+                                                                print(f"[debug] WEB_SEARCH: playwright extracted {len(useful_content)} chars from {url}", file=sys.stderr)
+                                                            except Exception:
+                                                                pass
+                                                
+                                                except ImportError:
+                                                    pass
+                                        
+                                        except ImportError:
+                                            if getattr(cfg, "voice_debug", False):
+                                                try:
+                                                    print(f"[debug] WEB_SEARCH: playwright not available", file=sys.stderr)
+                                                except Exception:
+                                                    pass
+                                        except Exception as playwright_error:
+                                            if getattr(cfg, "voice_debug", False):
+                                                try:
+                                                    print(f"[debug] WEB_SEARCH: playwright failed for {url}: {playwright_error}", file=sys.stderr)
+                                                except Exception:
+                                                    pass
+                                    
+                                    # Add content if we successfully extracted it
+                                    if content_text:
+                                        fetched_content.append(f"Content from {url}:\n{content_text}")
+                                
+                                except Exception as fetch_error:
+                                    if getattr(cfg, "voice_debug", False):
+                                        try:
+                                            print(f"[debug] WEB_SEARCH: failed to fetch {url}: {fetch_error}", file=sys.stderr)
+                                        except Exception:
+                                            pass
+                                    continue
+                        
+                        # If we got useful content, synthesize a natural response
+                        if fetched_content:
+                            # Prepare content for synthesis
+                            content_summary = ""
+                            for i, content in enumerate(fetched_content[:2]):  # Use top 2 sources
+                                # Clean up the content and take the most relevant parts
+                                lines = content.split('\n')[1:]  # Skip "Content from URL:" line
+                                meaningful_content = []
+                                for line in lines:
+                                    line = line.strip()
+                                    if len(line) > 20 and not any(skip in line.lower() for skip in ['cookie', 'privacy', 'subscribe', 'advertisement', 'javascript']):
+                                        meaningful_content.append(line)
+                                
+                                # Take up to 800 chars of meaningful content per source
+                                source_content = ' '.join(meaningful_content)
+                                if len(source_content) > 800:
+                                    source_content = source_content[:800] + "..."
+                                
+                                if source_content:
+                                    content_summary += f"Source {i+1}: {source_content}\n\n"
+                            
+                            if content_summary:
+                                # Create a natural synthesis based on the content
+                                synthesized_content = f"Based on my web search for '{search_query}', here's what I found:\n\n"
+                                
+                                # Simple content analysis and extraction
+                                combined_text = content_summary.lower()
+                                
+                                # Weather-specific extraction
+                                if any(word in search_query.lower() for word in ['weather', 'temperature', 'forecast', 'climate']):
+                                    import re
+                                    
+                                    # Look for temperature
+                                    temp_patterns = [
+                                        r'(\d+)\s*[°]?\s*[cf]\b',
+                                        r'temperature[:\s]*(\d+)',
+                                        r'(\d+)\s*degrees'
+                                    ]
+                                    
+                                    temps = []
+                                    for pattern in temp_patterns:
+                                        temps.extend(re.findall(pattern, combined_text))
+                                    
+                                    if temps:
+                                        synthesized_content += f"The temperature is around {temps[0]}°. "
+                                    
+                                    # Look for conditions
+                                    weather_conditions = []
+                                    condition_words = [
+                                        'sunny', 'clear', 'cloudy', 'overcast', 'partly cloudy',
+                                        'rainy', 'rain', 'drizzle', 'showers',
+                                        'snowy', 'snow', 'windy', 'foggy', 'humid'
+                                    ]
+                                    
+                                    for condition in condition_words:
+                                        if condition in combined_text:
+                                            weather_conditions.append(condition)
+                                    
+                                    if weather_conditions:
+                                        unique_conditions = list(set(weather_conditions[:3]))  # Remove duplicates, limit to 3
+                                        synthesized_content += f"Current conditions include {', '.join(unique_conditions)}. "
+                                
+                                # For general topics, extract key facts
+                                else:
+                                    # Take the first substantial paragraph from the first source
+                                    source_lines = content_summary.split('\n')
+                                    for line in source_lines:
+                                        line = line.strip()
+                                        if len(line) > 100 and not line.startswith('Source'):
+                                            # Clean up the line and add it
+                                            clean_line = re.sub(r'\s+', ' ', line)  # Normalize whitespace
+                                            synthesized_content += f"{clean_line[:400]}..."
+                                            break
+                                
+                                # Add a note about the sources being web-based for transparency
+                                synthesized_content += f"\n\n(Information gathered from web sources via search)"
+                                
+                                if getattr(cfg, "voice_debug", False):
+                                    try:
+                                        print(f"[debug] WEB_SEARCH: synthesized response from {len(fetched_content)} sources", file=sys.stderr)
+                                    except Exception:
+                                        pass
+                            else:
+                                # Fallback if content processing failed
+                                synthesized_content = None
                 
-                # Combine results
-                all_results = []
-                if instant_results:
-                    all_results.extend(instant_results)
-                    all_results.append("")  # Add spacing
+                except ImportError:
+                    if getattr(cfg, "voice_debug", False):
+                        try:
+                            print(f"[debug] WEB_SEARCH: content synthesis requires beautifulsoup4", file=sys.stderr)
+                        except Exception:
+                            pass
+                except Exception as synthesis_error:
+                    if getattr(cfg, "voice_debug", False):
+                        try:
+                            print(f"[debug] WEB_SEARCH: content synthesis failed: {synthesis_error}", file=sys.stderr)
+                        except Exception:
+                            pass
                 
-                if search_results:
-                    all_results.append("Search Results:")
-                    all_results.extend(search_results)
-                
-                if all_results:
-                    reply_text = f"Web search results for '{search_query}':\n\n" + "\n".join(all_results)
+                # Use synthesized content if available, otherwise return search results
+                if synthesized_content:
+                    reply_text = synthesized_content
                 else:
-                    # If no results from either method
-                    reply_text = f"I searched for '{search_query}' but didn't find any results. This could be due to network issues or the search terms not matching available content. Please try different search terms or check manually."
+                    # Combine instant answers and search results
+                    all_results = []
+                    if instant_results:
+                        all_results.extend(instant_results)
+                        all_results.append("")  # Add spacing
+                    
+                    if search_results:
+                        if instant_results:
+                            all_results.append("Web Search Results:")
+                        all_results.extend(search_results)
+                    
+                    if all_results:
+                        reply_text = f"Web search results for '{search_query}':\n\n" + "\n".join(all_results)
+                    else:
+                        # If no results from any method
+                        reply_text = f"I searched for '{search_query}' but didn't find any results. This could be due to network issues or search service limitations. Please try different search terms or check manually."
                 
                 if getattr(cfg, "voice_debug", False):
                     try:

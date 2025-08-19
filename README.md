@@ -179,16 +179,19 @@ python scripts/setup_geolocation.py
 Jarvis includes optional web search capabilities using privacy-friendly sources. This feature enhances your assistant's knowledge with up-to-date information while maintaining your privacy.
 
 ### Privacy-first web search
-- **Privacy-friendly sources**: Uses Wikipedia API and DuckDuckGo (both known for not tracking users)
+- **Privacy-friendly sources**: Tries DuckDuckGo first, falls back to Wikipedia API (both known for not tracking users)
 - **No data collection**: Your search queries are sent directly to these services without any intermediary tracking
 - **Completely optional**: Can be disabled entirely if you prefer offline-only operation
 - **Transparent operation**: You'll always know when web search is being used
+- **Reliable fallback**: Wikipedia API provides consistent results when search engines block automated requests
 
 ### What web search provides
-- **Educational content**: Wikipedia articles on any topic with summaries and links
-- **Current information guidance**: Helpful directions for finding real-time data (weather, news, stocks)
-- **Factual information**: Access to encyclopedic knowledge beyond the AI's training data
-- **Research assistance**: Quick access to authoritative sources for any topic
+- **Intelligent search strategy**: Tries DuckDuckGo for comprehensive results, uses Wikipedia as reliable fallback
+- **Natural responses from web content**: Fetches and synthesizes content from search results into conversational answers
+- **Intelligent content extraction**: Converts web pages to clean markdown format, filtering out navigation, ads, and clutter
+- **JavaScript-aware browsing**: Can execute JavaScript for dynamic content when needed (weather sites, etc.)
+- **Reliable content access**: Wikipedia fallback ensures you always get helpful information even when search engines block automated requests
+- **Research assistance**: Comprehensive answers synthesized from authoritative sources
 
 ### Configuration
 Web search is **enabled by default** but can be controlled via configuration:
@@ -207,6 +210,24 @@ To disable web search entirely:
 ```
 
 When disabled, the assistant will inform you that web search is unavailable and suggest enabling it if needed.
+
+### Enhanced content extraction (optional)
+For the best web search experience, install these optional dependencies:
+
+```bash
+# For clean markdown conversion (recommended)
+pip install html2text
+
+# For JavaScript-heavy sites (weather, dynamic content)
+pip install playwright
+playwright install chromium
+```
+
+**Without these dependencies:** Basic HTML parsing with BeautifulSoup (included in requirements)
+**With html2text:** Clean markdown conversion, removes navigation/ads/clutter  
+**With Playwright:** JavaScript execution for dynamic weather sites and modern web apps
+
+The system uses an intelligent fallback chain: html2text → BeautifulSoup → Playwright, ensuring robust content extraction regardless of which dependencies are available.
 
 ### Privacy considerations
 - **No tracking**: Wikipedia and DuckDuckGo are chosen specifically for their privacy-respecting policies
@@ -320,5 +341,6 @@ This approach ensures Jarvis remains freely available for personal and education
 - API so your other devices can query the same assistant.
 - Mobile apps.
 - More tools! Extensible tools!
+- Deep research.
 - Actual multi-modality but planning on waiting for smaller multi-modal open model releases for this one.
 - Ability to discern between different voices, but we are looking at advancements in open models here again.
