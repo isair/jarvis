@@ -336,6 +336,7 @@ For commercial licensing, please contact: [baris@writeme.com]
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
 
 ## Roadmap
+- Proper MCP integration. 
 - Home device control.
 - Cross-platform desktop UI.
 - API so your other devices can query the same assistant.
