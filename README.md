@@ -1,11 +1,11 @@
 # Jarvis
 
-An offline, completely private AI assistant with unlimited memory that understands your context, capable of using tools, and can just be left on 24/7 without any worries. Jarvis runs entirely on your machine using local models, with no data ever leaving your device.
+An offline, completely private AI assistant with unlimited memory that understands your context, capable of using tools, and can just be left on 24/7 without any worries. Jarvis runs entirely on your machine using local models, with no data leaving your device except for optional web search queries.
 
 ## Why Jarvis
 
 ### 🔒 **Complete privacy and control**
-- **100% offline**: Runs entirely on your machine using local models. Zero data ever leaves your device.
+- **Privacy-first**: Runs entirely on your machine using local models. No data leaves your device except for optional web search queries (DuckDuckGo/Wikipedia).
 - **No subscriptions**: No monthly fees, no usage limits, no account required.
 - **Your data stays yours**: Everything is stored locally under your control, plus sensitive information is automatically redacted regardless.
 - **Open source**: Vet and modify the code as you want. (See licensing information below)
