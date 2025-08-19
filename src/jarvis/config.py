@@ -53,6 +53,7 @@ class Settings:
     location_cache_minutes: int
     location_ip_address: str | None
     location_auto_detect: bool
+    web_search_enabled: bool
     
 
 
@@ -133,6 +134,7 @@ def get_default_config() -> Dict[str, Any]:
         "location_cache_minutes": 60,
         "location_ip_address": None,
         "location_auto_detect": True,
+        "web_search_enabled": True,
     }
 
 
@@ -215,6 +217,7 @@ def load_settings() -> Settings:
     location_ip_address_val = merged.get("location_ip_address")
     location_ip_address = None if location_ip_address_val in (None, "", "null") else str(location_ip_address_val)
     location_auto_detect = bool(merged.get("location_auto_detect", True))
+    web_search_enabled = bool(merged.get("web_search_enabled", True))
 
     return Settings(
         db_path=db_path,
@@ -256,4 +259,5 @@ def load_settings() -> Settings:
         location_cache_minutes=location_cache_minutes,
         location_ip_address=location_ip_address,
         location_auto_detect=location_auto_detect,
+        web_search_enabled=web_search_enabled,
     )

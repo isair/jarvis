@@ -52,7 +52,7 @@
   "dialogue_memory_timeout": 300.0,
   "stop_commands": [
     "stop",
-    "quiet", 
+    "quiet",
     "shush",
     "silence",
     "enough",
@@ -62,5 +62,6 @@
   "location_enabled": true,
   "location_cache_minutes": 60,
   "location_ip_address": null,
-  "location_auto_detect": true
+  "location_auto_detect": true,
+  "web_search_enabled": true
 }

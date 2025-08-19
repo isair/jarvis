@@ -31,7 +31,7 @@ An offline, completely private AI assistant with unlimited memory that understan
 - **Set it and forget it**: Install once, run forever.
 - **No conversation management**: No organising chats, no losing important discussions.
 - **Contextual screen monitoring**: Can optionally observe your screen for helpful interventions (debugging failures, etc.)
-- **Smart tool integration**: Screenshot OCR, meal logging, web search - all seamlessly integrated.
+- **Smart tool integration**: Screenshot OCR, meal logging, privacy-friendly web search - all seamlessly integrated.
 
 ### 🗣️ **Natural voice interface**
 - **Wake word detection**: Say "jarvis" and speak naturally. No buttons, no interfaces.
@@ -174,6 +174,46 @@ python scripts/setup_geolocation.py
 
 **Note**: If automatic detection fails, you can manually set `location_ip_address` by visiting https://whatismyipaddress.com
 
+## Web search (optional)
+
+Jarvis includes optional web search capabilities using privacy-friendly sources. This feature enhances your assistant's knowledge with up-to-date information while maintaining your privacy.
+
+### Privacy-first web search
+- **Privacy-friendly sources**: Uses Wikipedia API and DuckDuckGo (both known for not tracking users)
+- **No data collection**: Your search queries are sent directly to these services without any intermediary tracking
+- **Completely optional**: Can be disabled entirely if you prefer offline-only operation
+- **Transparent operation**: You'll always know when web search is being used
+
+### What web search provides
+- **Educational content**: Wikipedia articles on any topic with summaries and links
+- **Current information guidance**: Helpful directions for finding real-time data (weather, news, stocks)
+- **Factual information**: Access to encyclopedic knowledge beyond the AI's training data
+- **Research assistance**: Quick access to authoritative sources for any topic
+
+### Configuration
+Web search is **enabled by default** but can be controlled via configuration:
+
+```json
+{
+  "web_search_enabled": true
+}
+```
+
+To disable web search entirely:
+```json
+{
+  "web_search_enabled": false
+}
+```
+
+When disabled, the assistant will inform you that web search is unavailable and suggest enabling it if needed.
+
+### Privacy considerations
+- **No tracking**: Wikipedia and DuckDuckGo are chosen specifically for their privacy-respecting policies
+- **Direct queries**: Your searches go directly to these services without any intermediary logging
+- **Optional feature**: Complete control over when and if web search is used
+- **Transparent usage**: The assistant will clearly indicate when it's performing a web search
+
 ## Configuration (advanced)
 Most settings now come from a JSON file. Environment variables are kept only for debug toggles.
 
@@ -227,7 +267,8 @@ Example `config.json`:
   "location_enabled": true,
   "location_cache_minutes": 60,
   "location_ip_address": null,
-  "location_auto_detect": true
+  "location_auto_detect": true,
+  "web_search_enabled": true
 }
 ```
 
@@ -274,6 +315,7 @@ For commercial licensing, please contact: [baris@writeme.com]
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
 
 ## Roadmap
+- Home device control.
 - Cross-platform desktop UI.
 - API so your other devices can query the same assistant.
 - Mobile apps.

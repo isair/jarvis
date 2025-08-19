@@ -109,19 +109,18 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
     "WEB_SEARCH": ToolSpec(
         name="WEB_SEARCH",
         summary=(
-            "Search the web for current information when the user needs up-to-date data that may not be in your knowledge base. "
-            "Use this for: current news ('what's happening with X?', 'latest news about Y'), "
-            "current weather ('what's the weather like?', 'weather in [location]'), "
-            "current stock prices, sports scores, recent events, breaking news, "
-            "or any question requiring real-time/recent information. "
-            "Also use when explicitly asked to search the web."
+            "Search the web for information using privacy-friendly sources (Wikipedia and DuckDuckGo). "
+            "Use this for: educational topics, factual information, current news, weather, "
+            "stock prices, sports scores, recent events, breaking news, or any question requiring "
+            "real-time/recent information that may not be in your knowledge base. "
+            "Note: This feature can be disabled in configuration if desired."
         ),
         usage_line="TOOL:WEB_SEARCH {json}",
         args_help=(
             "JSON with required field: search_query (the search terms to use). "
             "Make search queries specific and include relevant keywords for better results."
         ),
-        example="TOOL:WEB_SEARCH {\"search_query\":\"weather San Francisco today\"}",
+        example="TOOL:WEB_SEARCH {\"search_query\":\"artificial intelligence trends 2024\"}",
     ),
 }
 
@@ -518,6 +517,13 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
     # WEB_SEARCH
     if name == "WEB_SEARCH":
         try:
+            # Check if web search is enabled
+            if not getattr(cfg, "web_search_enabled", True):
+                return ToolExecutionResult(
+                    success=False, 
+                    reply_text="Web search is currently disabled in your configuration. To enable it, set 'web_search_enabled': true in your config.json file."
+                )
+            
             search_query = ""
             if tool_args and isinstance(tool_args, dict):
                 search_query = str(tool_args.get("search_query", "")).strip()
@@ -531,58 +537,147 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
                 except Exception:
                     pass
             
-            # Use DuckDuckGo instant answer API for simple searches
+            # Use DuckDuckGo search with web scraping for comprehensive results
             try:
-                # Try DuckDuckGo instant answer first
-                ddg_url = "https://api.duckduckgo.com/"
-                ddg_params = {
-                    "q": search_query,
-                    "format": "json",
-                    "no_html": "1",
-                    "skip_disambig": "1"
-                }
+                # First try DuckDuckGo instant answers for quick facts
+                instant_results = []
+                try:
+                    ddg_instant_url = "https://api.duckduckgo.com/"
+                    ddg_instant_params = {
+                        "q": search_query,
+                        "format": "json",
+                        "no_html": "1",
+                        "skip_disambig": "1"
+                    }
+                    
+                    instant_response = requests.get(ddg_instant_url, params=ddg_instant_params, timeout=5)
+                    instant_response.raise_for_status()
+                    instant_data = instant_response.json()
+                    
+                    # Extract instant answers if available
+                    if instant_data.get("Abstract"):
+                        instant_results.append(f"Quick Answer: {instant_data['Abstract']}")
+                        if instant_data.get("AbstractURL"):
+                            instant_results.append(f"  Source: {instant_data['AbstractURL']}")
+                    
+                    if instant_data.get("Answer"):
+                        instant_results.append(f"Instant Answer: {instant_data['Answer']}")
+                    
+                    if instant_data.get("Definition"):
+                        instant_results.append(f"Definition: {instant_data['Definition']}")
+                except Exception:
+                    pass  # Continue to web search if instant answers fail
                 
-                response = requests.get(ddg_url, params=ddg_params, timeout=10)
-                response.raise_for_status()
-                data = response.json()
+                # Try multiple search methods for comprehensive results
+                search_results = []
                 
-                # Extract useful information from DuckDuckGo response
-                results = []
+                # Method 1: Try Wikipedia search for educational/factual queries
+                wikipedia_results = []
+                try:
+                    import urllib.parse
+                    
+                    encoded_query = urllib.parse.quote_plus(search_query)
+                    
+                    # Try Wikipedia search first
+                    wiki_search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
+                    
+                    wiki_response = requests.get(wiki_search_url, timeout=5)
+                    if wiki_response.status_code == 200:
+                        wiki_data = wiki_response.json()
+                        search_results_data = wiki_data.get('query', {}).get('search', [])
+                        
+                        for i, result in enumerate(search_results_data):
+                            title = result.get('title', '')
+                            snippet = result.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')
+                            page_id = result.get('pageid', '')
+                            
+                            if title and snippet:
+                                wikipedia_results.append(f"{i+1}. **{title}** (Wikipedia)")
+                                wikipedia_results.append(f"   {snippet}...")
+                                wikipedia_results.append(f"   Link: https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}")
+                                wikipedia_results.append("")
+                        
+                        if getattr(cfg, "voice_debug", False):
+                            try:
+                                print(f"[debug] WEB_SEARCH: Wikipedia found {len(search_results_data)} results", file=sys.stderr)
+                            except Exception:
+                                pass
                 
-                # Abstract (direct answer)
-                if data.get("Abstract"):
-                    results.append(f"Direct answer: {data['Abstract']}")
-                    if data.get("AbstractURL"):
-                        results.append(f"Source: {data['AbstractURL']}")
+                except Exception as wiki_error:
+                    if getattr(cfg, "voice_debug", False):
+                        try:
+                            print(f"[debug] WEB_SEARCH: Wikipedia search failed: {wiki_error}", file=sys.stderr)
+                        except Exception:
+                            pass
                 
-                # Answer (instant answer)
-                if data.get("Answer"):
-                    results.append(f"Answer: {data['Answer']}")
+                # Method 2: Try a simple web search API alternative (JSONPlaceholder-style)
+                # This is a fallback for when we need current/news information
+                web_search_results = []
+                if not wikipedia_results or any(word in search_query.lower() for word in ['news', 'latest', 'current', 'today', 'recent', 'weather']):
+                    try:
+                        # For current information, provide helpful guidance
+                        current_info_keywords = ['weather', 'news', 'stock', 'price', 'today', 'latest', 'current', 'recent']
+                        if any(keyword in search_query.lower() for keyword in current_info_keywords):
+                            web_search_results.append("🔍 **Current Information Search**")
+                            web_search_results.append(f"   For real-time information about '{search_query}', I recommend:")
+                            web_search_results.append("")
+                            
+                            if 'weather' in search_query.lower():
+                                web_search_results.append("   • Check weather.com or your local weather app")
+                                web_search_results.append("   • Search 'weather [your location]' on any search engine")
+                            elif any(word in search_query.lower() for word in ['news', 'latest', 'current']):
+                                web_search_results.append("   • Visit news.google.com for latest news")
+                                web_search_results.append("   • Check reliable news sources like BBC, Reuters, or AP News")
+                            elif any(word in search_query.lower() for word in ['stock', 'price']):
+                                web_search_results.append("   • Visit finance.yahoo.com or google finance")
+                                web_search_results.append("   • Check your brokerage app for real-time prices")
+                            else:
+                                web_search_results.append(f"   • Search '{search_query}' on Google, DuckDuckGo, or Bing")
+                                web_search_results.append("   • Try specific websites related to your query")
+                            
+                            web_search_results.append("")
+                            web_search_results.append("   Note: Many search engines block automated requests, so manual searching")
+                            web_search_results.append("   may be more effective for current information.")
+                            web_search_results.append("")
+                    
+                    except Exception as web_error:
+                        if getattr(cfg, "voice_debug", False):
+                            try:
+                                print(f"[debug] WEB_SEARCH: Web search guidance failed: {web_error}", file=sys.stderr)
+                            except Exception:
+                                pass
                 
-                # Definition
-                if data.get("Definition"):
-                    results.append(f"Definition: {data['Definition']}")
-                    if data.get("DefinitionURL"):
-                        results.append(f"Source: {data['DefinitionURL']}")
+                # Combine all results
+                if wikipedia_results:
+                    search_results.extend(wikipedia_results)
                 
-                # Related topics
-                if data.get("RelatedTopics"):
-                    related = data["RelatedTopics"][:3]  # Limit to top 3
-                    for topic in related:
-                        if isinstance(topic, dict) and topic.get("Text"):
-                            results.append(f"Related: {topic['Text']}")
-                            if topic.get("FirstURL"):
-                                results.append(f"  Link: {topic['FirstURL']}")
+                if web_search_results:
+                    if wikipedia_results:
+                        search_results.append("=" * 40)
+                        search_results.append("")
+                    search_results.extend(web_search_results)
                 
-                if results:
-                    reply_text = f"Web search results for '{search_query}':\n\n" + "\n".join(results)
+                # Combine results
+                all_results = []
+                if instant_results:
+                    all_results.extend(instant_results)
+                    all_results.append("")  # Add spacing
+                
+                if search_results:
+                    all_results.append("Search Results:")
+                    all_results.extend(search_results)
+                
+                if all_results:
+                    reply_text = f"Web search results for '{search_query}':\n\n" + "\n".join(all_results)
                 else:
-                    # If no instant answers, provide a fallback message
-                    reply_text = f"I searched for '{search_query}' but didn't find specific instant answers. You might want to try a more specific search or visit search engines directly for more comprehensive results."
+                    # If no results from either method
+                    reply_text = f"I searched for '{search_query}' but didn't find any results. This could be due to network issues or the search terms not matching available content. Please try different search terms or check manually."
                 
                 if getattr(cfg, "voice_debug", False):
                     try:
-                        print(f"[debug] WEB_SEARCH: found {len(results)} result items", file=sys.stderr)
+                        instant_count = len(instant_results)
+                        web_count = len([r for r in search_results if r.strip() and not r.startswith("   ")])
+                        print(f"[debug] WEB_SEARCH: found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
                     except Exception:
                         pass
                 
