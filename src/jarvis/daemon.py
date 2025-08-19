@@ -459,36 +459,6 @@ class VoiceListener(threading.Thread):
         
         return filtered
 
-    def _is_valid_transcription(self, text: str) -> bool:
-        """Check if transcription is valid or likely noise."""
-        if not text or not text.strip():
-            return False
-        
-        # Check minimum word length
-        min_word_length = getattr(self.cfg, "whisper_min_word_length", 2)
-        words = text.strip().split()
-        
-        # Filter out single character words and very short words
-        valid_words = [w for w in words if len(w.strip(".,!?;:()[]{}\"'`-_/")) >= min_word_length]
-        
-        # Require at least one valid word
-        if not valid_words:
-            return False
-        
-        # Filter out common noise transcriptions that Whisper produces
-        noise_patterns = [
-            "you", "okay", "yeah", "oh", "um", "uh", "hmm", "mm", "ah", "eh", 
-            "he", "she", "it", "i", "a", "and", "the", "to", "of", "in", "is"
-        ]
-        
-        # If transcription only contains noise patterns, reject it
-        text_lower = text.lower().strip()
-        for pattern in noise_patterns:
-            if text_lower == pattern or text_lower == pattern + ".":
-                return False
-        
-        return True
-
     def _check_query_timeout(self) -> None:
         """Check if there's a pending query that has timed out and should be processed."""
         if not self._is_collecting:
@@ -552,13 +522,8 @@ class VoiceListener(threading.Thread):
             filtered_segments = self._filter_noisy_segments(segments)
             text = " ".join(seg.text for seg in filtered_segments).strip()
         
-        # Additional text-level filtering
-        if not self._is_valid_transcription(text):
-            if self.cfg.voice_debug:
-                try:
-                    print(f"[debug] transcription filtered out: '{text}'", file=sys.stderr)
-                except Exception:
-                    pass
+        # Basic empty text check
+        if not text or not text.strip():
             return
             
         self._handle_transcript(text)
