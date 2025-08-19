@@ -315,11 +315,8 @@ def run_tool_with_retries(
             except Exception:
                 pass
         summary = summarize_meals([dict(r) for r in meals])
-        follow_sys = "You are a helpful nutrition coach. Turn the following meal summary into a brief, conversational recap with 1-2 suggestions."
-        follow_user = summary
-        follow_text = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user, include_location=False) or ""
-        follow_text = (follow_text or "").strip()
-        return ToolExecutionResult(success=True, reply_text=(follow_text or summary))
+        # Return raw meal summary for profile processing
+        return ToolExecutionResult(success=True, reply_text=summary)
 
     # DELETE_MEAL
     if name == "DELETE_MEAL":
@@ -456,47 +453,9 @@ def run_tool_with_retries(
             if not context:
                 reply_text = "I couldn't find any conversations matching your criteria in my memory."
             else:
-                # Use LLM to generate a natural response
-                try:
-                    memory_context = "\n".join(context[:5])  # Use top 5 results
-                    
-                    response_prompt = f"""The user is asking about their conversations and I found this in my memory:
-
-{memory_context}
-
-Please provide a brief, natural response that summarizes what we discussed. Be conversational and helpful."""
-                    
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] RECALL_CONVERSATION: generating natural response...", file=sys.stderr)
-                        except Exception:
-                            pass
-                    
-                    natural_response = ask_coach(
-                        cfg.ollama_base_url, 
-                        cfg.ollama_chat_model, 
-                        "You are a helpful assistant. Provide brief, natural responses based on conversation memories.", 
-                        response_prompt,
-                        include_location=cfg.location_enabled,
-                        config_ip=cfg.location_ip_address,
-                        auto_detect=cfg.location_auto_detect
-                    )
-                    
-                    if natural_response and natural_response.strip():
-                        reply_text = natural_response.strip()
-                    else:
-                        # Fallback to formatted results
-                        formatted_results = []
-                        for ctx in context:
-                            formatted_results.append(f"• {ctx}")
-                        reply_text = "Here's what I found:\n\n" + "\n".join(formatted_results)
-                        
-                except Exception:
-                    # Fallback to formatted results
-                    formatted_results = []
-                    for ctx in context:
-                        formatted_results.append(f"• {ctx}")
-                    reply_text = "Here's what I found:\n\n" + "\n".join(formatted_results)
+                # Return raw memory context for profile processing
+                memory_context = "\n".join(context[:5])  # Use top 5 results
+                reply_text = f"I found this in my memory:\n\n{memory_context}"
             
             if getattr(cfg, "voice_debug", False):
                 try:
@@ -720,349 +679,25 @@ Please provide a brief, natural response that summarizes what we discussed. Be c
                     search_results.append("   • Visiting specific websites related to your query")
                     search_results.append("")
                 
-                # Try to fetch and synthesize content from top results for a natural response
-                synthesized_content = None
-                try:
-                    if search_results and any("**" in result for result in search_results[:10]):  # Has actual results
-                        # Extract URLs from search results
-                        urls_to_fetch = []
-                        for line in search_results:
-                            if line.strip().startswith("Link: https://"):
-                                url = line.replace("Link: ", "").strip()
-                                if url.startswith("https://") and len(urls_to_fetch) < 2:  # Limit to top 2 URLs
-                                    urls_to_fetch.append(url)
-                        
-                        # Fetch content from top URLs
-                        fetched_content = []
-                        if urls_to_fetch:
-                            from bs4 import BeautifulSoup
-                            
-                            for url in urls_to_fetch:
-                                try:
-                                    if getattr(cfg, "voice_debug", False):
-                                        try:
-                                            print(f"[debug] WEB_SEARCH: fetching content from {url}", file=sys.stderr)
-                                        except Exception:
-                                            pass
-                                    
-                                    headers = {
-                                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                    }
-                                    
-                                    # Try intelligent content extraction with markdown conversion
-                                    content_text = None
-                                    
-                                    # Method 1: Try html2text for clean markdown conversion
-                                    try:
-                                        import html2text
-                                        
-                                        content_response = requests.get(url, headers=headers, timeout=8)
-                                        if content_response.status_code == 200:
-                                            # Configure html2text for clean output
-                                            h = html2text.HTML2Text()
-                                            h.ignore_links = False
-                                            h.ignore_images = True
-                                            h.ignore_emphasis = False
-                                            h.body_width = 0  # No line wrapping
-                                            h.skip_internal_links = True
-                                            
-                                            # Convert HTML to markdown
-                                            markdown_content = h.handle(content_response.text)
-                                            
-                                            # Clean up the markdown
-                                            lines = markdown_content.split('\n')
-                                            cleaned_lines = []
-                                            
-                                            for line in lines:
-                                                line = line.strip()
-                                                # Skip navigation, ads, and other unwanted content
-                                                if (len(line) > 15 and 
-                                                    not line.lower().startswith(('cookie', 'privacy', 'subscribe', 'advertisement', 'menu', 'navigation')) and
-                                                    not line.startswith('##') and  # Skip headers for now
-                                                    not line.startswith('[') and   # Skip link definitions
-                                                    not line.startswith('*') and   # Skip bullet points that are usually navigation
-                                                    '©' not in line and           # Skip copyright
-                                                    'javascript' not in line.lower()):
-                                                    cleaned_lines.append(line)
-                                            
-                                            # Take meaningful content
-                                            useful_content = ' '.join(cleaned_lines)
-                                            
-                                            # Remove excessive whitespace
-                                            import re
-                                            useful_content = re.sub(r'\s+', ' ', useful_content).strip()
-                                            
-                                            if len(useful_content) > 1500:
-                                                useful_content = useful_content[:1500] + "..."
-                                            
-                                            if len(useful_content) > 200:
-                                                content_text = useful_content
-                                                
-                                                if getattr(cfg, "voice_debug", False):
-                                                    try:
-                                                        print(f"[debug] WEB_SEARCH: html2text extracted {len(useful_content)} chars from {url}", file=sys.stderr)
-                                                    except Exception:
-                                                        pass
-                                    
-                                    except ImportError:
-                                        if getattr(cfg, "voice_debug", False):
-                                            try:
-                                                print(f"[debug] WEB_SEARCH: html2text not available, falling back to BeautifulSoup", file=sys.stderr)
-                                            except Exception:
-                                                pass
-                                    except Exception as html2text_error:
-                                        if getattr(cfg, "voice_debug", False):
-                                            try:
-                                                print(f"[debug] WEB_SEARCH: html2text failed for {url}: {html2text_error}", file=sys.stderr)
-                                            except Exception:
-                                                pass
-                                    
-                                    # Method 2: Fallback to BeautifulSoup if html2text failed
-                                    if not content_text:
-                                        try:
-                                            if 'content_response' not in locals():
-                                                content_response = requests.get(url, headers=headers, timeout=8)
-                                            
-                                            if content_response.status_code == 200:
-                                                soup = BeautifulSoup(content_response.content, 'html.parser')
-                                                
-                                                # Remove unwanted elements
-                                                for element in soup(["script", "style", "nav", "header", "footer", "aside", "form", "button"]):
-                                                    element.decompose()
-                                                
-                                                # Try main content selectors
-                                                content_selectors = [
-                                                    'main', 'article', '.content', '.main-content', 
-                                                    '#content', '#main', '.entry-content', '.post-content',
-                                                    '.mw-parser-output'  # Wikipedia
-                                                ]
-                                                
-                                                extracted_text = ""
-                                                for selector in content_selectors:
-                                                    content_elem = soup.select_one(selector)
-                                                    if content_elem:
-                                                        extracted_text = content_elem.get_text()
-                                                        break
-                                                
-                                                # Fallback to body
-                                                if not extracted_text:
-                                                    extracted_text = soup.get_text()
-                                                
-                                                # Clean the text
-                                                lines = extracted_text.split('\n')
-                                                cleaned_lines = []
-                                                for line in lines:
-                                                    line = line.strip()
-                                                    if (len(line) > 10 and 
-                                                        not line.lower().startswith(('cookie', 'privacy', 'subscribe', 'advertisement'))):
-                                                        cleaned_lines.append(line)
-                                                
-                                                useful_content = ' '.join(cleaned_lines)
-                                                if len(useful_content) > 1500:
-                                                    useful_content = useful_content[:1500] + "..."
-                                                
-                                                if len(useful_content) > 200:
-                                                    content_text = useful_content
-                                                    
-                                                    if getattr(cfg, "voice_debug", False):
-                                                        try:
-                                                            print(f"[debug] WEB_SEARCH: BeautifulSoup extracted {len(useful_content)} chars from {url}", file=sys.stderr)
-                                                        except Exception:
-                                                            pass
-                                        
-                                        except Exception as bs_error:
-                                            if getattr(cfg, "voice_debug", False):
-                                                try:
-                                                    print(f"[debug] WEB_SEARCH: BeautifulSoup failed for {url}: {bs_error}", file=sys.stderr)
-                                                except Exception:
-                                                    pass
-                                    
-                                    # Method 3: Try playwright for JavaScript-heavy sites (if other methods failed)
-                                    if not content_text and 'weather' in search_query.lower():
-                                        try:
-                                            from playwright.sync_api import sync_playwright
-                                            
-                                            if getattr(cfg, "voice_debug", False):
-                                                try:
-                                                    print(f"[debug] WEB_SEARCH: trying playwright for {url}", file=sys.stderr)
-                                                except Exception:
-                                                    pass
-                                            
-                                            with sync_playwright() as p:
-                                                browser = p.chromium.launch(headless=True)
-                                                page = browser.new_page()
-                                                page.goto(url, timeout=10000)
-                                                
-                                                # Wait for content to load
-                                                page.wait_for_timeout(2000)
-                                                
-                                                # Get the page content after JS execution
-                                                page_content = page.content()
-                                                browser.close()
-                                                
-                                                # Process with html2text
-                                                try:
-                                                    import html2text
-                                                    h = html2text.HTML2Text()
-                                                    h.ignore_links = False
-                                                    h.ignore_images = True
-                                                    h.body_width = 0
-                                                    
-                                                    markdown_content = h.handle(page_content)
-                                                    
-                                                    # Clean markdown content
-                                                    lines = markdown_content.split('\n')
-                                                    cleaned_lines = []
-                                                    for line in lines:
-                                                        line = line.strip()
-                                                        if (len(line) > 15 and 
-                                                            'cookie' not in line.lower() and
-                                                            'advertisement' not in line.lower()):
-                                                            cleaned_lines.append(line)
-                                                    
-                                                    useful_content = ' '.join(cleaned_lines)[:1500]
-                                                    if len(useful_content) > 200:
-                                                        content_text = useful_content
-                                                        
-                                                        if getattr(cfg, "voice_debug", False):
-                                                            try:
-                                                                print(f"[debug] WEB_SEARCH: playwright extracted {len(useful_content)} chars from {url}", file=sys.stderr)
-                                                            except Exception:
-                                                                pass
-                                                
-                                                except ImportError:
-                                                    pass
-                                        
-                                        except ImportError:
-                                            if getattr(cfg, "voice_debug", False):
-                                                try:
-                                                    print(f"[debug] WEB_SEARCH: playwright not available", file=sys.stderr)
-                                                except Exception:
-                                                    pass
-                                        except Exception as playwright_error:
-                                            if getattr(cfg, "voice_debug", False):
-                                                try:
-                                                    print(f"[debug] WEB_SEARCH: playwright failed for {url}: {playwright_error}", file=sys.stderr)
-                                                except Exception:
-                                                    pass
-                                    
-                                    # Add content if we successfully extracted it
-                                    if content_text:
-                                        fetched_content.append(f"Content from {url}:\n{content_text}")
-                                
-                                except Exception as fetch_error:
-                                    if getattr(cfg, "voice_debug", False):
-                                        try:
-                                            print(f"[debug] WEB_SEARCH: failed to fetch {url}: {fetch_error}", file=sys.stderr)
-                                        except Exception:
-                                            pass
-                                    continue
-                        
-                        # If we got useful content, synthesize a natural response
-                        if fetched_content:
-                            # Prepare content for synthesis
-                            content_summary = ""
-                            for i, content in enumerate(fetched_content[:2]):  # Use top 2 sources
-                                # Clean up the content and take the most relevant parts
-                                lines = content.split('\n')[1:]  # Skip "Content from URL:" line
-                                meaningful_content = []
-                                for line in lines:
-                                    line = line.strip()
-                                    if len(line) > 20 and not any(skip in line.lower() for skip in ['cookie', 'privacy', 'subscribe', 'advertisement', 'javascript']):
-                                        meaningful_content.append(line)
-                                
-                                # Take up to 800 chars of meaningful content per source
-                                source_content = ' '.join(meaningful_content)
-                                if len(source_content) > 800:
-                                    source_content = source_content[:800] + "..."
-                                
-                                if source_content:
-                                    content_summary += f"Source {i+1}: {source_content}\n\n"
-                            
-                            if content_summary:
-                                if getattr(cfg, "voice_debug", False):
-                                    try:
-                                        print(f"[debug] WEB_SEARCH: using LLM to synthesize response from {len(fetched_content)} sources", file=sys.stderr)
-                                    except Exception:
-                                        pass
-                                
-                                # Let the LLM synthesize the response naturally
-                                synthesis_prompt = f"""Based on the following web search results for "{search_query}", provide a helpful and accurate response to the user.
-
-Web content found:
-{content_summary[:3000]}
-
-User's original question/context: {original_prompt}
-
-Please synthesize this information into a clear, helpful response. Focus on directly answering what the user asked for."""
-                                
-                                try:
-                                    from .coach import ask_coach
-                                    synthesized_response = ask_coach(
-                                        cfg.ollama_base_url, 
-                                        cfg.ollama_chat_model, 
-                                        "You are a helpful assistant that synthesizes web search results into clear, accurate responses.", 
-                                        synthesis_prompt,
-                                        include_location=False
-                                    )
-                                    
-                                    if synthesized_response and synthesized_response.strip():
-                                        synthesized_content = synthesized_response.strip()
-                                    else:
-                                        # Fallback to raw content if LLM synthesis fails
-                                        synthesized_content = f"Based on my web search for '{search_query}', here's what I found:\n\n{content_summary[:1000]}..."
-                                        
-                                except Exception as llm_error:
-                                    if getattr(cfg, "voice_debug", False):
-                                        try:
-                                            print(f"[debug] WEB_SEARCH: LLM synthesis failed: {llm_error}", file=sys.stderr)
-                                        except Exception:
-                                            pass
-                                    # Fallback to raw content
-                                    synthesized_content = f"Based on my web search for '{search_query}', here's what I found:\n\n{content_summary[:1000]}..."
-                                
-                                if getattr(cfg, "voice_debug", False):
-                                    try:
-                                        print(f"[debug] WEB_SEARCH: synthesized response from {len(fetched_content)} sources", file=sys.stderr)
-                                    except Exception:
-                                        pass
-                            else:
-                                # Fallback if content processing failed
-                                synthesized_content = None
+                # Content synthesis is now handled by profile processing in daemon.py
                 
-                except ImportError:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] WEB_SEARCH: content synthesis requires beautifulsoup4", file=sys.stderr)
-                        except Exception:
-                            pass
-                except Exception as synthesis_error:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] WEB_SEARCH: content synthesis failed: {synthesis_error}", file=sys.stderr)
-                        except Exception:
-                            pass
+                # Return raw search results for profile processing
+                # Combine instant answers and search results
+                all_results = []
+                if instant_results:
+                    all_results.extend(instant_results)
+                    all_results.append("")  # Add spacing
                 
-                # Use synthesized content if available, otherwise return search results
-                if synthesized_content:
-                    reply_text = synthesized_content
-                else:
-                    # Combine instant answers and search results
-                    all_results = []
+                if search_results:
                     if instant_results:
-                        all_results.extend(instant_results)
-                        all_results.append("")  # Add spacing
-                    
-                    if search_results:
-                        if instant_results:
-                            all_results.append("Web Search Results:")
-                        all_results.extend(search_results)
-                    
-                    if all_results:
-                        reply_text = f"Web search results for '{search_query}':\n\n" + "\n".join(all_results)
-                    else:
-                        # If no results from any method
-                        reply_text = f"I searched for '{search_query}' but didn't find any results. This could be due to network issues or search service limitations. Please try different search terms or check manually."
+                        all_results.append("Web Search Results:")
+                    all_results.extend(search_results)
+                
+                if all_results:
+                    reply_text = f"Web search results for '{search_query}':\n\n" + "\n".join(all_results)
+                else:
+                    # If no results from any method
+                    reply_text = f"I searched for '{search_query}' but didn't find any results. This could be due to network issues or search service limitations. Please try different search terms or check manually."
                 
                 if getattr(cfg, "voice_debug", False):
                     try:

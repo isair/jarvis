@@ -21,3 +21,22 @@ Data privacy comes first, always.
 - **Profile System Prompts** (`src/jarvis/profiles.py`): Focus on post-tool behavior and personality
   - Life profile: "After logging meals: Follow up with healthy suggestions..."
   - Life profile: "After fetching meal history: Provide a brief recap with recommendations..."
+
+### Tool Response Flow Architecture
+
+**Decision**: Tools return raw data/summaries; profiles handle response formatting through a dedicated LLM processing step.
+
+**Problem**: Tools were doing their own LLM synthesis (e.g., WEB_SEARCH, FETCH_MEALS, RECALL_CONVERSATION), bypassing profile-specific formatting and personality, leading to inconsistent response styles.
+
+**Solution**: 
+1. **Tools return raw data** - Search results, meal summaries, memory context without LLM processing
+2. **Daemon processes tool results** - Passes raw tool output through profile-specific LLM loop (`src/jarvis/daemon.py`)
+3. **Profile formats response** - Current profile system prompt handles synthesis and ensures conversational, consistent formatting
+
+**Implementation Details**:
+- WEB_SEARCH: Returns raw search results instead of synthesized content
+- FETCH_MEALS: Returns raw meal summary instead of nutrition advice
+- RECALL_CONVERSATION: Returns raw memory context instead of formatted response
+- All profiles: Added explicit "short, conversational manner, no markdown tables" instructions
+
+**Benefits**: Consistent response personality, profile-appropriate formatting, single point of response control.

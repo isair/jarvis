@@ -136,16 +136,11 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         except Exception:
             pass
     
-    try:
-        reply, tool_req, tool_args = ask_coach_with_tools(
-            cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt, tools_desc,
-            additional_messages=recent_messages, include_location=cfg.location_enabled, 
-            config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
-        )
-    finally:
-        # Stop tune when LLM call completes
-        if tune_player is not None:
-            tune_player.stop_tune()
+    reply, tool_req, tool_args = ask_coach_with_tools(
+        cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt, tools_desc,
+        additional_messages=recent_messages, include_location=cfg.location_enabled, 
+        config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+    )
     if cfg.voice_debug:
         try:
             print(f"[debug] LLM returned: has_text={bool(reply)}, tool_req={tool_req}", file=sys.stderr)
@@ -171,7 +166,26 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             max_retries=1,
         )
         if result.reply_text:
-            reply = result.reply_text
+            # Pass tool results through profile-specific LLM processing
+            tool_followup_prompt = (
+                f"The user's original query: {redacted}\n\n"
+                f"Tool ({tool_req}) returned this information:\n{result.reply_text}\n\n"
+                f"Please provide a helpful response to the user based on this information."
+            )
+            
+            # Continue using the existing tune player - don't start/stop a new one
+            profile_response = ask_coach(
+                cfg.ollama_base_url, 
+                cfg.ollama_chat_model, 
+                system_prompt, 
+                tool_followup_prompt,
+                additional_messages=recent_messages, 
+                include_location=cfg.location_enabled, 
+                config_ip=cfg.location_ip_address, 
+                auto_detect=cfg.location_auto_detect
+            )
+            reply = (profile_response or result.reply_text or "").strip()
+
     # Retry once without tools if model produced no content and didn't request a tool
     if not reply and not tool_req:
         if cfg.voice_debug:
@@ -281,6 +295,10 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                     print(f"[debug] dialogue memory error: {e}", file=sys.stderr)
                 except Exception:
                     pass
+    
+    # Always stop tune when processing completes, regardless of code path
+    if tune_player is not None:
+        tune_player.stop_tune()
     
     return reply
 
