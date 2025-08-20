@@ -354,12 +354,20 @@ class VoiceListener(threading.Thread):
 
     def _is_stop_command(self, text_lower: str) -> bool:
         """Check if the given text contains a stop command"""
+        if not text_lower or not text_lower.strip():
+            return False
+            
         stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
         stop_sounds = ["sh", "shhh", "shhhh", "ssh", "sssh", "ssssh"]  # Common representations of shushing
         
         # Check for exact matches (case insensitive)
         for cmd in stop_commands + stop_sounds:
             if cmd in text_lower:
+                if self.cfg.voice_debug:
+                    try:
+                        print(f"[debug] stop command matched: '{cmd}' in '{text_lower}'", file=sys.stderr)
+                    except Exception:
+                        pass
                 return True
         
         # Check for fuzzy matches for stop commands (not shush sounds)
@@ -368,7 +376,13 @@ class VoiceListener(threading.Thread):
             words = text_lower.split()
             for word in words:
                 for cmd in stop_commands:
-                    if difflib.SequenceMatcher(a=cmd, b=word).ratio() >= fuzzy_threshold:
+                    ratio = difflib.SequenceMatcher(a=cmd, b=word).ratio()
+                    if ratio >= fuzzy_threshold:
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] fuzzy stop command matched: '{cmd}' ~= '{word}' (ratio: {ratio:.3f})", file=sys.stderr)
+                            except Exception:
+                                pass
                         return True
         except Exception:
             pass
@@ -379,13 +393,7 @@ class VoiceListener(threading.Thread):
         try:
             if self.should_stop:
                 return
-            if self.tts is not None and self.tts.is_speaking():
-                # Insert a reset marker to cut any ongoing utterance
-                try:
-                    self._audio_q.put_nowait(None)
-                except Exception:
-                    pass
-                return
+            # Always process audio, even during TTS, to allow stop commands
             # Copy to avoid referencing the same buffer
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
@@ -566,7 +574,7 @@ class VoiceListener(threading.Thread):
             if self._should_expire_hot_window():
                 self._expire_hot_window()
             return
-        # Check for stop commands during TTS
+        # Priority check for stop commands during TTS - process immediately
         if self.tts is not None and self.tts.enabled and self.tts.is_speaking():
             if self._is_stop_command(text_lower):
                 if self.cfg.voice_debug:
@@ -575,17 +583,25 @@ class VoiceListener(threading.Thread):
                     except Exception:
                         pass
                 self.tts.interrupt()
+                # Clear any pending audio to make stop more responsive
+                try:
+                    while not self._audio_q.empty():
+                        self._audio_q.get_nowait()
+                except Exception:
+                    pass
                 return
         
-        # Guard against echo of our own TTS
+        # Guard against echo of our own TTS (but allow stop commands through)
         if self.tts is not None and self.tts.enabled:
-            last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
-            is_same_as_tts = False
-            if last_tts and text_lower:
-                ratio = difflib.SequenceMatcher(a=last_tts, b=text_lower).ratio()
-                is_same_as_tts = ratio >= 0.74 or (text_lower in last_tts) or (last_tts in text_lower)
-            if self.tts.is_speaking() or is_same_as_tts:
-                return
+            # Always allow stop commands to pass through echo protection
+            if not self._is_stop_command(text_lower):
+                last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                is_same_as_tts = False
+                if last_tts and text_lower:
+                    ratio = difflib.SequenceMatcher(a=last_tts, b=text_lower).ratio()
+                    is_same_as_tts = ratio >= 0.74 or (text_lower in last_tts) or (last_tts in text_lower)
+                if is_same_as_tts:
+                    return
         if self.cfg.voice_debug and text:
             try:
                 print(f"[voice] heard: {text}", file=sys.stderr)
