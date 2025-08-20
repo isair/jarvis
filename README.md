@@ -1,6 +1,6 @@
 # Jarvis
 
-An offline, completely private AI assistant with unlimited memory that understands your context, capable of using tools, and can just be left on 24/7 without any worries. Jarvis runs entirely on your machine using local models, with no data leaving your device except for optional web search queries.
+An offline, completely private AI voice assistant with unlimited memory that understands your context, capable of using tools, and can just be left on 24/7 without any worries. Jarvis runs entirely on your machine using local models, with no data leaving your device except for optional web search queries.
 
 ## Why Jarvis
 
@@ -15,6 +15,11 @@ An offline, completely private AI assistant with unlimited memory that understan
 - **Always listening, never interrupting**: Leave it running 24/7. Unlike ChatGPT or Gemini's voice modes, it won't try to respond to every single thing you say.
 - **Contextual awareness**: Knows your location (if permitted), timezone, what day it is, and adapts responses accordingly.
 - **Real-time context**: Ask "what time is it?" mid-conversation and get the right answer. Not the time from when you first started the conversation.
+
+### 🗣️ **Natural voice interface**
+- **Wake word detection**: Say "jarvis" and speak naturally. No buttons, no interfaces.
+- **Hot window mode**: After responding, stays active for follow-ups without repeating the wake word.
+- **Interruptible responses**: You can shush it or tell it to shut up and it will comply, no hard feelings.
 
 ### 🧠 **Unlimited memory**
 - **Never forgets anything**: Unlimited conversation history with intelligent search across everything you've ever discussed.
@@ -33,10 +38,34 @@ An offline, completely private AI assistant with unlimited memory that understan
 - **Contextual screen monitoring**: Can optionally observe your screen for helpful interventions (debugging failures, etc.)
 - **Smart tool integration**: Screenshot OCR, meal logging, privacy-friendly web search - all seamlessly integrated.
 
-### 🗣️ **Natural voice interface**
-- **Wake word detection**: Say "jarvis" and speak naturally. No buttons, no interfaces.
-- **Hot window mode**: After responding, stays active for follow-ups without repeating the wake word.
-- **Interruptible responses**: You can shush it or tell it to shut up and it will comply, no hard feelings.
+## Demos
+
+### Weather
+
+```bash
+[voice] heard: Jarvis, how's the weather today?
+
+[jarvis coach:life]
+Hey! Today in London it’s a mild day – around 20–22 °C with partly‑cloudy skies. There’s a light chance of showers in the late afternoon, so a small umbrella or a quick rain‑coat might be handy if you’re heading out after 17:00. In the evening it cools to about 16 °C, so a light jacket or cardigan would keep you comfy. Enjoy the city—just keep that umbrella close by in case of a quick drizzle!
+```
+
+### Nutrition coach
+
+```bash
+[voice] heard: Jarvis, what have I eaten so far today?
+
+[jarvis coach:life]
+You’ve had a half‑Dubai chocolate bar (280 kcal) and two glasses of coconut water (90 kcal) so far—about 370 kcal total with 5 g protein, 46 g carbs and 10 g fat.  
+
+A couple of gentle ideas for the rest of the day:
+
+1. **Add a protein‑rich bite** – Aim for 15–20 g (e.g., a hard‑boiled egg, a scoop of Greek yogurt, or a handful of almonds).  
+2. **Fill in with veggies** – Toss a cup of raw veggies or a small salad with a drizzle of olive oil.  
+3. **Hydrate** – Sip an extra 250 mL of water now and keep a bottle handy.  
+4. **A quick walk** – 10‑15 minutes after lunch can help balance the sugar load.
+
+Just a few small moves, and you’ll keep the energy steady without feeling deprived. Happy eating!
+```
 
 ## Quick Start
 
@@ -90,6 +119,27 @@ scripts\run_windows.bat
 ```
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
+
+## Debug mode (recommended for developers)
+
+To see detailed information about what Jarvis is doing internally, run it with debug logging enabled:
+
+**macOS:**
+```bash
+JARVIS_VOICE_DEBUG=1 bash scripts/run_macos.sh
+```
+
+**Linux:**
+```bash
+JARVIS_VOICE_DEBUG=1 bash scripts/run_linux.sh
+```
+
+**Windows:**
+```cmd
+set JARVIS_VOICE_DEBUG=1 && scripts\run_windows.bat
+```
+
+This shows voice detection, processing steps, tool usage, and internal decision-making - helpful for developers and users who want transparency about the assistant's operations.
 
 ## Privacy, storage, and search
 - **Redaction first**: Before saving or using any text, Jarvis replaces emails, tokens, cards, JWTs, 6‑digit OTPs, and long hex with placeholders.
@@ -236,7 +286,7 @@ The system uses an intelligent fallback chain: html2text → BeautifulSoup → P
 - **Transparent usage**: The assistant will clearly indicate when it's performing a web search
 
 ## Configuration (advanced)
-Most settings now come from a JSON file. Environment variables are kept only for debug toggles.
+Most settings come from a JSON file. Environment variables are used only for debug toggles.
 
 ### JSON config
 Jarvis looks for a JSON config at:
@@ -336,12 +386,14 @@ For commercial licensing, please contact: [baris@writeme.com]
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
 
 ## Roadmap
-- Proper MCP integration. 
+- Configurable personality.
+- Proper MCP integration.
 - Home device control.
-- Cross-platform desktop UI.
+- Cross-platform desktop app so people don't have to bother with cloning and setting the project up.
 - API so your other devices can query the same assistant.
 - Mobile apps.
-- More tools! Extensible tools!
+- More baked-in tools.
 - Deep research.
 - Actual multi-modality but planning on waiting for smaller multi-modal open model releases for this one.
+- Agent mode.
 - Ability to discern between different voices, but we are looking at advancements in open models here again.

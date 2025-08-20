@@ -1,6 +1,25 @@
 {
+  "__comment": "Database & Storage",
   "db_path": "~/.local/share/jarvis/jarvis.db",
   "sqlite_vss_path": null,
+  
+  "__comment": "LLM & AI Models",
+  "ollama_base_url": "http://127.0.0.1:11434",
+  "ollama_embed_model": "nomic-embed-text",
+  "ollama_chat_model": "gpt-oss:20b",
+  "llm_chat_timeout_sec": 180.0,
+  "llm_tools_timeout_sec": 300.0,
+  "llm_embedding_timeout_sec": 60.0,
+  
+  "__comment": "Profiles & Behavior",
+  "active_profiles": [
+    "developer",
+    "business",
+    "life"
+  ],
+  "use_stdin": false,
+  
+  "__comment": "Screen Capture",
   "allowlist_bundles": [
     "com.apple.Terminal",
     "com.googlecode.iterm2",
@@ -8,22 +27,23 @@
     "com.jetbrains.intellij"
   ],
   "capture_interval_sec": 3.0,
-  "ollama_base_url": "http://127.0.0.1:11434",
-  "ollama_embed_model": "nomic-embed-text",
-  "ollama_chat_model": "gpt-oss:20b",
-  "use_stdin": false,
-  "active_profiles": [
-    "developer",
-    "business",
-    "life"
-  ],
+  
+  "__comment": "Text-to-Speech",
   "tts_enabled": true,
   "tts_voice": null,
   "tts_rate": 200,
+  
+  "__comment": "Voice Input & Audio",
   "voice_device": null,
+  "sample_rate": 16000,
+  "voice_min_energy": 0.02,
+  
+  "__comment": "Voice Collection & Timing",
   "voice_block_seconds": 4.0,
   "voice_collect_seconds": 2.5,
   "voice_max_collect_seconds": 6.0,
+  
+  "__comment": "Wake Word Detection",
   "wake_word": "jarvis",
   "wake_aliases": [
     "joris",
@@ -35,21 +55,32 @@
     "javis"
   ],
   "wake_fuzzy_ratio": 0.78,
+  
+  "__comment": "Whisper Speech Recognition",
   "whisper_model": "small",
   "whisper_compute_type": "int8",
   "whisper_vad": true,
-  "voice_min_energy": 0.02,
+  "whisper_min_confidence": 0.3,
+  "whisper_min_audio_duration": 0.15,
+  "whisper_min_word_length": 1,
+  
+  "__comment": "Voice Activity Detection (VAD)",
   "vad_enabled": true,
   "vad_aggressiveness": 2,
   "vad_frame_ms": 20,
   "vad_pre_roll_ms": 240,
   "endpoint_silence_ms": 800,
   "max_utterance_ms": 8000,
-  "sample_rate": 16000,
+  
+  "__comment": "UI/UX Features",
   "tune_enabled": true,
   "hot_window_enabled": true,
   "hot_window_seconds": 4.0,
+  
+  "__comment": "Memory & Dialogue",
   "dialogue_memory_timeout": 300.0,
+  
+  "__comment": "Stop Commands (legacy)",
   "stop_commands": [
     "stop",
     "quiet",
@@ -59,12 +90,13 @@
     "shut up"
   ],
   "stop_command_fuzzy_ratio": 0.8,
+  
+  "__comment": "Location Services",
   "location_enabled": true,
   "location_cache_minutes": 60,
   "location_ip_address": null,
   "location_auto_detect": true,
-  "web_search_enabled": true,
-  "whisper_min_confidence": 0.3,
-  "whisper_min_audio_duration": 0.15,
-  "whisper_min_word_length": 1
+  
+  "__comment": "Web Search",
+  "web_search_enabled": true
 }

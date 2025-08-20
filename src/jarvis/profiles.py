@@ -124,7 +124,7 @@ def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str
         "User text (may be partial transcript):\n" + text[:2000] + "\n\n"
         "Answer with only one of: " + allowed
     )
-    resp = ask_coach(base_url, chat_model, sys_prompt, user_content, include_location=False)
+    resp = ask_coach(base_url, chat_model, sys_prompt, user_content, timeout_sec=10.0, include_location=False)  # Short timeout for fast profile selection
     if isinstance(resp, str) and resp.strip():
         ans = resp.strip().lower()
         # Try exact match first

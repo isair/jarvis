@@ -34,7 +34,7 @@ def extract_and_log_meal(db: Database, cfg, original_text: str, source_app: str)
         "User said (redacted):\n" + original_text[:1200] + "\n\n"
         "Return ONLY JSON or the exact string NONE."
     )
-    raw = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, include_location=False) or ""
+    raw = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=cfg.llm_chat_timeout_sec, include_location=False) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
         return None
@@ -158,7 +158,7 @@ def generate_followups_for_meal(cfg, description: str, approx: str) -> str:
         "Be concise and specific."
     )
     follow_user = f"Logged meal: {description} | {approx}."
-    follow_text = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user, include_location=False) or ""
+    follow_text = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user, timeout_sec=cfg.llm_chat_timeout_sec, include_location=False) or ""
     return (follow_text or "").strip()
 
 

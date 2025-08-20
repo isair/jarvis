@@ -133,6 +133,7 @@ def generate_conversation_summary(
     previous_summary: Optional[str],
     ollama_base_url: str,
     ollama_chat_model: str,
+    timeout_sec: float = 30.0,
 ) -> Tuple[str, str]:
     """
     Generate a concise conversation summary from recent chunks and previous summary.
@@ -179,7 +180,7 @@ SUMMARY: [your summary here]
 TOPICS: [topic1, topic2, topic3]"""
     
     try:
-        response = ask_coach(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, include_location=False)
+        response = ask_coach(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, timeout_sec=timeout_sec, include_location=False)
         if not response:
             # Fallback: create a simple summary from the chunks themselves
             fallback_summary = chunks_text[:200] + "..." if len(chunks_text) > 200 else chunks_text
@@ -218,6 +219,7 @@ def update_daily_conversation_summary(
     ollama_embed_model: str,
     source_app: str = "jarvis",
     voice_debug: bool = False,
+    timeout_sec: float = 30.0,
 ) -> Optional[int]:
     """
     Update the conversation summary for today with new chunks.
@@ -247,7 +249,7 @@ def update_daily_conversation_summary(
         
         # Generate updated summary
         summary, topics = generate_conversation_summary(
-            new_chunks, previous_summary, ollama_base_url, ollama_chat_model
+            new_chunks, previous_summary, ollama_base_url, ollama_chat_model, timeout_sec=timeout_sec
         )
         
         # Debug: Log the generated summary and topics
@@ -277,7 +279,7 @@ def update_daily_conversation_summary(
         if db.is_vss_enabled:
             # Combine summary and topics for embedding
             text_for_embedding = f"{summary} {topics}"
-            vec = get_embedding(text_for_embedding, ollama_base_url, ollama_embed_model)
+            vec = get_embedding(text_for_embedding, ollama_base_url, ollama_embed_model, timeout_sec=15.0)  # Use shorter timeout for embeddings
             if vec is not None:
                 db.upsert_summary_embedding(summary_id, vec)
         
@@ -294,6 +296,7 @@ def get_relevant_conversation_context(
     ollama_embed_model: str,
     days_back: int = 7,
     dialogue_memory: Optional[DialogueMemory] = None,
+    timeout_sec: float = 15.0,
 ) -> List[str]:
     """
     Get relevant conversation summaries that might provide context for the current query.
@@ -337,7 +340,7 @@ def get_relevant_conversation_context(
         # Fallback: Use the database's hybrid search
         try:
             # Get vector embedding for semantic search if possible
-            vec = get_embedding(query, ollama_base_url, ollama_embed_model)
+            vec = get_embedding(query, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
             vec_json = json.dumps(vec) if vec is not None else None
         except Exception:
             vec_json = None
@@ -391,6 +394,7 @@ def update_diary_from_dialogue_memory(
     ollama_embed_model: str,
     source_app: str = "jarvis",
     voice_debug: bool = False,
+    timeout_sec: float = 30.0,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
@@ -415,6 +419,7 @@ def update_diary_from_dialogue_memory(
             ollama_embed_model=ollama_embed_model,
             source_app=source_app,
             voice_debug=voice_debug,
+            timeout_sec=timeout_sec,
         )
         
         # Clear the pending updates flag

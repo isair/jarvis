@@ -14,49 +14,79 @@ def _default_db_path() -> str:
 
 @dataclass(frozen=True)
 class Settings:
+    # Database & Storage
     db_path: str
     sqlite_vss_path: str | None
-    allowlist_bundles: list[str]
-    capture_interval_sec: float
+    
+    # LLM & AI Models
     ollama_base_url: str
     ollama_embed_model: str
     ollama_chat_model: str
-    use_stdin: bool
+    llm_chat_timeout_sec: float
+    llm_tools_timeout_sec: float
+    llm_embedding_timeout_sec: float
+    
+    # Profiles & Behavior
     active_profiles: list[str]
+    use_stdin: bool
+    voice_debug: bool
+    
+    # Screen Capture
+    allowlist_bundles: list[str]
+    capture_interval_sec: float
+    
+    # Text-to-Speech
     tts_enabled: bool
     tts_voice: str | None
     tts_rate: int | None
-    voice_debug: bool
+    
+    # Voice Input & Audio
     voice_device: str | None
+    sample_rate: int
+    voice_min_energy: float
+    
+    # Voice Collection & Timing
     voice_block_seconds: float
     voice_collect_seconds: float
     voice_max_collect_seconds: float
+    
+    # Wake Word Detection
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
+    
+    # Whisper Speech Recognition
     whisper_model: str
     whisper_compute_type: str
     whisper_vad: bool
-    voice_min_energy: float
+    whisper_min_confidence: float
+    whisper_min_audio_duration: float
+    whisper_min_word_length: int
+    
+    # Voice Activity Detection (VAD)
     vad_enabled: bool
     vad_aggressiveness: int
     vad_frame_ms: int
     vad_pre_roll_ms: int
     endpoint_silence_ms: int
     max_utterance_ms: int
-    sample_rate: int
+    
+    # UI/UX Features
     tune_enabled: bool
     hot_window_enabled: bool
     hot_window_seconds: float
+    
+    # Memory & Dialogue
     dialogue_memory_timeout: float
+    
+    # Location Services
     location_enabled: bool
     location_cache_minutes: int
     location_ip_address: str | None
     location_auto_detect: bool
+    
+    # Web Search
     web_search_enabled: bool
-    whisper_min_confidence: float
-    whisper_min_audio_duration: float
-    whisper_min_word_length: int
     
 
 
@@ -92,8 +122,23 @@ def _ensure_list(value: Any) -> list[str]:
 def get_default_config() -> Dict[str, Any]:
     """Returns the default configuration values."""
     return {
+        # Database & Storage
         "db_path": _default_db_path(),
         "sqlite_vss_path": None,
+        
+        # LLM & AI Models
+        "ollama_base_url": "http://127.0.0.1:11434",
+        "ollama_embed_model": "nomic-embed-text",
+        "ollama_chat_model": "gpt-oss:20b",
+        "llm_chat_timeout_sec": 180.0,
+        "llm_tools_timeout_sec": 300.0,
+        "llm_embedding_timeout_sec": 60.0,
+        
+        # Profiles & Behavior
+        "active_profiles": ["developer", "business", "life"],
+        "use_stdin": False,
+        
+        # Screen Capture
         "allowlist_bundles": [
             "com.apple.Terminal",
             "com.googlecode.iterm2",
@@ -101,46 +146,63 @@ def get_default_config() -> Dict[str, Any]:
             "com.jetbrains.intellij",
         ],
         "capture_interval_sec": 3.0,
-        "ollama_base_url": "http://127.0.0.1:11434",
-        "ollama_embed_model": "nomic-embed-text",
-        "ollama_chat_model": "gpt-oss:20b",
-        "use_stdin": False,
-        "active_profiles": ["developer", "business", "life"],
+        
+        # Text-to-Speech
         "tts_enabled": True,
         "tts_voice": None,
         "tts_rate": 200,
+        
+        # Voice Input & Audio
         "voice_device": None,
+        "sample_rate": 16000,
+        "voice_min_energy": 0.02,
+        
+        # Voice Collection & Timing
         "voice_block_seconds": 4.0,
         "voice_collect_seconds": 2.5,
         "voice_max_collect_seconds": 6.0,
+        
+        # Wake Word Detection
         "wake_word": "jarvis",
         "wake_aliases": ["joris", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis"],
         "wake_fuzzy_ratio": 0.78,
+        
+        # Whisper Speech Recognition
         "whisper_model": "small",
         "whisper_compute_type": "int8",
         "whisper_vad": True,
-        "voice_min_energy": 0.02,
+        "whisper_min_confidence": 0.3,
+        "whisper_min_audio_duration": 0.15,
+        "whisper_min_word_length": 1,
+        
+        # Voice Activity Detection (VAD)
         "vad_enabled": True,
         "vad_aggressiveness": 2,
         "vad_frame_ms": 20,
         "vad_pre_roll_ms": 240,
         "endpoint_silence_ms": 800,
         "max_utterance_ms": 8000,
-        "sample_rate": 16000,
+        
+        # UI/UX Features
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 4.0,
+        
+        # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
+        
+        # Stop Commands (legacy - should be moved to profiles or separate config)
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
+        
+        # Location Services
         "location_enabled": True,
         "location_cache_minutes": 60,
         "location_ip_address": None,
         "location_auto_detect": True,
+        
+        # Web Search
         "web_search_enabled": True,
-        "whisper_min_confidence": 0.3,
-        "whisper_min_audio_duration": 0.15,
-        "whisper_min_word_length": 1,
     }
 
 
@@ -227,49 +289,82 @@ def load_settings() -> Settings:
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.7))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
+    llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
+    llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
+    llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
 
     return Settings(
+        # Database & Storage
         db_path=db_path,
         sqlite_vss_path=sqlite_vss_path,
-        allowlist_bundles=allowlist_bundles,
-        capture_interval_sec=capture_interval_sec,
+        
+        # LLM & AI Models
         ollama_base_url=ollama_base_url,
         ollama_embed_model=ollama_embed_model,
         ollama_chat_model=ollama_chat_model,
-        use_stdin=use_stdin,
+        llm_chat_timeout_sec=llm_chat_timeout_sec,
+        llm_tools_timeout_sec=llm_tools_timeout_sec,
+        llm_embedding_timeout_sec=llm_embedding_timeout_sec,
+        
+        # Profiles & Behavior
         active_profiles=active_profiles,
+        use_stdin=use_stdin,
+        voice_debug=voice_debug,
+        
+        # Screen Capture
+        allowlist_bundles=allowlist_bundles,
+        capture_interval_sec=capture_interval_sec,
+        
+        # Text-to-Speech
         tts_enabled=tts_enabled,
         tts_voice=tts_voice,
         tts_rate=tts_rate,
-        voice_debug=voice_debug,
+        
+        # Voice Input & Audio
         voice_device=voice_device,
+        sample_rate=sample_rate,
+        voice_min_energy=voice_min_energy,
+        
+        # Voice Collection & Timing
         voice_block_seconds=voice_block_seconds,
         voice_collect_seconds=voice_collect_seconds,
         voice_max_collect_seconds=voice_max_collect_seconds,
+        
+        # Wake Word Detection
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
+        
+        # Whisper Speech Recognition
         whisper_model=whisper_model,
         whisper_compute_type=whisper_compute_type,
         whisper_vad=whisper_vad,
-        voice_min_energy=voice_min_energy,
+        whisper_min_confidence=whisper_min_confidence,
+        whisper_min_audio_duration=whisper_min_audio_duration,
+        whisper_min_word_length=whisper_min_word_length,
+        
+        # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,
         vad_aggressiveness=vad_aggressiveness,
         vad_frame_ms=vad_frame_ms,
         vad_pre_roll_ms=vad_pre_roll_ms,
         endpoint_silence_ms=endpoint_silence_ms,
         max_utterance_ms=max_utterance_ms,
-        sample_rate=sample_rate,
+        
+        # UI/UX Features
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
+        
+        # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,
+        
+        # Location Services
         location_enabled=location_enabled,
         location_cache_minutes=location_cache_minutes,
         location_ip_address=location_ip_address,
         location_auto_detect=location_auto_detect,
+        
+        # Web Search
         web_search_enabled=web_search_enabled,
-        whisper_min_confidence=whisper_min_confidence,
-        whisper_min_audio_duration=whisper_min_audio_duration,
-        whisper_min_word_length=whisper_min_word_length,
     )

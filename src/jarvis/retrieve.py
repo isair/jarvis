@@ -5,9 +5,9 @@ from .embed import get_embedding
 
 
 def retrieve_top_chunks(db: Database, query: str, ollama_base_url: str, embed_model: str,
-                         top_k: int = 8) -> list[tuple[int, float, str]]:
+                         top_k: int = 8, timeout_sec: float = 15.0) -> list[tuple[int, float, str]]:
     try:
-        vec = get_embedding(query, ollama_base_url, embed_model)
+        vec = get_embedding(query, ollama_base_url, embed_model, timeout_sec=timeout_sec)
         vec_json = json.dumps(vec) if vec is not None else None
     except Exception:
         vec_json = None

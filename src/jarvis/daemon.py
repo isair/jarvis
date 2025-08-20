@@ -100,7 +100,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         )
         if db.is_vss_enabled:
             for cid, text_chunk in zip(chunk_ids, chunks):
-                vec = get_embedding(text_chunk, cfg.ollama_base_url, cfg.ollama_embed_model)
+                vec = get_embedding(text_chunk, cfg.ollama_base_url, cfg.ollama_embed_model, timeout_sec=cfg.llm_embedding_timeout_sec)
                 if vec is not None:
                     db.upsert_embedding(cid, vec)
     # Try LLM-based routing first; fall back to heuristic
@@ -118,7 +118,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
     
     # Get chunk-based context (remove automatic conversation summaries)
-    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=8)
+    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=8, timeout_sec=cfg.llm_embedding_timeout_sec)
     context = []
     for _id, _score, _text in top:
         context.append(f"[chunk {_id}] {_text}")
@@ -138,7 +138,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     
     reply, tool_req, tool_args = ask_coach_with_tools(
         cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt, tools_desc,
-        additional_messages=recent_messages, include_location=cfg.location_enabled, 
+        timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
         config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
     )
     if cfg.voice_debug:
@@ -179,6 +179,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 cfg.ollama_chat_model, 
                 system_prompt, 
                 tool_followup_prompt,
+                timeout_sec=cfg.llm_chat_timeout_sec,
                 additional_messages=recent_messages, 
                 include_location=cfg.location_enabled, 
                 config_ip=cfg.location_ip_address, 
@@ -203,7 +204,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         
         try:
             plain = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt,
-                            additional_messages=recent_messages, include_location=cfg.location_enabled, 
+                            timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
                             config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
             if plain and plain.strip():
                 reply = (plain or "").strip()
@@ -242,7 +243,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             
             try:
                 follow_text = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user,
-                                      additional_messages=recent_messages, include_location=cfg.location_enabled, 
+                                      timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
                                       config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect) or ""
                 follow_text = (follow_text or "").strip()
                 reply = follow_text or summary
@@ -807,6 +808,7 @@ def _check_and_update_diary(db: Database, cfg) -> None:
                 ollama_embed_model=cfg.ollama_embed_model,
                 source_app=source_app,
                 voice_debug=cfg.voice_debug,
+                timeout_sec=cfg.llm_chat_timeout_sec,
             )
             if cfg.voice_debug:
                 try:

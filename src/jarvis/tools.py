@@ -220,7 +220,7 @@ def run_tool_with_retries(
                 pass
         followup_prompt = original_prompt + "\n\n[SCREENSHOT_OCR]\n" + ocr_text[:4000]
         reply = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, followup_prompt, 
-                         include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
+                         timeout_sec=cfg.llm_chat_timeout_sec, include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
         result = ToolExecutionResult(success=True, reply_text=(reply or "").strip())
         if getattr(cfg, "voice_debug", False):
             try:
