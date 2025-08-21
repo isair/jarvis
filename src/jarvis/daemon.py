@@ -353,41 +353,85 @@ class VoiceListener(threading.Thread):
         self._was_hot_window_active_at_voice_start: bool = False
 
     def _is_stop_command(self, text_lower: str) -> bool:
-        """Check if the given text contains a stop command"""
+        """Check if the given text contains a stop command that's not part of TTS echo"""
         if not text_lower or not text_lower.strip():
             return False
             
         stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
         stop_sounds = ["sh", "shhh", "shhhh", "ssh", "sssh", "ssssh"]  # Common representations of shushing
         
-        # Check for exact matches (case insensitive)
-        for cmd in stop_commands + stop_sounds:
+        # Check if any stop command or sound is present
+        detected_commands = []
+        
+        # Check for stop commands
+        for cmd in stop_commands:
             if cmd in text_lower:
-                if self.cfg.voice_debug:
+                detected_commands.append(cmd)
+        
+        # Check for shush sounds
+        for sound in stop_sounds:
+            if sound in text_lower:
+                detected_commands.append(sound)
+        
+        # Check fuzzy matches for short inputs
+        if len(text_lower.split()) <= 2:
+            try:
+                fuzzy_threshold = float(getattr(self.cfg, "stop_command_fuzzy_ratio", 0.8))
+                for word in text_lower.split():
+                    for cmd in stop_commands:
+                        ratio = difflib.SequenceMatcher(a=cmd, b=word).ratio()
+                        if ratio >= fuzzy_threshold:
+                            detected_commands.append(f"{cmd}~{word}")
+            except Exception:
+                pass
+        
+        if not detected_commands:
+            return False
+        
+        # If we found stop commands, check if they're part of current TTS output (echo)
+        if self.tts and self.tts.enabled:
+            current_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+            if current_tts and self._is_likely_tts_echo(text_lower, current_tts):
+                if getattr(self.cfg, 'voice_debug', False):
                     try:
-                        print(f"[debug] stop command matched: '{cmd}' in '{text_lower}'", file=sys.stderr)
+                        print(f"[debug] stop command ignored as TTS echo: '{text_lower}' (TTS: '{current_tts[:50]}...')", file=sys.stderr)
                     except Exception:
                         pass
-                return True
+                return False
         
-        # Check for fuzzy matches for stop commands (not shush sounds)
-        try:
-            fuzzy_threshold = float(getattr(self.cfg, "stop_command_fuzzy_ratio", 0.8))
-            words = text_lower.split()
-            for word in words:
-                for cmd in stop_commands:
-                    ratio = difflib.SequenceMatcher(a=cmd, b=word).ratio()
-                    if ratio >= fuzzy_threshold:
-                        if self.cfg.voice_debug:
-                            try:
-                                print(f"[debug] fuzzy stop command matched: '{cmd}' ~= '{word}' (ratio: {ratio:.3f})", file=sys.stderr)
-                            except Exception:
-                                pass
-                        return True
-        except Exception:
-            pass
+        # It's a legitimate stop command (not echo)
+        if getattr(self.cfg, 'voice_debug', False):
+            try:
+                print(f"[debug] legitimate stop command detected: {detected_commands[0]} in '{text_lower}'", file=sys.stderr)
+            except Exception:
+                pass
+        return True
+    
+    def _is_likely_tts_echo(self, heard_text: str, tts_text: str) -> bool:
+        """Check if the heard text is likely an echo of the current TTS output"""
+        if not heard_text or not tts_text:
+            return False
+        
+        # Simple similarity check
+        similarity = difflib.SequenceMatcher(a=tts_text, b=heard_text).ratio()
+        if similarity >= 0.7:  # High similarity suggests echo
+            return True
+        
+        # Check if heard text is a substring of TTS text (partial echo)
+        if heard_text in tts_text or tts_text in heard_text:
+            return True
+        
+        # Check if the heard text is just a few words from the TTS
+        heard_words = set(heard_text.split())
+        tts_words = set(tts_text.split())
+        
+        # If most heard words are in the TTS, it's likely echo
+        if len(heard_words) > 0 and len(heard_words.intersection(tts_words)) / len(heard_words) >= 0.8:
+            return True
         
         return False
+    
+
 
     def _on_audio(self, indata, frames, time_info, status):  # sounddevice callback
         try:
