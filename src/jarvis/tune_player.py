@@ -39,6 +39,29 @@ class TunePlayer:
         """Check if tune is currently playing."""
         return self._is_playing.is_set()
         
+    def play_beep(self) -> None:
+        """Play a single beep sound for immediate feedback."""
+        if not self.enabled:
+            return
+            
+        # Run beep in a separate thread to avoid blocking
+        threading.Thread(target=self._play_single_beep, daemon=True).start()
+        
+    def _play_single_beep(self) -> None:
+        """Play a single beep sound."""
+        system = platform.system().lower()
+        
+        try:
+            if system == "darwin":
+                self._play_macos_beep()
+            elif system == "linux":
+                self._play_linux_beep()
+            elif system == "windows":
+                self._play_windows_beep()
+        except Exception:
+            # Silent fallback - just skip if beep fails
+            pass
+        
     def _play_tune(self) -> None:
         """Play a gentle processing tune in a loop."""
         self._is_playing.set()
@@ -149,6 +172,70 @@ class TunePlayer:
                     break
         else:
             self._play_fallback_tune()
+            
+    def _play_macos_beep(self) -> None:
+        """Play a single beep on macOS."""
+        afplay = shutil.which("afplay")
+        if afplay:
+            # Use a subtle system sound for the beep
+            try:
+                subprocess.run([afplay, "/System/Library/Sounds/Ping.aiff"], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL,
+                             timeout=2.0)
+            except Exception:
+                # Fallback to say command beep
+                say = shutil.which("say")
+                if say:
+                    try:
+                        subprocess.run([say, "[[rate 300]]♪"], 
+                                     stdout=subprocess.DEVNULL, 
+                                     stderr=subprocess.DEVNULL,
+                                     timeout=1.0)
+                    except Exception:
+                        pass
+        else:
+            say = shutil.which("say")
+            if say:
+                try:
+                    subprocess.run([say, "[[rate 300]]♪"], 
+                                 stdout=subprocess.DEVNULL, 
+                                 stderr=subprocess.DEVNULL,
+                                 timeout=1.0)
+                except Exception:
+                    pass
+
+    def _play_linux_beep(self) -> None:
+        """Play a single beep on Linux."""
+        # Try beep command first
+        beep = shutil.which("beep")
+        if beep:
+            try:
+                subprocess.run([beep, "-f", "800", "-l", "150"], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL,
+                             timeout=1.0)
+            except Exception:
+                pass
+        else:
+            # Try paplay with a generated tone (if available)
+            paplay = shutil.which("paplay")
+            if paplay:
+                # This would need a pre-generated tone file, skip for now
+                pass
+
+    def _play_windows_beep(self) -> None:
+        """Play a single beep on Windows."""
+        pwsh = shutil.which("powershell") or shutil.which("pwsh")
+        if pwsh:
+            try:
+                script = "[Console]::Beep(800, 150)"
+                subprocess.run([pwsh, "-NoProfile", "-Command", script],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             timeout=1.0)
+            except Exception:
+                pass
             
     def _play_fallback_tune(self) -> None:
         """Fallback tune using print statements (silent but indicates activity)."""

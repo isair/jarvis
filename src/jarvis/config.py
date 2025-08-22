@@ -54,6 +54,7 @@ class Settings:
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
+    wake_beep_enabled: bool
     
     # Whisper Speech Recognition
     whisper_model: str
@@ -265,6 +266,7 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
+    wake_beep_enabled = bool(merged.get("wake_beep_enabled", True))
     whisper_model = str(merged.get("whisper_model", "small"))
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
     whisper_vad = bool(merged.get("whisper_vad", True))
@@ -334,6 +336,7 @@ def load_settings() -> Settings:
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
+        wake_beep_enabled=wake_beep_enabled,
         
         # Whisper Speech Recognition
         whisper_model=whisper_model,

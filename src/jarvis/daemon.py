@@ -351,6 +351,12 @@ class VoiceListener(threading.Thread):
         self._last_tts_finish_time: float = 0.0
         # Capture hot window state when voice input starts (before transcription)
         self._was_hot_window_active_at_voice_start: bool = False
+        
+        # Wake word beep functionality
+        self._beep_player: Optional[TunePlayer] = None
+        isWakeBeepEnabled = bool(getattr(self.cfg, "wake_beep_enabled", True))
+        if isWakeBeepEnabled:
+            self._beep_player = TunePlayer(enabled=True)
 
     def _is_stop_command(self, text_lower: str) -> bool:
         """Check if the given text contains a stop command that's not part of TTS echo"""
@@ -725,6 +731,10 @@ class VoiceListener(threading.Thread):
             except Exception:
                 is_wake = False
         if is_wake:
+            # Play wake word beep for user feedback
+            if self._beep_player is not None:
+                self._beep_player.play_beep()
+                
             fragment = text_lower
             for alias in aliases:
                 fragment = fragment.replace(alias, " ")
