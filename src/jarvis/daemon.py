@@ -18,6 +18,8 @@ from .tts import TextToSpeech
 from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
+from .query_analyzer import analyze_user_query, determine_tools_from_analysis
+from .multi_tool_executor import execute_multiple_tools, format_multi_tool_context
 from .memory import update_daily_conversation_summary, DialogueMemory, update_diary_from_dialogue_memory
 from .enhanced_rag import get_enhanced_rag_for_query
 
@@ -118,7 +120,31 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
     
-    # Get enhanced RAG context with LLM-based keyword extraction and multi-strategy retrieval
+    # Step 1: Analyze user query to determine intent and needed tools  
+    if cfg.voice_debug:
+        try:
+            print(f"[debug] analyzing query: {redacted[:100]}...", file=sys.stderr)
+        except Exception:
+            pass
+    
+    query_analysis = analyze_user_query(
+        query=redacted,
+        ollama_base_url=cfg.ollama_base_url,
+        ollama_chat_model=cfg.ollama_chat_model,
+        timeout_sec=10.0
+    )
+    
+    if cfg.voice_debug:
+        try:
+            print(f"[debug] query analysis: intent={query_analysis.get('intent')}, tools={query_analysis.get('suggested_tools')}, confidence={query_analysis.get('confidence')}", file=sys.stderr)
+        except Exception:
+            pass
+    
+    # Step 2: Determine which tools to execute based on analysis
+    allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
+    tools_to_execute = determine_tools_from_analysis(query_analysis, allowed_tools)
+    
+    # Step 3: Get enhanced RAG context as baseline
     enhanced_context = get_enhanced_rag_for_query(
         db=db,
         query=redacted,
@@ -126,77 +152,64 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         ollama_embed_model=cfg.ollama_embed_model,
         ollama_chat_model=cfg.ollama_chat_model,
         dialogue_memory=_global_dialogue_memory,
-        max_contexts=12,
-        include_metadata=cfg.voice_debug,  # Include metadata in debug mode
+        max_contexts=8,  # Reduced since we'll add tool results
+        include_metadata=cfg.voice_debug,
         voice_debug=cfg.voice_debug
     )
     
-    prompt = (
-        enhanced_context +
-        "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
-    )
-    allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
-    tools_desc = generate_tools_description(allowed_tools)
-    
-    if cfg.voice_debug:
-        try:
-            print(f"[debug] calling LLM: prompt_chars={len(prompt)}, tools_chars={len(tools_desc)}", file=sys.stderr)
-        except Exception:
-            pass
-    
-    reply, tool_req, tool_args = ask_coach_with_tools(
-        cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt, tools_desc,
-        timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
-        config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
-    )
-    if cfg.voice_debug:
-        try:
-            print(f"[debug] LLM returned: has_text={bool(reply)}, tool_req={tool_req}", file=sys.stderr)
-        except Exception:
-            pass
-    if cfg.voice_debug and tool_req:
-        try:
-            arg_keys = []
-            if isinstance(tool_args, dict):
-                arg_keys = list(tool_args.keys())
-            print(f"[debug] tool requested by model: {tool_req}, args_keys={arg_keys}", file=sys.stderr)
-        except Exception:
-            pass
-    if tool_req:
-        result = run_tool_with_retries(
+    # Step 4: Execute multiple tools if any were determined
+    tool_context = ""
+    if tools_to_execute:
+        if cfg.voice_debug:
+            try:
+                print(f"[debug] executing {len(tools_to_execute)} tools: {tools_to_execute}", file=sys.stderr)
+            except Exception:
+                pass
+        
+        base_prompt = enhanced_context + "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
+        
+        multi_result = execute_multiple_tools(
             db=db,
             cfg=cfg,
-            tool_name=tool_req,
-            tool_args=tool_args,
+            tools_to_execute=tools_to_execute,
+            query_analysis=query_analysis,
             system_prompt=system_prompt,
-            original_prompt=prompt,
+            original_prompt=base_prompt,
             redacted_text=redacted,
-            max_retries=1,
+            voice_debug=cfg.voice_debug
         )
-        if result.reply_text:
-            # Pass tool results through profile-specific LLM processing
-            tool_followup_prompt = (
-                f"The user's original query: {redacted}\n\n"
-                f"Tool ({tool_req}) returned this information:\n{result.reply_text}\n\n"
-                f"Please provide a helpful response to the user based on this information."
-            )
-            
-            # Continue using the existing tune player - don't start/stop a new one
-            profile_response = ask_coach(
-                cfg.ollama_base_url, 
-                cfg.ollama_chat_model, 
-                system_prompt, 
-                tool_followup_prompt,
-                timeout_sec=cfg.llm_chat_timeout_sec,
-                additional_messages=recent_messages, 
-                include_location=cfg.location_enabled, 
-                config_ip=cfg.location_ip_address, 
-                auto_detect=cfg.location_auto_detect
-            )
-            reply = (profile_response or result.reply_text or "").strip()
+        
+        # Format tool results into context
+        tool_context = format_multi_tool_context(multi_result, redacted)
+        
+        if cfg.voice_debug:
+            try:
+                print(f"[debug] tool execution: {multi_result.success_count}/{multi_result.total_count} succeeded", file=sys.stderr)
+            except Exception:
+                pass
+    
+    # Step 5: Generate final response with all context
+    if tool_context:
+        # Use tool results as primary context
+        final_prompt = tool_context
+    else:
+        # Fallback to enhanced RAG context
+        final_prompt = enhanced_context + "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
+    
+    if cfg.voice_debug:
+        try:
+            print(f"[debug] generating final response: prompt_chars={len(final_prompt)}", file=sys.stderr)
+        except Exception:
+            pass
+    
+    reply = ask_coach(
+        cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, final_prompt,
+        timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, 
+        include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+    )
 
-    # Retry once without tools if model produced no content and didn't request a tool
-    if not reply and not tool_req:
+    # Retry once if model produced no content  
+    if not reply:
         if cfg.voice_debug:
             try:
                 print("[debug] retrying without tools...", file=sys.stderr)
@@ -211,7 +224,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             retry_tune_player.start_tune()
         
         try:
-            plain = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt,
+            plain = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, final_prompt,
                             timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
                             config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
             if plain and plain.strip():
@@ -220,8 +233,8 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             # Stop retry tune
             if retry_tune_player is not None:
                 retry_tune_player.stop_tune()
-    # Simple fallback: if user asked about meals/food but model didn't call a tool, fetch today's by default
-    if not reply and not tool_req:
+    # Simple fallback: if user asked about meals/food but model didn't respond, fetch today's by default
+    if not reply:
         text_l = redacted.lower()
         is_food_mentioned = any(k in text_l for k in [
             "eat", "eaten", "ate", "meal", "meals", "food", "breakfast", "lunch", "dinner"

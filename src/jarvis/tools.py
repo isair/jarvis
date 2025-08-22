@@ -101,10 +101,13 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         usage_line="TOOL:RECALL_CONVERSATION {json}",
         args_help=(
             "JSON with optional fields: search_query (keywords to search for), from (start timestamp), to (end timestamp). "
-            "For time-based queries like 'today' or 'yesterday', convert to from/to timestamps. "
-            "For content queries use relevant keywords in search_query."
+            "IMPORTANT: For temporal queries, convert natural language to exact timestamps:\n"
+            "- 'today': from='2025-08-22T00:00:00Z', to='2025-08-22T23:59:59Z'\n"
+            "- 'yesterday': from='2025-08-21T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
+            "- 'last week': from='2025-08-15T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
+            "Use the current date/time context to calculate exact timestamps. Always include both from AND to for temporal queries."
         ),
-        example="TOOL:RECALL_CONVERSATION {\"search_query\":\"password\",\"from\":\"2024-01-15T00:00:00Z\"}",
+        example="TOOL:RECALL_CONVERSATION {\"search_query\":\"what I ate\",\"from\":\"2025-08-21T00:00:00Z\",\"to\":\"2025-08-21T23:59:59Z\"}",
     ),
     "WEB_SEARCH": ToolSpec(
         name="WEB_SEARCH",
