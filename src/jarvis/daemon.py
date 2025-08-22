@@ -13,7 +13,7 @@ from .embed import get_embedding
 from .retrieve import retrieve_top_chunks
 from .triggers import evaluate_triggers
 from .coach import ask_coach, ask_coach_with_tools
-from .profiles import PROFILES, select_profile, select_profile_llm, PROFILE_ALLOWED_TOOLS
+from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
 from .tts import TextToSpeech
 from .tune_player import TunePlayer
 from .nutrition import summarize_meals
@@ -74,6 +74,338 @@ def _ingest_iter() -> Iterable[str]:
         yield s
 
 
+def _extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False, timeout_sec: float = 8.0) -> dict:
+    """
+    Extract search keywords and time parameters for RECALL_CONVERSATION.
+    Returns dict with 'keywords' and optional 'from'/'to' timestamps.
+    """
+    try:
+        system_prompt = """Extract search parameters from the user's query for conversation memory search.
+
+Extract:
+1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words)
+2. TIME RANGE: If mentioned, convert to exact timestamps
+
+Current date/time: {current_time}
+
+Respond ONLY with JSON in this format:
+{{"keywords": ["keyword1", "keyword2"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+
+Rules:
+- keywords: content topics only (no time words like "yesterday", "today")
+- from/to: only if time mentioned, convert to exact UTC timestamps
+- omit from/to if no time mentioned
+
+Examples:
+"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "discuss"]}}
+"what did I eat yesterday?" → {{"keywords": ["eat", "food"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+"remember that password I mentioned today?" → {{"keywords": ["password", "remember"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
+"""
+        
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        current_time = now.strftime("%A, %Y-%m-%d %H:%M UTC")
+        formatted_prompt = system_prompt.format(current_time=current_time)
+        
+        # Try up to 2 attempts in case of transient model delays
+        attempts = 0
+        while attempts < 2:
+            attempts += 1
+            response = ask_coach(
+                base_url=ollama_base_url,
+                chat_model=ollama_chat_model,
+                system_prompt=formatted_prompt,
+                user_content=f"Extract search parameters from: {query}",
+                timeout_sec=timeout_sec,
+                include_location=False
+            )
+            
+            if response:
+                # Try to parse JSON response
+                import json
+                import re
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    try:
+                        params = json.loads(json_match.group())
+                        # Validate structure
+                        if 'keywords' in params and isinstance(params['keywords'], list):
+                            return params
+                    except json.JSONDecodeError:
+                        pass
+            
+            # If first attempt failed, log and retry once
+            if attempts == 1 and voice_debug:
+                try:
+                    print(f"[debug] search parameter extraction: first attempt returned no usable result, retrying", file=sys.stderr)
+                except Exception:
+                    pass
+            
+    except Exception as e:
+        if voice_debug:
+            try:
+                print(f"[debug] search parameter extraction failed: {e}", file=sys.stderr)
+            except Exception:
+                pass
+    
+    # No fallback - if LLM fails, return empty dict (no context enrichment)
+    return {}
+
+
+def _execute_multi_step_plan(
+    db, cfg, system_prompt: str, initial_prompt: str, 
+    initial_tool_req: str, initial_tool_args: dict, initial_reply: str,
+    redacted_text: str, recent_messages: list, allowed_tools: list, tools_desc: str,
+    conversation_context: str = ""
+) -> str:
+    """
+    Execute a multi-step plan where LLM can make consecutive tool calls.
+    Always starts by creating an explicit plan, then executes it step by step.
+    """
+    max_steps = 4  # Prevent infinite loops - most plans should complete in 2-3 steps
+    step = 0
+    accumulated_context = []
+    current_tool_req = initial_tool_req
+    current_tool_args = initial_tool_args
+    current_reply = initial_reply
+    
+    # Always create an explicit plan for complex queries, regardless of initial tool request
+    if not current_reply:  # Only plan if we don't already have a direct response
+        if cfg.voice_debug:
+            try:
+                print(f"📋 [planning] asking LLM to create response plan", file=sys.stderr)
+            except Exception:
+                pass
+        
+        context_section = ""
+        if conversation_context:
+            context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
+        
+        planning_prompt = f"""Original user query: {redacted_text}
+{context_section}
+Before taking any actions, create a clear plan to answer this query effectively.
+
+INSTRUCTIONS:
+1. First, analyze what the user is asking for
+2. CRITICALLY IMPORTANT: Carefully review any conversation history above to understand relevant context and past discussions
+3. Create a strategic numbered plan (2-4 steps) that uses this context to provide targeted, well-informed results  
+4. For complex queries: DON'T jump to generic tool calls - first understand the context, THEN use appropriate tools with targeted parameters
+
+Available tools: {', '.join(allowed_tools)}
+
+RESPOND WITH ONLY YOUR PLAN - DO NOT EXECUTE ANY TOOLS YET:
+PLAN:
+1. [Tool/Analysis] - Why this step is needed based on available context
+2. [Tool] - How this will be targeted using relevant information  
+3. [Final response] - Synthesize results effectively
+
+Do not include any tool calls in this response. Just provide the plan."""
+        
+        plan_reply, plan_tool_req, plan_tool_args = ask_coach_with_tools(
+            cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, planning_prompt, tools_desc,
+            timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages,
+            include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+        )
+        
+        if cfg.voice_debug:
+            try:
+                if "PLAN:" in (plan_reply or ""):
+                    plan_text = plan_reply.split("PLAN:")[1].strip() if "PLAN:" in plan_reply else plan_reply
+                    print(f"  📝 Created plan: {plan_text[:150]}{'...' if len(plan_text) > 150 else ''}", file=sys.stderr)
+                    print(f"  💾 Plan preserved for future steps", file=sys.stderr)
+                elif plan_reply:
+                    print(f"  ⚠️  No PLAN: found in response: {plan_reply[:100]}...", file=sys.stderr)
+            except Exception:
+                pass
+        
+        # Planning should NOT produce tool calls - if it did, ignore them
+        if plan_tool_req:
+            if cfg.voice_debug:
+                try:
+                    print(f"  ⚠️  Ignoring unexpected tool call during planning: {plan_tool_req}", file=sys.stderr)
+                except Exception:
+                    pass
+        
+        # Store the plan in accumulated context for all future steps
+        if plan_reply and "PLAN:" in plan_reply:
+            plan_section = plan_reply.split("PLAN:")[1].strip()
+            accumulated_context.append(f"Response Plan:\nPLAN:\n{plan_section}")
+            
+            # Now ask LLM to execute the first step of the plan
+            execution_prompt = f"""You created this plan:
+PLAN:
+{plan_section}
+{context_section}
+Now execute ONLY the first step of your plan. Use the conversation history above to make it targeted and relevant.
+
+Available tools: {', '.join(allowed_tools)}
+
+Execute the first step now using TOOL:TOOLNAME with appropriate arguments."""
+
+            if cfg.voice_debug:
+                try:
+                    print(f"  🚀 Asking LLM to execute first step of plan", file=sys.stderr)
+                except Exception:
+                    pass
+            
+            # Get first step execution
+            exec_reply, exec_tool_req, exec_tool_args = ask_coach_with_tools(
+                cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, execution_prompt, tools_desc,
+                timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages,
+                include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+            )
+            
+            current_tool_req = exec_tool_req
+            current_tool_args = exec_tool_args
+            
+            if cfg.voice_debug:
+                try:
+                    if current_tool_req:
+                        print(f"  🚀 Starting execution with: {current_tool_req}", file=sys.stderr)
+                    else:
+                        print(f"  ❌ No tool requested for first step", file=sys.stderr)
+                except Exception:
+                    pass
+            
+        elif plan_reply:
+            accumulated_context.append(f"Initial Analysis:\n{plan_reply}")
+            
+        # If we have no tool to execute, something went wrong
+        if not current_tool_req:
+            if cfg.voice_debug:
+                try:
+                    print(f"  ❌ No tool extracted from plan, stopping", file=sys.stderr)
+                except Exception:
+                    pass
+            return "I wasn't able to create a clear plan to answer your request."
+    
+    while step < max_steps:
+        step += 1
+        
+        # If LLM requested a tool, execute it
+        if current_tool_req:
+            if cfg.voice_debug:
+                try:
+                    print(f"⚙️  [step {step}] executing {current_tool_req}", file=sys.stderr)
+                except Exception:
+                    pass
+            
+            # Execute the tool
+            result = run_tool_with_retries(
+                db=db, cfg=cfg, tool_name=current_tool_req, tool_args=current_tool_args,
+                system_prompt=system_prompt, original_prompt=initial_prompt,
+                redacted_text=redacted_text, max_retries=1
+            )
+            
+            if result.reply_text:
+                # Add tool result to accumulated context
+                accumulated_context.append(f"Step {step} - {current_tool_req} result:\n{result.reply_text}")
+                
+                if cfg.voice_debug:
+                    try:
+                        print(f"    ✅ {current_tool_req} returned {len(result.reply_text)} chars", file=sys.stderr)
+                    except Exception:
+                        pass
+            else:
+                accumulated_context.append(f"Step {step} - {current_tool_req}: No results returned")
+        
+        # If LLM provided a direct reply without tool request, return it
+        elif current_reply and current_reply.strip():
+            if cfg.voice_debug:
+                try:
+                    print(f"    💬 [step {step}] LLM provided final response", file=sys.stderr)
+                except Exception:
+                    pass
+            return current_reply.strip()
+        
+        # Build continuation prompt with all accumulated context
+        context_section = ""
+        if conversation_context:
+            context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
+        
+        continuation_prompt = f"""Original user query: {redacted_text}
+{context_section}
+Previous steps completed:
+{chr(10).join(accumulated_context)}
+
+CRITICAL: Review your Response Plan above. Follow it step by step - do NOT repeat the same tool calls.
+Look at what steps you've already completed and execute the NEXT logical step from your plan.
+
+Available tools:
+{', '.join(allowed_tools)}
+
+Rules:
+- Follow your original Response Plan systematically - check what's been done vs what's next
+- Use available context to make tool calls targeted and relevant  
+- If you've completed all planned steps, provide the final comprehensive response
+- Do NOT make the same tool call multiple times
+- Stay focused on the user's original request
+
+Next, either:
+1) Request the NEXT tool from your plan using TOOL:TOOLNAME with concise arguments, or
+2) Provide a final answer now if all plan steps are complete.
+"""
+        
+        if cfg.voice_debug:
+            try:
+                plan_included = any("Response Plan:" in ctx for ctx in accumulated_context)
+                print(f"🤖 [step {step}] asking LLM for next action (plan included: {plan_included})", file=sys.stderr)
+            except Exception:
+                pass
+        
+        # Ask LLM what to do next
+        next_reply, next_tool_req, next_tool_args = ask_coach_with_tools(
+            cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, continuation_prompt, tools_desc,
+            timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages,
+            include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+        )
+        
+        if cfg.voice_debug:
+            try:
+                if next_reply and not next_tool_req:
+                    print(f"    ✅ LLM chose to finish", file=sys.stderr)
+                elif next_tool_req:
+                    print(f"    🔧 LLM chose next tool: {next_tool_req}", file=sys.stderr)
+            except Exception:
+                pass
+        
+        # Update current state for next iteration
+        current_tool_req = next_tool_req
+        current_tool_args = next_tool_args
+        current_reply = next_reply
+        
+        # If no tool requested and we have a reply, we're done
+        if not next_tool_req and next_reply and next_reply.strip():
+            if cfg.voice_debug:
+                try:
+                    print(f"🏁 [multi-step] completed after {step} steps", file=sys.stderr)
+                except Exception:
+                    pass
+            return next_reply.strip()
+        
+        # If no tool and no reply, something went wrong
+        if not next_tool_req and not next_reply:
+            if cfg.voice_debug:
+                try:
+                    print(f"    ❌ [step {step}] LLM returned empty response, stopping", file=sys.stderr)
+                except Exception:
+                    pass
+            break
+    
+    # Fallback: if we hit max steps, return what we have
+    if accumulated_context:
+        fallback_response = f"I gathered some information but couldn't complete the full analysis:\n\n{chr(10).join(accumulated_context)}"
+        if cfg.voice_debug:
+            try:
+                print(f"⏰ [multi-step] hit max steps ({max_steps}), returning partial results", file=sys.stderr)
+            except Exception:
+                pass
+        return fallback_response
+    
+    return "I wasn't able to gather the information you requested."
+
+
+
 def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str) -> Optional[str]:
     global _global_dialogue_memory
     
@@ -103,7 +435,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 vec = get_embedding(text_chunk, cfg.ollama_base_url, cfg.ollama_embed_model, timeout_sec=cfg.llm_embedding_timeout_sec)
                 if vec is not None:
                     db.upsert_embedding(cid, vec)
-    # Try LLM-based routing first; fall back to heuristic
+    # Use LLM-based profile selection
     profile_name = select_profile_llm(cfg.ollama_base_url, cfg.ollama_chat_model, cfg.active_profiles, redacted)
     if cfg.voice_debug:
         try:
@@ -117,78 +449,101 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
     
-    # Get chunk-based context (remove automatic conversation summaries)
-    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=8, timeout_sec=cfg.llm_embedding_timeout_sec)
-    context = []
-    for _id, _score, _text in top:
-        context.append(f"[chunk {_id}] {_text}")
+    # Simple approach: Always try to enrich with conversation memory using keywords and time
+    conversation_context = ""
+    try:
+        # Extract search parameters (keywords + time) for memory search
+        search_params = _extract_search_params_for_memory(
+            redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug, timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0))
+        )
+        
+        keywords = search_params.get('keywords', [])
+        if keywords and 'RECALL_CONVERSATION' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
+            # Build tool arguments with both keywords and time parameters
+            tool_args = {"search_query": " ".join(keywords)}
+            
+            # Add time parameters if present
+            if 'from' in search_params:
+                tool_args['from'] = search_params['from']
+            if 'to' in search_params:
+                tool_args['to'] = search_params['to']
+            
+            if cfg.voice_debug:
+                try:
+                    time_info = f", time: {search_params.get('from', 'none')} to {search_params.get('to', 'none')}" if 'from' in search_params or 'to' in search_params else ""
+                    print(f"🧠 [memory] searching with keywords={keywords}{time_info}", file=sys.stderr)
+                except Exception:
+                    pass
+            
+            # Call RECALL_CONVERSATION to enrich context
+            memory_result = run_tool_with_retries(
+                db=db,
+                cfg=cfg,
+                tool_name="RECALL_CONVERSATION",
+                tool_args=tool_args,
+                system_prompt=system_prompt,
+                original_prompt="",  # Not needed for memory search
+                redacted_text=redacted,
+                max_retries=1
+            )
+            
+            if memory_result.success and memory_result.reply_text:
+                conversation_context = memory_result.reply_text
+                if cfg.voice_debug:
+                    try:
+                        print(f"  ✅ found context: {len(conversation_context)} chars", file=sys.stderr)
+                    except Exception:
+                        pass
+    except Exception:
+        # If keyword extraction or memory search fails, continue without it
+        if cfg.voice_debug:
+            try:
+                print("  ❌ [memory] enrichment failed, continuing without", file=sys.stderr)
+            except Exception:
+                pass
     
-    prompt = (
-        "Context (recent relevant snippets):\n" + "\n".join(context[:6]) +
-        "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
-    )
+    # Build context: conversation memory + basic document chunks  
+    context = []
+    
+    # Add conversation memory first (most relevant)
+    if conversation_context:
+        context.append(f"Relevant conversation history:\n{conversation_context}")
+    
+    # Add basic document chunk retrieval as fallback
+    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=6, timeout_sec=cfg.llm_embedding_timeout_sec)
+    chunk_contexts = []
+    for _id, _score, _text in top:
+        chunk_contexts.append(f"[chunk {_id}] {_text}")
+    
+    if chunk_contexts:
+        context.append("Context (document snippets):\n" + "\n".join(chunk_contexts))
+    
+    # Build final prompt
+    final_prompt = "\n\n".join(context) + f"\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
+    
+
+    
+    # Enable tool calling for complex queries that might need multiple tools
     allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
     tools_desc = generate_tools_description(allowed_tools)
     
     if cfg.voice_debug:
         try:
-            print(f"[debug] calling LLM: prompt_chars={len(prompt)}, tools_chars={len(tools_desc)}", file=sys.stderr)
+            print(f"🤖 [multi-step] starting with {len(allowed_tools)} tools available", file=sys.stderr)
         except Exception:
             pass
     
-    reply, tool_req, tool_args = ask_coach_with_tools(
-        cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt, tools_desc,
-        timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
-        config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+    # Always use multi-step planning for complex queries
+    # This creates an explicit plan FIRST, then executes it step by step
+    reply = _execute_multi_step_plan(
+        db=db, cfg=cfg, system_prompt=system_prompt, 
+        initial_prompt=final_prompt, initial_tool_req=None, initial_tool_args=None, initial_reply=None,
+        redacted_text=redacted, recent_messages=recent_messages, allowed_tools=allowed_tools, tools_desc=tools_desc,
+        conversation_context=conversation_context
     )
-    if cfg.voice_debug:
-        try:
-            print(f"[debug] LLM returned: has_text={bool(reply)}, tool_req={tool_req}", file=sys.stderr)
-        except Exception:
-            pass
-    if cfg.voice_debug and tool_req:
-        try:
-            arg_keys = []
-            if isinstance(tool_args, dict):
-                arg_keys = list(tool_args.keys())
-            print(f"[debug] tool requested by model: {tool_req}, args_keys={arg_keys}", file=sys.stderr)
-        except Exception:
-            pass
-    if tool_req:
-        result = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name=tool_req,
-            tool_args=tool_args,
-            system_prompt=system_prompt,
-            original_prompt=prompt,
-            redacted_text=redacted,
-            max_retries=1,
-        )
-        if result.reply_text:
-            # Pass tool results through profile-specific LLM processing
-            tool_followup_prompt = (
-                f"The user's original query: {redacted}\n\n"
-                f"Tool ({tool_req}) returned this information:\n{result.reply_text}\n\n"
-                f"Please provide a helpful response to the user based on this information."
-            )
-            
-            # Continue using the existing tune player - don't start/stop a new one
-            profile_response = ask_coach(
-                cfg.ollama_base_url, 
-                cfg.ollama_chat_model, 
-                system_prompt, 
-                tool_followup_prompt,
-                timeout_sec=cfg.llm_chat_timeout_sec,
-                additional_messages=recent_messages, 
-                include_location=cfg.location_enabled, 
-                config_ip=cfg.location_ip_address, 
-                auto_detect=cfg.location_auto_detect
-            )
-            reply = (profile_response or result.reply_text or "").strip()
 
-    # Retry once without tools if model produced no content and didn't request a tool
-    if not reply and not tool_req:
+    # Retry once if model produced no content
+    if not reply:
         if cfg.voice_debug:
             try:
                 print("[debug] retrying without tools...", file=sys.stderr)
@@ -203,7 +558,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             retry_tune_player.start_tune()
         
         try:
-            plain = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, prompt,
+            plain = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, final_prompt,
                             timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
                             config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
             if plain and plain.strip():
@@ -212,45 +567,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             # Stop retry tune
             if retry_tune_player is not None:
                 retry_tune_player.stop_tune()
-    # Simple fallback: if user asked about meals/food but model didn't call a tool, fetch today's by default
-    if not reply and not tool_req:
-        text_l = redacted.lower()
-        is_food_mentioned = any(k in text_l for k in [
-            "eat", "eaten", "ate", "meal", "meals", "food", "breakfast", "lunch", "dinner"
-        ])
-        is_list_requested = any(k in text_l for k in [
-            "list", "show", "print", "what did i eat", "what i ate", "what have i eaten", "what have i ate"
-        ]) or ("what" in text_l and ("eat" in text_l or "ate" in text_l or "eaten" in text_l) and "today" in text_l)
-        if is_food_mentioned and is_list_requested:
-            if cfg.voice_debug:
-                try:
-                    print("[debug] fallback: fetching today's meals", file=sys.stderr)
-                except Exception:
-                    pass
-            now = datetime.now(timezone.utc)
-            since = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            meals = db.get_meals_between(since, now.isoformat())
-            summary = summarize_meals([dict(r) for r in meals])
-            follow_sys = "You are a helpful nutrition coach. Turn the following meal summary into a brief, conversational recap with 1-2 suggestions."
-            follow_user = summary
-            
-            # Start tune for nutrition follow-up if enabled and not conflicting with TTS
-            nutrition_tune_player = None
-            should_play_nutrition_tune = cfg.tune_enabled and (tts is None or not tts.is_speaking())
-            if should_play_nutrition_tune:
-                nutrition_tune_player = TunePlayer(enabled=True)
-                nutrition_tune_player.start_tune()
-            
-            try:
-                follow_text = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user,
-                                      timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
-                                      config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect) or ""
-                follow_text = (follow_text or "").strip()
-                reply = follow_text or summary
-            finally:
-                # Stop nutrition tune
-                if nutrition_tune_player is not None:
-                    nutrition_tune_player.stop_tune()
+    # No rule-based fallbacks - rely on LLM responses only
     
     # Intentionally avoid logging the full reply in debug to prevent duplicate output
     if reply:

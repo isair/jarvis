@@ -101,10 +101,13 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         usage_line="TOOL:RECALL_CONVERSATION {json}",
         args_help=(
             "JSON with optional fields: search_query (keywords to search for), from (start timestamp), to (end timestamp). "
-            "For time-based queries like 'today' or 'yesterday', convert to from/to timestamps. "
-            "For content queries use relevant keywords in search_query."
+            "IMPORTANT: For temporal queries, convert natural language to exact timestamps:\n"
+            "- 'today': from='2025-08-22T00:00:00Z', to='2025-08-22T23:59:59Z'\n"
+            "- 'yesterday': from='2025-08-21T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
+            "- 'last week': from='2025-08-15T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
+            "Use the current date/time context to calculate exact timestamps. Always include both from AND to for temporal queries."
         ),
-        example="TOOL:RECALL_CONVERSATION {\"search_query\":\"password\",\"from\":\"2024-01-15T00:00:00Z\"}",
+        example="TOOL:RECALL_CONVERSATION {\"search_query\":\"what I ate\",\"from\":\"2025-08-21T00:00:00Z\",\"to\":\"2025-08-21T23:59:59Z\"}",
     ),
     "WEB_SEARCH": ToolSpec(
         name="WEB_SEARCH",
@@ -112,6 +115,7 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "Search the web using DuckDuckGo to find current information on any topic. "
             "Use this for: educational topics, current news, weather, stock prices, sports scores, "
             "recent events, breaking news, or any question requiring information that may not be in your knowledge base. "
+            "When asked about current events, news, or today's information, always use this tool to get up-to-date information rather than relying on stored knowledge. "
             "Automatically fetches and synthesizes content from the most relevant results. "
             "Note: This feature can be disabled in configuration if desired."
         ),
@@ -196,15 +200,8 @@ def run_tool_with_retries(
     max_retries: int = 1,
 ) -> ToolExecutionResult:
     name = (tool_name or "").upper()
-    # Debug: entering tool
-    if getattr(cfg, "voice_debug", False):
-        try:
-            arg_keys = []
-            if isinstance(tool_args, dict):
-                arg_keys = list(tool_args.keys())
-            print(f"[debug] tool start: {name}, args_keys={arg_keys}", file=sys.stderr)
-        except Exception:
-            pass
+
+
     # SCREENSHOT
     if name == "SCREENSHOT":
         if getattr(cfg, "voice_debug", False):
@@ -357,7 +354,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    debug_msg = f"[debug] RECALL_CONVERSATION: query='{search_query}', from={from_time}, to={to_time}"
+                    debug_msg = f"    🔍 RECALL_CONVERSATION: query='{search_query}', from={from_time}, to={to_time}"
                     print(debug_msg, file=sys.stderr)
                 except Exception:
                     pass
@@ -378,7 +375,7 @@ def run_tool_with_retries(
                         context.append(formatted_text)
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] RECALL_CONVERSATION: match score {fuzzy_score}: {formatted_text[:100]}...", file=sys.stderr)
+                                print(f"      📋 match score {fuzzy_score}: {formatted_text[:100]}...", file=sys.stderr)
                             except Exception:
                                 pass
                                 
@@ -459,7 +456,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"[debug] RECALL_CONVERSATION: found {len(context)} results", file=sys.stderr)
+                    print(f"      ✅ found {len(context)} results", file=sys.stderr)
                 except Exception:
                     pass
             
@@ -492,7 +489,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"[debug] WEB_SEARCH: searching for '{search_query}'", file=sys.stderr)
+                    print(f"    🌐 WEB_SEARCH: searching for '{search_query}'", file=sys.stderr)
                 except Exception:
                     pass
             
@@ -625,45 +622,7 @@ def run_tool_with_retries(
                         except Exception:
                             pass
                 
-                # If DuckDuckGo search failed, fall back to Wikipedia for reliable content
-                if not search_results:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] WEB_SEARCH: DuckDuckGo blocked, trying Wikipedia fallback", file=sys.stderr)
-                        except Exception:
-                            pass
-                    
-                    try:
-                        # Wikipedia fallback for when search engines block us
-                        wiki_search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
-                        
-                        wiki_response = requests.get(wiki_search_url, timeout=5)
-                        if wiki_response.status_code == 200:
-                            wiki_data = wiki_response.json()
-                            search_results_data = wiki_data.get('query', {}).get('search', [])
-                            
-                            for i, result in enumerate(search_results_data):
-                                title = result.get('title', '')
-                                snippet = result.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')
-                                
-                                if title and snippet:
-                                    search_results.append(f"{i+1}. **{title}** (Wikipedia)")
-                                    search_results.append(f"   {snippet}...")
-                                    search_results.append(f"   Link: https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}")
-                                    search_results.append("")
-                            
-                            if getattr(cfg, "voice_debug", False):
-                                try:
-                                    print(f"[debug] WEB_SEARCH: Wikipedia fallback found {len(search_results_data)} results", file=sys.stderr)
-                                except Exception:
-                                    pass
-                    
-                    except Exception as wiki_error:
-                        if getattr(cfg, "voice_debug", False):
-                            try:
-                                print(f"[debug] WEB_SEARCH: Wikipedia fallback failed: {wiki_error}", file=sys.stderr)
-                            except Exception:
-                                pass
+                # No fallback - if primary search fails, the search fails
                 
                 # If still no results, provide helpful guidance
                 if not search_results:
@@ -703,7 +662,7 @@ def run_tool_with_retries(
                     try:
                         instant_count = len(instant_results)
                         web_count = len([r for r in search_results if r.strip() and not r.startswith("   ")])
-                        print(f"[debug] WEB_SEARCH: found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
+                        print(f"      ✅ found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
                     except Exception:
                         pass
                 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
-import re
 from .coach import ask_coach
 
 
@@ -19,6 +18,8 @@ PROFILES: Dict[str, Profile] = {
             "Prefer succinct diffs or commands; avoid long explanations. "
             "Be aware of the current time, day, and location when suggesting scheduling-related actions or deadlines. "
             "Consider work hours, weekdays vs weekends, and local context when making recommendations. "
+            "IMPORTANT: When conversation history is provided, use it to understand the context, previous work, "
+            "and established patterns to provide more targeted and relevant solutions. "
             "Always respond in a short, conversational manner. No markdown tables or complex formatting."
         ),
     ),
@@ -29,6 +30,8 @@ PROFILES: Dict[str, Profile] = {
             "and recommend a next action with a crisp rationale. Provide concrete templates when relevant. "
             "Be mindful of the current time, day, and location when scheduling meetings, setting deadlines, or planning business activities. "
             "Consider business hours, weekdays, time zones, and local business culture in your recommendations. "
+            "IMPORTANT: When conversation history is provided, use it strategically to inform your response. Look for relevant "
+            "context, patterns, and past discussions to make your analysis more targeted and useful. "
             "Always respond in a short, conversational manner. No markdown tables or complex formatting."
         ),
     ),
@@ -40,6 +43,8 @@ PROFILES: Dict[str, Profile] = {
             "Be aware of the current time, day, and location when suggesting activities. "
             "Tailor recommendations based on morning vs evening, weekday vs weekend patterns, and local opportunities. "
             "Consider local weather, culture, and available resources in your suggestions.\n\n"
+            "IMPORTANT: When conversation history is provided, use it to inform your response. Look for relevant patterns, "
+            "past context, and what approaches have been effective to make your suggestions more targeted. "
             "After logging meals: Follow up with healthy suggestions for the rest of the day (hydration, protein targets, vegetables, light activity). "
             "After fetching meal history: Provide a brief recap with 1-2 gentle recommendations for balance or improvement. "
             "Always respond in a short, conversational manner. No markdown tables or complex formatting."
@@ -69,37 +74,6 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
         "WEB_SEARCH",
     ],
 }
-
-
-_DEV_HINTS = re.compile(r"\b(npm ERR!|ESLint|TS\d{3,5}|Traceback|FAIL(ed)?|stack trace|jest|vitest|pytest)\b", re.IGNORECASE)
-_BIZ_HINTS = re.compile(r"\b(ARR|MRR|churn|CAC|LTV|revenue|invoice|proposal|roadmap|OKR|KPI|marketing|sales)\b", re.IGNORECASE)
-_LIFE_HINTS = re.compile(r"\b(sleep|exercise|workout|meditate|habit|journal|schedule|break|walk)\b", re.IGNORECASE)
-_CHAT_HINTS = re.compile(
-    r"\b(hey|hi|hello|how are you|what's up|good morning|good evening|thank you|thanks)\b",
-    re.IGNORECASE,
-)
-
-
-def select_profile(active_profiles: List[str], text: str) -> str:
-    text_sample = text[:2000]
-    candidates = [p for p in active_profiles if p in PROFILES]
-    if not candidates:
-        return "developer"
-    # Heuristic selection based on hints
-    if "developer" in candidates and _DEV_HINTS.search(text_sample):
-        return "developer"
-    if "business" in candidates and _BIZ_HINTS.search(text_sample):
-        return "business"
-    if "life" in candidates and _LIFE_HINTS.search(text_sample):
-        return "life"
-    # General conversational tone → prefer a calmer "life" profile if available
-    if "life" in candidates and _CHAT_HINTS.search(text_sample):
-        return "life"
-    # Default preference order
-    for pref in ("developer", "business", "life"):
-        if pref in candidates:
-            return pref
-    return candidates[0]
 
 
 def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str], text: str) -> str:
@@ -134,5 +108,5 @@ def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str
         for c in candidates:
             if c in ans:
                 return c
-    # Fallback to heuristic if model fails/ambiguous
-    return select_profile(active_profiles, text)
+    # No fallback - if LLM fails, use first available profile or default to developer
+    return candidates[0] if candidates else "developer"

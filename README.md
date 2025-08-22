@@ -20,6 +20,7 @@ An offline, completely private AI voice assistant with unlimited memory that und
 ### 🎬 **AI like in the movies**
 - **One continuous conversation**: No "new chat" buttons. Talk to it like a real person across days, weeks, months.
 - **Always listening, never interrupting**: Leave it running 24/7. Unlike ChatGPT or Gemini's voice modes, it won't try to respond to every single thing you say.
+- **Multi-step reasoning**: Can chain multiple tools together to answer complex queries, like finding your interests from conversation history then searching for personalized news.
 - **Contextual awareness**: Knows your location (if permitted), timezone, what day it is, and adapts responses accordingly.
 - **Real-time context**: Ask "what time is it?" mid-conversation and get the right answer. Not the time from when you first started the conversation.
 
@@ -47,7 +48,37 @@ An offline, completely private AI voice assistant with unlimited memory that und
 
 ## Demos
 
-### Weather
+
+<details>
+
+<summary>Finding news that you would be interested in</summary>
+
+```bash
+[voice] heard: Jarvis, what are some news from today that I might be interested in?
+
+[debug] step 1: executing RECALL_CONVERSATION, args=['search_query']
+[debug] step 1: RECALL_CONVERSATION returned 890 chars
+[debug] step 2: executing WEB_SEARCH, args=['search_query'] 
+[debug] step 2: WEB_SEARCH returned 2100 chars
+[debug] step 2: LLM completed after 2 steps
+
+[jarvis coach:business]
+Based on your interest in AI startups and climate tech that we discussed before, here are today's relevant stories:
+
+**AI Funding**: Anthropic raised $300M in Series C, focusing on AI safety research you mentioned being curious about.
+
+**Climate Tech**: New carbon capture breakthrough from Swiss startup Climeworks - their direct air capture tech just hit 1000x cost reduction.
+
+**Startups**: Three unicorn announcements today in fintech, including that blockchain payments company we talked about last week.
+
+Want me to dive deeper into any of these, or get more details on the funding landscape?
+```
+
+</details>
+
+<details>
+
+<summary>Weather</summary>
 
 ```bash
 [voice] heard: Jarvis, how's the weather today?
@@ -56,7 +87,11 @@ An offline, completely private AI voice assistant with unlimited memory that und
 Hey! Today in London it’s a mild day – around 20–22 °C with partly‑cloudy skies. There’s a light chance of showers in the late afternoon, so a small umbrella or a quick rain‑coat might be handy if you’re heading out after 17:00. In the evening it cools to about 16 °C, so a light jacket or cardigan would keep you comfy. Enjoy the city—just keep that umbrella close by in case of a quick drizzle!
 ```
 
-### Nutrition coach
+</details>
+
+<details>
+
+<summary>Nutrition coach</summary>
 
 ```bash
 [voice] heard: Jarvis, what have I eaten so far today?
@@ -71,8 +106,10 @@ A couple of gentle ideas for the rest of the day:
 3. **Hydrate** – Sip an extra 250 mL of water now and keep a bottle handy.  
 4. **A quick walk** – 10‑15 minutes after lunch can help balance the sugar load.
 
-Just a few small moves, and you’ll keep the energy steady without feeling deprived. Happy eating!
+Just a few small moves, and you'll keep the energy steady without feeling deprived. Happy eating!
 ```
+
+</details>
 
 ## Quick Start
 
