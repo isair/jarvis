@@ -116,12 +116,8 @@ Examples:
             except Exception:
                 pass
     
-    # Fallback: simple word extraction
-    import re
-    words = re.findall(r'\b\w{3,}\b', query.lower())
-    stop_words = {'the', 'and', 'what', 'how', 'when', 'where', 'why', 'who', 'did', 'you', 'can', 'will', 'that', 'this', 'was', 'were', 'have', 'has', 'had'}
-    keywords = [w for w in words if w not in stop_words][:5]
-    return keywords
+    # No fallback - if LLM fails, return empty list (no context enrichment)
+    return []
 
 
 def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str) -> Optional[str]:
@@ -153,7 +149,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 vec = get_embedding(text_chunk, cfg.ollama_base_url, cfg.ollama_embed_model, timeout_sec=cfg.llm_embedding_timeout_sec)
                 if vec is not None:
                     db.upsert_embedding(cid, vec)
-    # Try LLM-based routing first; fall back to heuristic
+    # Use LLM-based profile selection
     profile_name = select_profile_llm(cfg.ollama_base_url, cfg.ollama_chat_model, cfg.active_profiles, redacted)
     if cfg.voice_debug:
         try:
@@ -263,45 +259,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             # Stop retry tune
             if retry_tune_player is not None:
                 retry_tune_player.stop_tune()
-    # Simple fallback: if user asked about meals/food but model didn't respond, fetch today's by default
-    if not reply:
-        text_l = redacted.lower()
-        is_food_mentioned = any(k in text_l for k in [
-            "eat", "eaten", "ate", "meal", "meals", "food", "breakfast", "lunch", "dinner"
-        ])
-        is_list_requested = any(k in text_l for k in [
-            "list", "show", "print", "what did i eat", "what i ate", "what have i eaten", "what have i ate"
-        ]) or ("what" in text_l and ("eat" in text_l or "ate" in text_l or "eaten" in text_l) and "today" in text_l)
-        if is_food_mentioned and is_list_requested:
-            if cfg.voice_debug:
-                try:
-                    print("[debug] fallback: fetching today's meals", file=sys.stderr)
-                except Exception:
-                    pass
-            now = datetime.now(timezone.utc)
-            since = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            meals = db.get_meals_between(since, now.isoformat())
-            summary = summarize_meals([dict(r) for r in meals])
-            follow_sys = "You are a helpful nutrition coach. Turn the following meal summary into a brief, conversational recap with 1-2 suggestions."
-            follow_user = summary
-            
-            # Start tune for nutrition follow-up if enabled and not conflicting with TTS
-            nutrition_tune_player = None
-            should_play_nutrition_tune = cfg.tune_enabled and (tts is None or not tts.is_speaking())
-            if should_play_nutrition_tune:
-                nutrition_tune_player = TunePlayer(enabled=True)
-                nutrition_tune_player.start_tune()
-            
-            try:
-                follow_text = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user,
-                                      timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages, include_location=cfg.location_enabled, 
-                                      config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect) or ""
-                follow_text = (follow_text or "").strip()
-                reply = follow_text or summary
-            finally:
-                # Stop nutrition tune
-                if nutrition_tune_player is not None:
-                    nutrition_tune_player.stop_tune()
+    # No rule-based fallbacks - rely on LLM responses only
     
     # Intentionally avoid logging the full reply in debug to prevent duplicate output
     if reply:

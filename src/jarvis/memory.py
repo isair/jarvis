@@ -182,9 +182,8 @@ TOPICS: [topic1, topic2, topic3]"""
     try:
         response = ask_coach(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, timeout_sec=timeout_sec, include_location=False)
         if not response:
-            # Fallback: create a simple summary from the chunks themselves
-            fallback_summary = chunks_text[:200] + "..." if len(chunks_text) > 200 else chunks_text
-            return fallback_summary, "conversation, general"
+            # No fallback - if LLM fails to respond, skip summarization
+            return None, None
             
         # Parse the response
         lines = response.strip().split('\n')
@@ -197,18 +196,15 @@ TOPICS: [topic1, topic2, topic3]"""
             elif line.startswith("TOPICS:"):
                 topics = line[7:].strip()
         
-        # Fallback if parsing fails
-        if not summary:
-            summary = response[:200] + "..." if len(response) > 200 else response
-        if not topics:
-            topics = "conversation, general"
+        # No fallback - if parsing fails, skip summarization
+        if not summary or not topics:
+            return None, None
             
         return summary, topics
         
     except Exception:
-        # Even if LLM fails, store the raw conversation chunks for searchability
-        fallback_summary = chunks_text[:200] + "..." if len(chunks_text) > 200 else chunks_text
-        return fallback_summary, "conversation, memory, error"
+        # No fallback - if LLM fails, skip summarization entirely
+        return None, None
 
 
 def update_daily_conversation_summary(
@@ -251,6 +247,15 @@ def update_daily_conversation_summary(
         summary, topics = generate_conversation_summary(
             new_chunks, previous_summary, ollama_base_url, ollama_chat_model, timeout_sec=timeout_sec
         )
+        
+        # Skip summarization if LLM failed
+        if summary is None or topics is None:
+            if voice_debug:
+                try:
+                    print(f"[debug] conversation summary skipped - LLM failed to generate summary", file=sys.stderr)
+                except Exception:
+                    pass
+            return  # Skip summarization entirely
         
         # Debug: Log the generated summary and topics
         if voice_debug:

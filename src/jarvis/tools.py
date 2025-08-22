@@ -628,45 +628,7 @@ def run_tool_with_retries(
                         except Exception:
                             pass
                 
-                # If DuckDuckGo search failed, fall back to Wikipedia for reliable content
-                if not search_results:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] WEB_SEARCH: DuckDuckGo blocked, trying Wikipedia fallback", file=sys.stderr)
-                        except Exception:
-                            pass
-                    
-                    try:
-                        # Wikipedia fallback for when search engines block us
-                        wiki_search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
-                        
-                        wiki_response = requests.get(wiki_search_url, timeout=5)
-                        if wiki_response.status_code == 200:
-                            wiki_data = wiki_response.json()
-                            search_results_data = wiki_data.get('query', {}).get('search', [])
-                            
-                            for i, result in enumerate(search_results_data):
-                                title = result.get('title', '')
-                                snippet = result.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')
-                                
-                                if title and snippet:
-                                    search_results.append(f"{i+1}. **{title}** (Wikipedia)")
-                                    search_results.append(f"   {snippet}...")
-                                    search_results.append(f"   Link: https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}")
-                                    search_results.append("")
-                            
-                            if getattr(cfg, "voice_debug", False):
-                                try:
-                                    print(f"[debug] WEB_SEARCH: Wikipedia fallback found {len(search_results_data)} results", file=sys.stderr)
-                                except Exception:
-                                    pass
-                    
-                    except Exception as wiki_error:
-                        if getattr(cfg, "voice_debug", False):
-                            try:
-                                print(f"[debug] WEB_SEARCH: Wikipedia fallback failed: {wiki_error}", file=sys.stderr)
-                            except Exception:
-                                pass
+                # No fallback - if primary search fails, the search fails
                 
                 # If still no results, provide helpful guidance
                 if not search_results:

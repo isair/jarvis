@@ -1,7 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
-import re
 from .coach import ask_coach
 
 
@@ -71,37 +70,6 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
 }
 
 
-_DEV_HINTS = re.compile(r"\b(npm ERR!|ESLint|TS\d{3,5}|Traceback|FAIL(ed)?|stack trace|jest|vitest|pytest)\b", re.IGNORECASE)
-_BIZ_HINTS = re.compile(r"\b(ARR|MRR|churn|CAC|LTV|revenue|invoice|proposal|roadmap|OKR|KPI|marketing|sales)\b", re.IGNORECASE)
-_LIFE_HINTS = re.compile(r"\b(sleep|exercise|workout|meditate|habit|journal|schedule|break|walk)\b", re.IGNORECASE)
-_CHAT_HINTS = re.compile(
-    r"\b(hey|hi|hello|how are you|what's up|good morning|good evening|thank you|thanks)\b",
-    re.IGNORECASE,
-)
-
-
-def select_profile(active_profiles: List[str], text: str) -> str:
-    text_sample = text[:2000]
-    candidates = [p for p in active_profiles if p in PROFILES]
-    if not candidates:
-        return "developer"
-    # Heuristic selection based on hints
-    if "developer" in candidates and _DEV_HINTS.search(text_sample):
-        return "developer"
-    if "business" in candidates and _BIZ_HINTS.search(text_sample):
-        return "business"
-    if "life" in candidates and _LIFE_HINTS.search(text_sample):
-        return "life"
-    # General conversational tone → prefer a calmer "life" profile if available
-    if "life" in candidates and _CHAT_HINTS.search(text_sample):
-        return "life"
-    # Default preference order
-    for pref in ("developer", "business", "life"):
-        if pref in candidates:
-            return pref
-    return candidates[0]
-
-
 def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str], text: str) -> str:
     candidates = [p for p in active_profiles if p in PROFILES]
     if not candidates:
@@ -134,5 +102,5 @@ def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str
         for c in candidates:
             if c in ans:
                 return c
-    # Fallback to heuristic if model fails/ambiguous
-    return select_profile(active_profiles, text)
+    # No fallback - if LLM fails, use first available profile or default to developer
+    return candidates[0] if candidates else "developer"
