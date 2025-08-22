@@ -13,7 +13,7 @@ from .embed import get_embedding
 from .retrieve import retrieve_top_chunks
 from .triggers import evaluate_triggers
 from .coach import ask_coach, ask_coach_with_tools
-from .profiles import PROFILES, select_profile, select_profile_llm, PROFILE_ALLOWED_TOOLS
+from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
 from .tts import TextToSpeech
 from .tune_player import TunePlayer
 from .nutrition import summarize_meals
@@ -74,50 +74,71 @@ def _ingest_iter() -> Iterable[str]:
         yield s
 
 
-def _extract_keywords_for_memory_search(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False) -> list[str]:
+def _extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False) -> dict:
     """
-    Simple LLM-based keyword extraction for memory search.
-    Returns 3-5 relevant keywords for searching conversation history.
+    Extract search keywords and time parameters for RECALL_CONVERSATION.
+    Returns dict with 'keywords' and optional 'from'/'to' timestamps.
     """
     try:
-        system_prompt = """Extract 3-5 keywords from the user's query for searching conversation history. 
-Focus on:
-- Specific topics, subjects, or themes mentioned
-- Important nouns and technical terms  
-- Names, places, or unique identifiers
-- Avoid common words like "the", "and", "what", "how"
+        system_prompt = """Extract search parameters from the user's query for conversation memory search.
 
-Respond ONLY with keywords separated by commas, no other text.
+Extract:
+1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words)
+2. TIME RANGE: If mentioned, convert to exact timestamps
+
+Current date/time: {current_time}
+
+Respond ONLY with JSON in this format:
+{{"keywords": ["keyword1", "keyword2"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+
+Rules:
+- keywords: content topics only (no time words like "yesterday", "today")
+- from/to: only if time mentioned, convert to exact UTC timestamps
+- omit from/to if no time mentioned
 
 Examples:
-"what did we discuss about the warhammer project?" → warhammer, project, discuss
-"do you remember that password I mentioned?" → password, remember, mentioned  
-"what did I eat yesterday for lunch?" → eat, yesterday, lunch, food
+"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "discuss"]}}
+"what did I eat yesterday?" → {{"keywords": ["eat", "food"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+"remember that password I mentioned today?" → {{"keywords": ["password", "remember"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
 """
+        
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        current_time = now.strftime("%A, %Y-%m-%d %H:%M UTC")
+        formatted_prompt = system_prompt.format(current_time=current_time)
         
         response = ask_coach(
             base_url=ollama_base_url,
             chat_model=ollama_chat_model,
-            system_prompt=system_prompt,
-            user_content=f"Extract keywords from: {query}",
+            system_prompt=formatted_prompt,
+            user_content=f"Extract search parameters from: {query}",
             timeout_sec=8.0,
             include_location=False
         )
         
         if response:
-            # Parse comma-separated keywords
-            keywords = [k.strip() for k in response.split(',') if k.strip() and len(k.strip()) > 2]
-            return keywords[:5]  # Max 5 keywords
+            # Try to parse JSON response
+            import json
+            import re
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                try:
+                    params = json.loads(json_match.group())
+                    # Validate structure
+                    if 'keywords' in params and isinstance(params['keywords'], list):
+                        return params
+                except json.JSONDecodeError:
+                    pass
             
     except Exception as e:
         if voice_debug:
             try:
-                print(f"[debug] keyword extraction failed: {e}", file=sys.stderr)
+                print(f"[debug] search parameter extraction failed: {e}", file=sys.stderr)
             except Exception:
                 pass
     
-    # No fallback - if LLM fails, return empty list (no context enrichment)
-    return []
+    # No fallback - if LLM fails, return empty dict (no context enrichment)
+    return {}
 
 
 def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str) -> Optional[str]:
@@ -163,16 +184,27 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
     
-    # Simple approach: Always try to enrich with conversation memory using keywords
+    # Simple approach: Always try to enrich with conversation memory using keywords and time
     conversation_context = ""
     try:
-        # Extract keywords for memory search using simple LLM call
-        keywords = _extract_keywords_for_memory_search(redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug)
+        # Extract search parameters (keywords + time) for memory search
+        search_params = _extract_search_params_for_memory(redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug)
         
+        keywords = search_params.get('keywords', [])
         if keywords and 'RECALL_CONVERSATION' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
+            # Build tool arguments with both keywords and time parameters
+            tool_args = {"search_query": " ".join(keywords)}
+            
+            # Add time parameters if present
+            if 'from' in search_params:
+                tool_args['from'] = search_params['from']
+            if 'to' in search_params:
+                tool_args['to'] = search_params['to']
+            
             if cfg.voice_debug:
                 try:
-                    print(f"[debug] extracted keywords for memory search: {keywords}", file=sys.stderr)
+                    time_info = f", time: {search_params.get('from', 'none')} to {search_params.get('to', 'none')}" if 'from' in search_params or 'to' in search_params else ""
+                    print(f"[debug] memory search params: keywords={keywords}{time_info}", file=sys.stderr)
                 except Exception:
                     pass
             
@@ -181,7 +213,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 db=db,
                 cfg=cfg,
                 tool_name="RECALL_CONVERSATION",
-                tool_args={"search_query": " ".join(keywords)},
+                tool_args=tool_args,
                 system_prompt=system_prompt,
                 original_prompt="",  # Not needed for memory search
                 redacted_text=redacted,
