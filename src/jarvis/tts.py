@@ -5,6 +5,7 @@ import threading
 import queue
 import shutil
 import signal
+import time
 from typing import Optional, Callable
 
 
@@ -18,6 +19,7 @@ class TextToSpeech:
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
+        self._speech_start_time: float = 0.0
         self._completion_callback: Optional[Callable[[], None]] = None
         self._current_process: Optional[subprocess.Popen] = None
         self._process_lock = threading.Lock()
@@ -71,6 +73,12 @@ class TextToSpeech:
                     pass
                 self._current_process = None
 
+    def get_speech_duration(self) -> float:
+        """Get how long the current/last speech has been playing"""
+        if self._speech_start_time > 0:
+            return time.time() - self._speech_start_time
+        return 0.0
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -87,6 +95,7 @@ class TextToSpeech:
     def _speak_once(self, text: str) -> None:
         self._is_speaking.set()
         self._last_spoken_text = text
+        self._speech_start_time = time.time()
         self._should_interrupt.clear()
         system = platform.system().lower()
         interrupted = False
