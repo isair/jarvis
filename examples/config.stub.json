@@ -9,6 +9,7 @@
   "ollama_chat_model": "gpt-oss:20b",
   "llm_chat_timeout_sec": 180.0,
   "llm_tools_timeout_sec": 300.0,
+  "llm_multi_step_timeout_sec": 600.0,
   "llm_embedding_timeout_sec": 60.0,
   
   "__comment": "Profiles & Behavior",

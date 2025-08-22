@@ -203,7 +203,7 @@ Do not include any tool calls in this response. Just provide the plan."""
         
         plan_reply, plan_tool_req, plan_tool_args = ask_coach_with_tools(
             cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, planning_prompt, tools_desc,
-            timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages,
+            timeout_sec=cfg.llm_multi_step_timeout_sec, additional_messages=recent_messages,
             include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
         )
         
@@ -251,7 +251,7 @@ Execute the first step now using TOOL:TOOLNAME with appropriate arguments."""
             # Get first step execution
             exec_reply, exec_tool_req, exec_tool_args = ask_coach_with_tools(
                 cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, execution_prompt, tools_desc,
-                timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages,
+                timeout_sec=cfg.llm_multi_step_timeout_sec, additional_messages=recent_messages,
                 include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
             )
             
@@ -356,7 +356,7 @@ Next, either:
         # Ask LLM what to do next
         next_reply, next_tool_req, next_tool_args = ask_coach_with_tools(
             cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, continuation_prompt, tools_desc,
-            timeout_sec=cfg.llm_tools_timeout_sec, additional_messages=recent_messages,
+            timeout_sec=cfg.llm_multi_step_timeout_sec, additional_messages=recent_messages,
             include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
         )
         
