@@ -115,6 +115,7 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "Search the web using DuckDuckGo to find current information on any topic. "
             "Use this for: educational topics, current news, weather, stock prices, sports scores, "
             "recent events, breaking news, or any question requiring information that may not be in your knowledge base. "
+            "When asked about current events, news, or today's information, always use this tool to get up-to-date information rather than relying on stored knowledge. "
             "Automatically fetches and synthesizes content from the most relevant results. "
             "Note: This feature can be disabled in configuration if desired."
         ),
@@ -199,15 +200,8 @@ def run_tool_with_retries(
     max_retries: int = 1,
 ) -> ToolExecutionResult:
     name = (tool_name or "").upper()
-    # Debug: entering tool
-    if getattr(cfg, "voice_debug", False):
-        try:
-            arg_keys = []
-            if isinstance(tool_args, dict):
-                arg_keys = list(tool_args.keys())
-            print(f"[debug] tool start: {name}, args_keys={arg_keys}", file=sys.stderr)
-        except Exception:
-            pass
+
+
     # SCREENSHOT
     if name == "SCREENSHOT":
         if getattr(cfg, "voice_debug", False):
@@ -360,7 +354,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    debug_msg = f"[debug] RECALL_CONVERSATION: query='{search_query}', from={from_time}, to={to_time}"
+                    debug_msg = f"    🔍 RECALL_CONVERSATION: query='{search_query}', from={from_time}, to={to_time}"
                     print(debug_msg, file=sys.stderr)
                 except Exception:
                     pass
@@ -381,7 +375,7 @@ def run_tool_with_retries(
                         context.append(formatted_text)
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] RECALL_CONVERSATION: match score {fuzzy_score}: {formatted_text[:100]}...", file=sys.stderr)
+                                print(f"      📋 match score {fuzzy_score}: {formatted_text[:100]}...", file=sys.stderr)
                             except Exception:
                                 pass
                                 
@@ -462,7 +456,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"[debug] RECALL_CONVERSATION: found {len(context)} results", file=sys.stderr)
+                    print(f"      ✅ found {len(context)} results", file=sys.stderr)
                 except Exception:
                     pass
             
@@ -495,7 +489,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"[debug] WEB_SEARCH: searching for '{search_query}'", file=sys.stderr)
+                    print(f"    🌐 WEB_SEARCH: searching for '{search_query}'", file=sys.stderr)
                 except Exception:
                     pass
             
@@ -668,7 +662,7 @@ def run_tool_with_retries(
                     try:
                         instant_count = len(instant_results)
                         web_count = len([r for r in search_results if r.strip() and not r.startswith("   ")])
-                        print(f"[debug] WEB_SEARCH: found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
+                        print(f"      ✅ found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
                     except Exception:
                         pass
                 

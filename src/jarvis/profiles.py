@@ -18,6 +18,8 @@ PROFILES: Dict[str, Profile] = {
             "Prefer succinct diffs or commands; avoid long explanations. "
             "Be aware of the current time, day, and location when suggesting scheduling-related actions or deadlines. "
             "Consider work hours, weekdays vs weekends, and local context when making recommendations. "
+            "IMPORTANT: When conversation history is provided, use it to understand the context, previous work, "
+            "and established patterns to provide more targeted and relevant solutions. "
             "Always respond in a short, conversational manner. No markdown tables or complex formatting."
         ),
     ),
@@ -28,6 +30,8 @@ PROFILES: Dict[str, Profile] = {
             "and recommend a next action with a crisp rationale. Provide concrete templates when relevant. "
             "Be mindful of the current time, day, and location when scheduling meetings, setting deadlines, or planning business activities. "
             "Consider business hours, weekdays, time zones, and local business culture in your recommendations. "
+            "IMPORTANT: When conversation history is provided, use it strategically to inform your response. Look for relevant "
+            "context, patterns, and past discussions to make your analysis more targeted and useful. "
             "Always respond in a short, conversational manner. No markdown tables or complex formatting."
         ),
     ),
@@ -39,6 +43,8 @@ PROFILES: Dict[str, Profile] = {
             "Be aware of the current time, day, and location when suggesting activities. "
             "Tailor recommendations based on morning vs evening, weekday vs weekend patterns, and local opportunities. "
             "Consider local weather, culture, and available resources in your suggestions.\n\n"
+            "IMPORTANT: When conversation history is provided, use it to inform your response. Look for relevant patterns, "
+            "past context, and what approaches have been effective to make your suggestions more targeted. "
             "After logging meals: Follow up with healthy suggestions for the rest of the day (hydration, protein targets, vegetables, light activity). "
             "After fetching meal history: Provide a brief recap with 1-2 gentle recommendations for balance or improvement. "
             "Always respond in a short, conversational manner. No markdown tables or complex formatting."
