@@ -2,6 +2,13 @@
 
 An offline, completely private AI voice assistant with unlimited memory that understands your context, capable of using tools, and can just be left on 24/7 without any worries. Jarvis runs entirely on your machine using local models, with no data leaving your device except for optional web search queries.
 
+---
+
+**💖 Support Jarvis**  
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ff69b4?logo=github)](https://github.com/sponsors/isair) [![Ko-fi](https://img.shields.io/badge/Support-Ko--fi-ff5722?logo=kofi&logoColor=white)](https://ko-fi.com/isair)
+
+---
+
 ## Why Jarvis
 
 ### 🔒 **Complete privacy and control**
