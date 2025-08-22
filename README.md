@@ -48,65 +48,128 @@ An offline, completely private AI voice assistant with unlimited memory that und
 
 ## Demos
 
+These examples show Jarvis in action with debug mode enabled to demonstrate the internal processing steps.
 
 <details>
 
-<summary>Finding news that you would be interested in</summary>
+<summary>Personalized news search with multi-step planning</summary>
 
 ```bash
-[voice] heard: Jarvis, what are some news from today that I might be interested in?
-
-[debug] step 1: executing RECALL_CONVERSATION, args=['search_query']
-[debug] step 1: RECALL_CONVERSATION returned 890 chars
-[debug] step 2: executing WEB_SEARCH, args=['search_query'] 
-[debug] step 2: WEB_SEARCH returned 2100 chars
-[debug] step 2: LLM completed after 2 steps
+[voice] heard: Jarvis, what are some news from today that might interest me?
+[debug] query collected (silence timeout): 'what are some news from today that might interest me?'
+[debug] selected profile: business
+🧠 [memory] searching with keywords=['news', 'interest'], time: 2025-08-22T00:00:00Z to 2025-08-22T23:59:59Z
+    🔍 RECALL_CONVERSATION: query='news interest', from=2025-08-22T00:00:00Z, to=2025-08-22T23:59:59Z
+      📋 match score 69.2: [2025-08-22] User discussed interests in AI startups, climate tech, and fintech developments...
+      📋 match score 53.8: [2025-08-21] User asked about renewable energy investments and carbon offset markets...
+      ✅ found 1 results
+  ✅ found context: 905 chars
+🤖 [multi-step] starting with 3 tools available
+📋 [planning] asking LLM to create response plan
+  📝 Created plan with 2 steps
+     Step 1: WEB_SEARCH - Search for current news in user's areas of interest
+     Step 2: FINAL_RESPONSE - Synthesize relevant stories conversationally
+⚙️  [step 1] executing: WEB_SEARCH - Search for current news in user's areas of interest
+    🌐 WEB_SEARCH: searching for 'August 22 2025 AI startups climate tech fintech news'
+[debug] WEB_SEARCH: DuckDuckGo found 5 results
+    ✅ WEB_SEARCH returned 1847 chars
+⚙️  [step 2] executing: FINAL_RESPONSE - Synthesize relevant stories conversationally
+🏁 [multi-step] completed with final response
 
 [jarvis coach:business]
-Based on your interest in AI startups and climate tech that we discussed before, here are today's relevant stories:
-
-**AI Funding**: Anthropic raised $300M in Series C, focusing on AI safety research you mentioned being curious about.
-
-**Climate Tech**: New carbon capture breakthrough from Swiss startup Climeworks - their direct air capture tech just hit 1000x cost reduction.
-
-**Startups**: Three unicorn announcements today in fintech, including that blockchain payments company we talked about last week.
-
-Want me to dive deeper into any of these, or get more details on the funding landscape?
+Found a couple things you'd probably like - there's news about Anthropic's latest $400M funding round focusing on AI safety research, which matches what you mentioned being curious about. Also spotted that Swiss startup Climeworks just announced a breakthrough in direct air capture costs. Plus three new fintech unicorns were announced today, including that blockchain payments company we talked about last week hitting a $2B valuation. Want me to dig deeper into any of these?
 ```
 
 </details>
 
 <details>
 
-<summary>Weather</summary>
+<summary>Location-aware weather request</summary>
 
 ```bash
 [voice] heard: Jarvis, how's the weather today?
+[debug] query collected (silence timeout): 'how is the weather today?'
+[debug] selected profile: life
+🤖 [multi-step] starting with 3 tools available
+📋 [planning] asking LLM to create response plan
+  📝 Created plan with 2 steps
+     Step 1: WEB_SEARCH - Get current weather for user's location
+     Step 2: FINAL_RESPONSE - Provide weather summary with local context
+⚙️  [step 1] executing: WEB_SEARCH - Get current weather for user's location
+    🌐 WEB_SEARCH: searching for 'weather today NY1 New York'
+[debug] WEB_SEARCH: DuckDuckGo found 4 results
+    ✅ WEB_SEARCH returned 1234 chars
+⚙️  [step 2] executing: FINAL_RESPONSE - Provide weather summary with local context
+🏁 [multi-step] completed with final response
 
 [jarvis coach:life]
-Hey! Today in London it’s a mild day – around 20–22 °C with partly‑cloudy skies. There’s a light chance of showers in the late afternoon, so a small umbrella or a quick rain‑coat might be handy if you’re heading out after 17:00. In the evening it cools to about 16 °C, so a light jacket or cardigan would keep you comfy. Enjoy the city—just keep that umbrella close by in case of a quick drizzle!
+Hey! Today in New York it's looking pretty nice – around 68-72°F with partly cloudy skies. There's a light chance of showers around 5 PM, so maybe grab a light jacket if you're heading out later. Evening temps will drop to about 60°F, perfect for a walk if the rain holds off. Should be a good day overall!
 ```
 
 </details>
 
 <details>
 
-<summary>Nutrition coach</summary>
+<summary>Nutrition tracking with meal recall</summary>
 
 ```bash
 [voice] heard: Jarvis, what have I eaten so far today?
+[debug] query collected (silence timeout): 'what have i eaten so far today?'
+[debug] selected profile: life
+🧠 [memory] searching with keywords=['eaten', 'food'], time: 2025-08-22T00:00:00Z to 2025-08-22T23:59:59Z
+    🔍 RECALL_CONVERSATION: query='eaten food', from=2025-08-22T00:00:00Z, to=2025-08-22T23:59:59Z
+      📋 match score 85.5: [2025-08-22] User logged breakfast: Greek yogurt with berries (280 kcal), coffee with oat milk...
+      ✅ found 1 results
+  ✅ found context: 743 chars
+🤖 [multi-step] starting with 3 tools available
+📋 [planning] asking LLM to create response plan
+  📝 Created plan with 2 steps
+     Step 1: FETCH_MEALS - Retrieve detailed meal data for today
+     Step 2: FINAL_RESPONSE - Summarize nutrition and provide suggestions
+⚙️  [step 1] executing: FETCH_MEALS - Retrieve detailed meal data for today
+    ✅ FETCH_MEALS returned 456 chars
+⚙️  [step 2] executing: FINAL_RESPONSE - Summarize nutrition and provide suggestions
+🏁 [multi-step] completed with final response
 
 [jarvis coach:life]
-You’ve had a half‑Dubai chocolate bar (280 kcal) and two glasses of coconut water (90 kcal) so far—about 370 kcal total with 5 g protein, 46 g carbs and 10 g fat.  
+You've had Greek yogurt with berries and granola for breakfast (280 kcal) and a coffee with oat milk (45 kcal) - about 325 kcal total with decent protein from the yogurt. 
 
-A couple of gentle ideas for the rest of the day:
+For the rest of the day, maybe add some veggies and lean protein? A quinoa salad with chicken or a veggie wrap would round things out nicely. You're doing great with the balanced start!
+```
 
-1. **Add a protein‑rich bite** – Aim for 15–20 g (e.g., a hard‑boiled egg, a scoop of Greek yogurt, or a handful of almonds).  
-2. **Fill in with veggies** – Toss a cup of raw veggies or a small salad with a drizzle of olive oil.  
-3. **Hydrate** – Sip an extra 250 mL of water now and keep a bottle handy.  
-4. **A quick walk** – 10‑15 minutes after lunch can help balance the sugar load.
+</details>
 
-Just a few small moves, and you'll keep the energy steady without feeling deprived. Happy eating!
+<details>
+
+<summary>Complex technical query with context recall</summary>
+
+```bash
+[voice] heard: Jarvis, help me debug this authentication error I mentioned yesterday
+[debug] query collected (silence timeout): 'help me debug this authentication error i mentioned yesterday'
+[debug] selected profile: developer
+🧠 [memory] searching with keywords=['authentication', 'error', 'debug'], time: 2025-08-21T00:00:00Z to 2025-08-21T23:59:59Z
+    🔍 RECALL_CONVERSATION: query='authentication error debug', from=2025-08-21T00:00:00Z, to=2025-08-21T23:59:59Z
+      📋 match score 92.1: [2025-08-21] User reported JWT token expiration issues in React app, 401 errors on protected routes...
+      📋 match score 78.3: [2025-08-21] Discussed implementing refresh token logic, current using localStorage for tokens...
+      ✅ found 2 results
+  ✅ found context: 1456 chars
+🤖 [multi-step] starting with 3 tools available
+📋 [planning] asking LLM to create response plan
+  📝 Created plan with 1 step
+     Step 1: FINAL_RESPONSE - Provide debugging steps based on previous context
+⚙️  [step 1] executing: FINAL_RESPONSE - Provide debugging steps based on previous context
+🏁 [multi-step] completed with final response
+
+[jarvis coach:developer]
+Right, the JWT expiration issue in your React app. Based on what we discussed yesterday, let's check a few things:
+
+1. **Token expiry**: Log the decoded JWT payload to see the actual exp timestamp vs current time
+2. **Refresh logic**: The refresh token flow we talked about - is it firing before the 401 hits?
+3. **Storage timing**: You mentioned localStorage - check if tokens are being cleared unexpectedly
+
+Try adding `console.log(jwt_decode(token).exp, Date.now()/1000)` before your protected requests. That'll show if it's actually expiring when you think it is.
+
+Want me to take a screenshot and help debug the specific error you're seeing?
 ```
 
 </details>
