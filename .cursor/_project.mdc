@@ -8,35 +8,14 @@ Data privacy comes first, always.
 
 ## Architecture Decisions
 
-### Tool-Profile Separation of Concerns
+### Language-Agnostic Design
 
-**Decision**: Separate "when/how to use tools" from "what to do after tools execute" into distinct layers.
+Avoid hardcoded language patterns as this assistant needs to support an arbitrary amount of different languages.
 
-**Implementation**:
-- **Tool Descriptions** (`src/jarvis/tools.py`): Specify when and how tools should be used
-  - LOG_MEAL: "when the user mentions eating or drinking something specific"
-  - FETCH_MEALS: "when the user asks about their eating history"
-  - Include clear examples and usage patterns
+### Tool-Profile Separation
 
-- **Profile System Prompts** (`src/jarvis/profiles.py`): Focus on post-tool behavior and personality
-  - Life profile: "After logging meals: Follow up with healthy suggestions..."
-  - Life profile: "After fetching meal history: Provide a brief recap with recommendations..."
+Tools define when/how to be used. Profiles define what to do after tools execute. Keep these concerns separate in `tools.py` and `profiles.py`.
 
-### Tool Response Flow Architecture
+### Tool Response Flow
 
-**Decision**: Tools return raw data/summaries; profiles handle response formatting through a dedicated LLM processing step.
-
-**Problem**: Tools were doing their own LLM synthesis (e.g., WEB_SEARCH, FETCH_MEALS, RECALL_CONVERSATION), bypassing profile-specific formatting and personality, leading to inconsistent response styles.
-
-**Solution**: 
-1. **Tools return raw data** - Search results, meal summaries, memory context without LLM processing
-2. **Daemon processes tool results** - Passes raw tool output through profile-specific LLM loop (`src/jarvis/daemon.py`)
-3. **Profile formats response** - Current profile system prompt handles synthesis and ensures conversational, consistent formatting
-
-**Implementation Details**:
-- WEB_SEARCH: Returns raw search results instead of synthesized content
-- FETCH_MEALS: Returns raw meal summary instead of nutrition advice
-- RECALL_CONVERSATION: Returns raw memory context instead of formatted response
-- All profiles: Added explicit "short, conversational manner, no markdown tables" instructions
-
-**Benefits**: Consistent response personality, profile-appropriate formatting, single point of response control.
+Tools return raw data without LLM processing. Profiles handle all response formatting and personality through the daemon's LLM loop. This ensures consistent response style across all profiles.
