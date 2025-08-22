@@ -391,6 +391,14 @@ class VoiceListener(threading.Thread):
         # If we found stop commands, check if they're part of current TTS output (echo)
         if self.tts and self.tts.enabled:
             current_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+            if getattr(self.cfg, 'voice_debug', False):
+                try:
+                    print(f"[debug] echo check: TTS available={bool(current_tts)}, TTS_len={len(current_tts) if current_tts else 0}", file=sys.stderr)
+                    if current_tts:
+                        print(f"[debug] TTS text: '{current_tts[:100]}...'", file=sys.stderr)
+                except Exception:
+                    pass
+            
             if current_tts and self._is_likely_tts_echo(text_lower, current_tts):
                 if getattr(self.cfg, 'voice_debug', False):
                     try:
@@ -421,13 +429,37 @@ class VoiceListener(threading.Thread):
         if heard_text in tts_text or tts_text in heard_text:
             return True
         
-        # Check if the heard text is just a few words from the TTS
-        heard_words = set(heard_text.split())
-        tts_words = set(tts_text.split())
+        # Check if TTS content appears within the heard text (mixed with other audio)
+        # This handles cases where heard text is longer than TTS due to background noise or timing
+        tts_words = tts_text.split()
+        heard_words = heard_text.split()
         
-        # If most heard words are in the TTS, it's likely echo
-        if len(heard_words) > 0 and len(heard_words.intersection(tts_words)) / len(heard_words) >= 0.8:
-            return True
+        # Look for consecutive sequences of TTS words in the heard text
+        if len(tts_words) >= 3:  # Only check for substantial sequences
+            for i in range(len(tts_words) - 2):  # Check 3-word sequences
+                sequence = " ".join(tts_words[i:i+3])
+                if sequence in heard_text:
+                    if getattr(self.cfg, 'voice_debug', False):
+                        try:
+                            print(f"[debug] TTS sequence found in heard text: '{sequence}'", file=sys.stderr)
+                        except Exception:
+                            pass
+                    return True
+        
+        # Check if significant portion of TTS words appear in heard text
+        if len(tts_words) > 0:
+            tts_word_set = set(word.lower().strip('.,!?;:"()[]') for word in tts_words if len(word) > 2)  # Ignore short words
+            heard_word_set = set(word.lower().strip('.,!?;:"()[]') for word in heard_words if len(word) > 2)
+            
+            if len(tts_word_set) > 0:
+                overlap_ratio = len(tts_word_set.intersection(heard_word_set)) / len(tts_word_set)
+                if overlap_ratio >= 0.6:  # 60% of TTS words found in heard text
+                    if getattr(self.cfg, 'voice_debug', False):
+                        try:
+                            print(f"[debug] High word overlap detected: {overlap_ratio:.2f} ({len(tts_word_set.intersection(heard_word_set))}/{len(tts_word_set)} words)", file=sys.stderr)
+                        except Exception:
+                            pass
+                    return True
         
         return False
     
