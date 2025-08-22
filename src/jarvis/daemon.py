@@ -18,10 +18,7 @@ from .tts import TextToSpeech
 from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
-from .query_analyzer import analyze_user_query, determine_tools_from_analysis
-from .multi_tool_executor import execute_multiple_tools, format_multi_tool_context
 from .memory import update_daily_conversation_summary, DialogueMemory, update_diary_from_dialogue_memory
-from .enhanced_rag import get_enhanced_rag_for_query
 
 try:
     from faster_whisper import WhisperModel  # type: ignore
@@ -77,6 +74,56 @@ def _ingest_iter() -> Iterable[str]:
         yield s
 
 
+def _extract_keywords_for_memory_search(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False) -> list[str]:
+    """
+    Simple LLM-based keyword extraction for memory search.
+    Returns 3-5 relevant keywords for searching conversation history.
+    """
+    try:
+        system_prompt = """Extract 3-5 keywords from the user's query for searching conversation history. 
+Focus on:
+- Specific topics, subjects, or themes mentioned
+- Important nouns and technical terms  
+- Names, places, or unique identifiers
+- Avoid common words like "the", "and", "what", "how"
+
+Respond ONLY with keywords separated by commas, no other text.
+
+Examples:
+"what did we discuss about the warhammer project?" → warhammer, project, discuss
+"do you remember that password I mentioned?" → password, remember, mentioned  
+"what did I eat yesterday for lunch?" → eat, yesterday, lunch, food
+"""
+        
+        response = ask_coach(
+            base_url=ollama_base_url,
+            chat_model=ollama_chat_model,
+            system_prompt=system_prompt,
+            user_content=f"Extract keywords from: {query}",
+            timeout_sec=8.0,
+            include_location=False
+        )
+        
+        if response:
+            # Parse comma-separated keywords
+            keywords = [k.strip() for k in response.split(',') if k.strip() and len(k.strip()) > 2]
+            return keywords[:5]  # Max 5 keywords
+            
+    except Exception as e:
+        if voice_debug:
+            try:
+                print(f"[debug] keyword extraction failed: {e}", file=sys.stderr)
+            except Exception:
+                pass
+    
+    # Fallback: simple word extraction
+    import re
+    words = re.findall(r'\b\w{3,}\b', query.lower())
+    stop_words = {'the', 'and', 'what', 'how', 'when', 'where', 'why', 'who', 'did', 'you', 'can', 'will', 'that', 'this', 'was', 'were', 'have', 'has', 'had'}
+    keywords = [w for w in words if w not in stop_words][:5]
+    return keywords
+
+
 def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str) -> Optional[str]:
     global _global_dialogue_memory
     
@@ -120,81 +167,64 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
     
-    # Step 1: Analyze user query to determine intent and needed tools  
-    if cfg.voice_debug:
-        try:
-            print(f"[debug] analyzing query: {redacted[:100]}...", file=sys.stderr)
-        except Exception:
-            pass
-    
-    query_analysis = analyze_user_query(
-        query=redacted,
-        ollama_base_url=cfg.ollama_base_url,
-        ollama_chat_model=cfg.ollama_chat_model,
-        timeout_sec=10.0
-    )
-    
-    if cfg.voice_debug:
-        try:
-            print(f"[debug] query analysis: intent={query_analysis.get('intent')}, tools={query_analysis.get('suggested_tools')}, confidence={query_analysis.get('confidence')}", file=sys.stderr)
-        except Exception:
-            pass
-    
-    # Step 2: Determine which tools to execute based on analysis
-    allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
-    tools_to_execute = determine_tools_from_analysis(query_analysis, allowed_tools)
-    
-    # Step 3: Get enhanced RAG context as baseline
-    enhanced_context = get_enhanced_rag_for_query(
-        db=db,
-        query=redacted,
-        ollama_base_url=cfg.ollama_base_url,
-        ollama_embed_model=cfg.ollama_embed_model,
-        ollama_chat_model=cfg.ollama_chat_model,
-        dialogue_memory=_global_dialogue_memory,
-        max_contexts=8,  # Reduced since we'll add tool results
-        include_metadata=cfg.voice_debug,
-        voice_debug=cfg.voice_debug
-    )
-    
-    # Step 4: Execute multiple tools if any were determined
-    tool_context = ""
-    if tools_to_execute:
+    # Simple approach: Always try to enrich with conversation memory using keywords
+    conversation_context = ""
+    try:
+        # Extract keywords for memory search using simple LLM call
+        keywords = _extract_keywords_for_memory_search(redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug)
+        
+        if keywords and 'RECALL_CONVERSATION' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
+            if cfg.voice_debug:
+                try:
+                    print(f"[debug] extracted keywords for memory search: {keywords}", file=sys.stderr)
+                except Exception:
+                    pass
+            
+            # Call RECALL_CONVERSATION to enrich context
+            memory_result = run_tool_with_retries(
+                db=db,
+                cfg=cfg,
+                tool_name="RECALL_CONVERSATION",
+                tool_args={"search_query": " ".join(keywords)},
+                system_prompt=system_prompt,
+                original_prompt="",  # Not needed for memory search
+                redacted_text=redacted,
+                max_retries=1
+            )
+            
+            if memory_result.success and memory_result.reply_text:
+                conversation_context = memory_result.reply_text
+                if cfg.voice_debug:
+                    try:
+                        print(f"[debug] memory context retrieved: {len(conversation_context)} chars", file=sys.stderr)
+                    except Exception:
+                        pass
+    except Exception:
+        # If keyword extraction or memory search fails, continue without it
         if cfg.voice_debug:
             try:
-                print(f"[debug] executing {len(tools_to_execute)} tools: {tools_to_execute}", file=sys.stderr)
-            except Exception:
-                pass
-        
-        base_prompt = enhanced_context + "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
-        
-        multi_result = execute_multiple_tools(
-            db=db,
-            cfg=cfg,
-            tools_to_execute=tools_to_execute,
-            query_analysis=query_analysis,
-            system_prompt=system_prompt,
-            original_prompt=base_prompt,
-            redacted_text=redacted,
-            voice_debug=cfg.voice_debug
-        )
-        
-        # Format tool results into context
-        tool_context = format_multi_tool_context(multi_result, redacted)
-        
-        if cfg.voice_debug:
-            try:
-                print(f"[debug] tool execution: {multi_result.success_count}/{multi_result.total_count} succeeded", file=sys.stderr)
+                print("[debug] memory enrichment failed, continuing without", file=sys.stderr)
             except Exception:
                 pass
     
-    # Step 5: Generate final response with all context
-    if tool_context:
-        # Use tool results as primary context
-        final_prompt = tool_context
-    else:
-        # Fallback to enhanced RAG context
-        final_prompt = enhanced_context + "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
+    # Build context: conversation memory + basic document chunks  
+    context = []
+    
+    # Add conversation memory first (most relevant)
+    if conversation_context:
+        context.append(f"Relevant conversation history:\n{conversation_context}")
+    
+    # Add basic document chunk retrieval as fallback
+    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=6, timeout_sec=cfg.llm_embedding_timeout_sec)
+    chunk_contexts = []
+    for _id, _score, _text in top:
+        chunk_contexts.append(f"[chunk {_id}] {_text}")
+    
+    if chunk_contexts:
+        context.append("Context (document snippets):\n" + "\n".join(chunk_contexts))
+    
+    # Build final prompt
+    final_prompt = "\n\n".join(context) + f"\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
     
     if cfg.voice_debug:
         try:
