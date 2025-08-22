@@ -162,15 +162,14 @@ def _execute_multi_step_plan(
     Execute a multi-step plan where LLM can make consecutive tool calls.
     Always starts by creating an explicit plan, then executes it step by step.
     """
-    max_steps = 4  # Prevent infinite loops - most plans should complete in 2-3 steps
-    step = 0
-    accumulated_context = []
-    current_tool_req = initial_tool_req
-    current_tool_args = initial_tool_args
-    current_reply = initial_reply
+    import json
+    max_steps = 6  # Prevent infinite loops
+    completed_results = []  # Store results from completed steps
+    remaining_plan_steps = []  # Mutable list of steps yet to be executed
+    current_step_num = 0
     
     # Always create an explicit plan for complex queries, regardless of initial tool request
-    if not current_reply:  # Only plan if we don't already have a direct response
+    if not initial_reply:  # Only plan if we don't already have a direct response
         if cfg.voice_debug:
             try:
                 print(f"📋 [planning] asking LLM to create response plan", file=sys.stderr)
@@ -183,23 +182,33 @@ def _execute_multi_step_plan(
         
         planning_prompt = f"""Original user query: {redacted_text}
 {context_section}
-Before taking any actions, create a clear plan to answer this query effectively.
+Create a plan to answer this query effectively.
 
 INSTRUCTIONS:
-1. First, analyze what the user is asking for
-2. CRITICALLY IMPORTANT: Carefully review any conversation history above to understand relevant context and past discussions
-3. Create a strategic numbered plan (2-4 steps) that uses this context to provide targeted, well-informed results  
-4. For complex queries: DON'T jump to generic tool calls - first understand the context, THEN use appropriate tools with targeted parameters
+1. Analyze what the user is asking for
+2. Review any conversation history to understand context
+3. Create a strategic plan that provides targeted results
 
 Available tools: {', '.join(allowed_tools)}
 
-RESPOND WITH ONLY YOUR PLAN - DO NOT EXECUTE ANY TOOLS YET:
-PLAN:
-1. [Tool/Analysis] - Why this step is needed based on available context
-2. [Tool] - How this will be targeted using relevant information  
-3. [Final response] - Synthesize results effectively
+Respond with ONLY a JSON object in this exact format:
+{{
+  "steps": [
+    {{
+      "step": 1,
+      "action": "TOOL_NAME or ANALYZE",
+      "description": "Brief description of what this step does",
+      "tool_args": {{}}  // Only if action is a tool name
+    }},
+    {{
+      "step": 2,
+      "action": "FINAL_RESPONSE",
+      "description": "Synthesize and respond to user"
+    }}
+  ]
+}}
 
-Do not include any tool calls in this response. Just provide the plan."""
+Do NOT execute any tools. Just return the JSON plan."""
         
         plan_reply, plan_tool_req, plan_tool_args = ask_coach_with_tools(
             cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, planning_prompt, tools_desc,
@@ -207,202 +216,163 @@ Do not include any tool calls in this response. Just provide the plan."""
             include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
         )
         
+        # Parse JSON plan
+        try:
+            # Extract JSON from the response
+            import re
+            json_match = re.search(r'\{.*\}', plan_reply or "", re.DOTALL)
+            if json_match:
+                plan_data = json.loads(json_match.group())
+                remaining_plan_steps = plan_data.get("steps", [])
+                
+                if cfg.voice_debug:
+                    try:
+                        print(f"  📝 Created plan with {len(remaining_plan_steps)} steps", file=sys.stderr)
+                        for step in remaining_plan_steps[:3]:  # Show first 3 steps
+                            print(f"     Step {step['step']}: {step['action']} - {step['description'][:50]}...", file=sys.stderr)
+                    except Exception:
+                        pass
+            else:
+                if cfg.voice_debug:
+                    try:
+                        print(f"  ❌ No valid JSON plan found in response", file=sys.stderr)
+                    except Exception:
+                        pass
+                return "I wasn't able to create a clear plan to answer your request."
+                
+        except json.JSONDecodeError as e:
+            if cfg.voice_debug:
+                try:
+                    print(f"  ❌ Failed to parse plan JSON: {e}", file=sys.stderr)
+                except Exception:
+                    pass
+            return "I encountered an error while planning the response."
+        
+        if not remaining_plan_steps:
+            return "I wasn't able to create a plan for your request."
+    
+    # Execute plan step by step
+    while remaining_plan_steps and current_step_num < max_steps:
+        current_step_num += 1
+        
+        # Get the next step from the plan
+        if not remaining_plan_steps:
+            break
+            
+        current_step = remaining_plan_steps.pop(0)  # Remove from remaining steps
+        step_action = current_step.get("action", "").upper()
+        step_description = current_step.get("description", "")
+        step_tool_args = current_step.get("tool_args", {})
+        
         if cfg.voice_debug:
             try:
-                if "PLAN:" in (plan_reply or ""):
-                    plan_text = plan_reply.split("PLAN:")[1].strip() if "PLAN:" in plan_reply else plan_reply
-                    print(f"  📝 Created plan: {plan_text[:150]}{'...' if len(plan_text) > 150 else ''}", file=sys.stderr)
-                    print(f"  💾 Plan preserved for future steps", file=sys.stderr)
-                elif plan_reply:
-                    print(f"  ⚠️  No PLAN: found in response: {plan_reply[:100]}...", file=sys.stderr)
+                print(f"⚙️  [step {current_step_num}] executing: {step_action} - {step_description[:50]}...", file=sys.stderr)
             except Exception:
                 pass
         
-        # Planning should NOT produce tool calls - if it did, ignore them
-        if plan_tool_req:
-            if cfg.voice_debug:
-                try:
-                    print(f"  ⚠️  Ignoring unexpected tool call during planning: {plan_tool_req}", file=sys.stderr)
-                except Exception:
-                    pass
-        
-        # Store the plan in accumulated context for all future steps
-        if plan_reply and "PLAN:" in plan_reply:
-            plan_section = plan_reply.split("PLAN:")[1].strip()
-            accumulated_context.append(f"Response Plan:\nPLAN:\n{plan_section}")
+        # Handle different action types
+        if step_action == "FINAL_RESPONSE":
+            # This is the final synthesis step
+            context_for_final = ""
+            if conversation_context:
+                context_for_final += f"Relevant conversation history:\n{conversation_context}\n\n"
+            if completed_results:
+                context_for_final += "Results from previous steps:\n"
+                for i, result in enumerate(completed_results, 1):
+                    context_for_final += f"\nStep {i} result:\n{result}\n"
             
-            # Now ask LLM to execute the first step of the plan
-            execution_prompt = f"""You created this plan:
-PLAN:
-{plan_section}
-{context_section}
-Now execute ONLY the first step of your plan. Use the conversation history above to make it targeted and relevant.
+            final_prompt = f"""Original user query: {redacted_text}
 
-Available tools: {', '.join(allowed_tools)}
+{context_for_final}
 
-Execute the first step now using TOOL:TOOLNAME with appropriate arguments."""
-
-            if cfg.voice_debug:
-                try:
-                    print(f"  🚀 Asking LLM to execute first step of plan", file=sys.stderr)
-                except Exception:
-                    pass
+Based on all the information gathered, provide a comprehensive response to the user's query.
+Be concise but thorough. Focus on what's most relevant to their specific question."""
             
-            # Get first step execution
-            exec_reply, exec_tool_req, exec_tool_args = ask_coach_with_tools(
-                cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, execution_prompt, tools_desc,
-                timeout_sec=cfg.llm_multi_step_timeout_sec, additional_messages=recent_messages,
-                include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
+            final_response = ask_coach(
+                cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, final_prompt,
+                timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages,
+                include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, 
+                auto_detect=cfg.location_auto_detect
             )
             
-            current_tool_req = exec_tool_req
-            current_tool_args = exec_tool_args
-            
-            if cfg.voice_debug:
-                try:
-                    if current_tool_req:
-                        print(f"  🚀 Starting execution with: {current_tool_req}", file=sys.stderr)
-                    else:
-                        print(f"  ❌ No tool requested for first step", file=sys.stderr)
-                except Exception:
-                    pass
-            
-        elif plan_reply:
-            accumulated_context.append(f"Initial Analysis:\n{plan_reply}")
-            
-        # If we have no tool to execute, something went wrong
-        if not current_tool_req:
-            if cfg.voice_debug:
-                try:
-                    print(f"  ❌ No tool extracted from plan, stopping", file=sys.stderr)
-                except Exception:
-                    pass
-            return "I wasn't able to create a clear plan to answer your request."
-    
-    while step < max_steps:
-        step += 1
+            if final_response and final_response.strip():
+                if cfg.voice_debug:
+                    try:
+                        print(f"🏁 [multi-step] completed with final response", file=sys.stderr)
+                    except Exception:
+                        pass
+                return final_response.strip()
+            else:
+                # Fallback if final response fails
+                if completed_results:
+                    return f"Based on my search:\n\n" + "\n\n".join(completed_results[-2:])  # Last 2 results
+                else:
+                    return "I wasn't able to gather the information you requested."
         
-        # If LLM requested a tool, execute it
-        if current_tool_req:
-            if cfg.voice_debug:
-                try:
-                    print(f"⚙️  [step {step}] executing {current_tool_req}", file=sys.stderr)
-                except Exception:
-                    pass
+        elif step_action == "ANALYZE":
+            # This is an analysis/thinking step without tools
+            analysis_prompt = f"""Original query: {redacted_text}
+
+{conversation_context if conversation_context else ''}
+
+Task: {step_description}
+
+Provide a brief analysis or response for this step."""
             
-            # Execute the tool
+            analysis_response = ask_coach(
+                cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, analysis_prompt,
+                timeout_sec=cfg.llm_chat_timeout_sec, additional_messages=recent_messages,
+                include_location=cfg.location_enabled, config_ip=cfg.location_ip_address,
+                auto_detect=cfg.location_auto_detect
+            )
+            
+            if analysis_response and analysis_response.strip():
+                completed_results.append(analysis_response.strip())
+                if cfg.voice_debug:
+                    try:
+                        print(f"    ✅ Analysis completed: {len(analysis_response)} chars", file=sys.stderr)
+                    except Exception:
+                        pass
+        
+        elif step_action in allowed_tools:
+            # This is a tool execution step
             result = run_tool_with_retries(
-                db=db, cfg=cfg, tool_name=current_tool_req, tool_args=current_tool_args,
+                db=db, cfg=cfg, tool_name=step_action, tool_args=step_tool_args,
                 system_prompt=system_prompt, original_prompt=initial_prompt,
                 redacted_text=redacted_text, max_retries=1
             )
             
             if result.reply_text:
-                # Add tool result to accumulated context
-                accumulated_context.append(f"Step {step} - {current_tool_req} result:\n{result.reply_text}")
-                
+                completed_results.append(result.reply_text)
                 if cfg.voice_debug:
                     try:
-                        print(f"    ✅ {current_tool_req} returned {len(result.reply_text)} chars", file=sys.stderr)
+                        print(f"    ✅ {step_action} returned {len(result.reply_text)} chars", file=sys.stderr)
                     except Exception:
                         pass
             else:
-                accumulated_context.append(f"Step {step} - {current_tool_req}: No results returned")
-        
-        # If LLM provided a direct reply without tool request, return it
-        elif current_reply and current_reply.strip():
+                if cfg.voice_debug:
+                    try:
+                        print(f"    ⚠️  {step_action} returned no results", file=sys.stderr)
+                    except Exception:
+                        pass
+        else:
+            # Unknown action type
             if cfg.voice_debug:
                 try:
-                    print(f"    💬 [step {step}] LLM provided final response", file=sys.stderr)
+                    print(f"    ⚠️  Unknown action type: {step_action}", file=sys.stderr)
                 except Exception:
                     pass
-            return current_reply.strip()
-        
-        # Build continuation prompt with all accumulated context
-        context_section = ""
-        if conversation_context:
-            context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
-        
-        continuation_prompt = f"""Original user query: {redacted_text}
-{context_section}
-Previous steps completed:
-{chr(10).join(accumulated_context)}
-
-CRITICAL: Review your Response Plan above. Follow it step by step - do NOT repeat the same tool calls.
-Look at what steps you've already completed and execute the NEXT logical step from your plan.
-
-Available tools:
-{', '.join(allowed_tools)}
-
-Rules:
-- Follow your original Response Plan systematically - check what's been done vs what's next
-- Use available context to make tool calls targeted and relevant  
-- If you've completed all planned steps, provide the final comprehensive response
-- Do NOT make the same tool call multiple times
-- Stay focused on the user's original request
-
-Next, either:
-1) Request the NEXT tool from your plan using TOOL:TOOLNAME with concise arguments, or
-2) Provide a final answer now if all plan steps are complete.
-"""
-        
-        if cfg.voice_debug:
-            try:
-                plan_included = any("Response Plan:" in ctx for ctx in accumulated_context)
-                print(f"🤖 [step {step}] asking LLM for next action (plan included: {plan_included})", file=sys.stderr)
-            except Exception:
-                pass
-        
-        # Ask LLM what to do next
-        next_reply, next_tool_req, next_tool_args = ask_coach_with_tools(
-            cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, continuation_prompt, tools_desc,
-            timeout_sec=cfg.llm_multi_step_timeout_sec, additional_messages=recent_messages,
-            include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect
-        )
-        
-        if cfg.voice_debug:
-            try:
-                if next_reply and not next_tool_req:
-                    print(f"    ✅ LLM chose to finish", file=sys.stderr)
-                elif next_tool_req:
-                    print(f"    🔧 LLM chose next tool: {next_tool_req}", file=sys.stderr)
-            except Exception:
-                pass
-        
-        # Update current state for next iteration
-        current_tool_req = next_tool_req
-        current_tool_args = next_tool_args
-        current_reply = next_reply
-        
-        # If no tool requested and we have a reply, we're done
-        if not next_tool_req and next_reply and next_reply.strip():
-            if cfg.voice_debug:
-                try:
-                    print(f"🏁 [multi-step] completed after {step} steps", file=sys.stderr)
-                except Exception:
-                    pass
-            return next_reply.strip()
-        
-        # If no tool and no reply, something went wrong
-        if not next_tool_req and not next_reply:
-            if cfg.voice_debug:
-                try:
-                    print(f"    ❌ [step {step}] LLM returned empty response, stopping", file=sys.stderr)
-                except Exception:
-                    pass
-            break
     
-    # Fallback: if we hit max steps, return what we have
-    if accumulated_context:
-        fallback_response = f"I gathered some information but couldn't complete the full analysis:\n\n{chr(10).join(accumulated_context)}"
+    # Fallback: if we exhausted steps without a final response
+    if completed_results:
         if cfg.voice_debug:
             try:
-                print(f"⏰ [multi-step] hit max steps ({max_steps}), returning partial results", file=sys.stderr)
+                print(f"⏰ [multi-step] plan incomplete, returning gathered results", file=sys.stderr)
             except Exception:
                 pass
-        return fallback_response
+        return f"Here's what I found:\n\n" + "\n\n".join(completed_results)
     
-    return "I wasn't able to gather the information you requested."
+    return "I wasn't able to complete the analysis of your request."
 
 
 
