@@ -19,6 +19,7 @@ from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
 from .memory import update_daily_conversation_summary, DialogueMemory, update_diary_from_dialogue_memory
+from .enhanced_rag import get_enhanced_rag_for_query
 
 try:
     from faster_whisper import WhisperModel  # type: ignore
@@ -117,14 +118,21 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
     
-    # Get chunk-based context (remove automatic conversation summaries)
-    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=8, timeout_sec=cfg.llm_embedding_timeout_sec)
-    context = []
-    for _id, _score, _text in top:
-        context.append(f"[chunk {_id}] {_text}")
+    # Get enhanced RAG context with LLM-based keyword extraction and multi-strategy retrieval
+    enhanced_context = get_enhanced_rag_for_query(
+        db=db,
+        query=redacted,
+        ollama_base_url=cfg.ollama_base_url,
+        ollama_embed_model=cfg.ollama_embed_model,
+        ollama_chat_model=cfg.ollama_chat_model,
+        dialogue_memory=_global_dialogue_memory,
+        max_contexts=12,
+        include_metadata=cfg.voice_debug,  # Include metadata in debug mode
+        voice_debug=cfg.voice_debug
+    )
     
     prompt = (
-        "Context (recent relevant snippets):\n" + "\n".join(context[:6]) +
+        enhanced_context +
         "\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
     )
     allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
