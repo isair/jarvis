@@ -164,7 +164,7 @@ def get_default_config() -> Dict[str, Any]:
         
         # Wake Word Detection
         "wake_word": "jarvis",
-        "wake_aliases": ["joris", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis"],
+        "wake_aliases": ["joris", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus"],
         "wake_fuzzy_ratio": 0.78,
         
         # Whisper Speech Recognition
@@ -191,7 +191,7 @@ def get_default_config() -> Dict[str, Any]:
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
         
-        # Stop Commands (legacy - should be moved to profiles or separate config)
+        # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
         

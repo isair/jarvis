@@ -328,7 +328,8 @@ Example `config.json`:
     "jervis",
     "jarvus",
     "jarviz",
-    "javis"
+    "javis",
+    "jairus"
   ],
   "wake_fuzzy_ratio": 0.78,
   "whisper_model": "small",
