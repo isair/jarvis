@@ -285,8 +285,13 @@ Do NOT execute any tools. Just return the JSON plan."""
 
 {context_for_final}
 
-Based on all the information gathered, provide a comprehensive response to the user's query.
-Be concise but thorough. Focus on what's most relevant to their specific question."""
+Give a brief, conversational response to the user's question. Keep it:
+- Short and natural (like talking to a friend)
+- Focus on 2-3 most relevant items
+- No bullet points or formal structure
+- Personal and direct tone
+
+Respond as if you're having a casual chat."""
             
             final_response = ask_coach(
                 cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, final_prompt,
@@ -305,9 +310,9 @@ Be concise but thorough. Focus on what's most relevant to their specific questio
             else:
                 # Fallback if final response fails
                 if completed_results:
-                    return f"Based on my search:\n\n" + "\n\n".join(completed_results[-2:])  # Last 2 results
+                    return f"I found a few things that might interest you: {completed_results[-1][:200]}..."
                 else:
-                    return "I wasn't able to gather the information you requested."
+                    return "Sorry, I couldn't find much on that topic right now."
         
         elif step_action == "ANALYZE":
             # This is an analysis/thinking step without tools
@@ -370,9 +375,9 @@ Provide a brief analysis or response for this step."""
                 print(f"⏰ [multi-step] plan incomplete, returning gathered results", file=sys.stderr)
             except Exception:
                 pass
-        return f"Here's what I found:\n\n" + "\n\n".join(completed_results)
+        return f"I found some info but didn't get to finish everything: {completed_results[-1][:300]}..."
     
-    return "I wasn't able to complete the analysis of your request."
+    return "Sorry, I ran into some issues getting that information for you."
 
 
 
