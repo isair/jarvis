@@ -149,8 +149,14 @@ class TextToSpeech:
         """Returns True if interrupted, False if completed normally"""
         # Prefer Windows PowerShell if available, else PowerShell 7
         pwsh = shutil.which("powershell") or shutil.which("pwsh")
-        # Optionally set Rate (-10..10) and Voice if specified
-        rate = 0 if self.rate is None else max(-10, min(10, int(self.rate)))
+        # Convert words-per-minute to Windows SAPI rate scale (-10 to 10)
+        # Linear mapping: (WPM - 200) / 10 = SAPI rate
+        if self.rate is None:
+            rate = 0  # Normal speed (200 WPM)
+        else:
+            wpm = float(self.rate)
+            rate = (wpm - 200) / 10
+            rate = max(-10, min(10, round(rate)))  # Clamp to SAPI bounds
         voice_set = f"$v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet);"
         if pwsh:
             script = (

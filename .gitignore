@@ -1,3 +1,6 @@
+.DS_Store
+.env/
 .venv/
 __pycache__/
 .mamba_env/
+.micromamba/

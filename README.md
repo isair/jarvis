@@ -481,7 +481,7 @@ Example `config.json`:
   ],
   "tts_enabled": true,
   "tts_voice": null,
-  "tts_rate": null,
+  "tts_rate": 200,
   "voice_device": null,
   "voice_block_seconds": 4.0,
   "voice_collect_seconds": 2.5,
@@ -508,6 +508,11 @@ Example `config.json`:
   "web_search_enabled": true
 }
 ```
+
+#### TTS Configuration
+- `tts_enabled`: Enable/disable text-to-speech (default: `true`)
+- `tts_voice`: Voice to use (default: system default)
+- `tts_rate`: Speech rate in words per minute (default: 200)
 
 ### Environment variables (debug only)
 - `JARVIS_CONFIG_PATH` — absolute path to JSON config

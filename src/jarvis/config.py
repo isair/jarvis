@@ -40,7 +40,7 @@ class Settings:
     # Text-to-Speech
     tts_enabled: bool
     tts_voice: str | None
-    tts_rate: int | None
+    tts_rate: int | None  # Words per minute (WPM), 200=normal
     
     # Voice Input & Audio
     voice_device: str | None
@@ -154,7 +154,7 @@ def get_default_config() -> Dict[str, Any]:
         # Text-to-Speech
         "tts_enabled": True,
         "tts_voice": None,
-        "tts_rate": 200,
+        "tts_rate": 200,  # Words per minute (WPM), 200=normal
         
         # Voice Input & Audio
         "voice_device": None,
