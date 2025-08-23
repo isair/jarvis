@@ -5,6 +5,8 @@ import threading
 import queue
 import shutil
 import signal
+import tempfile
+import os
 from typing import Optional, Callable
 
 
@@ -140,36 +142,68 @@ class TextToSpeech:
 
     def _win_sapi(self, text: str) -> bool:
         """Returns True if interrupted, False if completed normally"""
+        # Prefer Windows PowerShell if available, else PowerShell 7
         pwsh = shutil.which("powershell") or shutil.which("pwsh")
-        if not pwsh:
-            return False
-        # Use SAPI via PowerShell
         # Optionally set Rate (-10..10) and Voice if specified
         rate = 0 if self.rate is None else max(-10, min(10, int(self.rate)))
         voice_set = f"$v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet);"
-        script = (
-            "Add-Type -AssemblyName System.Speech; "
-            "$v = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            f"$v.Rate = {rate}; "
-            f"{voice_set} "
-            f"$v.Speak({json_escape_ps(text)});"
+        if pwsh:
+            script = (
+                "Add-Type -AssemblyName System.Speech; "
+                "$v = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                f"$v.Volume = 100; $v.Rate = {rate}; "
+                f"{voice_set} "
+                f"$v.Speak({json_escape_ps(text)});"
+            )
+            try:
+                with self._process_lock:
+                    self._current_process = subprocess.Popen([pwsh, "-NoProfile", "-Command", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                while self._current_process.poll() is None:
+                    if self._should_interrupt.is_set():
+                        return True
+                    try:
+                        self._current_process.wait(timeout=0.1)
+                    except subprocess.TimeoutExpired:
+                        continue
+                return False
+            except Exception:
+                pass  # Fall back to cscript below
+
+        # Fallback: use Windows Script Host with VBScript (broadly available)
+        cscript = shutil.which("cscript")
+        if not cscript:
+            return False
+        vbs_text = text.replace('"', '""')
+        vbs_code = (
+            'Dim v\n'
+            'Set v = CreateObject("SAPI.SpVoice")\n'
+            f'v.Rate = {rate}\n'
+            'v.Volume = 100\n'
+            f'v.Speak("{vbs_text}")\n'
         )
-        
+        tmp_path = None
         try:
+            with tempfile.NamedTemporaryFile("w", suffix=".vbs", delete=False, encoding="utf-8") as tf:
+                tf.write(vbs_code)
+                tmp_path = tf.name
             with self._process_lock:
-                self._current_process = subprocess.Popen([pwsh, "-NoProfile", "-Command", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Wait for process to complete or be interrupted
+                self._current_process = subprocess.Popen([cscript, "//nologo", tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             while self._current_process.poll() is None:
                 if self._should_interrupt.is_set():
-                    return True  # Interrupted
+                    return True
                 try:
                     self._current_process.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
-            return False  # Completed normally
+            return False
         except Exception:
             return False
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
 
     def _linux_say(self, text: str) -> bool:
         """Returns True if interrupted, False if completed normally"""
