@@ -34,6 +34,11 @@ class TextToSpeech:
     def stop(self) -> None:
         if self._thread is None:
             return
+        # Ensure any active speech is interrupted immediately
+        try:
+            self.interrupt()
+        except Exception:
+            pass
         self._stop.set()
         try:
             self._q.put_nowait("")

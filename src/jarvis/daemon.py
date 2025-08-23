@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 import threading
 import difflib
+import signal
 
 from .config import load_settings
 from .redact import redact
@@ -49,6 +50,21 @@ _global_dialogue_memory: Optional[DialogueMemory] = None
 # Global voice listener instance for hot window activation
 _global_voice_listener: Optional["VoiceListener"] = None
 
+
+def _install_signal_handlers() -> None:
+    """Ensure Windows signals like Ctrl+Break (SIGBREAK) trigger clean shutdown."""
+    def _raise_keyboard_interrupt(_signum, _frame):
+        # Route signals to the existing KeyboardInterrupt handling path
+        raise KeyboardInterrupt()
+
+    for sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _raise_keyboard_interrupt)
+            except Exception:
+                # Best-effort; some signals may not be settable on this platform
+                pass
 
 def _chunk_text(text: str, min_chars: int = 500, max_chars: int = 900) -> list[str]:
     parts: list[str] = []
@@ -1264,6 +1280,8 @@ def _check_and_update_diary(db: Database, cfg, verbose: bool = False) -> None:
 def main() -> None:
     global _global_dialogue_memory
     
+    _install_signal_handlers()
+
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
@@ -1309,6 +1327,11 @@ def main() -> None:
     finally:
         if voice_thread is not None:
             voice_thread.should_stop = True
+            # Wait briefly for the voice thread to exit to avoid orphaned audio capture
+            try:
+                voice_thread.join(timeout=2.0)
+            except Exception:
+                pass
         _commit_buffer(db, cfg, tts, buffer)
         
         # Final diary update before shutdown to save any pending interactions

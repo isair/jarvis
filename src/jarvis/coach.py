@@ -2,8 +2,8 @@ from __future__ import annotations
 import requests
 from typing import Optional, Tuple, Dict, Any, List
 import sys
-import requests
 import json
+import os
 from datetime import datetime, timezone
 
 try:
@@ -11,6 +11,14 @@ try:
     LOCATION_AVAILABLE = True
 except ImportError:
     LOCATION_AVAILABLE = False
+
+
+def _debug_print(message: str, enabled: bool) -> None:
+    if enabled:
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
 
 
 def _get_temporal_context(include_location: bool = True, config_ip: Optional[str] = None, auto_detect: bool = True) -> str:
@@ -105,7 +113,7 @@ def _extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
 
 
 def ask_coach(base_url: str, chat_model: str, system_prompt: str, user_content: str,
-              timeout_sec: float = 30.0, additional_messages: Optional[List[Dict[str, str]]] = None, include_location: bool = True, config_ip: Optional[str] = None, auto_detect: bool = True) -> str | None:
+              timeout_sec: float = 30.0, additional_messages: Optional[List[Dict[str, str]]] = None, include_location: bool = True, config_ip: Optional[str] = None, auto_detect: bool = True, voice_debug: bool = False) -> str | None:
     # Add temporal context to system prompt
     enhanced_system_prompt = _add_temporal_context_to_system_prompt(system_prompt, include_location=include_location, config_ip=config_ip, auto_detect=auto_detect)
     
@@ -138,11 +146,7 @@ def ask_coach(base_url: str, chat_model: str, system_prompt: str, user_content: 
     }
     try:
         if base_url and base_url.startswith("http"):
-            try:
-                if 'voice_debug' in globals() or True:
-                    pass
-            except Exception:
-                pass
+            _debug_print(f"[debug] POST {base_url.rstrip('/')}/api/chat", voice_debug)
         resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)
         resp.raise_for_status()
         data = resp.json()
@@ -150,27 +154,18 @@ def ask_coach(base_url: str, chat_model: str, system_prompt: str, user_content: 
             content = _extract_text_from_response(data)
             if isinstance(content, str) and content.strip():
                 return content
-            try:
-                print(f"[debug] LLM empty content (keys={list(data.keys())})", file=sys.stderr)
-            except Exception:
-                pass
+            _debug_print(f"[debug] LLM empty content (keys={list(data.keys())})", voice_debug)
     except requests.exceptions.Timeout:
-        try:
-            print("[debug] LLM request timed out", file=sys.stderr)
-        except Exception:
-            pass
+        _debug_print("[debug] LLM request timed out", voice_debug)
         return None
     except Exception as e:
-        try:
-            print(f"[debug] LLM request error: {e}", file=sys.stderr)
-        except Exception:
-            pass
+        _debug_print(f"[debug] LLM request error: {e}", voice_debug)
         return None
     return None
 
 
 def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, user_content: str,
-                         tools_desc: str, timeout_sec: float = 45.0, additional_messages: Optional[List[Dict[str, str]]] = None, include_location: bool = True, config_ip: Optional[str] = None, auto_detect: bool = True) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+                         tools_desc: str, timeout_sec: float = 45.0, additional_messages: Optional[List[Dict[str, str]]] = None, include_location: bool = True, config_ip: Optional[str] = None, auto_detect: bool = True, voice_debug: bool = False) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
     """
     Lightweight tool-use protocol: The model can respond with a single line directive
     like: TOOL:SCREENSHOT. If present, caller should execute the tool and then re-ask
@@ -208,10 +203,7 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
     }
     try:
         if base_url and base_url.startswith("http"):
-            try:
-                print(f"[debug] POST {base_url.rstrip('/')}/api/chat", file=sys.stderr)
-            except Exception:
-                pass
+            _debug_print(f"[debug] POST {base_url.rstrip('/')}/api/chat", voice_debug)
         resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)
         resp.raise_for_status()
         data = resp.json()
@@ -222,9 +214,9 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
         # Check for structured tool calls when content is empty
         if not content:
             try:
-                print(f"[debug] LLM empty content (keys={list(data.keys()) if isinstance(data, dict) else type(data)})", file=sys.stderr)
+                _debug_print(f"[debug] LLM empty content (keys={list(data.keys()) if isinstance(data, dict) else type(data)})", voice_debug)
                 if isinstance(data, dict) and "message" in data:
-                    print(f"[debug] message field: {data['message']}", file=sys.stderr)
+                    _debug_print(f"[debug] message field: {data['message']}", voice_debug)
                     message = data["message"]
                     if isinstance(message, dict) and "tool_calls" in message:
                         tool_calls = message["tool_calls"]
@@ -237,10 +229,7 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
                                     tool_name = func.get("name", "").replace("TOOL:", "").upper()
                                     tool_args = func.get("arguments")
                                     if tool_name:
-                                        try:
-                                            print(f"[debug] structured tool call: {tool_name}", file=sys.stderr)
-                                        except Exception:
-                                            pass
+                                        _debug_print(f"[debug] structured tool call: {tool_name}", voice_debug)
                                         return None, tool_name, tool_args
             except Exception:
                 pass
@@ -284,14 +273,8 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
                 return None, tool_name, args
         return text, None, None
     except requests.exceptions.Timeout:
-        try:
-            print("[debug] LLM request timed out", file=sys.stderr)
-        except Exception:
-            pass
+        _debug_print("[debug] LLM request timed out", voice_debug)
         return None, None, None
     except Exception as e:
-        try:
-            print(f"[debug] LLM request error: {e}", file=sys.stderr)
-        except Exception:
-            pass
+        _debug_print(f"[debug] LLM request error: {e}", voice_debug)
         return None, None, None

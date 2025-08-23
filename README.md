@@ -222,7 +222,7 @@ Then set in your config:
 ## Quick Start
 
 ### Prerequisites
-- **Python 3.11+**
+- **Python 3.11+** (Windows script installs 3.12 automatically)
 - **macOS, Linux, or Windows**
 
 ### Step 1: Install Ollama
@@ -270,22 +270,25 @@ cd jarvis
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 ```
 
-### Windows (Micromamba/Conda alternative)
+### Recommended: Windows with Micromamba (Avoid Build Issues)
 
-If you don't have Conda/Mamba, install Micromamba, then just run the PowerShell script (it will create the env, install `av` from conda‑forge, pip install the rest, and start Jarvis):
+**Why Micromamba?** Many dependencies (`webrtcvad`, `av`, `miniupnpc`, `sounddevice`) require compilation on Windows. Micromamba provides pre-built binaries, avoiding the need for Visual C++ Build Tools.
 
+**Install Micromamba first:**
 ```powershell
 Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1 -UseBasicParsing).Content)
+```
+
+**Then run Jarvis:**
+```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 ```
 
-Optional: UPnP support (`miniupnpc`). If you need it and see build errors, install Visual C++ Build Tools (Desktop C++ workload), then:
+The script automatically detects Micromamba and uses it to create an environment with pre-built dependencies.
 
-```powershell
-micromamba run -p .\.mamba_env pip install miniupnpc
-```
+### Alternative: Regular Python (May Require Build Tools)
 
-**Windows users:** If you encounter build errors during installation, install [Microsoft Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "Desktop development with C++" workload). This enables compilation of native dependencies like `webrtcvad` and `av`.
+If you prefer regular Python, you may need [Microsoft Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "Desktop development with C++" workload) to compile native dependencies like `webrtcvad` and `av`.
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
@@ -308,15 +311,7 @@ JARVIS_VOICE_DEBUG=1 bash scripts/run_linux.sh
 $env:JARVIS_VOICE_DEBUG=1; pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 ```
 
-If you're using Windows PowerShell (powershell.exe) instead of PowerShell 7 (pwsh):
-```powershell
-$env:JARVIS_VOICE_DEBUG=1; powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
-```
-
-From Command Prompt (cmd.exe):
-```cmd
-set JARVIS_VOICE_DEBUG=1 && powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
-```
+**Note:** Requires PowerShell 7+ (`pwsh`). If you don't have it installed, download from [Microsoft PowerShell releases](https://github.com/PowerShell/PowerShell/releases).
 
 This shows voice detection, processing steps, tool usage, and internal decision-making - helpful for developers and users who want transparency about the assistant's operations.
 
@@ -349,22 +344,17 @@ Jarvis can be location-aware to provide contextually relevant suggestions based 
 
 ### Setup instructions
 
-1) **Install geolocation dependencies**
-```bash
-pip install geoip2 miniupnpc
-```
-
-2) **Run the setup script for detailed instructions**
+1) **Run the setup script for detailed instructions**
 ```bash
 python scripts/setup_geolocation.py
 ```
 
-3) **Download the GeoLite2 database** (free, requires MaxMind account)
+2) **Download the GeoLite2 database** (free, requires MaxMind account)
 - Register at: https://www.maxmind.com/en/geolite2/signup
 - Download GeoLite2 City database (MMDB format)
 - Copy to: `~/.local/share/jarvis/geoip/GeoLite2-City.mmdb`
 
-4) **Enable automatic IP detection** (default) or configure manually
+3) **Enable automatic IP detection** (default) or configure manually
 ```json
 {
   "location_enabled": true,
@@ -441,20 +431,15 @@ To disable web search entirely:
 When disabled, the assistant will inform you that web search is unavailable and suggest enabling it if needed.
 
 ### Enhanced content extraction (optional)
-For the best web search experience, install these optional dependencies:
+The web search dependencies are automatically installed via `requirements.txt`. For full JavaScript support, you may optionally install browser binaries:
 
 ```bash
-# For clean markdown conversion (recommended)
-pip install html2text
-
-# For JavaScript-heavy sites (weather, dynamic content)
-pip install playwright
+# Optional: For JavaScript-heavy sites (weather, dynamic content)
 playwright install chromium
 ```
 
-**Without these dependencies:** Basic HTML parsing with BeautifulSoup (included in requirements)
-**With html2text:** Clean markdown conversion, removes navigation/ads/clutter  
-**With Playwright:** JavaScript execution for dynamic weather sites and modern web apps
+**Default setup:** HTML parsing with BeautifulSoup + clean markdown conversion via html2text  
+**With playwright browsers:** JavaScript execution for dynamic weather sites and modern web apps
 
 The system uses an intelligent fallback chain: html2text → BeautifulSoup → Playwright, ensuring robust content extraction regardless of which dependencies are available.
 
