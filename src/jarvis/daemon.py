@@ -398,14 +398,21 @@ Provide a brief analysis or response for this step."""
 
 
 def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str) -> Optional[str]:
-    global _global_dialogue_memory
+    global _global_dialogue_memory, _global_voice_listener
     
-    # Start tune immediately when we detect a valid query and begin processing
-    tune_player = None
-    should_play_tune = cfg.tune_enabled and (tts is None or not tts.is_speaking())
-    if should_play_tune:
-        tune_player = TunePlayer(enabled=True)
-        tune_player.start_tune()
+    # Always print the query being processed for visibility (not just in debug mode)
+    try:
+        print(f"[jarvis] Processing query: {text}")
+    except Exception:
+        pass
+    
+    # Check if thinking tune is already playing from wake word detection
+    tune_already_active = (_global_voice_listener and 
+                          _global_voice_listener._is_thinking_tune_active())
+    
+    # If no tune is active yet, start one now
+    if not tune_already_active and _global_voice_listener:
+        _global_voice_listener._start_thinking_tune()
     
     redacted = redact(text)
     chunks = _chunk_text(redacted)
@@ -547,12 +554,9 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             except Exception:
                 pass
         
-        # Start tune for retry if enabled and not conflicting with TTS
-        retry_tune_player = None
-        should_play_retry_tune = cfg.tune_enabled and (tts is None or not tts.is_speaking())
-        if should_play_retry_tune:
-            retry_tune_player = TunePlayer(enabled=True)
-            retry_tune_player.start_tune()
+        # Start thinking tune for retry if not already active
+        if _global_voice_listener and not _global_voice_listener._is_thinking_tune_active():
+            _global_voice_listener._start_thinking_tune()
         
         try:
             plain = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, final_prompt,
@@ -561,9 +565,8 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             if plain and plain.strip():
                 reply = (plain or "").strip()
         finally:
-            # Stop retry tune
-            if retry_tune_player is not None:
-                retry_tune_player.stop_tune()
+            # Tune cleanup is handled at the end of _run_coach_on_text
+            pass
     # No rule-based fallbacks - rely on LLM responses only
     
     # Intentionally avoid logging the full reply in debug to prevent duplicate output
@@ -611,9 +614,9 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 except Exception:
                     pass
     
-    # Always stop tune when processing completes, regardless of code path
-    if tune_player is not None:
-        tune_player.stop_tune()
+    # Always stop thinking tune when processing completes, regardless of code path
+    if _global_voice_listener:
+        _global_voice_listener._stop_thinking_tune()
     
     return reply
 
@@ -665,6 +668,29 @@ class VoiceListener(threading.Thread):
         self._last_tts_finish_time: float = 0.0
         # Capture hot window state when voice input starts (before transcription)
         self._was_hot_window_active_at_voice_start: bool = False
+        
+        # Global tune management - single tune player for the whole system
+        self._tune_player: Optional[TunePlayer] = None
+
+    def _start_thinking_tune(self) -> None:
+        """Start the thinking tune when we detect a valid query is being processed."""
+        # Only start if tune is enabled, not already playing, and not conflicting with TTS
+        should_play_tune = (self.cfg.tune_enabled and 
+                          self._tune_player is None and 
+                          (self.tts is None or not self.tts.is_speaking()))
+        if should_play_tune:
+            self._tune_player = TunePlayer(enabled=True)
+            self._tune_player.start_tune()
+            
+    def _stop_thinking_tune(self) -> None:
+        """Stop the thinking tune."""
+        if self._tune_player is not None:
+            self._tune_player.stop_tune()
+            self._tune_player = None
+            
+    def _is_thinking_tune_active(self) -> bool:
+        """Check if thinking tune is currently active."""
+        return self._tune_player is not None and self._tune_player.is_playing()
 
     def _is_stop_command(self, text_lower: str) -> bool:
         """Check if the given text contains a stop command that's not part of TTS echo"""
@@ -1017,6 +1043,9 @@ class VoiceListener(threading.Thread):
                     print(f"[debug] hot window input accepted: {text_lower}", file=sys.stderr)
                 except Exception:
                     pass
+            
+            # Start thinking tune immediately for hot window input too
+            self._start_thinking_tune()
             return
         
         # Wake detection
@@ -1052,6 +1081,9 @@ class VoiceListener(threading.Thread):
             self._is_collecting = True
             self._last_voice_time = time.time()
             self._collect_start_time = self._last_voice_time
+            
+            # Start thinking tune immediately when wake word + query detected
+            self._start_thinking_tune()
             return
         if self._is_collecting:
             # Accept even single words to avoid dropping short intents
@@ -1326,6 +1358,8 @@ def main() -> None:
         pass
     finally:
         if voice_thread is not None:
+            # Stop any active thinking tune before shutting down
+            voice_thread._stop_thinking_tune()
             voice_thread.should_stop = True
             # Wait briefly for the voice thread to exit to avoid orphaned audio capture
             try:
