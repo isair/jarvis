@@ -161,16 +161,30 @@ class TextToSpeech:
 
         voice_set = f"$v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet);"
         if pwsh:
+            # Read the text to speak from stdin to avoid any quoting/interpolation issues
             script = (
+                "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
                 "Add-Type -AssemblyName System.Speech; "
                 "$v = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
                 f"$v.Volume = 100; $v.Rate = {rate}; "
                 f"{voice_set} "
-                f"$v.Speak({json_escape_ps(text)});"
+                "$t = [Console]::In.ReadToEnd(); "
+                "$v.Speak($t);"
             )
             try:
                 with self._process_lock:
-                    self._current_process = subprocess.Popen([pwsh, "-NoProfile", "-Command", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self._current_process = subprocess.Popen(
+                        [pwsh, "-NoProfile", "-Command", script],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                try:
+                    if self._current_process.stdin is not None:
+                        self._current_process.stdin.write(text.encode("utf-8", errors="replace"))
+                        self._current_process.stdin.close()
+                except Exception:
+                    pass
                 while self._current_process.poll() is None:
                     if self._should_interrupt.is_set():
                         return True
@@ -196,7 +210,8 @@ class TextToSpeech:
         )
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile("w", suffix=".vbs", delete=False, encoding="utf-8") as tf:
+            # Use UTF-16 for VBScript source to preserve non-ASCII characters reliably on Windows
+            with tempfile.NamedTemporaryFile("w", suffix=".vbs", delete=False, encoding="utf-16") as tf:
                 tf.write(vbs_code)
                 tmp_path = tf.name
             with self._process_lock:
