@@ -174,6 +174,51 @@ Want me to take a screenshot and help debug the specific error you're seeing?
 
 </details>
 
+## System Requirements
+
+Minimum specs for the default setup (chat `gpt-oss:20b`, embeddings `nomic-embed-text`, STT Whisper "small"):
+
+- **OS**: Windows 10/11 (64‑bit), macOS 12+ (Monterey or newer), or Ubuntu 20.04+
+- **CPU**: 4+ physical cores (e.g., Intel Core i5 / AMD Ryzen 5)
+- **RAM**: 16 GB
+- **Storage**: 20–40 GB free SSD (models + cache + DB)
+- **GPU**: Strongly recommended for the default 20B model (CPU‑only works but is slow). For acceleration:
+  - **NVIDIA (CUDA, Windows/Linux)**: 16 GB VRAM minimum; 24 GB recommended. Examples: RTX 4080 (16 GB), RTX 3090/4090 (24 GB)
+  - **AMD (Windows/Linux via DirectML/ROCm)**: 16–24 GB VRAM (e.g., RX 7900 XT/XTX)
+  - **Apple Silicon (macOS, Metal)**: 16 GB runs 7–8B models well; 32 GB recommended for 20B (e.g., M2/M3 Pro/Max)
+- **Audio**: Microphone + speakers/headphones (for voice)
+
+Notes:
+- On CPU‑only or lower‑VRAM GPUs, switch to a 7–8B chat model to keep latency reasonable.
+
+### CPU‑only fallback for the 20B default
+- Expect long generations on CPU. If you still want to use `gpt-oss:20b` without a GPU, increase timeouts in your JSON config (or set `JARVIS_CONFIG_PATH` to a custom file) to avoid premature cancellations:
+
+```json
+{
+  "llm_chat_timeout_sec": 900,
+  "llm_tools_timeout_sec": 900,
+  "llm_multi_step_timeout_sec": 1800,
+  "llm_embedding_timeout_sec": 120,
+  "llm_profile_select_timeout_sec": 60
+}
+```
+
+- Recommended alternative (faster on CPU): switch to a 7–8B model. For example, using Ollama:
+
+```bash
+ollama pull llama3:8b
+# or: ollama pull mistral:7b
+```
+
+Then set in your config:
+
+```json
+{
+  "ollama_chat_model": "llama3:8b"
+}
+```
+
 ## Quick Start
 
 ### Prerequisites
