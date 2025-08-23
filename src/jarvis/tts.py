@@ -156,7 +156,8 @@ class TextToSpeech:
         else:
             wpm = float(self.rate)
             rate = (wpm - 200) / 10
-            rate = max(-10, min(10, round(rate)))  # Clamp to SAPI bounds
+            rate = int(max(-10, min(10, round(rate))))  # Clamp to SAPI bounds and ensure int
+
         voice_set = f"$v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet);"
         if pwsh:
             script = (
@@ -261,5 +262,7 @@ class TextToSpeech:
 
 
 def json_escape_ps(s: str) -> str:
-    # Escape for PowerShell single-quoted string: double single quotes
-    return "'" + s.replace("'", "''") + "'"
+    # For PowerShell, use double quotes and escape internal double quotes
+    # This avoids issues with apostrophes in contractions like "you're"
+    escaped = s.replace('"', '""')
+    return '"' + escaped + '"'
