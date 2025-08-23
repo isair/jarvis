@@ -410,8 +410,14 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 vec = get_embedding(text_chunk, cfg.ollama_base_url, cfg.ollama_embed_model, timeout_sec=cfg.llm_embedding_timeout_sec)
                 if vec is not None:
                     db.upsert_embedding(cid, vec)
-    # Use LLM-based profile selection
-    profile_name = select_profile_llm(cfg.ollama_base_url, cfg.ollama_chat_model, cfg.active_profiles, redacted)
+    # Use LLM-based profile selection (with configurable timeout)
+    profile_name = select_profile_llm(
+        cfg.ollama_base_url,
+        cfg.ollama_chat_model,
+        cfg.active_profiles,
+        redacted,
+        timeout_sec=float(getattr(cfg, 'llm_profile_select_timeout_sec', 30.0))
+    )
     if cfg.voice_debug:
         try:
             print(f"[debug] selected profile: {profile_name}", file=sys.stderr)

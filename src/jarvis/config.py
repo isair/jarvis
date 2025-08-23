@@ -26,6 +26,7 @@ class Settings:
     llm_tools_timeout_sec: float
     llm_multi_step_timeout_sec: float
     llm_embedding_timeout_sec: float
+    llm_profile_select_timeout_sec: float
     
     # Profiles & Behavior
     active_profiles: list[str]
@@ -135,6 +136,7 @@ def get_default_config() -> Dict[str, Any]:
         "llm_tools_timeout_sec": 300.0,
         "llm_multi_step_timeout_sec": 600.0,
         "llm_embedding_timeout_sec": 60.0,
+        "llm_profile_select_timeout_sec": 30.0,
         
         # Profiles & Behavior
         "active_profiles": ["developer", "business", "life"],
@@ -295,6 +297,7 @@ def load_settings() -> Settings:
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_multi_step_timeout_sec = float(merged.get("llm_multi_step_timeout_sec", 600.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
+    llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
     return Settings(
         # Database & Storage
@@ -309,6 +312,7 @@ def load_settings() -> Settings:
         llm_tools_timeout_sec=llm_tools_timeout_sec,
         llm_multi_step_timeout_sec=llm_multi_step_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
+        llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
         
         # Profiles & Behavior
         active_profiles=active_profiles,

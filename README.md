@@ -263,6 +263,16 @@ JARVIS_VOICE_DEBUG=1 bash scripts/run_linux.sh
 $env:JARVIS_VOICE_DEBUG=1; pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 ```
 
+If you're using Windows PowerShell (powershell.exe) instead of PowerShell 7 (pwsh):
+```powershell
+$env:JARVIS_VOICE_DEBUG=1; powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
+From Command Prompt (cmd.exe):
+```cmd
+set JARVIS_VOICE_DEBUG=1 && powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
 This shows voice detection, processing steps, tool usage, and internal decision-making - helpful for developers and users who want transparency about the assistant's operations.
 
 ## Privacy, storage, and search
@@ -432,6 +442,7 @@ Example `config.json`:
   "ollama_base_url": "http://127.0.0.1:11434",
   "ollama_embed_model": "nomic-embed-text",
   "ollama_chat_model": "gpt-oss:20b",
+  "llm_profile_select_timeout_sec": 30.0,
   "use_stdin": false,
   "active_profiles": [
     "developer",

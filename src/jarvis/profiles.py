@@ -76,7 +76,7 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
 }
 
 
-def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str], text: str) -> str:
+def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str], text: str, timeout_sec: float = 10.0) -> str:
     candidates = [p for p in active_profiles if p in PROFILES]
     if not candidates:
         return "developer"
@@ -98,7 +98,7 @@ def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str
         "User text (may be partial transcript):\n" + text[:2000] + "\n\n"
         "Answer with only one of: " + allowed
     )
-    resp = ask_coach(base_url, chat_model, sys_prompt, user_content, timeout_sec=10.0, include_location=False)  # Short timeout for fast profile selection
+    resp = ask_coach(base_url, chat_model, sys_prompt, user_content, timeout_sec=timeout_sec, include_location=False)
     if isinstance(resp, str) and resp.strip():
         ans = resp.strip().lower()
         # Try exact match first

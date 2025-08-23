@@ -11,6 +11,7 @@
   "llm_tools_timeout_sec": 300.0,
   "llm_multi_step_timeout_sec": 600.0,
   "llm_embedding_timeout_sec": 60.0,
+  "llm_profile_select_timeout_sec": 30.0,
   
   "__comment": "Profiles & Behavior",
   "active_profiles": [
