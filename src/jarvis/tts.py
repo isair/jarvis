@@ -150,13 +150,14 @@ class TextToSpeech:
         # Prefer Windows PowerShell if available, else PowerShell 7
         pwsh = shutil.which("powershell") or shutil.which("pwsh")
         # Convert words-per-minute to Windows SAPI rate scale (-10 to 10)
-        # Linear mapping: (WPM - 200) / 10 = SAPI rate
-        if self.rate is None:
-            rate = 0  # Normal speed (200 WPM)
-        else:
-            wpm = float(self.rate)
-            rate = (wpm - 200) / 10
-            rate = int(max(-10, min(10, round(rate))))  # Clamp to SAPI bounds and ensure int
+        # We apply a small Windows-specific multiplier so that the perceived speed
+        # better matches macOS "say" defaults at the same WPM.
+        # Mapping: rate = round(((WPM * multiplier) - 200) / 10), clamped to [-10, 10]
+        multiplier = 1.2
+        base_wpm = 200.0 if self.rate is None else float(self.rate)
+        adjusted_wpm = base_wpm * multiplier
+        rate = (adjusted_wpm - 200.0) / 10.0
+        rate = int(max(-10, min(10, round(rate))))  # Clamp to SAPI bounds and ensure int
 
         voice_set = f"$v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet);"
         if pwsh:
