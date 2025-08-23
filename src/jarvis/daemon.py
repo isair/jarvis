@@ -1381,6 +1381,26 @@ def main() -> None:
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
     print("[jarvis] daemon started", file=sys.stderr)
+    # MCP preflight: list available external MCP tools (optional)
+    try:
+        mcps = getattr(cfg, "mcps", {}) or {}
+        if mcps:
+            try:
+                from .mcp_client import MCPClient  # type: ignore
+                client = MCPClient(mcps)
+                for server_name in mcps.keys():
+                    try:
+                        tools = client.list_tools(server_name)
+                        names = [str(t.get("name")) for t in (tools or []) if t and t.get("name")]
+                        preview = ", ".join(names[:10])
+                        print(f"[mcp] {server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[mcp] {server_name}: error listing tools: {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"[mcp] MCP client unavailable: {e}", file=sys.stderr)
+    except Exception:
+        # Never fail startup due to MCP enumeration issues
+        pass
     
     # Initialize dialogue memory with 5-minute inactivity timeout
     _global_dialogue_memory = DialogueMemory(inactivity_timeout=cfg.dialogue_memory_timeout, max_interactions=20)

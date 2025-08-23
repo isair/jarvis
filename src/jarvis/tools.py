@@ -9,6 +9,11 @@ from datetime import datetime, timezone, timedelta
 from .ocr import capture_screenshot_and_ocr
 from .coach import ask_coach
 from .nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
+from .config import Settings
+try:
+    from .mcp_client import MCPClient  # optional usage via config
+except Exception:
+    MCPClient = None  # type: ignore
 
 
 
@@ -136,19 +141,17 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str
     """
     names = [n.upper() for n in (allowed_tools or list(TOOL_SPECS.keys()))]
     lines: List[str] = []
-    lines.append(
-        "Tool-use protocol: When you need a tool, reply with a SINGLE LINE ONLY in the form `TOOL:NAME` or `TOOL:NAME {json}`. No other words before or after."
-    )
+    lines.append("Available tools and when to use them:")
     for nm in names:
         spec = TOOL_SPECS.get(nm)
         if not spec:
             continue
         lines.append(f"\n{spec.name}: {spec.summary}")
-        lines.append(f"Usage: {spec.usage_line}")
         if spec.args_help:
-            lines.append(f"Args: {spec.args_help}")
-        if spec.example:
-            lines.append(f"Example: {spec.example}")
+            lines.append(f"Input: {spec.args_help}")
+    # Nudge towards MCP usage in host environments
+    if MCPClient is not None:
+        lines.append("\nNote: In MCP-capable hosts, call these via MCP tools.")
     return "\n".join(lines)
 
 
@@ -191,7 +194,7 @@ def _normalize_time_range(args: Optional[Dict[str, Any]]) -> Tuple[str, str]:
 
 def run_tool_with_retries(
     db,
-    cfg,
+    cfg: Settings,
     tool_name: str,
     tool_args: Optional[Dict[str, Any]],
     system_prompt: str,
@@ -200,6 +203,39 @@ def run_tool_with_retries(
     max_retries: int = 1,
 ) -> ToolExecutionResult:
     name = (tool_name or "").upper()
+    # Prefer MCP if configured and tool is exposed by an MCP server
+    # Expected format: MCP:server:tool OR a mapping in cfg.mcps like { "jarvis": ... }
+    if name.startswith("MCP:") or (getattr(cfg, "mcps", None) and name in ("SCREENSHOT","LOG_MEAL","FETCH_MEALS","DELETE_MEAL","RECALL_CONVERSATION","WEB_SEARCH")):
+        try:
+            # Parse explicit MCP:server:tool or select default server 'jarvis' if present
+            server_name = None
+            mcp_tool = None
+            if name.startswith("MCP:"):
+                parts = name.split(":", 2)
+                if len(parts) >= 3:
+                    _, server_name, mcp_tool = parts
+            else:
+                # Use first configured server if available
+                server_name = next(iter((cfg.mcps or {}).keys()), None)
+                mcp_tool = name
+            if server_name:
+                try:
+                    from .mcp_client import MCPClient  # optional
+                except Exception:
+                    MCPClient = None  # type: ignore
+                if MCPClient is not None:
+                    client = MCPClient(cfg.mcps)
+                    result = client.invoke_tool(server_name=server_name, tool_name=(mcp_tool or name), arguments=(tool_args or {}))
+                    is_error = bool(result.get("isError", False))
+                    content = result.get("content")
+                    if isinstance(content, list):
+                        text = "\n".join(str(c) for c in content)
+                    else:
+                        text = None if content is None else str(content)
+                    return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
+        except Exception:
+            # Fall through to local implementation
+            pass
     
     # Friendly user print helper (non-debug only)
     def _user_print(message: str) -> None:
@@ -716,6 +752,28 @@ def run_tool_with_retries(
                 except Exception:
                     pass
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble performing the web search.")
+
+    # External MCP tools can be invoked by prefix MCP:<server>:<tool>
+    if name.startswith("MCP:"):
+        try:
+            if MCPClient is None:
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
+            # Expected format: MCP:server_name:tool_name
+            parts = name.split(":", 2)
+            if len(parts) < 3:
+                return ToolExecutionResult(success=False, reply_text="Invalid MCP tool format. Use MCP:server:tool.")
+            _, server_name, mcp_tool = parts
+            client = MCPClient(getattr(cfg, "mcps", {}))
+            result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool, arguments=(tool_args or {}))
+            is_error = bool(result.get("isError", False))
+            content = result.get("content")
+            if isinstance(content, list):
+                text = "\n".join(str(c) for c in content)
+            else:
+                text = None if content is None else str(content)
+            return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
+        except Exception as e:
+            return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP error: {e}")
 
     # Unknown tool
     if getattr(cfg, "voice_debug", False):
