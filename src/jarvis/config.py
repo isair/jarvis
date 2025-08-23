@@ -190,7 +190,7 @@ def get_default_config() -> Dict[str, Any]:
         # UI/UX Features
         "tune_enabled": True,
         "hot_window_enabled": True,
-        "hot_window_seconds": 4.0,
+        "hot_window_seconds": 6.0,
         
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
@@ -282,7 +282,7 @@ def load_settings() -> Settings:
     sample_rate = int(merged.get("sample_rate", 16000))
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
-    hot_window_seconds = float(merged.get("hot_window_seconds", 4.0))
+    hot_window_seconds = float(merged.get("hot_window_seconds", 6.0))
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))

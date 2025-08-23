@@ -78,7 +78,7 @@
   "__comment": "UI/UX Features",
   "tune_enabled": true,
   "hot_window_enabled": true,
-  "hot_window_seconds": 4.0,
+  "hot_window_seconds": 6.0,
   
   "__comment": "Memory & Dialogue",
   "dialogue_memory_timeout": 300.0,
