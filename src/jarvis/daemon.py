@@ -1044,6 +1044,11 @@ class VoiceListener(threading.Thread):
             model_name = getattr(self.cfg, "whisper_model", "small")
             compute = getattr(self.cfg, "whisper_compute_type", "int8")
             self.model = WhisperModel(model_name, device="cpu", compute_type=compute)
+            if self.cfg.voice_debug:
+                try:
+                    print(f"[voice] whisper model initialized: name={model_name}, compute={compute}", file=sys.stderr)
+                except Exception:
+                    pass
         except Exception:
             return
         # Audio and VAD parameters
@@ -1057,8 +1062,30 @@ class VoiceListener(threading.Thread):
         endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
         max_utt_frames = max(1, int(max_utt_ms / frame_ms))
 
+        if self.cfg.voice_debug:
+            try:
+                print(f"[voice] audio params: sample_rate={self._samplerate}, frame_ms={frame_ms}, frame_samples={self._frame_samples}", file=sys.stderr)
+                print(f"[voice] VAD: enabled={bool(self._vad is not None)}, aggressiveness={getattr(self.cfg, 'vad_aggressiveness', 2)}", file=sys.stderr)
+            except Exception:
+                pass
+
         stream_kwargs = {}
         device_env = (self.cfg.voice_device or '').strip().lower()
+        # When debugging, list available input devices once
+        if self.cfg.voice_debug:
+            try:
+                print("[voice] available input devices:", file=sys.stderr)
+                for idx, dev in enumerate(sd.query_devices()):
+                    try:
+                        max_in = int(dev.get("max_input_channels", 0))
+                    except Exception:
+                        max_in = 0
+                    if max_in > 0:
+                        name = dev.get("name")
+                        rate = dev.get("default_samplerate")
+                        print(f"  [{idx}] {name} (channels={max_in}, default_sr={rate})", file=sys.stderr)
+            except Exception:
+                pass
         if device_env and device_env not in ("default", "system"):
             try:
                 device_index = int(self.cfg.voice_device)  # type: ignore[arg-type]
@@ -1093,7 +1120,12 @@ class VoiceListener(threading.Thread):
                 callback=self._on_audio,
                 **stream_kwargs,
             )
-        except Exception:
+        except Exception as e:
+            if self.cfg.voice_debug:
+                try:
+                    print(f"[voice] failed to open input stream: {e}", file=sys.stderr)
+                except Exception:
+                    pass
             return
 
         with stream:
