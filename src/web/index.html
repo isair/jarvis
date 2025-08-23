@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#111827" />
+    <title>Jarvis Mobile</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h2>Connect to Jarvis</h2>
+        <div class="row">
+          <input id="host" placeholder="Host (e.g. 192.168.1.10)" />
+          <input id="port" placeholder="Port (e.g. 8756)" />
+        </div>
+        <button id="save">Save</button>
+        <p class="small">Enter the PC's IP and API port from Jarvis settings.</p>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h2>Chat</h2>
+        <textarea id="input" rows="3" placeholder="Type your message..."></textarea>
+        <div class="controls">
+          <button id="send">Send</button>
+          <button id="vstart">Start Voice</button>
+          <button id="vstop" disabled>Stop Voice</button>
+        </div>
+        <label><input type="checkbox" id="autospeak" checked /> Auto speak replies</label>
+        <div id="out" class="msg"></div>
+        <p id="warn" class="small muted"></p>
+      </div>
+    </div>
+    <script src="/main.js"></script>
+  </body>
+ </html>
+
+
