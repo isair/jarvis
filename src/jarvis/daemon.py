@@ -400,20 +400,6 @@ Provide a brief analysis or response for this step."""
 def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str) -> Optional[str]:
     global _global_dialogue_memory, _global_voice_listener
     
-    # Always print the query being processed for visibility (not just in debug mode)
-    try:
-        print(f"[jarvis] Processing query: {text}")
-    except Exception:
-        pass
-    
-    # Check if thinking tune is already playing from wake word detection
-    tune_already_active = (_global_voice_listener and 
-                          _global_voice_listener._is_thinking_tune_active())
-    
-    # If no tune is active yet, start one now
-    if not tune_already_active and _global_voice_listener:
-        _global_voice_listener._start_thinking_tune()
-    
     redacted = redact(text)
     chunks = _chunk_text(redacted)
     if chunks:
@@ -1046,6 +1032,13 @@ class VoiceListener(threading.Thread):
             
             # Start thinking tune immediately for hot window input too
             self._start_thinking_tune()
+            
+            # Print processing message when we start working on the query
+            try:
+                print(f"[jarvis] Processing query: {self._pending_query}")
+            except Exception:
+                pass
+            
             return
         
         # Wake detection
@@ -1084,6 +1077,13 @@ class VoiceListener(threading.Thread):
             
             # Start thinking tune immediately when wake word + query detected
             self._start_thinking_tune()
+            
+            # Print processing message when we start working on the query
+            try:
+                print(f"[jarvis] Processing query: {self._pending_query}")
+            except Exception:
+                pass
+            
             return
         if self._is_collecting:
             # Accept even single words to avoid dropping short intents
