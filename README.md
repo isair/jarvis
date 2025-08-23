@@ -292,6 +292,30 @@ If you prefer regular Python, you may need [Microsoft Visual C++ Build Tools](ht
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
+### MCP integration (use external MCP tools)
+
+Jarvis can act as an MCP client and invoke tools exposed by external MCP servers.
+
+Requirements:
+
+- Install the Python MCP SDK: `pip install mcp`
+
+Configure servers in your `config.json` under `mcps` (stdio transport):
+
+```
+"mcps": {
+  "filesystem": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
+    "env": {}
+  }
+}
+```
+
+Usage from Jarvis tool layer (for LLM planning): request tools using the `MCP:<server>:<tool>` prefix, e.g. `MCP:filesystem:list {"path":"/"}`. Jarvis will launch the server over stdio, call the tool, and return the output.
+
+
 ## Debug mode (recommended for developers)
 
 To see detailed information about what Jarvis is doing internally, run it with debug logging enabled:

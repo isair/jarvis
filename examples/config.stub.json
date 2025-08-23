@@ -101,5 +101,15 @@
   "location_auto_detect": true,
   
   "__comment": "Web Search",
-  "web_search_enabled": true
+  "web_search_enabled": true,
+
+  "__comment": "MCP Integration: external servers Jarvis can use (stdio)",
+  "mcps": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
+      "env": {}
+    }
+  }
 }
