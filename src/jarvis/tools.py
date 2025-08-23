@@ -200,10 +200,19 @@ def run_tool_with_retries(
     max_retries: int = 1,
 ) -> ToolExecutionResult:
     name = (tool_name or "").upper()
+    
+    # Friendly user print helper (non-debug only)
+    def _user_print(message: str) -> None:
+        if not getattr(cfg, "voice_debug", False):
+            try:
+                print(message)
+            except Exception:
+                pass
 
 
     # SCREENSHOT
     if name == "SCREENSHOT":
+        _user_print("📸 Capturing a screenshot for OCR…")
         if getattr(cfg, "voice_debug", False):
             try:
                 print("[debug] SCREENSHOT: capturing OCR...", file=sys.stderr)
@@ -224,10 +233,12 @@ def run_tool_with_retries(
                 print("[debug] SCREENSHOT: completed", file=sys.stderr)
             except Exception:
                 pass
+        _user_print("✅ Screenshot processed.")
         return result
 
     # LOG_MEAL
     if name == "LOG_MEAL":
+        _user_print("🥗 Logging your meal…")
         # First attempt: use provided args if complete
         required = [
             "description",
@@ -271,6 +282,7 @@ def run_tool_with_retries(
                         print(f"[debug] LOG_MEAL: logged meal_id={meal_id}", file=sys.stderr)
                     except Exception:
                         pass
+                _user_print("✅ Meal saved.")
                 return ToolExecutionResult(success=True, reply_text=reply_text)
         # Retry path: extract and log from redacted text using extractor
         for attempt in range(max_retries + 1):
@@ -295,10 +307,12 @@ def run_tool_with_retries(
                 print("[debug] LOG_MEAL: failed", file=sys.stderr)
             except Exception:
                 pass
+        _user_print("⚠️ I couldn't log that meal automatically.")
         return ToolExecutionResult(success=False, reply_text=None, error_message="Failed to log meal")
 
     # FETCH_MEALS
     if name == "FETCH_MEALS":
+        _user_print("📖 Retrieving your meals…")
         since, until = _normalize_time_range(tool_args if isinstance(tool_args, dict) else None)
         if getattr(cfg, "voice_debug", False):
             try:
@@ -313,10 +327,12 @@ def run_tool_with_retries(
                 pass
         summary = summarize_meals([dict(r) for r in meals])
         # Return raw meal summary for profile processing
+        _user_print("✅ Meals retrieved.")
         return ToolExecutionResult(success=True, reply_text=summary)
 
     # DELETE_MEAL
     if name == "DELETE_MEAL":
+        _user_print("🗑️ Deleting the meal…")
         mid = None
         if tool_args and isinstance(tool_args, dict):
             try:
@@ -334,10 +350,12 @@ def run_tool_with_retries(
                 print(f"[debug] DELETE_MEAL: id={mid} deleted={is_deleted}", file=sys.stderr)
             except Exception:
                 pass
+        _user_print("✅ Meal deleted." if is_deleted else "⚠️ I couldn't delete that meal.")
         return ToolExecutionResult(success=is_deleted, reply_text=("Meal deleted." if is_deleted else "Sorry, I couldn't delete that meal."))
 
     # RECALL_CONVERSATION
     if name == "RECALL_CONVERSATION":
+        _user_print("🧠 Looking back at our past conversations…")
         try:
             search_query = ""
             from_time = None
@@ -459,6 +477,7 @@ def run_tool_with_retries(
                     print(f"      ✅ found {len(context)} results", file=sys.stderr)
                 except Exception:
                     pass
+            _user_print("✅ Memory search complete.")
             
             return ToolExecutionResult(success=True, reply_text=reply_text)
             
@@ -472,6 +491,7 @@ def run_tool_with_retries(
 
     # WEB_SEARCH
     if name == "WEB_SEARCH":
+        _user_print("🌐 Searching the web…")
         try:
             # Check if web search is enabled
             if not getattr(cfg, "web_search_enabled", True):
@@ -665,6 +685,14 @@ def run_tool_with_retries(
                         print(f"      ✅ found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
                     except Exception:
                         pass
+                try:
+                    count_results = len([r for r in (search_results or []) if r.strip() and not r.startswith("   ")])
+                    if count_results > 0:
+                        _user_print(f"✅ Found {count_results} results.")
+                    else:
+                        _user_print("⚠️ No web results found.")
+                except Exception:
+                    pass
                 
                 return ToolExecutionResult(success=True, reply_text=reply_text)
                 

@@ -184,6 +184,39 @@ def _execute_multi_step_plan(
     remaining_plan_steps = []  # Mutable list of steps yet to be executed
     current_step_num = 0
     
+    # Helper: friendly console output for non-debug users
+    def _user_print(message: str, indent_levels: int = 0) -> None:
+        if not getattr(cfg, "voice_debug", False):
+            try:
+                indent = "  " * max(0, int(indent_levels))
+                print(f"{indent}{message}")
+            except Exception:
+                pass
+
+    # Helper: describe a step in friendly terms
+    def _describe_step(action: str, description: str, args: dict | None) -> str:
+        upper = (action or "").upper().strip()
+        args = args or {}
+        if upper == "ANALYZE":
+            return "🧠 Thinking…"
+        if upper == "WEB_SEARCH":
+            q = str(args.get("search_query") or "").strip()
+            return f"🌐 Web search: '{q}'" if q else "🌐 Web search…"
+        if upper == "SCREENSHOT":
+            return "📸 Screenshot OCR…"
+        if upper == "LOG_MEAL":
+            desc = str(args.get("description") or "meal").strip()
+            return f"🥗 Logging your meal: {desc}" if desc else "🥗 Logging your meal…"
+        if upper == "FETCH_MEALS":
+            return "📖 Fetching your logged meals…"
+        if upper == "DELETE_MEAL":
+            return "🗑️ Deleting a meal…"
+        if upper == "RECALL_CONVERSATION":
+            return "🧠 Looking back at our past conversations…"
+        if upper == "FINAL_RESPONSE":
+            return "💬 Preparing your answer…"
+        return f"⚙️ Executing: {upper}"
+
     # Always create an explicit plan for complex queries, regardless of initial tool request
     if not initial_reply:  # Only plan if we don't already have a direct response
         if cfg.voice_debug:
@@ -191,6 +224,7 @@ def _execute_multi_step_plan(
                 print(f"📋 [planning] asking LLM to create response plan", file=sys.stderr)
             except Exception:
                 pass
+        _user_print("📋 Planning how to help…")
         
         context_section = ""
         if conversation_context:
@@ -248,6 +282,16 @@ Do NOT execute any tools. Just return the JSON plan."""
                             print(f"     Step {step['step']}: {step['action']} - {step['description'][:50]}...", file=sys.stderr)
                     except Exception:
                         pass
+                try:
+                    _user_print(f"📝 Plan created ({len(remaining_plan_steps)} steps)")
+                    for step in remaining_plan_steps[:3]:
+                        action = str(step.get("action", "")).upper()
+                        desc = str(step.get("description", ""))
+                        _user_print(f"• Step {step.get('step', '?')}: {action.title()} — {desc[:60]}".rstrip(), indent_levels=1)
+                    if len(remaining_plan_steps) > 3:
+                        _user_print(f"…and {len(remaining_plan_steps) - 3} more", indent_levels=1)
+                except Exception:
+                    pass
             else:
                 if cfg.voice_debug:
                     try:
@@ -285,6 +329,7 @@ Do NOT execute any tools. Just return the JSON plan."""
                 print(f"⚙️  [step {current_step_num}] executing: {step_action} - {step_description[:50]}...", file=sys.stderr)
             except Exception:
                 pass
+        _user_print(_describe_step(step_action, step_description, step_tool_args))
         
         # Handle different action types
         if step_action == "FINAL_RESPONSE":
@@ -322,6 +367,7 @@ Respond as if you're having a casual chat."""
                         print(f"🏁 [multi-step] completed with final response", file=sys.stderr)
                     except Exception:
                         pass
+                _user_print("✅ Done.")
                 return final_response.strip()
             else:
                 # Fallback if final response fails
@@ -354,6 +400,7 @@ Provide a brief analysis or response for this step."""
                         print(f"    ✅ Analysis completed: {len(analysis_response)} chars", file=sys.stderr)
                     except Exception:
                         pass
+                _user_print("✅ Analysis complete.", indent_levels=1)
         
         elif step_action in allowed_tools:
             # This is a tool execution step
@@ -370,12 +417,14 @@ Provide a brief analysis or response for this step."""
                         print(f"    ✅ {step_action} returned {len(result.reply_text)} chars", file=sys.stderr)
                     except Exception:
                         pass
+                _user_print("✅ Step complete.", indent_levels=1)
             else:
                 if cfg.voice_debug:
                     try:
                         print(f"    ⚠️  {step_action} returned no results", file=sys.stderr)
                     except Exception:
                         pass
+                _user_print("⚠️ Step returned no results.", indent_levels=1)
         else:
             # Unknown action type
             if cfg.voice_debug:
@@ -563,7 +612,15 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             return "\n".join(lines).strip()
         safe_reply = _sanitize_out(reply)
         if safe_reply:
-            print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
+            # Friendly header for non-debug users; preserve technical header in debug
+            try:
+                if not getattr(cfg, "voice_debug", False):
+                    print(f"\n🤖 Jarvis ({profile_name})\n" + safe_reply + "\n", flush=True)
+                else:
+                    print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
+            except Exception:
+                # Fallback to original print if any issue occurs
+                print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
             if tts is not None and tts.enabled:
                 # Define completion callback for hot window activation
                 def _on_tts_complete():
@@ -1035,7 +1092,10 @@ class VoiceListener(threading.Thread):
             
             # Print processing message when we start working on the query
             try:
-                print(f"[jarvis] Processing query: {self._pending_query}")
+                if not getattr(self.cfg, "voice_debug", False):
+                    print(f"✨ Working on it: {self._pending_query}")
+                else:
+                    print(f"[jarvis] Processing query: {self._pending_query}")
             except Exception:
                 pass
             
@@ -1080,7 +1140,10 @@ class VoiceListener(threading.Thread):
             
             # Print processing message when we start working on the query
             try:
-                print(f"[jarvis] Processing query: {self._pending_query}")
+                if not getattr(self.cfg, "voice_debug", False):
+                    print(f"✨ Working on it: {self._pending_query}")
+                else:
+                    print(f"[jarvis] Processing query: {self._pending_query}")
             except Exception:
                 pass
             
