@@ -219,11 +219,28 @@ bash scripts/run_linux.sh
 ```
 
 **Windows:**
-```cmd
+```powershell
 git clone git@github.com:isair/jarvis.git
 cd jarvis
-scripts\run_windows.bat
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 ```
+
+### Windows (Micromamba/Conda alternative)
+
+If you don't have Conda/Mamba, install Micromamba, then just run the PowerShell script (it will create the env, install `av` from conda‑forge, pip install the rest, and start Jarvis):
+
+```powershell
+Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1 -UseBasicParsing).Content)
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
+Optional: UPnP support (`miniupnpc`). If you need it and see build errors, install Visual C++ Build Tools (Desktop C++ workload), then:
+
+```powershell
+micromamba run -p .\.mamba_env pip install miniupnpc
+```
+
+**Windows users:** If you encounter build errors during installation, install [Microsoft Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "Desktop development with C++" workload). This enables compilation of native dependencies like `webrtcvad` and `av`.
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
@@ -242,8 +259,8 @@ JARVIS_VOICE_DEBUG=1 bash scripts/run_linux.sh
 ```
 
 **Windows:**
-```cmd
-set JARVIS_VOICE_DEBUG=1 && scripts\run_windows.bat
+```powershell
+$env:JARVIS_VOICE_DEBUG=1; pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 ```
 
 This shows voice detection, processing steps, tool usage, and internal decision-making - helpful for developers and users who want transparency about the assistant's operations.
@@ -458,7 +475,7 @@ Example `config.json`:
 ## What's inside (for developers)
 - Python core: deterministic redaction, SQLite (FTS5 + optional VSS), embeddings, hybrid retrieval, triggers, multi‑profile coach, voice wake word, and TTS.
 - Tools: one‑shot interactive screenshot OCR (macOS `screencapture` + Tesseract) and optional nutrition logging.
-- Scripts: Platform-specific launchers (`run_macos.sh`, `run_linux.sh`, `run_windows.bat`) that handle setup and start the daemon.
+- Scripts: Platform-specific launchers (`run_macos.sh`, `run_linux.sh`, `run_windows.ps1`) that handle setup and start the daemon.
 
 ### Maintaining configuration examples
 Configuration defaults are defined once in `src/jarvis/config.py`. To update example files after changing defaults:
