@@ -1213,7 +1213,7 @@ class VoiceListener(threading.Thread):
                                 break
 
 
-def _check_and_update_diary(db: Database, cfg) -> None:
+def _check_and_update_diary(db: Database, cfg, verbose: bool = False) -> None:
     """Check if diary should be updated and perform batch update if needed."""
     global _global_dialogue_memory
     if _global_dialogue_memory is None:
@@ -1221,6 +1221,11 @@ def _check_and_update_diary(db: Database, cfg) -> None:
         
     try:
         if _global_dialogue_memory.should_update_diary():
+            if verbose:
+                try:
+                    print("📝 Updating your diary. Please wait… (don't press Ctrl+C again)", file=sys.stderr, flush=True)
+                except Exception:
+                    pass
             source_app = "stdin" if cfg.use_stdin else "voice"
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
@@ -1238,6 +1243,14 @@ def _check_and_update_diary(db: Database, cfg) -> None:
                         print(f"[debug] diary updated from dialogue memory: id={summary_id}", file=sys.stderr)
                     else:
                         print("[debug] diary update from dialogue memory failed", file=sys.stderr)
+                except Exception:
+                    pass
+            if verbose:
+                try:
+                    if summary_id:
+                        print("✅ Diary update finished.", file=sys.stderr, flush=True)
+                    else:
+                        print("⚠️ Diary update failed. Shutting down anyway.", file=sys.stderr, flush=True)
                 except Exception:
                     pass
     except Exception as e:
@@ -1284,13 +1297,13 @@ def main() -> None:
             
             # Periodically check if diary should be updated
             if now - last_diary_check >= diary_check_interval:
-                _check_and_update_diary(db, cfg)
+                _check_and_update_diary(db, cfg, verbose=False)
                 last_diary_check = now
         if voice_thread is not None:
             while voice_thread.is_alive():
                 time.sleep(0.5)
                 # Check for diary updates while waiting
-                _check_and_update_diary(db, cfg)
+                _check_and_update_diary(db, cfg, verbose=False)
     except KeyboardInterrupt:
         pass
     finally:
@@ -1299,7 +1312,7 @@ def main() -> None:
         _commit_buffer(db, cfg, tts, buffer)
         
         # Final diary update before shutdown to save any pending interactions
-        _check_and_update_diary(db, cfg)
+        _check_and_update_diary(db, cfg, verbose=True)
         
         if tts is not None:
             tts.stop()
