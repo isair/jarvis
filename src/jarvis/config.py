@@ -89,6 +89,13 @@ class Settings:
     
     # Web Search
     web_search_enabled: bool
+
+    # HTTP API Server
+    api_enabled: bool
+    api_host: str
+    api_port: int
+    api_cors_origins: list[str]
+    api_enable_pwa: bool
     
 
 
@@ -207,6 +214,13 @@ def get_default_config() -> Dict[str, Any]:
         
         # Web Search
         "web_search_enabled": True,
+
+        # HTTP API Server
+        "api_enabled": True,
+        "api_host": "0.0.0.0",
+        "api_port": 8756,
+        "api_cors_origins": ["*"],
+        "api_enable_pwa": True,
     }
 
 
@@ -299,6 +313,13 @@ def load_settings() -> Settings:
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
+    # API server
+    api_enabled = bool(merged.get("api_enabled", True))
+    api_host = str(merged.get("api_host", "0.0.0.0"))
+    api_port = int(merged.get("api_port", 8756))
+    api_cors_origins = _ensure_list(merged.get("api_cors_origins")) or ["*"]
+    api_enable_pwa = bool(merged.get("api_enable_pwa", True))
+
     return Settings(
         # Database & Storage
         db_path=db_path,
@@ -375,4 +396,11 @@ def load_settings() -> Settings:
         
         # Web Search
         web_search_enabled=web_search_enabled,
+
+        # HTTP API Server
+        api_enabled=api_enabled,
+        api_host=api_host,
+        api_port=api_port,
+        api_cors_origins=api_cors_origins,
+        api_enable_pwa=api_enable_pwa,
     )

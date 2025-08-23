@@ -17,6 +17,7 @@ from .coach import ask_coach, ask_coach_with_tools
 from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
 from .tts import TextToSpeech
 from .tune_player import TunePlayer
+from .server import ApiServer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
 from .memory import update_daily_conversation_summary, DialogueMemory, update_diary_from_dialogue_memory
@@ -1388,6 +1389,32 @@ def main() -> None:
     tts: Optional[TextToSpeech] = TextToSpeech(enabled=cfg.tts_enabled, voice=cfg.tts_voice, rate=cfg.tts_rate)
     if tts.enabled:
         tts.start()
+
+    # Start HTTP API server if enabled
+    if getattr(cfg, 'api_enabled', False):
+        def run_chat_once(prompt: str) -> str:
+            reply = _run_coach_on_text(db, cfg, tts, prompt)
+            return reply or ""
+        try:
+            server = ApiServer(
+                host=getattr(cfg, 'api_host', '0.0.0.0'),
+                port=getattr(cfg, 'api_port', 8756),
+                cors_origins=getattr(cfg, 'api_cors_origins', ['*']),
+                enable_pwa=getattr(cfg, 'api_enable_pwa', True),
+                run_chat=run_chat_once,
+                health_check=lambda: True,
+            )
+            server.start_in_background()
+            try:
+                print(f"[jarvis] api listening on http://{cfg.api_host}:{cfg.api_port}", file=sys.stderr)
+            except Exception:
+                pass
+        except Exception as e:
+            if cfg.voice_debug:
+                try:
+                    print(f"[debug] api server failed to start: {e}", file=sys.stderr)
+                except Exception:
+                    pass
 
     voice_thread: Optional[VoiceListener] = None
     if WhisperModel is not None and sd is not None:

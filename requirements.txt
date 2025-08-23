@@ -13,3 +13,5 @@ webrtcvad==2.0.10
 rapidfuzz==3.6.1
 geoip2==4.8.0
 miniupnpc==2.2.8
+fastapi==0.112.2
+uvicorn==0.30.6
