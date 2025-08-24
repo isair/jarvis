@@ -167,9 +167,11 @@ def ask_coach(base_url: str, chat_model: str, system_prompt: str, user_content: 
 def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, user_content: str,
                          tools_desc: str, timeout_sec: float = 45.0, additional_messages: Optional[List[Dict[str, str]]] = None, include_location: bool = True, config_ip: Optional[str] = None, auto_detect: bool = True, voice_debug: bool = False) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
     """
-    Lightweight tool-use protocol: The model can respond with a single line directive
-    like: TOOL:SCREENSHOT. If present, caller should execute the tool and then re-ask
-    with the tool output appended. Returns (final_text, tool_request).
+    Tool-use protocol: The model can respond with a single-line JSON
+    directive in the form {"tool": {"name": "SCREENSHOT", "args": {...}}}.
+    For MCP tools include a "server" field: {"tool": {"server": "filesystem", "name": "list", "args": {...}}}.
+    If present, the caller should execute the tool and then re-ask with the tool output
+    appended. Returns (final_text, tool_request, tool_args) for backward compatibility.
     """
     # Add temporal context to system prompt
     enhanced_system_prompt = _add_temporal_context_to_system_prompt(system_prompt, include_location=include_location, config_ip=config_ip, auto_detect=auto_detect)
@@ -235,42 +237,25 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
                 pass
             return None, None, None
         text = content.strip()
-        # Detect tool directives even if the model added other text around them.
-        # Support optional JSON args on the same line or following text.
+        # Prefer JSON directive parsing first
         for line in (text.splitlines() or [text]):
-            original_line = (line or "").strip()
-            if not original_line:
+            s = (line or "").strip()
+            if not s:
                 continue
-            upper = original_line.upper()
-            if upper.startswith("TOOL:"):
-                # Parse tool name
+            if s.startswith("{") and s.endswith("}"):
                 try:
-                    after_colon = original_line.split(":", 1)[1].strip()
+                    obj = json.loads(s)
+                    if isinstance(obj, dict) and isinstance(obj.get("tool"), dict):
+                        t = obj["tool"]
+                        # MCP if a server field is provided; otherwise internal tool
+                        if t.get("server"):
+                            return None, "MCP", t
+                        name = str(t.get("name", "")).upper()
+                        args = t.get("args") if isinstance(t.get("args"), dict) else None
+                        return None, name, args
                 except Exception:
-                    after_colon = original_line
-                parts = after_colon.split(None, 1)
-                tool_name = parts[0].upper().strip()
-                arg_str: Optional[str] = None
-                if len(parts) > 1:
-                    remainder = parts[1].strip()
-                    # Heuristic: find first JSON object substring
-                    if "{" in remainder and "}" in remainder:
-                        try:
-                            json_start = remainder.find("{")
-                            json_end = remainder.rfind("}")
-                            if json_start >= 0 and json_end > json_start:
-                                arg_str = remainder[json_start:json_end + 1]
-                        except Exception:
-                            arg_str = None
-                args: Optional[Dict[str, Any]] = None
-                if arg_str:
-                    try:
-                        parsed = json.loads(arg_str)
-                        if isinstance(parsed, dict):
-                            args = parsed
-                    except Exception:
-                        args = None
-                return None, tool_name, args
+                    pass
+        # Fallback to plain text (no tool)
         return text, None, None
     except requests.exceptions.Timeout:
         _debug_print("[debug] LLM request timed out", voice_debug)

@@ -135,13 +135,15 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
 
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str:
-    """Produce a standardized, compact tools help string for the system prompt.
-
-    If allowed_tools is provided, only include those. Otherwise include all.
-    """
+    """Produce a compact, JSON-only tool help string for the system prompt."""
     names = [n.upper() for n in (allowed_tools or list(TOOL_SPECS.keys()))]
     lines: List[str] = []
-    lines.append("Available tools and when to use them:")
+    lines.append("Tool-use protocol: Reply with ONLY a JSON object:")
+    lines.append("{\"tool\": { \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
+    if MCPClient is not None:
+        lines.append("For external MCP tools (include 'server'):")
+        lines.append("{\"tool\": { \"server\": \"<SERVER>\", \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
+    lines.append("\nAvailable tools and when to use them:")
     for nm in names:
         spec = TOOL_SPECS.get(nm)
         if not spec:
@@ -149,9 +151,6 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str
         lines.append(f"\n{spec.name}: {spec.summary}")
         if spec.args_help:
             lines.append(f"Input: {spec.args_help}")
-    # Nudge towards MCP usage in host environments
-    if MCPClient is not None:
-        lines.append("\nNote: In MCP-capable hosts, call these via MCP tools.")
     return "\n".join(lines)
 
 
@@ -203,40 +202,31 @@ def run_tool_with_retries(
     max_retries: int = 1,
 ) -> ToolExecutionResult:
     name = (tool_name or "").upper()
-    # Prefer MCP if configured and tool is exposed by an MCP server
-    # Expected format: MCP:server:tool OR a mapping in cfg.mcps like { "jarvis": ... }
-    if name.startswith("MCP:") or (getattr(cfg, "mcps", None) and name in ("SCREENSHOT","LOG_MEAL","FETCH_MEALS","DELETE_MEAL","RECALL_CONVERSATION","WEB_SEARCH")):
+
+    # JSON-based MCP invocation
+    if name == "MCP":
         try:
-            # Parse explicit MCP:server:tool or select default server 'jarvis' if present
-            server_name = None
-            mcp_tool = None
-            if name.startswith("MCP:"):
-                parts = name.split(":", 2)
-                if len(parts) >= 3:
-                    _, server_name, mcp_tool = parts
+            if MCPClient is None:
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
+            if not (tool_args and isinstance(tool_args, dict)):
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP requires args with 'server' and 'name'.")
+            server_name = str(tool_args.get("server") or "")
+            mcp_tool = str(tool_args.get("name") or "")
+            arguments = tool_args.get("args") if isinstance(tool_args.get("args"), dict) else {}
+            if not server_name or not mcp_tool:
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP requires both 'server' and 'name'.")
+            client = MCPClient(getattr(cfg, "mcps", {}))
+            result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool, arguments=arguments)
+            is_error = bool(result.get("isError", False))
+            content = result.get("content")
+            if isinstance(content, list):
+                text = "\n".join(str(c) for c in content)
             else:
-                # Use first configured server if available
-                server_name = next(iter((cfg.mcps or {}).keys()), None)
-                mcp_tool = name
-            if server_name:
-                try:
-                    from .mcp_client import MCPClient  # optional
-                except Exception:
-                    MCPClient = None  # type: ignore
-                if MCPClient is not None:
-                    client = MCPClient(cfg.mcps)
-                    result = client.invoke_tool(server_name=server_name, tool_name=(mcp_tool or name), arguments=(tool_args or {}))
-                    is_error = bool(result.get("isError", False))
-                    content = result.get("content")
-                    if isinstance(content, list):
-                        text = "\n".join(str(c) for c in content)
-                    else:
-                        text = None if content is None else str(content)
-                    return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
-        except Exception:
-            # Fall through to local implementation
-            pass
-    
+                text = None if content is None else str(content)
+            return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
+        except Exception as e:
+            return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP error: {e}")
+
     # Friendly user print helper (non-debug only)
     def _user_print(message: str) -> None:
         if not getattr(cfg, "voice_debug", False):
@@ -752,28 +742,6 @@ def run_tool_with_retries(
                 except Exception:
                     pass
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble performing the web search.")
-
-    # External MCP tools can be invoked by prefix MCP:<server>:<tool>
-    if name.startswith("MCP:"):
-        try:
-            if MCPClient is None:
-                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
-            # Expected format: MCP:server_name:tool_name
-            parts = name.split(":", 2)
-            if len(parts) < 3:
-                return ToolExecutionResult(success=False, reply_text="Invalid MCP tool format. Use MCP:server:tool.")
-            _, server_name, mcp_tool = parts
-            client = MCPClient(getattr(cfg, "mcps", {}))
-            result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool, arguments=(tool_args or {}))
-            is_error = bool(result.get("isError", False))
-            content = result.get("content")
-            if isinstance(content, list):
-                text = "\n".join(str(c) for c in content)
-            else:
-                text = None if content is None else str(content)
-            return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
-        except Exception as e:
-            return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP error: {e}")
 
     # Unknown tool
     if getattr(cfg, "voice_debug", False):

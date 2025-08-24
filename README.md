@@ -313,9 +313,6 @@ Configure servers in your `config.json` under `mcps` (stdio transport):
 }
 ```
 
-Usage from Jarvis tool layer (for LLM planning): request tools using the `MCP:<server>:<tool>` prefix, e.g. `MCP:filesystem:list {"path":"/"}`. Jarvis will launch the server over stdio, call the tool, and return the output.
-
-
 ## Debug mode (recommended for developers)
 
 To see detailed information about what Jarvis is doing internally, run it with debug logging enabled:
@@ -581,11 +578,10 @@ For commercial licensing, please contact: [baris@writeme.com]
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
 
 ## Roadmap
-- Configurable personality.
-- Proper MCP integration.
+- First time setup over voice with configurable personality.
 - Home device control.
 - Cross-platform desktop app so people don't have to bother with cloning and setting the project up.
-- API so your other devices can query the same assistant.
+- API so your other devices can query the same assistant, and a PWA so most devices have a way of using Jarvis.
 - Mobile apps.
 - More baked-in tools.
 - Deep research.
