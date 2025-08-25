@@ -4,8 +4,7 @@ from __future__ import annotations
 MCP Client integration for Jarvis (use external MCP tools)
 
 This module allows Jarvis to connect to external MCP servers and invoke their tools.
-It uses the Python MCP SDK over stdio transport. The dependency is optional and
-only required if you enable MCP in your configuration.
+It uses the Python MCP SDK over stdio transport.
 
 Config format (in config.json under key "mcps"):
 
@@ -35,24 +34,8 @@ print(result)
 import asyncio
 from typing import Any, Dict, Optional, List
 
-
-class _OptionalImports:
-    def __init__(self) -> None:
-        self.errors: List[str] = []
-        try:
-            from mcp import ClientSession  # type: ignore
-            from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
-            self.ClientSession = ClientSession  # type: ignore
-            self.stdio_client = stdio_client  # type: ignore
-            self.StdioServerParameters = StdioServerParameters  # type: ignore
-        except Exception as e:  # pragma: no cover
-            self.ClientSession = None  # type: ignore
-            self.stdio_client = None  # type: ignore
-            self.StdioServerParameters = None  # type: ignore
-            self.errors.append(str(e))
-
-
-_imports = _OptionalImports()
+from mcp import ClientSession  # type: ignore
+from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
 
 class MCPClient:
@@ -60,18 +43,13 @@ class MCPClient:
 
     def __init__(self, mcps_config: Dict[str, Any]) -> None:
         self.server_configs: Dict[str, Dict[str, Any]] = mcps_config or {}
-        if _imports.ClientSession is None:  # pragma: no cover
-            raise RuntimeError(
-                "The 'mcp' Python package is required for MCP client features. "
-                "Install with: pip install mcp"
-            )
 
     async def _connect_stdio(self, server_cfg: Dict[str, Any]):
         command = str(server_cfg.get("command"))
         args = [str(a) for a in (server_cfg.get("args") or [])]
         env = server_cfg.get("env") or None
-        params = _imports.StdioServerParameters(command=command, args=args, env=env)
-        return _imports.stdio_client(params)
+        params = StdioServerParameters(command=command, args=args, env=env)
+        return stdio_client(params)
 
     async def _with_session(self, server_name: str):
         cfg = self.server_configs.get(server_name)
@@ -81,14 +59,17 @@ class MCPClient:
         if transport != "stdio":
             raise NotImplementedError(f"Unsupported MCP transport '{transport}'. Only 'stdio' is supported currently.")
 
-        async with await self._connect_stdio(cfg) as (read, write):
-            async with _imports.ClientSession(read, write) as session:
+        async with self._connect_stdio(cfg) as (read, write):
+            async with ClientSession(read, write) as session:
                 await session.initialize()
                 yield session
 
     async def list_tools_async(self, server_name: str) -> List[Dict[str, Any]]:
         async for session in self._with_session(server_name):
             tools = await session.list_tools()
+            # Some SDK versions may return (tools, meta). Handle tuple shape.
+            if isinstance(tools, tuple) and len(tools) >= 1:
+                tools = tools[0]
             # Normalize to a simple dict list
             return [
                 {

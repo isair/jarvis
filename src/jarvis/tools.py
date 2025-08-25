@@ -10,10 +10,7 @@ from .ocr import capture_screenshot_and_ocr
 from .coach import ask_coach
 from .nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
 from .config import Settings
-try:
-    from .mcp_client import MCPClient  # optional usage via config
-except Exception:
-    MCPClient = None  # type: ignore
+from .mcp_client import MCPClient
 
 
 
@@ -140,9 +137,8 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str
     lines: List[str] = []
     lines.append("Tool-use protocol: Reply with ONLY a JSON object:")
     lines.append("{\"tool\": { \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
-    if MCPClient is not None:
-        lines.append("For external MCP tools (include 'server'):")
-        lines.append("{\"tool\": { \"server\": \"<SERVER>\", \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
+    lines.append("For external MCP tools (include 'server'):")
+    lines.append("{\"tool\": { \"server\": \"<SERVER>\", \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
     lines.append("\nAvailable tools and when to use them:")
     for nm in names:
         spec = TOOL_SPECS.get(nm)

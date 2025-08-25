@@ -297,21 +297,33 @@ The scripts automatically create a virtual environment, install dependencies, an
 Jarvis can act as an MCP client and invoke tools exposed by external MCP servers.
 
 Requirements:
+- Node.js 18+ with `npx` if you want to use the preconfigured third‑party servers below.
 
-- Install the Python MCP SDK: `pip install mcp`
+Default servers:
+
+- We ship a default `filesystem-home` MCP entry that launches the third‑party `@modelcontextprotocol/server-filesystem` via `npx` pointed at your home directory (`~`). This server is not part of Jarvis. It requires Node.js and, on first run, network access to fetch the package. Remove or edit this entry if you prefer not to use third‑party servers.
 
 Configure servers in your `config.json` under `mcps` (stdio transport):
 
 ```
 "mcps": {
-  "filesystem": {
+  "filesystem-home": {
     "transport": "stdio",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
     "env": {}
+  },
+  "filesystem-tmp": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    "env": {}
   }
 }
-```
+
+Notes:
+- The example servers above (and the default `filesystem-home`) are third‑party and run via `npx`. If you don’t have Node.js installed or prefer not to use external servers, remove or empty `mcps`. Jarvis will still work with its internal tools.
+- You can replace these with any MCP server you trust by adjusting `command`, `args`, and `env`.
 
 ## Debug mode (recommended for developers)
 

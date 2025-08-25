@@ -20,6 +20,7 @@ from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
 from .memory import update_daily_conversation_summary, DialogueMemory, update_diary_from_dialogue_memory
+from .mcp_client import MCPClient
 
 try:
     from faster_whisper import WhisperModel  # type: ignore
@@ -564,7 +565,21 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     
     # Enable tool calling for complex queries that might need multiple tools
     allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
+    # Expose MCP as a tool if any MCP servers are configured
+    if getattr(cfg, "mcps", {}):
+        if "MCP" not in allowed_tools:
+            allowed_tools = list(allowed_tools) + ["MCP"]
     tools_desc = generate_tools_description(allowed_tools)
+    # Append configured MCP servers to the tool description to guide selection
+    if getattr(cfg, "mcps", {}):
+        try:
+            mcp_lines = ["", "External MCP servers available:"]
+            for srv in (cfg.mcps or {}).keys():
+                mcp_lines.append(f"- {srv}")
+            mcp_lines.append('Call MCP with: {"tool": {"server": "<SERVER>", "name": "<TOOL_NAME>", "args": { ... } }}')
+            tools_desc = tools_desc + "\n" + "\n".join(mcp_lines)
+        except Exception:
+            pass
     
     if cfg.voice_debug:
         try:
@@ -1381,26 +1396,18 @@ def main() -> None:
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
     print("[jarvis] daemon started", file=sys.stderr)
-    # MCP preflight: list available external MCP tools (optional)
-    try:
-        mcps = getattr(cfg, "mcps", {}) or {}
-        if mcps:
+    # MCP preflight: list available external MCP tools
+    mcps = getattr(cfg, "mcps", {}) or {}
+    if mcps:
+        client = MCPClient(mcps)
+        for server_name in mcps.keys():
             try:
-                from .mcp_client import MCPClient  # type: ignore
-                client = MCPClient(mcps)
-                for server_name in mcps.keys():
-                    try:
-                        tools = client.list_tools(server_name)
-                        names = [str(t.get("name")) for t in (tools or []) if t and t.get("name")]
-                        preview = ", ".join(names[:10])
-                        print(f"[mcp] {server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"[mcp] {server_name}: error listing tools: {e}", file=sys.stderr)
+                tools = client.list_tools(server_name)
+                names = [str(t.get("name")) for t in (tools or []) if t and t.get("name")]
+                preview = ", ".join(names[:10])
+                print(f"[mcp] {server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", file=sys.stderr)
             except Exception as e:
-                print(f"[mcp] MCP client unavailable: {e}", file=sys.stderr)
-    except Exception:
-        # Never fail startup due to MCP enumeration issues
-        pass
+                print(f"[mcp] {server_name}: error listing tools: {e}", file=sys.stderr)
     
     # Initialize dialogue memory with 5-minute inactivity timeout
     _global_dialogue_memory = DialogueMemory(inactivity_timeout=cfg.dialogue_memory_timeout, max_interactions=20)
