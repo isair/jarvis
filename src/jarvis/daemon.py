@@ -211,40 +211,39 @@ def _execute_multi_step_plan(
         if conversation_context:
             context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
         
-        planning_prompt = f"""Original user query: {redacted_text}
-{context_section}
-Create a plan to answer this query effectively.
-
-INSTRUCTIONS:
-1. Analyze what the user is asking for
-2. Review any conversation history to understand context
-3. Create a strategic plan that provides targeted results
-
-Available tools: {', '.join(allowed_tools)}
-
-Respond with ONLY a JSON object in this exact format:
-{{
-  "steps": [
-    {{
-      "step": 1,
-      "action": "tool or analyze",
-      "description": "Brief description of what this step does",
-      "tool_call": {{  // Only when action == "tool"
-        // Internal tool example (no server):
-        // {"name": "fetchMeals", "args": {{ "since_utc": "2025-01-01T00:00:00Z" }} }
-        // MCP tool example (requires server):
-        // {"server": "fs", "name": "list", "args": {{ "path": "~" }} }
-      }}
-    }},
-    {{
-      "step": 2,
-      "action": "finalResponse",
-      "description": "Synthesize and respond to user"
-    }}
-  ]
-}}
-
-Do NOT execute any tools. Just return the JSON plan."""
+        # Build planning prompt using concatenation to avoid f-string brace interpolation issues
+        planning_prompt = (
+            "Original user query: " + redacted_text + "\n"
+            + context_section +
+            "Create a plan to answer this query effectively.\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Analyze what the user is asking for\n"
+            "2. Review any conversation history to understand context\n"
+            "3. Create a strategic plan that provides targeted results\n\n"
+            "Available tools: " + ", ".join(allowed_tools) + "\n\n"
+            "Respond with ONLY a JSON object in this exact format:\n"
+            "{\n"
+            "  \"steps\": [\n"
+            "    {\n"
+            "      \"step\": 1,\n"
+            "      \"action\": \"tool or analyze\",\n"
+            "      \"description\": \"Brief description of what this step does\",\n"
+            "      \"tool_call\": {  // Only when action == \"tool\"\n"
+            "        // Internal tool example (no server):\n"
+            "        // {\"name\": \"fetchMeals\", \"args\": { \"since_utc\": \"2025-01-01T00:00:00Z\" } }\n"
+            "        // MCP tool example (requires server):\n"
+            "        // {\"server\": \"fs\", \"name\": \"list\", \"args\": { \"path\": \"~\" } }\n"
+            "      }\n"
+            "    },\n"
+            "    {\n"
+            "      \"step\": 2,\n"
+            "      \"action\": \"finalResponse\",\n"
+            "      \"description\": \"Synthesize and respond to user\"\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Do NOT execute any tools. Just return the JSON plan."
+        )
         
         plan_reply, plan_tool_req, plan_tool_args = ask_coach_with_tools(
             cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, planning_prompt, tools_desc,
@@ -497,7 +496,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             memory_result = run_tool_with_retries(
                 db=db,
                 cfg=cfg,
-                tool="recallConversation",
+                tool_name="recallConversation",
                 tool_args=tool_args,
                 system_prompt=system_prompt,
                 original_prompt="",  # Not needed for memory search
