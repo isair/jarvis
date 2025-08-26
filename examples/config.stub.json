@@ -32,8 +32,13 @@
   
   "__comment": "Text-to-Speech",
   "tts_enabled": true,
+  "tts_engine": "system",
   "tts_voice": null,
   "tts_rate": 200,
+  "tts_chatterbox_device": "cuda",
+  "tts_chatterbox_audio_prompt": null,
+  "tts_chatterbox_exaggeration": 0.5,
+  "tts_chatterbox_cfg_weight": 0.5,
   
   "__comment": "Voice Input & Audio",
   "voice_device": null,

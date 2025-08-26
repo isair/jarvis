@@ -7,6 +7,7 @@ import shutil
 import signal
 import tempfile
 import os
+import warnings
 from typing import Optional, Callable
 
 
@@ -275,6 +276,244 @@ class TextToSpeech:
 
     def get_last_spoken_text(self) -> str:
         return self._last_spoken_text
+
+
+class ChatterboxTTS:
+    """Experimental TTS implementation using Resemble AI's Chatterbox model."""
+    
+    def __init__(self, enabled: bool = True, voice: Optional[str] = None, rate: Optional[int] = None, 
+                 device: str = "cuda", audio_prompt_path: Optional[str] = None, 
+                 exaggeration: float = 0.5, cfg_weight: float = 0.5) -> None:
+        self.enabled = enabled
+        self.voice = voice  # Not used in Chatterbox, kept for interface compatibility
+        self.rate = rate    # Not directly supported in Chatterbox, kept for interface compatibility
+        self.device = device
+        self.audio_prompt_path = audio_prompt_path
+        self.exaggeration = exaggeration
+        self.cfg_weight = cfg_weight
+        
+        # Threading and queue setup (same as TextToSpeech)
+        self._q: queue.Queue[str] = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self._is_speaking = threading.Event()
+        self._last_spoken_text: str = ""
+        self._completion_callback: Optional[Callable[[], None]] = None
+        self._should_interrupt = threading.Event()
+        
+        # Chatterbox model (eagerly loaded during initialization)
+        self._model = None
+        self._model_error = None
+        self._system_tts = None  # For setup announcements
+        
+        # Perform eager initialization
+        if enabled:
+            self._initialize_with_logging()
+        
+    def _initialize_with_logging(self) -> None:
+        """Initialize Chatterbox with proper logging and system announcements."""
+        import sys
+        
+        print("🔧 [TTS] Initializing Chatterbox neural voice synthesis...", file=sys.stderr)
+        
+        # Create system TTS for announcements during setup
+        self._system_tts = TextToSpeech(enabled=True)
+        self._system_tts.start()
+        self._system_tts.speak("Setting up advanced voice synthesis")
+        
+        try:
+            print("📦 [TTS] Loading Chatterbox dependencies...", file=sys.stderr)
+            
+            # Import dependencies
+            import torch
+            import torchaudio as ta
+            from chatterbox.tts import ChatterboxTTS as ChatterboxModel
+            
+            # Check device availability
+            if self.device == "cuda" and not torch.cuda.is_available():
+                print("⚠️  [TTS] CUDA requested but not available, falling back to CPU", file=sys.stderr)
+                actual_device = "cpu"
+            else:
+                actual_device = self.device
+            
+            print(f"🚀 [TTS] Loading Chatterbox model on {actual_device.upper()}...", file=sys.stderr)
+            
+            # Load model with proper device specification
+            self._model = ChatterboxModel.from_pretrained(device=actual_device)
+            
+            print("✅ [TTS] Chatterbox neural voice synthesis ready!", file=sys.stderr)
+            self._system_tts.speak("Advanced voice synthesis ready")
+            
+        except ImportError as e:
+            self._model_error = f"Chatterbox dependencies not available: {e}"
+            print(f"❌ [TTS] Missing dependencies: {self._model_error}", file=sys.stderr)
+            self._system_tts.speak("Voice synthesis dependencies missing, using system voice")
+            warnings.warn(f"ChatterboxTTS initialization failed: {self._model_error}")
+        except Exception as e:
+            self._model_error = f"Failed to load Chatterbox model: {e}"
+            print(f"❌ [TTS] Model loading failed: {self._model_error}", file=sys.stderr)
+            self._system_tts.speak("Voice synthesis setup failed, using system voice")
+            warnings.warn(f"ChatterboxTTS initialization failed: {self._model_error}")
+        finally:
+            # Clean up system TTS after announcements
+            if self._system_tts:
+                # Give a moment for the last announcement to finish
+                import time
+                time.sleep(1.0)
+                self._system_tts.stop()
+                self._system_tts = None
+                
+    def _ensure_model(self) -> bool:
+        """Check if Chatterbox model is loaded. Returns True if successful."""
+        if self._model is not None:
+            return True
+        if self._model_error is not None:
+            return False
+        # Model should already be loaded during initialization
+        return False
+    
+    def start(self) -> None:
+        if not self.enabled or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        # Ensure any active speech is interrupted immediately
+        try:
+            self.interrupt()
+        except Exception:
+            pass
+        self._stop.set()
+        try:
+            self._q.put_nowait("")
+        except Exception:
+            pass
+        self._thread.join(timeout=2.0)
+        self._thread = None
+        self._stop.clear()
+
+    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None) -> None:
+        if not self.enabled or not text.strip():
+            return
+        self._completion_callback = completion_callback
+        try:
+            self._q.put_nowait(text)
+        except Exception:
+            pass
+
+    def interrupt(self) -> None:
+        """Stop current speech immediately"""
+        self._should_interrupt.set()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                text = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if not text:
+                continue
+            try:
+                self._speak_once(text)
+            except Exception:
+                continue
+
+    def _speak_once(self, text: str) -> None:
+        self._is_speaking.set()
+        self._last_spoken_text = text
+        self._should_interrupt.clear()
+        interrupted = False
+        
+        try:
+            # Check if model is available
+            if not self._ensure_model():
+                # Fall back to system TTS if Chatterbox fails
+                warnings.warn("Chatterbox TTS not available, skipping speech synthesis")
+                return
+                
+            # Generate audio using Chatterbox
+            import tempfile
+            import pygame
+            import os
+            
+            # Generate speech
+            wav = self._model.generate(
+                text, 
+                audio_prompt_path=self.audio_prompt_path,
+                exaggeration=self.exaggeration,
+                cfg_weight=self.cfg_weight
+            )
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+                
+            try:
+                # Save audio
+                import torchaudio as ta
+                ta.save(tmp_path, wav, self._model.sr)
+                
+                # Play audio using pygame (cross-platform)
+                pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
+                pygame.mixer.music.load(tmp_path)
+                pygame.mixer.music.play()
+                
+                # Wait for playback to complete or interruption
+                while pygame.mixer.music.get_busy():
+                    if self._should_interrupt.is_set():
+                        pygame.mixer.music.stop()
+                        interrupted = True
+                        break
+                    pygame.time.wait(100)  # Check every 100ms
+                    
+            finally:
+                # Cleanup
+                pygame.mixer.quit()
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            warnings.warn(f"Chatterbox TTS error: {e}")
+        finally:
+            self._is_speaking.clear()
+            # Call completion callback if set and not interrupted
+            if self._completion_callback is not None and not interrupted:
+                try:
+                    self._completion_callback()
+                except Exception:
+                    pass
+                self._completion_callback = None
+
+    # Loopback guard helpers (same interface as TextToSpeech)
+    def is_speaking(self) -> bool:
+        return self._is_speaking.is_set()
+
+    def get_last_spoken_text(self) -> str:
+        return self._last_spoken_text
+
+
+def create_tts_engine(engine: str = "system", enabled: bool = True, voice: Optional[str] = None, 
+                      rate: Optional[int] = None, device: str = "cuda", audio_prompt_path: Optional[str] = None,
+                      exaggeration: float = 0.5, cfg_weight: float = 0.5):
+    """Factory function to create the appropriate TTS engine."""
+    if engine.lower() == "chatterbox":
+        return ChatterboxTTS(
+            enabled=enabled,
+            voice=voice,
+            rate=rate,
+            device=device,
+            audio_prompt_path=audio_prompt_path,
+            exaggeration=exaggeration,
+            cfg_weight=cfg_weight
+        )
+    else:
+        # Default to system TTS
+        return TextToSpeech(enabled=enabled, voice=voice, rate=rate)
 
 
 def json_escape_ps(s: str) -> str:

@@ -13,7 +13,7 @@ from .db import Database
 from .triggers import evaluate_triggers
 from .coach import ask_coach, ask_coach_with_tools
 from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
-from .tts import TextToSpeech
+from .tts import TextToSpeech, create_tts_engine
 from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
@@ -1395,7 +1395,16 @@ def main() -> None:
     # Initialize dialogue memory with 5-minute inactivity timeout
     _global_dialogue_memory = DialogueMemory(inactivity_timeout=cfg.dialogue_memory_timeout, max_interactions=20)
 
-    tts: Optional[TextToSpeech] = TextToSpeech(enabled=cfg.tts_enabled, voice=cfg.tts_voice, rate=cfg.tts_rate)
+    tts = create_tts_engine(
+        engine=cfg.tts_engine,
+        enabled=cfg.tts_enabled,
+        voice=cfg.tts_voice,
+        rate=cfg.tts_rate,
+        device=cfg.tts_chatterbox_device,
+        audio_prompt_path=cfg.tts_chatterbox_audio_prompt,
+        exaggeration=cfg.tts_chatterbox_exaggeration,
+        cfg_weight=cfg.tts_chatterbox_cfg_weight
+    )
     if tts.enabled:
         tts.start()
 

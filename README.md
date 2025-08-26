@@ -28,6 +28,7 @@ An offline, completely private AI voice assistant with unlimited memory that und
 - **Wake word detection**: Say "jarvis" and speak naturally. No buttons, no interfaces.
 - **Hot window mode**: After responding, stays active for follow-ups without repeating the wake word.
 - **Interruptible responses**: You can shush it or tell it to shut up and it will comply, no hard feelings.
+- **Advanced TTS options**: Choose between system TTS or experimental Chatterbox AI for high-quality, expressive speech with voice cloning capabilities.
 
 ### 🧠 **Unlimited memory**
 - **Never forgets anything**: Unlimited conversation history with intelligent search across everything you've ever discussed.
@@ -522,6 +523,7 @@ Example `config.json`:
     "life"
   ],
   "tts_enabled": true,
+  "tts_engine": "system",
   "tts_voice": null,
   "tts_rate": 200,
   "voice_device": null,
@@ -553,8 +555,31 @@ Example `config.json`:
 
 #### TTS Configuration
 - `tts_enabled`: Enable/disable text-to-speech (default: `true`)
-- `tts_voice`: Voice to use (default: system default)
+- `tts_engine`: Choose TTS engine - `"system"` (default) or `"chatterbox"` (experimental AI TTS)
+- `tts_voice`: Voice to use for system TTS (default: system default)
 - `tts_rate`: Speech rate in words per minute (default: 200)
+
+**Experimental Chatterbox TTS (high-quality AI voices):**
+- `tts_chatterbox_audio_prompt`: Path to audio file for voice cloning (optional)
+- `tts_chatterbox_exaggeration`: Emotion intensity control 0.0-1.0+ (default: 0.5)
+- `tts_chatterbox_cfg_weight`: Quality/speed trade-off 0.0-1.0 (default: 0.5)
+
+To enable Chatterbox TTS:
+```json
+{
+  "tts_engine": "chatterbox",
+  "tts_chatterbox_exaggeration": 0.6
+}
+```
+
+**Voice Cloning:** To clone a specific voice, add a reference audio file:
+```json
+{
+  "tts_engine": "chatterbox",
+  "tts_chatterbox_audio_prompt": "/path/to/voice_sample.wav"
+}
+```
+Use a clear 3-10 second WAV file of the target voice speaking naturally.
 
 ### Environment variables (debug only)
 - `JARVIS_CONFIG_PATH` — absolute path to JSON config
