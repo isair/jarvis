@@ -598,14 +598,5 @@ For commercial licensing, please contact: [baris@writeme.com]
 
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
 
-## Roadmap
-- First time setup over voice with configurable personality.
-- Home device control.
-- Cross-platform desktop app so people don't have to bother with cloning and setting the project up.
-- API so your other devices can query the same assistant, and a PWA so most devices have a way of using Jarvis.
-- Mobile apps.
-- More baked-in tools.
-- Deep research.
-- Actual multi-modality but planning on waiting for smaller multi-modal open model releases for this one.
 - Agent mode.
 - Ability to discern between different voices, but we are looking at advancements in open models here again.
