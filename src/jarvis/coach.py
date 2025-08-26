@@ -228,7 +228,8 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
                             if isinstance(tool_call, dict) and "function" in tool_call:
                                 func = tool_call["function"]
                                 if isinstance(func, dict):
-                                    tool_name = func.get("name", "").replace("TOOL:", "").upper()
+                                    # Expect camelCase tool names as provided; do not transform casing
+                                    tool_name = str(func.get("name", "")).strip()
                                     tool_args = func.get("arguments")
                                     if tool_name:
                                         _debug_print(f"[debug] structured tool call: {tool_name}", voice_debug)
@@ -250,7 +251,7 @@ def ask_coach_with_tools(base_url: str, chat_model: str, system_prompt: str, use
                         # MCP if a server field is provided; otherwise internal tool
                         if t.get("server"):
                             return None, "MCP", t
-                        name = str(t.get("name", "")).upper()
+                        name = str(t.get("name", "")).strip()
                         args = t.get("args") if isinstance(t.get("args"), dict) else None
                         return None, name, args
                 except Exception:

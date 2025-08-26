@@ -105,12 +105,6 @@
 
   "__comment": "MCP Integration: external servers Jarvis can use (stdio)",
   "mcps": {
-    "filesystem-home": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
-      "env": {}
-    },
     "filesystem-tmp": {
       "transport": "stdio",
       "command": "npx",

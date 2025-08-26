@@ -3,13 +3,10 @@ from jarvis.config import get_default_config, load_settings
 
 
 @pytest.mark.unit
-def test_default_config_contains_filesystem_home():
+def test_default_config_has_empty_mcps():
     cfg = get_default_config()
     assert isinstance(cfg.get("mcps"), dict)
-    assert "filesystem-home" in cfg["mcps"]
-    fs = cfg["mcps"]["filesystem-home"]
-    assert fs.get("transport") == "stdio"
-    assert fs.get("command") in ("npx", "npx")
+    assert cfg["mcps"] == {}
 
 
 @pytest.mark.unit

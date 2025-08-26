@@ -11,10 +11,8 @@ This specification documents only the reply flow that begins when a valid user q
   - speech synthesizer (optional): for spoken output and hot-window activation.
 
 ### Steps and Branches
-1. Redact and Ingest
+1. Redact
    - Redact input to remove sensitive data.
-   - Chunk and persist with timestamp for later retrieval.
-   - Branch: If vector search is enabled, compute embeddings for chunks; failures are ignored.
 
 2. Profile Selection
    - Use a lightweight LLM-based router over the configured candidate profiles to select the most appropriate persona/system behavior.
@@ -24,7 +22,7 @@ This specification documents only the reply flow that begins when a valid user q
    - Load the profile’s system guidance.
 
 3. Recent Dialogue Context
-   - If short-term dialogue memory has recent interactions, collect a compact set of recent messages for context.
+   - Include the short-term dialogue memory (last 5 minutes) for context.
 
 4. Conversation Memory Enrichment (optional)
    - Ask a lightweight LLM to extract conversation-recall parameters as structured data (keywords and optional time range).
@@ -33,10 +31,6 @@ This specification documents only the reply flow that begins when a valid user q
        - Invoke the conversation-recall capability with the keywords and time bounds.
        - If results are returned, capture them as conversation context.
      - Extraction fails or yields no keywords → skip enrichment.
-
-5. Document Context (hybrid retrieval)
-   - Retrieve top snippets relevant to the redacted query using hybrid search (keyword + vector).
-   - Append after conversation memory (if any). If none found, omit.
 
 6. Build Final Prompt
    - Concatenate, in order:
@@ -103,18 +97,13 @@ sequenceDiagram
   participant ShortMem as Short-term Memory
   participant Recall as Conversation Recall
   participant Tools as Tool Orchestrator
-  participant Ret as Retriever
+  participant Ret as (removed)
   participant Plan as Planner/Executor
   participant LLM as LLM Gateway
   participant Out as Output/TTS
 
   Caller->>Engine: text
   Engine->>Engine: Redact
-  Engine->>Store: persist(chunks)
-  alt VSS enabled
-    Engine->>Emb: embed(chunk)
-    Emb-->>Store: upsert_vector
-  end
   Engine->>Router: route(profile candidates, text)
   Router-->>Engine: profile
   Engine->>ShortMem: recent_messages()
@@ -123,8 +112,6 @@ sequenceDiagram
     Engine->>Tools: recall_conversation(args)
     Tools-->>Engine: memory_context (optional)
   end
-  Engine->>Ret: retrieve_snippets(query)
-  Ret-->>Engine: snippets (0..N)
   Engine->>Plan: plan(final_prompt, tools_desc, recent_messages)
   alt plan valid
     loop steps (≤6)

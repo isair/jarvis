@@ -230,17 +230,8 @@ def get_default_config() -> Dict[str, Any]:
         # Web Search
         "web_search_enabled": True,
 
-        # MCP Integration (external servers Jarvis can use)
-        # Preconfigure a safe filesystem server pointed at the user's home directory
-        # You can add more in your config.json under the same structure
-        "mcps": {
-            "filesystem-home": {
-                "transport": "stdio",
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
-                "env": {}
-            }
-        },
+        # MCP Integration (external servers Jarvis can use). No defaults.
+        "mcps": {},
     }
 
 

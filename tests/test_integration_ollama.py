@@ -58,7 +58,7 @@ def test_ollama_with_tools_prompt():
     system_prompt = "You are a helpful assistant that follows tool instructions."
     tools_desc = (
         "Tool-use protocol: Reply with ONLY a JSON object:\n"
-        '{"tool": { "name": "FETCH_MEALS", "args": { "since_utc": "2025-01-01T00:00:00Z" } }}'
+        '{"tool": { "name": "fetchMeals", "args": { "since_utc": "2025-01-01T00:00:00Z" } }}'
     )
     final_text, tool_req, tool_args = ask_coach_with_tools(
         base_url,

@@ -292,38 +292,11 @@ If you prefer regular Python, you may need [Microsoft Visual C++ Build Tools](ht
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
-### MCP integration (use external MCP tools)
+### MCP integration (external tools)
 
-Jarvis can act as an MCP client and invoke tools exposed by external MCP servers.
+Jarvis can act as an MCP client and invoke tools exposed by external MCP servers if you configure them. We do not ship any default MCP servers.
 
-Requirements:
-- Node.js 18+ with `npx` if you want to use the preconfigured third‑party servers below.
-
-Default servers:
-
-- We ship a default `filesystem-home` MCP entry that launches the third‑party `@modelcontextprotocol/server-filesystem` via `npx` pointed at your home directory (`~`). This server is not part of Jarvis. It requires Node.js and, on first run, network access to fetch the package. Remove or edit this entry if you prefer not to use third‑party servers.
-
-Configure servers in your `config.json` under `mcps` (stdio transport):
-
-```
-"mcps": {
-  "filesystem-home": {
-    "transport": "stdio",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
-    "env": {}
-  },
-  "filesystem-tmp": {
-    "transport": "stdio",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-    "env": {}
-  }
-}
-
-Notes:
-- The example servers above (and the default `filesystem-home`) are third‑party and run via `npx`. If you don’t have Node.js installed or prefer not to use external servers, remove or empty `mcps`. Jarvis will still work with its internal tools.
-- You can replace these with any MCP server you trust by adjusting `command`, `args`, and `env`.
+To enable MCP servers, add entries under `mcps` in your `config.json` (stdio transport).
 
 ## Testing (for developers)
 

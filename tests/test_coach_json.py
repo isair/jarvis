@@ -20,7 +20,7 @@ class DummyResp:
 def test_json_directive_internal_tool(monkeypatch):
     # Mock requests.post to return a single message content that is the JSON directive
     def _fake_post(url, json=None, timeout=None):
-        msg = {"message": {"content": '{"tool": {"name": "FETCH_MEALS", "args": {"since_utc": "2025-01-01T00:00:00Z"}}}'}}
+        msg = {"message": {"content": '{"tool": {"name": "fetchMeals", "args": {"since_utc": "2025-01-01T00:00:00Z"}}}'}}
         return DummyResp(msg)
 
     monkeypatch.setattr("jarvis.coach.requests.post", _fake_post)
@@ -39,7 +39,7 @@ def test_json_directive_internal_tool(monkeypatch):
         voice_debug=False,
     )
     assert final_text is None
-    assert tool_req == "FETCH_MEALS"
+    assert tool_req == "fetchMeals"
     assert isinstance(tool_args, dict) and tool_args.get("since_utc") == "2025-01-01T00:00:00Z"
 
 
@@ -77,7 +77,7 @@ def test_structured_tool_calls_function_path(monkeypatch):
             "message": {
                 "content": "",
                 "tool_calls": [
-                    {"function": {"name": "TOOL:DELETE_MEAL", "arguments": {"id": 5}}}
+                    {"function": {"name": "deleteMeal", "arguments": {"id": 5}}}
                 ],
             }
         }
@@ -99,6 +99,6 @@ def test_structured_tool_calls_function_path(monkeypatch):
         voice_debug=False,
     )
     assert final_text is None
-    assert tool_req == "DELETE_MEAL"
+    assert tool_req == "deleteMeal"
     assert tool_args == {"id": 5}
 

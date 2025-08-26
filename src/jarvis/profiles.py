@@ -56,22 +56,25 @@ PROFILES: Dict[str, Profile] = {
 # Per-profile tool allowlist to limit cognitive load for the LLM
 PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
     "developer": [
-        "SCREENSHOT",
-        "RECALL_CONVERSATION",
-        "WEB_SEARCH",
+        "screenshot",
+        "recallConversation",
+        "localFiles",
+        "webSearch",
     ],
     "business": [
-        "SCREENSHOT",
-        "RECALL_CONVERSATION",
-        "WEB_SEARCH",
+        "screenshot",
+        "recallConversation",
+        "localFiles",
+        "webSearch",
     ],
     "life": [
-        "SCREENSHOT",
-        "RECALL_CONVERSATION",
-        "LOG_MEAL",
-        "FETCH_MEALS",
-        "DELETE_MEAL",
-        "WEB_SEARCH",
+        "screenshot",
+        "recallConversation",
+        "logMeal",
+        "fetchMeals",
+        "deleteMeal",
+        "localFiles",
+        "webSearch",
     ],
 }
 
