@@ -1319,14 +1319,14 @@ class VoiceListener(threading.Thread):
                                 break
 
 
-def _check_and_update_diary(db: Database, cfg, verbose: bool = False) -> None:
+def _check_and_update_diary(db: Database, cfg, verbose: bool = False, force: bool = False) -> None:
     """Check if diary should be updated and perform batch update if needed."""
     global _global_dialogue_memory
     if _global_dialogue_memory is None:
         return
         
     try:
-        if _global_dialogue_memory.should_update_diary():
+        if force or _global_dialogue_memory.should_update_diary():
             if verbose:
                 try:
                     print("📝 Updating your diary. Please wait… (don't press Ctrl+C again)", file=sys.stderr, flush=True)
@@ -1342,6 +1342,7 @@ def _check_and_update_diary(db: Database, cfg, verbose: bool = False) -> None:
                 source_app=source_app,
                 voice_debug=cfg.voice_debug,
                 timeout_sec=cfg.llm_chat_timeout_sec,
+                force=force,
             )
             if cfg.voice_debug:
                 try:
@@ -1441,7 +1442,7 @@ def main() -> None:
         _commit_buffer(db, cfg, tts, buffer)
         
         # Final diary update before shutdown to save any pending interactions
-        _check_and_update_diary(db, cfg, verbose=True)
+        _check_and_update_diary(db, cfg, verbose=True, force=True)
         
         if tts is not None:
             tts.stop()

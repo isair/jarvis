@@ -394,13 +394,14 @@ def update_diary_from_dialogue_memory(
     source_app: str = "jarvis",
     voice_debug: bool = False,
     timeout_sec: float = 30.0,
+    force: bool = False,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
     
     Returns the summary ID if successful, None otherwise.
     """
-    if not dialogue_memory.should_update_diary():
+    if not force and not dialogue_memory.should_update_diary():
         return None
         
     try:
