@@ -23,7 +23,7 @@ def _has_model(base_url: str, model_name: str) -> bool:
         if isinstance(data, dict) and isinstance(data.get("models"), list):
             for m in data["models"]:
                 if isinstance(m, dict) and m.get("name"):
-                    names.add(m["name"])()
+                    names.add(m["name"]) 
         return model_name in names
     except Exception:
         # If the tag listing schema changes, don't block the test here.

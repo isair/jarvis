@@ -325,6 +325,32 @@ Notes:
 - The example servers above (and the default `filesystem-home`) are third‑party and run via `npx`. If you don’t have Node.js installed or prefer not to use external servers, remove or empty `mcps`. Jarvis will still work with its internal tools.
 - You can replace these with any MCP server you trust by adjusting `command`, `args`, and `env`.
 
+## Testing (for developers)
+
+### Quick unit tests
+- Install dependencies:
+```bash
+python -m pip install -r requirements.txt
+```
+- Run unit tests:
+```bash
+python -m pytest -q -m unit
+```
+
+Notes:
+- Tests automatically add `src/` to `PYTHONPATH`, so you can run them from the repo root.
+- On Windows, use the same commands in PowerShell.
+
+### Integration tests (optional)
+Integration tests talk to a local Ollama server and require a model:
+```bash
+ollama pull llama3:8b
+python -m pytest -q -m integration
+```
+
+### CI on pull requests
+We run unit tests in GitHub Actions on every pull request. PRs must be green before merge. The workflow installs `requirements.txt` and executes `pytest -m unit` on Linux and Windows.
+
 ## Debug mode (recommended for developers)
 
 To see detailed information about what Jarvis is doing internally, run it with debug logging enabled:

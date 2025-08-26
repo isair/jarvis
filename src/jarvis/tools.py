@@ -214,11 +214,7 @@ def run_tool_with_retries(
             client = MCPClient(getattr(cfg, "mcps", {}))
             result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool, arguments=arguments)
             is_error = bool(result.get("isError", False))
-            content = result.get("content")
-            if isinstance(content, list):
-                text = "\n".join(str(c) for c in content)
-            else:
-                text = None if content is None else str(content)
+            text = result.get("text") or None
             return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
         except Exception as e:
             return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP error: {e}")

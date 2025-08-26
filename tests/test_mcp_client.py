@@ -2,14 +2,10 @@ import asyncio
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_mcp_client_list_and_invoke(monkeypatch):
-    # Lazy import to avoid hard dependency when not installed
-    from jarvis.mcp_client import MCPClient, _imports
-
-    # Skip if MCP SDK not available
-    if _imports.ClientSession is None:
-        pytest.skip("mcp sdk not installed")
+@pytest.mark.unit
+def test_mcp_client_list_and_invoke(monkeypatch):
+    # Import the real client and patch its external dependencies
+    from jarvis.mcp_client import MCPClient
 
     # Prepare fake server config (command won't actually run because we mock stdio_client)
     mcps = {
@@ -23,7 +19,7 @@ async def test_mcp_client_list_and_invoke(monkeypatch):
 
     client = MCPClient(mcps)
 
-    # Create fake session object
+    # Create fake session object implementing the observable API used by MCPClient
     class FakeSession:
         async def initialize(self):
             return None
@@ -37,7 +33,7 @@ async def test_mcp_client_list_and_invoke(monkeypatch):
         async def call_tool(self, name, arguments):
             return {"content": f"called:{name}:{arguments}", "isError": False}
 
-    # Mock stdio_client context manager to yield (read, write) of our FakeSession
+    # Mock stdio_client context manager to yield (read, write)
     class FakeCM:
         def __init__(self, session):
             self._session = session
@@ -61,13 +57,16 @@ async def test_mcp_client_list_and_invoke(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr("jarvis.mcp_client._imports.stdio_client", lambda params: FakeCM(FakeSession()))
-    monkeypatch.setattr("jarvis.mcp_client._imports.ClientSession", FakeClientSession)
+    # Patch public imports inside the module (observable seams)
+    monkeypatch.setattr("jarvis.mcp_client.stdio_client", lambda params: FakeCM(FakeSession()))
+    monkeypatch.setattr("jarvis.mcp_client.ClientSession", FakeClientSession)
+    # Avoid PATH check failing in _connect_stdio
+    monkeypatch.setattr("jarvis.mcp_client.shutil.which", lambda cmd: cmd)
 
-    tools = await client.list_tools_async("fake")
+    tools = asyncio.run(client.list_tools_async("fake"))
     assert isinstance(tools, list) and {t["name"] for t in tools} == {"alpha", "beta"}
 
-    res = await client.invoke_tool_async("fake", "alpha", {"x": 1})
+    res = asyncio.run(client.invoke_tool_async("fake", "alpha", {"x": 1}))
     assert res["content"] == "called:alpha:{'x': 1}"
     assert res.get("isError") is False
 

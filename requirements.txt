@@ -14,4 +14,4 @@ rapidfuzz==3.6.1
 geoip2==4.8.0
 miniupnpc==2.2.8
 pytest==8.3.2
-mcp>=0.1.0
+mcp==1.13.1

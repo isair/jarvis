@@ -570,13 +570,30 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         if "MCP" not in allowed_tools:
             allowed_tools = list(allowed_tools) + ["MCP"]
     tools_desc = generate_tools_description(allowed_tools)
-    # Append configured MCP servers to the tool description to guide selection
+    # Append configured MCP servers and explicit guidance/examples to the tool description
     if getattr(cfg, "mcps", {}):
         try:
-            mcp_lines = ["", "External MCP servers available:"]
+            mcp_lines = [
+                "",
+                "External MCP servers available:",
+            ]
             for srv in (cfg.mcps or {}).keys():
                 mcp_lines.append(f"- {srv}")
-            mcp_lines.append('Call MCP with: {"tool": {"server": "<SERVER>", "name": "<TOOL_NAME>", "args": { ... } }}')
+            mcp_lines.extend([
+                'Call MCP with: {"tool": {"server": "<SERVER>", "name": "<TOOL_NAME>", "args": { ... } }}',
+                "",
+                "Guidance:",
+                "- Prefer MCP tools when the user asks for actual data (e.g., listing files, reading files)",
+                "- Do NOT reply with shell commands if a tool can return the real data",
+            ])
+            # Provide a concrete example for filesystem listing
+            default_srv = next(iter((cfg.mcps or {}).keys()), None)
+            if default_srv:
+                mcp_lines.extend([
+                    "",
+                    "Example (list home directory):",
+                    f'{{"tool": {{"server": "{default_srv}", "name": "list", "args": {{"path": "~"}} }}}}',
+                ])
             tools_desc = tools_desc + "\n" + "\n".join(mcp_lines)
         except Exception:
             pass
@@ -1406,6 +1423,8 @@ def main() -> None:
                 names = [str(t.get("name")) for t in (tools or []) if t and t.get("name")]
                 preview = ", ".join(names[:10])
                 print(f"[mcp] {server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", file=sys.stderr)
+            except FileNotFoundError as e:
+                print(f"[mcp] {server_name}: command not found – {e}", file=sys.stderr)
             except Exception as e:
                 print(f"[mcp] {server_name}: error listing tools: {e}", file=sys.stderr)
     
