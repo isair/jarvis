@@ -947,7 +947,7 @@ class VoiceListener(threading.Thread):
         
         current_time = time.time()
         silence_timeout = current_time - self._last_voice_time >= float(self.cfg.voice_collect_seconds)
-        max_timeout = current_time - self._collect_start_time >= float(getattr(self.cfg, "voice_max_collect_seconds", 6.0))
+        max_timeout = current_time - self._collect_start_time >= float(getattr(self.cfg, "voice_max_collect_seconds", 60.0))
         
         if silence_timeout or max_timeout:
             final_query = self._pending_query.strip() or "what should i do next?"
@@ -1169,7 +1169,7 @@ class VoiceListener(threading.Thread):
         self._frame_samples = max(1, int(self._samplerate * frame_ms / 1000))
         pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
         endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
-        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 8000))
+        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 60000))
         pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
         endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
         max_utt_frames = max(1, int(max_utt_ms / frame_ms))

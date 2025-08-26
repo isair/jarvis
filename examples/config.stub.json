@@ -42,8 +42,8 @@
   
   "__comment": "Voice Collection & Timing",
   "voice_block_seconds": 4.0,
-  "voice_collect_seconds": 2.5,
-  "voice_max_collect_seconds": 6.0,
+  "voice_collect_seconds": 4.5,
+  "voice_max_collect_seconds": 180.0,
   
   "__comment": "Wake Word Detection",
   "wake_word": "jarvis",
@@ -73,7 +73,7 @@
   "vad_frame_ms": 20,
   "vad_pre_roll_ms": 240,
   "endpoint_silence_ms": 800,
-  "max_utterance_ms": 8000,
+  "max_utterance_ms": 12000,
   
   "__comment": "UI/UX Features",
   "tune_enabled": true,
