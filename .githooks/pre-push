@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${SKIP_TESTS:-}" = "1" ]; then
+  echo "[pre-push] SKIP_TESTS=1 -> skipping unit tests"
+  exit 0
+fi
+
+echo "[pre-push] Running unit tests (pytest -m unit)"
+
+# Prefer python -m pytest to avoid PATH issues
+if ! command -v python >/dev/null 2>&1; then
+  echo "[pre-push] python not found on PATH; skipping tests"
+  exit 0
+fi
+
+if ! python -c "import pytest" >/dev/null 2>&1; then
+  echo "[pre-push] pytest not installed; skipping tests"
+  exit 0
+fi
+
+# Run only unit tests to keep the hook fast
+if ! python -m pytest -q -m unit; then
+  echo "[pre-push] Unit tests failed. Aborting push."
+  exit 1
+fi
+
+echo "[pre-push] Unit tests passed"
+exit 0
+
+

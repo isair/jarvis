@@ -348,6 +348,16 @@ ollama pull llama3:8b
 python -m pytest -q -m integration
 ```
 
+### Git hooks (pre-push)
+A pre-push hook is included to run unit tests automatically before pushing. Enable it with:
+```bash
+git config core.hooksPath .githooks
+```
+Skip when necessary (CI or emergencies):
+```bash
+SKIP_TESTS=1 git push
+```
+
 ### CI on pull requests
 We run unit tests in GitHub Actions on every pull request. PRs must be green before merge. The workflow installs `requirements.txt` and executes `pytest -m unit` on Linux and Windows.
 
