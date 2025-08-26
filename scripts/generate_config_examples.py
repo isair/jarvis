@@ -37,8 +37,8 @@ def generate_readme_example() -> str:
     # For README, we want a slightly shorter example
     # Remove some less commonly changed settings
     readme_config = {k: v for k, v in config.items() if k not in [
-        "voice_max_collect_seconds", "vad_aggressiveness", "vad_frame_ms",
-        "vad_pre_roll_ms", "endpoint_silence_ms", "max_utterance_ms", 
+        "vad_aggressiveness", "vad_frame_ms",
+        "vad_pre_roll_ms", "endpoint_silence_ms", 
         "sample_rate", "tune_enabled", "hot_window_enabled", 
         "hot_window_seconds", "dialogue_memory_timeout", "voice_min_energy"
     ]}

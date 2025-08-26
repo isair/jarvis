@@ -947,14 +947,12 @@ class VoiceListener(threading.Thread):
         
         current_time = time.time()
         silence_timeout = current_time - self._last_voice_time >= float(self.cfg.voice_collect_seconds)
-        max_timeout = current_time - self._collect_start_time >= float(getattr(self.cfg, "voice_max_collect_seconds", 6.0))
         
-        if silence_timeout or max_timeout:
+        if silence_timeout:
             final_query = self._pending_query.strip() or "what should i do next?"
             if self.cfg.voice_debug:
                 try:
-                    timeout_type = "silence" if silence_timeout else "max"
-                    print(f"[debug] query collected ({timeout_type} timeout): '{final_query}'", file=sys.stderr)
+                    print(f"[debug] query collected (silence timeout): '{final_query}'", file=sys.stderr)
                 except Exception:
                     pass
             _run_coach_on_text(self.db, self.cfg, self.tts, final_query)
@@ -1169,10 +1167,8 @@ class VoiceListener(threading.Thread):
         self._frame_samples = max(1, int(self._samplerate * frame_ms / 1000))
         pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
         endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
-        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 8000))
         pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
         endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
-        max_utt_frames = max(1, int(max_utt_ms / frame_ms))
 
         if self.cfg.voice_debug:
             try:
@@ -1301,7 +1297,7 @@ class VoiceListener(threading.Thread):
                             self._silence_frames = 0
                         else:
                             self._silence_frames += 1
-                            if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= max_utt_frames:
+                            if self._silence_frames >= endpoint_silence_frames:
                                 self._finalize_utterance()
                                 self._pre_roll.clear()
                         

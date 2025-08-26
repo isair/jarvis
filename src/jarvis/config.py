@@ -50,7 +50,6 @@ class Settings:
     # Voice Collection & Timing
     voice_block_seconds: float
     voice_collect_seconds: float
-    voice_max_collect_seconds: float
     
     # Wake Word Detection
     wake_word: str
@@ -71,7 +70,6 @@ class Settings:
     vad_frame_ms: int
     vad_pre_roll_ms: int
     endpoint_silence_ms: int
-    max_utterance_ms: int
     
     # UI/UX Features
     tune_enabled: bool
@@ -186,7 +184,6 @@ def get_default_config() -> Dict[str, Any]:
         # Voice Collection & Timing
         "voice_block_seconds": 4.0,
         "voice_collect_seconds": 2.5,
-        "voice_max_collect_seconds": 6.0,
         
         # Wake Word Detection
         "wake_word": "jarvis",
@@ -207,7 +204,6 @@ def get_default_config() -> Dict[str, Any]:
         "vad_frame_ms": 20,
         "vad_pre_roll_ms": 240,
         "endpoint_silence_ms": 800,
-        "max_utterance_ms": 8000,
         
         # UI/UX Features
         "tune_enabled": True,
@@ -290,7 +286,6 @@ def load_settings() -> Settings:
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
     voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
     voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
-    voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 6.0))
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
@@ -303,7 +298,6 @@ def load_settings() -> Settings:
     vad_frame_ms = int(merged.get("vad_frame_ms", 20))
     vad_pre_roll_ms = int(merged.get("vad_pre_roll_ms", 240))
     endpoint_silence_ms = int(merged.get("endpoint_silence_ms", 800))
-    max_utterance_ms = int(merged.get("max_utterance_ms", 8000))
     sample_rate = int(merged.get("sample_rate", 16000))
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
@@ -362,7 +356,6 @@ def load_settings() -> Settings:
         # Voice Collection & Timing
         voice_block_seconds=voice_block_seconds,
         voice_collect_seconds=voice_collect_seconds,
-        voice_max_collect_seconds=voice_max_collect_seconds,
         
         # Wake Word Detection
         wake_word=wake_word,
@@ -383,7 +376,6 @@ def load_settings() -> Settings:
         vad_frame_ms=vad_frame_ms,
         vad_pre_roll_ms=vad_pre_roll_ms,
         endpoint_silence_ms=endpoint_silence_ms,
-        max_utterance_ms=max_utterance_ms,
         
         # UI/UX Features
         tune_enabled=tune_enabled,
