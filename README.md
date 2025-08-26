@@ -511,7 +511,7 @@ Example `config.json`:
     "com.microsoft.VSCode",
     "com.jetbrains.intellij"
   ],
-  "capture_interval_sec": 3.0,
+
   "ollama_base_url": "http://127.0.0.1:11434",
   "ollama_embed_model": "nomic-embed-text",
   "ollama_chat_model": "gpt-oss:20b",

@@ -28,7 +28,7 @@
     "com.microsoft.VSCode",
     "com.jetbrains.intellij"
   ],
-  "capture_interval_sec": 3.0,
+
   
   "__comment": "Text-to-Speech",
   "tts_enabled": true,

@@ -2,7 +2,7 @@ from __future__ import annotations
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Optional
 import threading
 import difflib
 import signal
@@ -10,7 +10,7 @@ import signal
 from .config import load_settings
 from .redact import redact
 from .db import Database
-from .triggers import evaluate_triggers
+
 from .coach import ask_coach, ask_coach_with_tools
 from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
 from .tts import TextToSpeech, create_tts_engine
@@ -67,13 +67,6 @@ def _install_signal_handlers() -> None:
 
  
 
-
-def _ingest_iter() -> Iterable[str]:
-    for line in sys.stdin:
-        s = line.strip()
-        if not s:
-            continue
-        yield s
 
 
 def _extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False, timeout_sec: float = 8.0) -> dict:
@@ -658,17 +651,6 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     
     return reply
 
-
-def _commit_buffer(db: Database, cfg, tts: Optional[TextToSpeech], buffer: list[str]) -> None:
-    if not buffer:
-        return
-    text = "\n".join(buffer)
-    buffer.clear()
-    if not text.strip():
-        return
-    trig = evaluate_triggers(text)
-    if trig.should_fire:
-        _run_coach_on_text(db, cfg, tts, text)
 
 
 class VoiceListener(threading.Thread):
@@ -1413,19 +1395,14 @@ def main() -> None:
         voice_thread = VoiceListener(db, cfg, tts)
         voice_thread.start()
 
-    buffer: list[str] = []
-    last_commit = time.time()
     last_diary_check = time.time()
-    commit_interval = max(1.0, cfg.capture_interval_sec)
     diary_check_interval = 60.0  # Check for diary updates every minute
 
     try:
-        for snippet in _ingest_iter():
-            buffer.append(snippet)
+        # Main daemon loop - just handle voice and periodic diary updates
+        while True:
+            time.sleep(1.0)  # Check for updates every second
             now = time.time()
-            if now - last_commit >= commit_interval:
-                _commit_buffer(db, cfg, tts, buffer)
-                last_commit = now
             
             # Periodically check if diary should be updated
             if now - last_diary_check >= diary_check_interval:
@@ -1448,7 +1425,7 @@ def main() -> None:
                 voice_thread.join(timeout=2.0)
             except Exception:
                 pass
-        _commit_buffer(db, cfg, tts, buffer)
+
         
         # Final diary update before shutdown to save any pending interactions
         _check_and_update_diary(db, cfg, verbose=True, force=True)

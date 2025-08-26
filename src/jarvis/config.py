@@ -35,7 +35,6 @@ class Settings:
     
     # Screen Capture
     allowlist_bundles: list[str]
-    capture_interval_sec: float
     
     # Text-to-Speech
     tts_enabled: bool
@@ -176,7 +175,7 @@ def get_default_config() -> Dict[str, Any]:
             "com.microsoft.VSCode",
             "com.jetbrains.intellij",
         ],
-        "capture_interval_sec": 3.0,
+
         
         # Text-to-Speech
         "tts_enabled": True,
@@ -282,7 +281,7 @@ def load_settings() -> Settings:
     db_path = str(merged.get("db_path") or _default_db_path())
     sqlite_vss_path = merged.get("sqlite_vss_path")
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
-    capture_interval_sec = float(merged.get("capture_interval_sec", 3.0))
+
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
@@ -367,7 +366,6 @@ def load_settings() -> Settings:
         
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
-        capture_interval_sec=capture_interval_sec,
         
         # Text-to-Speech
         tts_enabled=tts_enabled,

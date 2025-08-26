@@ -27,7 +27,7 @@ class ToolSpec:
 
 
 def _required_log_meal_fields() -> List[str]:
-    # Keep in sync with run_tool_with_retries LOG_MEAL required list
+    # Keep in sync with run_tool_with_retries logMeal required list
     return [
         "description",
         "calories_kcal",
