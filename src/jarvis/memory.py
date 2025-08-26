@@ -25,7 +25,7 @@ class DialogueMemory:
         self._interactions: List[Tuple[float, str, str]] = []  # (timestamp, user_text, assistant_text)
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
-        self._max_interactions = max_interactions
+        self._max_interactions = max_interactions  # kept for backward-compat; not used for cropping
         self._is_pending_diary_update = False
     
     def add_interaction(self, user_text: str, assistant_text: str) -> None:
@@ -34,28 +34,23 @@ class DialogueMemory:
         self._interactions.append((timestamp, user_text.strip(), assistant_text.strip()))
         self._last_activity_time = timestamp
         self._is_pending_diary_update = True
-        
-        # Keep only the most recent interactions
-        if len(self._interactions) > self._max_interactions:
-            self._interactions = self._interactions[-self._max_interactions:]
+        # Do not crop by count; retrieval applies a 5-minute window
     
     def get_recent_context(self, max_interactions: Optional[int] = None) -> List[str]:
         """
         Get recent interactions formatted for context.
         
         Args:
-            max_interactions: Maximum number of interactions to return (default: all)
+            max_interactions: Deprecated; ignored. Context is limited by time window only.
             
         Returns:
             List of formatted interaction strings
         """
         if not self._interactions:
             return []
-        
-        interactions_to_return = self._interactions
-        if max_interactions is not None:
-            interactions_to_return = self._interactions[-max_interactions:]
-        
+        # Filter to last 5 minutes
+        cutoff = time.time() - 300.0
+        interactions_to_return = [it for it in self._interactions if it[0] >= cutoff]
         context = []
         for timestamp, user_text, assistant_text in interactions_to_return:
             if user_text:
@@ -70,18 +65,16 @@ class DialogueMemory:
         Get recent interactions formatted as conversation messages for LLM API.
         
         Args:
-            max_interactions: Maximum number of interactions to return (default: all)
+            max_interactions: Deprecated; ignored. Messages are limited by time window only.
             
         Returns:
             List of message dictionaries with 'role' and 'content' keys
         """
         if not self._interactions:
             return []
-        
-        interactions_to_return = self._interactions
-        if max_interactions is not None:
-            interactions_to_return = self._interactions[-max_interactions:]
-        
+        # Filter to last 5 minutes
+        cutoff = time.time() - 300.0
+        interactions_to_return = [it for it in self._interactions if it[0] >= cutoff]
         messages = []
         for timestamp, user_text, assistant_text in interactions_to_return:
             if user_text:
@@ -120,8 +113,9 @@ class DialogueMemory:
         # We'll keep them for context but they won't trigger another diary update
         
     def has_recent_interactions(self) -> bool:
-        """Check if there are any recent interactions in memory."""
-        return len(self._interactions) > 0
+        """Check if there are any interactions in the last 5 minutes."""
+        cutoff = time.time() - 300.0
+        return any(ts >= cutoff for ts, _, _ in self._interactions)
     
     def get_time_since_last_activity(self) -> float:
         """Get seconds since last activity."""
@@ -313,11 +307,11 @@ def get_relevant_conversation_context(
         # Start with recent dialogue memory for immediate context
         contexts = []
         if dialogue_memory and dialogue_memory.has_recent_interactions():
-            recent_dialogue = dialogue_memory.get_recent_context(max_interactions=5)
+            recent_dialogue = dialogue_memory.get_recent_context()
             if recent_dialogue:
                 # Add a header to distinguish recent vs historical context
                 contexts.append("--- Recent Conversation ---")
-                contexts.extend(recent_dialogue[-10:])  # Last 10 lines max
+                contexts.extend(recent_dialogue)
                 contexts.append("--- Historical Context ---")
         
         # Continue with existing logic for historical context
@@ -400,13 +394,14 @@ def update_diary_from_dialogue_memory(
     source_app: str = "jarvis",
     voice_debug: bool = False,
     timeout_sec: float = 30.0,
+    force: bool = False,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
     
     Returns the summary ID if successful, None otherwise.
     """
-    if not dialogue_memory.should_update_diary():
+    if not force and not dialogue_memory.should_update_diary():
         return None
         
     try:

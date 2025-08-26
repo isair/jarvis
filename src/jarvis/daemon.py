@@ -10,8 +10,6 @@ import signal
 from .config import load_settings
 from .redact import redact
 from .db import Database
-from .embed import get_embedding
-from .retrieve import retrieve_top_chunks
 from .triggers import evaluate_triggers
 from .coach import ask_coach, ask_coach_with_tools
 from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
@@ -20,6 +18,7 @@ from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
 from .memory import update_daily_conversation_summary, DialogueMemory, update_diary_from_dialogue_memory
+from .mcp_client import MCPClient
 
 try:
     from faster_whisper import WhisperModel  # type: ignore
@@ -66,20 +65,7 @@ def _install_signal_handlers() -> None:
                 # Best-effort; some signals may not be settable on this platform
                 pass
 
-def _chunk_text(text: str, min_chars: int = 500, max_chars: int = 900) -> list[str]:
-    parts: list[str] = []
-    buf: list[str] = []
-    size = 0
-    for tok in text.split():
-        if size + len(tok) + 1 > max_chars and size >= min_chars:
-            parts.append(" ".join(buf))
-            buf = []
-            size = 0
-        buf.append(tok)
-        size += len(tok) + 1
-    if buf:
-        parts.append(" ".join(buf))
-    return parts or ([text] if text else [])
+ 
 
 
 def _ingest_iter() -> Iterable[str]:
@@ -195,27 +181,22 @@ def _execute_multi_step_plan(
 
     # Helper: describe a step in friendly terms
     def _describe_step(action: str, description: str, args: dict | None) -> str:
-        upper = (action or "").upper().strip()
+        act = (action or "").strip()
         args = args or {}
-        if upper == "ANALYZE":
+        if act == "analyze":
             return "🧠 Thinking…"
-        if upper == "WEB_SEARCH":
-            q = str(args.get("search_query") or "").strip()
-            return f"🌐 Web search: '{q}'" if q else "🌐 Web search…"
-        if upper == "SCREENSHOT":
-            return "📸 Screenshot OCR…"
-        if upper == "LOG_MEAL":
-            desc = str(args.get("description") or "meal").strip()
-            return f"🥗 Logging your meal: {desc}" if desc else "🥗 Logging your meal…"
-        if upper == "FETCH_MEALS":
-            return "📖 Fetching your logged meals…"
-        if upper == "DELETE_MEAL":
-            return "🗑️ Deleting a meal…"
-        if upper == "RECALL_CONVERSATION":
-            return "🧠 Looking back at our past conversations…"
-        if upper == "FINAL_RESPONSE":
+        if act == "tool":
+            # args expected to be a structured tool_call dict
+            if isinstance(args, dict):
+                server = args.get("server")
+                tname = args.get("name") or "tool"
+                if server:
+                    return f"🧰 MCP: {server}:{tname}…"
+                return f"🧰 Tool: {tname}…"
+            return "🧰 Tool step…"
+        if act == "finalResponse":
             return "💬 Preparing your answer…"
-        return f"⚙️ Executing: {upper}"
+        return f"⚙️ Executing: {act}"
 
     # Always create an explicit plan for complex queries, regardless of initial tool request
     if not initial_reply:  # Only plan if we don't already have a direct response
@@ -230,35 +211,39 @@ def _execute_multi_step_plan(
         if conversation_context:
             context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
         
-        planning_prompt = f"""Original user query: {redacted_text}
-{context_section}
-Create a plan to answer this query effectively.
-
-INSTRUCTIONS:
-1. Analyze what the user is asking for
-2. Review any conversation history to understand context
-3. Create a strategic plan that provides targeted results
-
-Available tools: {', '.join(allowed_tools)}
-
-Respond with ONLY a JSON object in this exact format:
-{{
-  "steps": [
-    {{
-      "step": 1,
-      "action": "TOOL_NAME or ANALYZE",
-      "description": "Brief description of what this step does",
-      "tool_args": {{}}  // Only if action is a tool name
-    }},
-    {{
-      "step": 2,
-      "action": "FINAL_RESPONSE",
-      "description": "Synthesize and respond to user"
-    }}
-  ]
-}}
-
-Do NOT execute any tools. Just return the JSON plan."""
+        # Build planning prompt using concatenation to avoid f-string brace interpolation issues
+        planning_prompt = (
+            "Original user query: " + redacted_text + "\n"
+            + context_section +
+            "Create a plan to answer this query effectively.\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Analyze what the user is asking for\n"
+            "2. Review any conversation history to understand context\n"
+            "3. Create a strategic plan that provides targeted results\n\n"
+            "Available tools: " + ", ".join(allowed_tools) + "\n\n"
+            "Respond with ONLY a JSON object in this exact format:\n"
+            "{\n"
+            "  \"steps\": [\n"
+            "    {\n"
+            "      \"step\": 1,\n"
+            "      \"action\": \"tool or analyze\",\n"
+            "      \"description\": \"Brief description of what this step does\",\n"
+            "      \"tool_call\": {  // Only when action == \"tool\"\n"
+            "        // Internal tool example (no server):\n"
+            "        // {\"name\": \"fetchMeals\", \"args\": { \"since_utc\": \"2025-01-01T00:00:00Z\" } }\n"
+            "        // MCP tool example (requires server):\n"
+            "        // {\"server\": \"fs\", \"name\": \"list\", \"args\": { \"path\": \"~\" } }\n"
+            "      }\n"
+            "    },\n"
+            "    {\n"
+            "      \"step\": 2,\n"
+            "      \"action\": \"finalResponse\",\n"
+            "      \"description\": \"Synthesize and respond to user\"\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Do NOT execute any tools. Just return the JSON plan."
+        )
         
         plan_reply, plan_tool_req, plan_tool_args = ask_coach_with_tools(
             cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, planning_prompt, tools_desc,
@@ -285,9 +270,9 @@ Do NOT execute any tools. Just return the JSON plan."""
                 try:
                     _user_print(f"📝 Plan created ({len(remaining_plan_steps)} steps)")
                     for step in remaining_plan_steps[:3]:
-                        action = str(step.get("action", "")).upper()
+                        action = str(step.get("action", "")).strip()
                         desc = str(step.get("description", ""))
-                        _user_print(f"• Step {step.get('step', '?')}: {action.title()} — {desc[:60]}".rstrip(), indent_levels=1)
+                        _user_print(f"• Step {step.get('step', '?')}: {action} — {desc[:60]}".rstrip(), indent_levels=1)
                     if len(remaining_plan_steps) > 3:
                         _user_print(f"…and {len(remaining_plan_steps) - 3} more", indent_levels=1)
                 except Exception:
@@ -320,19 +305,19 @@ Do NOT execute any tools. Just return the JSON plan."""
             break
             
         current_step = remaining_plan_steps.pop(0)  # Remove from remaining steps
-        step_action = current_step.get("action", "").upper()
+        step_action = str(current_step.get("action", "")).strip()
         step_description = current_step.get("description", "")
-        step_tool_args = current_step.get("tool_args", {})
+        step_tool_call = current_step.get("tool_call", {})
         
         if cfg.voice_debug:
             try:
                 print(f"⚙️  [step {current_step_num}] executing: {step_action} - {step_description[:50]}...", file=sys.stderr)
             except Exception:
                 pass
-        _user_print(_describe_step(step_action, step_description, step_tool_args))
+        _user_print(_describe_step(step_action, step_description, (step_tool_call if step_action == "tool" else {})))
         
         # Handle different action types
-        if step_action == "FINAL_RESPONSE":
+        if step_action == "finalResponse":
             # This is the final synthesis step
             context_for_final = ""
             if conversation_context:
@@ -376,7 +361,7 @@ Respond as if you're having a casual chat."""
                 else:
                     return "Sorry, I couldn't find much on that topic right now."
         
-        elif step_action == "ANALYZE":
+        elif step_action == "analyze":
             # This is an analysis/thinking step without tools
             analysis_prompt = f"""Original query: {redacted_text}
 
@@ -402,36 +387,47 @@ Provide a brief analysis or response for this step."""
                         pass
                 _user_print("✅ Analysis complete.", indent_levels=1)
         
-        elif step_action in allowed_tools:
-            # This is a tool execution step
-            result = run_tool_with_retries(
-                db=db, cfg=cfg, tool_name=step_action, tool_args=step_tool_args,
-                system_prompt=system_prompt, original_prompt=initial_prompt,
-                redacted_text=redacted_text, max_retries=1
-            )
-            
-            if result.reply_text:
-                completed_results.append(result.reply_text)
-                if cfg.voice_debug:
-                    try:
-                        print(f"    ✅ {step_action} returned {len(result.reply_text)} chars", file=sys.stderr)
-                    except Exception:
-                        pass
-                _user_print("✅ Step complete.", indent_levels=1)
-            else:
-                if cfg.voice_debug:
-                    try:
-                        print(f"    ⚠️  {step_action} returned no results", file=sys.stderr)
-                    except Exception:
-                        pass
-                _user_print("⚠️ Step returned no results.", indent_levels=1)
         else:
-            # Unknown action type
-            if cfg.voice_debug:
-                try:
-                    print(f"    ⚠️  Unknown action type: {step_action}", file=sys.stderr)
-                except Exception:
-                    pass
+            # Execute tool via structured tool_call
+            if step_action != "tool" or not isinstance(step_tool_call, dict):
+                if cfg.voice_debug:
+                    try:
+                        print(f"    ⚠️  Unknown action type: {step_action}", file=sys.stderr)
+                    except Exception:
+                        pass
+            else:
+                server = step_tool_call.get("server")
+                tool_name = str(step_tool_call.get("name") or "").strip()
+                args_dict = step_tool_call.get("args") if isinstance(step_tool_call.get("args"), dict) else {}
+                if server:
+                    normalized_action = "MCP"
+                    call_args = {"server": str(server), "name": tool_name, "args": args_dict}
+                else:
+                    normalized_action = tool_name
+                    call_args = args_dict
+
+                if normalized_action in allowed_tools:
+                    result = run_tool_with_retries(
+                        db=db, cfg=cfg, tool_name=normalized_action, tool_args=call_args,
+                        system_prompt=system_prompt, original_prompt=initial_prompt,
+                        redacted_text=redacted_text, max_retries=1
+                    )
+
+                    if result.reply_text:
+                        completed_results.append(result.reply_text)
+                        if cfg.voice_debug:
+                            try:
+                                print(f"    ✅ {normalized_action} returned {len(result.reply_text)} chars", file=sys.stderr)
+                            except Exception:
+                                pass
+                        _user_print("✅ Step complete.", indent_levels=1)
+                    else:
+                        if cfg.voice_debug:
+                            try:
+                                print(f"    ⚠️  {normalized_action} returned no results", file=sys.stderr)
+                            except Exception:
+                                pass
+                        _user_print("⚠️ Step returned no results.", indent_levels=1)
     
     # Fallback: if we exhausted steps without a final response
     if completed_results:
@@ -450,24 +446,6 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     global _global_dialogue_memory, _global_voice_listener
     
     redacted = redact(text)
-    chunks = _chunk_text(redacted)
-    if chunks:
-        ts = datetime.now(timezone.utc).isoformat()
-        doc_id, chunk_ids = db.insert_document(
-            ts_utc=ts,
-            app="stdin" if cfg.use_stdin else "unknown",
-            window_title=None,
-            url=None,
-            sha256_img=None,
-            kind="log",
-            redaction_ver=1,
-            chunks_text=chunks,
-        )
-        if db.is_vss_enabled:
-            for cid, text_chunk in zip(chunk_ids, chunks):
-                vec = get_embedding(text_chunk, cfg.ollama_base_url, cfg.ollama_embed_model, timeout_sec=cfg.llm_embedding_timeout_sec)
-                if vec is not None:
-                    db.upsert_embedding(cid, vec)
     # Use LLM-based profile selection (with configurable timeout)
     profile_name = select_profile_llm(
         cfg.ollama_base_url,
@@ -486,7 +464,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     # Get recent dialogue messages for conversation context
     recent_messages = []
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
-        recent_messages = _global_dialogue_memory.get_recent_messages(max_interactions=5)
+        recent_messages = _global_dialogue_memory.get_recent_messages()
     
     # Simple approach: Always try to enrich with conversation memory using keywords and time
     conversation_context = ""
@@ -497,7 +475,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         )
         
         keywords = search_params.get('keywords', [])
-        if keywords and 'RECALL_CONVERSATION' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
+        if keywords and 'recallConversation' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
             # Build tool arguments with both keywords and time parameters
             tool_args = {"search_query": " ".join(keywords)}
             
@@ -514,11 +492,11 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 except Exception:
                     pass
             
-            # Call RECALL_CONVERSATION to enrich context
+            # Call recallConversation to enrich context
             memory_result = run_tool_with_retries(
                 db=db,
                 cfg=cfg,
-                tool_name="RECALL_CONVERSATION",
+                tool_name="recallConversation",
                 tool_args=tool_args,
                 system_prompt=system_prompt,
                 original_prompt="",  # Not needed for memory search
@@ -541,30 +519,55 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             except Exception:
                 pass
     
-    # Build context: conversation memory + basic document chunks  
+    # Build context: conversation memory only
     context = []
     
     # Add conversation memory first (most relevant)
     if conversation_context:
         context.append(f"Relevant conversation history:\n{conversation_context}")
     
-    # Add basic document chunk retrieval as fallback
-    top = retrieve_top_chunks(db, redacted[:1024], cfg.ollama_base_url, cfg.ollama_embed_model, top_k=6, timeout_sec=cfg.llm_embedding_timeout_sec)
-    chunk_contexts = []
-    for _id, _score, _text in top:
-        chunk_contexts.append(f"[chunk {_id}] {_text}")
-    
-    if chunk_contexts:
-        context.append("Context (document snippets):\n" + "\n".join(chunk_contexts))
+    # Document snippet retrieval removed per architecture decision; rely on conversation memory and tools
     
     # Build final prompt
-    final_prompt = "\n\n".join(context) + f"\n\nObserved text (redacted excerpt):\n" + redacted[-1200:]
+    prefix = ("\n\n".join(context) + "\n\n") if context else ""
+    final_prompt = prefix + "Observed text (redacted excerpt):\n" + redacted[-1200:]
     
 
     
     # Enable tool calling for complex queries that might need multiple tools
     allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
+    # Expose MCP as a tool if any MCP servers are configured
+    if getattr(cfg, "mcps", {}):
+        if "MCP" not in allowed_tools:
+            allowed_tools = list(allowed_tools) + ["MCP"]
     tools_desc = generate_tools_description(allowed_tools)
+    # Append configured MCP servers and explicit guidance/examples to the tool description
+    if getattr(cfg, "mcps", {}):
+        try:
+            mcp_lines = [
+                "",
+                "External MCP servers available:",
+            ]
+            for srv in (cfg.mcps or {}).keys():
+                mcp_lines.append(f"- {srv}")
+            mcp_lines.extend([
+                'Call MCP with: {"tool": {"server": "<SERVER>", "name": "<tool>", "args": { ... } }}',
+                "",
+                "Guidance:",
+                "- Prefer MCP tools when the user asks for actual data (e.g., listing files, reading files)",
+                "- Do NOT reply with shell commands if a tool can return the real data",
+            ])
+            # Provide a concrete example for filesystem listing
+            default_srv = next(iter((cfg.mcps or {}).keys()), None)
+            if default_srv:
+                mcp_lines.extend([
+                    "",
+                    "Example (list home directory):",
+                    f'{{"tool": {{"server": "{default_srv}", "name": "list", "args": {{"path": "~"}} }}}}',
+                ])
+            tools_desc = tools_desc + "\n" + "\n".join(mcp_lines)
+        except Exception:
+            pass
     
     if cfg.voice_debug:
         try:
@@ -606,11 +609,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     
     # Intentionally avoid logging the full reply in debug to prevent duplicate output
     if reply:
-        # Ensure we never speak or print tool protocol lines
-        def _sanitize_out(text_out: str) -> str:
-            lines = [ln for ln in (text_out.splitlines() or []) if not ln.strip().upper().startswith("TOOL:")]
-            return "\n".join(lines).strip()
-        safe_reply = _sanitize_out(reply)
+        safe_reply = (reply or "").strip()
         if safe_reply:
             # Friendly header for non-debug users; preserve technical header in debug
             try:
@@ -636,11 +635,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
             user_text = redacted if redacted and redacted.strip() else ""
             assistant_text = ""
             if reply and reply.strip():
-                # Clean the reply for memory (remove tool protocol lines)
-                assistant_text = "\n".join([
-                    ln for ln in reply.splitlines() 
-                    if not ln.strip().upper().startswith("TOOL:")
-                ]).strip()
+                assistant_text = reply.strip()
             
             if user_text or assistant_text:
                 _global_dialogue_memory.add_interaction(user_text, assistant_text)
@@ -1324,14 +1319,14 @@ class VoiceListener(threading.Thread):
                                 break
 
 
-def _check_and_update_diary(db: Database, cfg, verbose: bool = False) -> None:
+def _check_and_update_diary(db: Database, cfg, verbose: bool = False, force: bool = False) -> None:
     """Check if diary should be updated and perform batch update if needed."""
     global _global_dialogue_memory
     if _global_dialogue_memory is None:
         return
         
     try:
-        if _global_dialogue_memory.should_update_diary():
+        if force or _global_dialogue_memory.should_update_diary():
             if verbose:
                 try:
                     print("📝 Updating your diary. Please wait… (don't press Ctrl+C again)", file=sys.stderr, flush=True)
@@ -1347,6 +1342,7 @@ def _check_and_update_diary(db: Database, cfg, verbose: bool = False) -> None:
                 source_app=source_app,
                 voice_debug=cfg.voice_debug,
                 timeout_sec=cfg.llm_chat_timeout_sec,
+                force=force,
             )
             if cfg.voice_debug:
                 try:
@@ -1381,6 +1377,20 @@ def main() -> None:
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
     print("[jarvis] daemon started", file=sys.stderr)
+    # MCP preflight: list available external MCP tools
+    mcps = getattr(cfg, "mcps", {}) or {}
+    if mcps:
+        client = MCPClient(mcps)
+        for server_name in mcps.keys():
+            try:
+                tools = client.list_tools(server_name)
+                names = [str(t.get("name")) for t in (tools or []) if t and t.get("name")]
+                preview = ", ".join(names[:10])
+                print(f"[mcp] {server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", file=sys.stderr)
+            except FileNotFoundError as e:
+                print(f"[mcp] {server_name}: command not found – {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"[mcp] {server_name}: error listing tools: {e}", file=sys.stderr)
     
     # Initialize dialogue memory with 5-minute inactivity timeout
     _global_dialogue_memory = DialogueMemory(inactivity_timeout=cfg.dialogue_memory_timeout, max_interactions=20)
@@ -1432,7 +1442,7 @@ def main() -> None:
         _commit_buffer(db, cfg, tts, buffer)
         
         # Final diary update before shutdown to save any pending interactions
-        _check_and_update_diary(db, cfg, verbose=True)
+        _check_and_update_diary(db, cfg, verbose=True, force=True)
         
         if tts is not None:
             tts.stop()

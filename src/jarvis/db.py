@@ -155,104 +155,28 @@ class Database:
                 cur.executescript(_VSS_SCHEMA_SQL)
             self.conn.commit()
 
-    def insert_document(
-        self,
-        ts_utc: str,
-        app: str,
-        window_title: Optional[str],
-        url: Optional[str],
-        sha256_img: Optional[bytes],
-        kind: Optional[str],
-        redaction_ver: int,
-        chunks_text: Sequence[str],
-    ) -> tuple[int, list[int]]:
-        total_tokens = sum(len(t.split()) for t in chunks_text)
-        with self._lock:
-            cur = self.conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO docs(ts_utc, app, window_title, url, sha256_img, kind, redaction_ver, token_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (ts_utc, app, window_title, url, sha256_img, kind, redaction_ver, total_tokens),
-            )
-            doc_id = cur.lastrowid
-            chunk_ids: list[int] = []
-            for ord_idx, text in enumerate(chunks_text):
-                cur.execute(
-                    "INSERT INTO chunks(doc_id, ord, text) VALUES (?, ?, ?)",
-                    (doc_id, ord_idx, text),
-                )
-                chunk_ids.append(cur.lastrowid)
-            self.conn.commit()
-            return int(doc_id), [int(c) for c in chunk_ids]
-
-    def upsert_embedding(self, chunk_id: int, vec: Sequence[float]) -> Optional[int]:
-        if not self.is_vss_enabled:
-            return None
-        with self._lock:
-            cur = self.conn.cursor()
-            cur.execute("INSERT INTO embeddings(vec) VALUES (?)", (sqlite3.Binary(self._pack_vector(vec)),))
-            emb_id = cur.lastrowid
-            cur.execute(
-                "INSERT OR REPLACE INTO chunk_vec(chunk_id, emb_id) VALUES (?, ?)",
-                (chunk_id, emb_id),
-            )
-            self.conn.commit()
-            return int(emb_id)
+    
 
     def search_hybrid(self, fts_query: str, query_vec_json: Optional[str], top_k: int = 8) -> list[sqlite3.Row]:
         with self._lock:
             cur = self.conn.cursor()
             safe_q = _normalize_fts_query(fts_query)
-            
-            # Split results between chunks and summaries (75% chunks, 25% summaries)
-            chunk_limit = max(1, int(top_k * 0.75))
-            summary_limit = max(1, top_k - chunk_limit)
-            
+
             if self.is_vss_enabled and query_vec_json is not None and safe_q:
-                # Search chunks with vector and FTS
-                chunk_sql = f"""
-                WITH fts AS (
-                  SELECT c.id, bm25(chunks_fts) AS bm
-                  FROM chunks_fts
-                  JOIN chunks c ON c.id = chunks_fts.rowid
-                  WHERE chunks_fts MATCH ?
-                  ORDER BY bm LIMIT 100
-                ),
-                v AS (
-                  SELECT cv.chunk_id AS id, distance
-                  FROM vss_search(embeddings, 'vec', ?)
-                  JOIN chunk_vec cv ON cv.emb_id = rowid
-                  LIMIT 100
-                )
-                SELECT c.id, (
-                    (1.0/(1.0+COALESCE(v.distance, 1))) * 0.6 +
-                    (1.0/(1.0+COALESCE(fts.bm, 10))) * 0.4
-                  ) AS score,
-                  c.text, 'chunk' AS result_type
-                FROM chunks c
-                LEFT JOIN v   ON v.id = c.id
-                LEFT JOIN fts ON fts.id = c.id
-                ORDER BY score DESC
-                LIMIT {int(chunk_limit)};
-                """
-                chunk_rows = cur.execute(chunk_sql, (safe_q, query_vec_json)).fetchall()
-                
-                # Search conversation summaries with vector and FTS
+                # Vector + FTS search over conversation summaries only
                 summary_sql = f"""
                 WITH fts_sum AS (
                   SELECT s.id, bm25(summaries_fts) AS bm
                   FROM summaries_fts
                   JOIN conversation_summaries s ON s.id = summaries_fts.rowid
                   WHERE summaries_fts MATCH ?
-                  ORDER BY bm LIMIT 50
+                  ORDER BY bm LIMIT 100
                 ),
                 v_sum AS (
                   SELECT sv.summary_id AS id, distance
                   FROM vss_search(embeddings, 'vec', ?)
                   JOIN summary_vec sv ON sv.emb_id = rowid
-                  LIMIT 50
+                  LIMIT 100
                 )
                 SELECT s.id, (
                     (1.0/(1.0+COALESCE(v_sum.distance, 1))) * 0.6 +
@@ -264,27 +188,12 @@ class Database:
                 LEFT JOIN v_sum     ON v_sum.id = s.id
                 LEFT JOIN fts_sum   ON fts_sum.id = s.id
                 ORDER BY score DESC
-                LIMIT {int(summary_limit)};
+                LIMIT {int(top_k)};
                 """
-                summary_rows = cur.execute(summary_sql, (safe_q, query_vec_json)).fetchall()
-                
-                # Combine and re-sort by score
-                all_rows = list(chunk_rows) + list(summary_rows)
-                all_rows.sort(key=lambda x: x[1], reverse=True)
-                rows = all_rows[:top_k]
-                
+                rows = cur.execute(summary_sql, (safe_q, query_vec_json)).fetchall()
+
             elif safe_q:
-                # FTS-only search for both chunks and summaries
-                chunk_sql = f"""
-                SELECT c.id, bm25(chunks_fts) AS score, c.text, 'chunk' AS result_type
-                FROM chunks_fts
-                JOIN chunks c ON c.id = chunks_fts.rowid
-                WHERE chunks_fts MATCH ?
-                ORDER BY score
-                LIMIT {int(chunk_limit)};
-                """
-                chunk_rows = cur.execute(chunk_sql, (safe_q,)).fetchall()
-                
+                # FTS-only search over conversation summaries
                 summary_sql = f"""
                 SELECT s.id, bm25(summaries_fts) AS score,
                        '[' || s.date_utc || '] ' || s.summary || ' (Topics: ' || COALESCE(s.topics, '') || ')' AS text,
@@ -293,37 +202,22 @@ class Database:
                 JOIN conversation_summaries s ON s.id = summaries_fts.rowid
                 WHERE summaries_fts MATCH ?
                 ORDER BY score
-                LIMIT {int(summary_limit)};
+                LIMIT {int(top_k)};
                 """
-                summary_rows = cur.execute(summary_sql, (safe_q,)).fetchall()
-                
-                # Combine and re-sort by score
-                all_rows = list(chunk_rows) + list(summary_rows)
-                all_rows.sort(key=lambda x: x[1])  # FTS scores are lower-is-better
-                rows = all_rows[:top_k]
-                
+                rows = cur.execute(summary_sql, (safe_q,)).fetchall()
+
             else:
-                # Fallback: return latest chunks and summaries
-                chunk_sql = f"""
-                SELECT id, 0.0 AS score, text, 'chunk' AS result_type
-                FROM chunks
-                ORDER BY id DESC
-                LIMIT {int(chunk_limit)};
-                """
-                chunk_rows = cur.execute(chunk_sql).fetchall()
-                
+                # Fallback: latest conversation summaries
                 summary_sql = f"""
                 SELECT id, 0.0 AS score,
                        '[' || date_utc || '] ' || summary || ' (Topics: ' || COALESCE(topics, '') || ')' AS text,
                        'summary' AS result_type
                 FROM conversation_summaries
                 ORDER BY date_utc DESC
-                LIMIT {int(summary_limit)};
+                LIMIT {int(top_k)};
                 """
-                summary_rows = cur.execute(summary_sql).fetchall()
-                
-                rows = list(chunk_rows) + list(summary_rows)
-                
+                rows = cur.execute(summary_sql).fetchall()
+
             return rows
 
     @staticmethod

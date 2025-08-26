@@ -90,6 +90,9 @@ class Settings:
     # Web Search
     web_search_enabled: bool
     
+    # MCP Integration
+    mcps: Dict[str, Any]
+    
 
 
 def _default_config_path() -> Path:
@@ -119,6 +122,25 @@ def _ensure_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [v.strip() for v in value.split(",") if v.strip()]
     return [str(value)]
+
+
+def _ensure_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    # Accept list of pairs like [{"name":..., ...}] and convert to dict by name if present
+    try:
+        if isinstance(value, list):
+            out: Dict[str, Any] = {}
+            for item in value:
+                if isinstance(item, dict):
+                    key = str(item.get("name")) if item.get("name") is not None else None
+                    if key:
+                        out[key] = {k: v for k, v in item.items() if k != "name"}
+            if out:
+                return out
+    except Exception:
+        pass
+    return {}
 
 
 def get_default_config() -> Dict[str, Any]:
@@ -207,6 +229,9 @@ def get_default_config() -> Dict[str, Any]:
         
         # Web Search
         "web_search_enabled": True,
+
+        # MCP Integration (external servers Jarvis can use). No defaults.
+        "mcps": {},
     }
 
 
@@ -290,6 +315,7 @@ def load_settings() -> Settings:
     location_ip_address = None if location_ip_address_val in (None, "", "null") else str(location_ip_address_val)
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
+    mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.7))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
@@ -375,4 +401,7 @@ def load_settings() -> Settings:
         
         # Web Search
         web_search_enabled=web_search_enabled,
+
+        # MCP Integration
+        mcps=mcps,
     )

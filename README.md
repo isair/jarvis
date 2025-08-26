@@ -292,6 +292,48 @@ If you prefer regular Python, you may need [Microsoft Visual C++ Build Tools](ht
 
 The scripts automatically create a virtual environment, install dependencies, and start Jarvis. Say "jarvis" followed by your request and it will respond via your system's text-to-speech. You may need to grant microphone access when prompted.
 
+### MCP integration (external tools)
+
+Jarvis can act as an MCP client and invoke tools exposed by external MCP servers if you configure them. We do not ship any default MCP servers.
+
+To enable MCP servers, add entries under `mcps` in your `config.json` (stdio transport).
+
+## Testing (for developers)
+
+### Quick unit tests
+- Install dependencies:
+```bash
+python -m pip install -r requirements.txt
+```
+- Run unit tests:
+```bash
+python -m pytest -q -m unit
+```
+
+Notes:
+- Tests automatically add `src/` to `PYTHONPATH`, so you can run them from the repo root.
+- On Windows, use the same commands in PowerShell.
+
+### Integration tests (optional)
+Integration tests talk to a local Ollama server and require a model:
+```bash
+ollama pull llama3:8b
+python -m pytest -q -m integration
+```
+
+### Git hooks (pre-push)
+A pre-push hook is included to run unit tests automatically before pushing. Enable it with:
+```bash
+git config core.hooksPath .githooks
+```
+Skip when necessary (CI or emergencies):
+```bash
+SKIP_TESTS=1 git push
+```
+
+### CI on pull requests
+We run unit tests in GitHub Actions on every pull request. PRs must be green before merge. The workflow installs `requirements.txt` and executes `pytest -m unit` on Linux and Windows.
+
 ## Debug mode (recommended for developers)
 
 To see detailed information about what Jarvis is doing internally, run it with debug logging enabled:
@@ -557,11 +599,10 @@ For commercial licensing, please contact: [baris@writeme.com]
 This approach ensures Jarvis remains freely available for personal and educational use while supporting continued development through commercial licensing.
 
 ## Roadmap
-- Configurable personality.
-- Proper MCP integration.
+- First time setup over voice with configurable personality.
 - Home device control.
 - Cross-platform desktop app so people don't have to bother with cloning and setting the project up.
-- API so your other devices can query the same assistant.
+- API so your other devices can query the same assistant, and a PWA so most devices have a way of using Jarvis.
 - Mobile apps.
 - More baked-in tools.
 - Deep research.

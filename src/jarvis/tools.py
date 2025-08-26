@@ -5,17 +5,21 @@ import sys
 import re
 import requests
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+import os
 
 from .ocr import capture_screenshot_and_ocr
 from .coach import ask_coach
 from .nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
+from .config import Settings
+from .mcp_client import MCPClient
 
 
 
 # Centralized tool specifications and standardized description generator
 @dataclass(frozen=True)
 class ToolSpec:
-    name: str
+    name: str  # canonical tool identifier (camelCase)
     summary: str
     usage_line: str
     args_help: Optional[str] = None
@@ -40,65 +44,65 @@ def _required_log_meal_fields() -> List[str]:
 
 
 TOOL_SPECS: Dict[str, ToolSpec] = {
-    "SCREENSHOT": ToolSpec(
-        name="SCREENSHOT",
+    "screenshot": ToolSpec(
+        name="screenshot",
         summary=(
             "Capture a selected screen region and OCR the text. Use only if the OCR will materially help."
         ),
-        usage_line="TOOL:SCREENSHOT",
+        usage_line='{"tool": { "name": "screenshot", "args": {} }}',
         args_help=(
-            "No arguments. Reply with exactly one line only: TOOL:SCREENSHOT. No other words before or after."
+            "No arguments. Reply with ONLY a single JSON object as shown."
         ),
-        example="TOOL:SCREENSHOT",
+        example='{"tool": { "name": "screenshot", "args": {} }}',
     ),
-    "LOG_MEAL": ToolSpec(
-        name="LOG_MEAL",
+    "logMeal": ToolSpec(
+        name="logMeal",
         summary=(
             "Log a single meal when the user mentions eating or drinking something specific (e.g., 'I ate chicken curry', 'I had a sandwich', 'I drank a protein shake'). "
             "Estimate approximate macros and key micronutrients based on typical portions."
         ),
-        usage_line="TOOL:LOG_MEAL {json}",
+        usage_line='{"tool": { "name": "logMeal", "args": { ... } }}',
         args_help=(
             "JSON object with required fields: "
             + ", ".join(_required_log_meal_fields())
             + ". Provide conservative estimates in numeric fields."
         ),
         example=(
-            "TOOL:LOG_MEAL {\"description\":\"small curry\",\"calories_kcal\":300,\"protein_g\":10,\"carbs_g\":45,\"fat_g\":5,\"fiber_g\":4,\"sugar_g\":6,\"sodium_mg\":600,\"potassium_mg\":350,\"micros\":{\"iron_mg\":3,\"vitamin_a_iu\":800,\"vitamin_c_mg\":30},\"confidence\":0.7}"
+            '{"tool": { "name": "logMeal", "args": {"description":"small curry","calories_kcal":300,"protein_g":10,"carbs_g":45,"fat_g":5,"fiber_g":4,"sugar_g":6,"sodium_mg":600,"potassium_mg":350,"micros":{"iron_mg":3,"vitamin_a_iu":800,"vitamin_c_mg":30},"confidence":0.7} }}'
         ),
     ),
-    "FETCH_MEALS": ToolSpec(
-        name="FETCH_MEALS",
+    "fetchMeals": ToolSpec(
+        name="fetchMeals",
         summary=(
             "Fetch logged meals when the user asks about their eating history (e.g., 'what have I eaten today?', 'show me my meals', 'what did I eat yesterday?'). "
             "Retrieves meal data for the specified time range."
         ),
-        usage_line="TOOL:FETCH_MEALS {json}",
+        usage_line='{"tool": { "name": "fetchMeals", "args": { ... } }}',
         args_help=(
             "JSON with ISO8601 strings: since_utc and/or until_utc. Provide at least one."
         ),
         example=(
-            "TOOL:FETCH_MEALS {\"since_utc\":\"2025-01-01T00:00:00Z\",\"until_utc\":\"2025-01-02T00:00:00Z\"}"
+            '{"tool": { "name": "fetchMeals", "args": {"since_utc":"2025-01-01T00:00:00Z","until_utc":"2025-01-02T00:00:00Z"} }}'
         ),
     ),
-    "DELETE_MEAL": ToolSpec(
-        name="DELETE_MEAL",
+    "deleteMeal": ToolSpec(
+        name="deleteMeal",
         summary=(
             "Delete a single meal by id."
         ),
-        usage_line="TOOL:DELETE_MEAL {json}",
-        args_help="JSON with integer id field.",
-        example="TOOL:DELETE_MEAL {\"id\":123}",
+        usage_line='{"tool": { "name": "deleteMeal", "args": { ... } }}',
+        args_help='JSON with integer id field.',
+        example='{"tool": { "name": "deleteMeal", "args": {"id":123} }}',
     ),
-    "RECALL_CONVERSATION": ToolSpec(
-        name="RECALL_CONVERSATION",
+    "recallConversation": ToolSpec(
+        name="recallConversation",
         summary=(
             "Search conversation history when the user asks about past conversations or wants to recall what we've discussed. "
             "Use this for: recap requests ('what have we talked about?', 'what did we discuss today?'), "
             "specific memory queries ('what did I tell you about X?', 'remember when we talked about Y?'), "
             "or when they reference something from before ('that password I mentioned', 'the plan we made')."
         ),
-        usage_line="TOOL:RECALL_CONVERSATION {json}",
+        usage_line='{"tool": { "name": "recallConversation", "args": { ... } }}',
         args_help=(
             "JSON with optional fields: search_query (keywords to search for), from (start timestamp), to (end timestamp). "
             "IMPORTANT: For temporal queries, convert natural language to exact timestamps:\n"
@@ -107,10 +111,10 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "- 'last week': from='2025-08-15T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
             "Use the current date/time context to calculate exact timestamps. Always include both from AND to for temporal queries."
         ),
-        example="TOOL:RECALL_CONVERSATION {\"search_query\":\"what I ate\",\"from\":\"2025-08-21T00:00:00Z\",\"to\":\"2025-08-21T23:59:59Z\"}",
+        example='{"tool": { "name": "recallConversation", "args": {"search_query":"what I ate","from":"2025-08-21T00:00:00Z","to":"2025-08-21T23:59:59Z"} }}',
     ),
-    "WEB_SEARCH": ToolSpec(
-        name="WEB_SEARCH",
+    "webSearch": ToolSpec(
+        name="webSearch",
         summary=(
             "Search the web using DuckDuckGo to find current information on any topic. "
             "Use this for: educational topics, current news, weather, stock prices, sports scores, "
@@ -119,36 +123,47 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "Automatically fetches and synthesizes content from the most relevant results. "
             "Note: This feature can be disabled in configuration if desired."
         ),
-        usage_line="TOOL:WEB_SEARCH {json}",
+        usage_line='{"tool": { "name": "webSearch", "args": { ... } }}',
         args_help=(
             "JSON with required field: search_query (the search terms to use). "
             "Make search queries specific and include relevant keywords for better results."
         ),
-        example="TOOL:WEB_SEARCH {\"search_query\":\"weather London today\"}",
+        example='{"tool": { "name": "webSearch", "args": {"search_query":"weather London today"} }}',
+    ),
+    "localFiles": ToolSpec(
+        name="localFiles",
+        summary=(
+            "Safely access local files in the user's home directory. Use to list, read, write, append, or delete files as requested by the user. "
+            "Always operate within the allowed root; never request or disclose sensitive system paths."
+        ),
+        usage_line='{"tool": { "name": "localFiles", "args": { ... } }}',
+        args_help=(
+            "JSON with fields: operation ('list'|'read'|'write'|'append'|'delete'), path (string, absolute or relative to home). "
+            "Optional for 'list': glob (string), recursive (bool). Optional for 'write'/'append': content (string)."
+        ),
+        example=(
+            '{"tool": { "name": "localFiles", "args": {"operation":"read","path":"~/notes/todo.txt"} }}'
+        ),
     ),
 }
 
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str:
-    """Produce a standardized, compact tools help string for the system prompt.
-
-    If allowed_tools is provided, only include those. Otherwise include all.
-    """
-    names = [n.upper() for n in (allowed_tools or list(TOOL_SPECS.keys()))]
+    """Produce a compact, JSON-only tool help string for the system prompt."""
+    names = list(allowed_tools or list(TOOL_SPECS.keys()))
     lines: List[str] = []
-    lines.append(
-        "Tool-use protocol: When you need a tool, reply with a SINGLE LINE ONLY in the form `TOOL:NAME` or `TOOL:NAME {json}`. No other words before or after."
-    )
+    lines.append("Tool-use protocol: Reply with ONLY a JSON object:")
+    lines.append("{\"tool\": { \"name\": \"<camelCaseToolName>\", \"args\": { ... } }}")
+    lines.append("For external MCP tools (include 'server'):")
+    lines.append("{\"tool\": { \"server\": \"<SERVER>\", \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
+    lines.append("\nAvailable tools and when to use them:")
     for nm in names:
         spec = TOOL_SPECS.get(nm)
         if not spec:
             continue
         lines.append(f"\n{spec.name}: {spec.summary}")
-        lines.append(f"Usage: {spec.usage_line}")
         if spec.args_help:
-            lines.append(f"Args: {spec.args_help}")
-        if spec.example:
-            lines.append(f"Example: {spec.example}")
+            lines.append(f"Input: {spec.args_help}")
     return "\n".join(lines)
 
 
@@ -191,7 +206,7 @@ def _normalize_time_range(args: Optional[Dict[str, Any]]) -> Tuple[str, str]:
 
 def run_tool_with_retries(
     db,
-    cfg,
+    cfg: Settings,
     tool_name: str,
     tool_args: Optional[Dict[str, Any]],
     system_prompt: str,
@@ -199,8 +214,30 @@ def run_tool_with_retries(
     redacted_text: str,
     max_retries: int = 1,
 ) -> ToolExecutionResult:
-    name = (tool_name or "").upper()
-    
+    # Normalize tool name to canonical camelCase
+    raw_name = (tool_name or "").strip()
+    name = raw_name
+
+    # JSON-based MCP invocation
+    if raw_name.upper() == "MCP":
+        try:
+            if MCPClient is None:
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
+            if not (tool_args and isinstance(tool_args, dict)):
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP requires args with 'server' and 'name'.")
+            server_name = str(tool_args.get("server") or "")
+            mcp_tool = str(tool_args.get("name") or "")
+            arguments = tool_args.get("args") if isinstance(tool_args.get("args"), dict) else {}
+            if not server_name or not mcp_tool:
+                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP requires both 'server' and 'name'.")
+            client = MCPClient(getattr(cfg, "mcps", {}))
+            result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool, arguments=arguments)
+            is_error = bool(result.get("isError", False))
+            text = result.get("text") or None
+            return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
+        except Exception as e:
+            return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP error: {e}")
+
     # Friendly user print helper (non-debug only)
     def _user_print(message: str) -> None:
         if not getattr(cfg, "voice_debug", False):
@@ -210,8 +247,8 @@ def run_tool_with_retries(
                 pass
 
 
-    # SCREENSHOT
-    if name == "SCREENSHOT":
+    # screenshot
+    if name == "screenshot":
         _user_print("📸 Capturing a screenshot for OCR…")
         if getattr(cfg, "voice_debug", False):
             try:
@@ -236,8 +273,8 @@ def run_tool_with_retries(
         _user_print("✅ Screenshot processed.")
         return result
 
-    # LOG_MEAL
-    if name == "LOG_MEAL":
+    # logMeal
+    if name == "logMeal":
         _user_print("🥗 Logging your meal…")
         # First attempt: use provided args if complete
         required = [
@@ -310,8 +347,8 @@ def run_tool_with_retries(
         _user_print("⚠️ I couldn't log that meal automatically.")
         return ToolExecutionResult(success=False, reply_text=None, error_message="Failed to log meal")
 
-    # FETCH_MEALS
-    if name == "FETCH_MEALS":
+    # fetchMeals
+    if name == "fetchMeals":
         _user_print("📖 Retrieving your meals…")
         since, until = _normalize_time_range(tool_args if isinstance(tool_args, dict) else None)
         if getattr(cfg, "voice_debug", False):
@@ -330,8 +367,8 @@ def run_tool_with_retries(
         _user_print("✅ Meals retrieved.")
         return ToolExecutionResult(success=True, reply_text=summary)
 
-    # DELETE_MEAL
-    if name == "DELETE_MEAL":
+    # deleteMeal
+    if name == "deleteMeal":
         _user_print("🗑️ Deleting the meal…")
         mid = None
         if tool_args and isinstance(tool_args, dict):
@@ -353,8 +390,8 @@ def run_tool_with_retries(
         _user_print("✅ Meal deleted." if is_deleted else "⚠️ I couldn't delete that meal.")
         return ToolExecutionResult(success=is_deleted, reply_text=("Meal deleted." if is_deleted else "Sorry, I couldn't delete that meal."))
 
-    # RECALL_CONVERSATION
-    if name == "RECALL_CONVERSATION":
+    # recallConversation
+    if name == "recallConversation":
         _user_print("🧠 Looking back at our past conversations…")
         try:
             search_query = ""
@@ -489,8 +526,8 @@ def run_tool_with_retries(
                     pass
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble searching my conversation memory.")
 
-    # WEB_SEARCH
-    if name == "WEB_SEARCH":
+    # webSearch
+    if name == "webSearch":
         _user_print("🌐 Searching the web…")
         try:
             # Check if web search is enabled
@@ -716,6 +753,115 @@ def run_tool_with_retries(
                 except Exception:
                     pass
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble performing the web search.")
+
+    # localFiles
+    if name == "localFiles":
+        try:
+            # Safety: restrict to user's home directory by default
+            home_root = Path(os.path.expanduser("~")).resolve()
+
+            def _expand_user_path(p: str) -> str:
+                if not isinstance(p, str):
+                    return str(p)
+                if p == "~":
+                    return os.path.expanduser("~")
+                if p.startswith("~/") or p.startswith("~\\"):
+                    return os.path.join(os.path.expanduser("~"), p[2:])
+                return os.path.expanduser(p)
+
+            def _resolve_safe(p: str) -> Path:
+                resolved = Path(_expand_user_path(p)).resolve()
+                try:
+                    # Allow exactly the home root or its descendants
+                    if resolved == home_root or str(resolved).startswith(str(home_root) + os.sep):
+                        return resolved
+                except Exception:
+                    pass
+                raise PermissionError(f"Path not allowed: {resolved}")
+
+            if not (tool_args and isinstance(tool_args, dict)):
+                return ToolExecutionResult(success=False, reply_text="localFiles requires a JSON object with at least 'operation' and 'path'.")
+
+            operation = str(tool_args.get("operation") or "").strip().lower()
+            path_arg = tool_args.get("path")
+            if not operation or not path_arg:
+                return ToolExecutionResult(success=False, reply_text="localFiles requires 'operation' and 'path'.")
+
+            target = _resolve_safe(str(path_arg))
+
+            # list
+            if operation == "list":
+                recursive = bool(tool_args.get("recursive", False))
+                glob_pat = str(tool_args.get("glob") or "*")
+                base = target if target.is_dir() else target.parent
+                if not base.exists() or not base.is_dir():
+                    return ToolExecutionResult(success=False, reply_text=f"Directory not found: {base}")
+                try:
+                    if recursive:
+                        items = sorted([str(p) for p in base.rglob(glob_pat)])
+                    else:
+                        items = sorted([str(p) for p in base.glob(glob_pat)])
+                except Exception as e:
+                    return ToolExecutionResult(success=False, reply_text=f"List failed: {e}")
+                if not items:
+                    return ToolExecutionResult(success=True, reply_text=f"No matches under {base} for '{glob_pat}'.")
+                preview = "\n".join(items[:200])
+                more = "\n..." if len(items) > 200 else ""
+                return ToolExecutionResult(success=True, reply_text=f"Listing for {base} ({'recursive' if recursive else 'non-recursive'}) with pattern '{glob_pat}':\n\n{preview}{more}")
+
+            # read
+            if operation == "read":
+                if not target.exists() or not target.is_file():
+                    return ToolExecutionResult(success=False, reply_text=f"File not found: {target}")
+                try:
+                    data = target.read_text(encoding="utf-8", errors="replace")
+                except Exception as e:
+                    return ToolExecutionResult(success=False, reply_text=f"Read failed: {e}")
+                max_chars = 100_000
+                if len(data) > max_chars:
+                    return ToolExecutionResult(success=True, reply_text=f"[Truncated to {max_chars} chars]\n" + data[:max_chars])
+                return ToolExecutionResult(success=True, reply_text=data)
+
+            # write
+            if operation == "write":
+                content = tool_args.get("content")
+                if not isinstance(content, str):
+                    return ToolExecutionResult(success=False, reply_text="Write requires string 'content'.")
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content, encoding="utf-8")
+                    return ToolExecutionResult(success=True, reply_text=f"Wrote {len(content)} characters to {target}")
+                except Exception as e:
+                    return ToolExecutionResult(success=False, reply_text=f"Write failed: {e}")
+
+            # append
+            if operation == "append":
+                content = tool_args.get("content")
+                if not isinstance(content, str):
+                    return ToolExecutionResult(success=False, reply_text="Append requires string 'content'.")
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with target.open("a", encoding="utf-8", errors="replace") as f:
+                        f.write(content)
+                    return ToolExecutionResult(success=True, reply_text=f"Appended {len(content)} characters to {target}")
+                except Exception as e:
+                    return ToolExecutionResult(success=False, reply_text=f"Append failed: {e}")
+
+            # delete
+            if operation == "delete":
+                try:
+                    if target.exists() and target.is_file():
+                        target.unlink()
+                        return ToolExecutionResult(success=True, reply_text=f"Deleted file: {target}")
+                    return ToolExecutionResult(success=False, reply_text=f"File not found: {target}")
+                except Exception as e:
+                    return ToolExecutionResult(success=False, reply_text=f"Delete failed: {e}")
+
+            return ToolExecutionResult(success=False, reply_text=f"Unknown localFiles operation: {operation}")
+        except PermissionError as pe:
+            return ToolExecutionResult(success=False, reply_text=f"Permission error: {pe}")
+        except Exception as e:
+            return ToolExecutionResult(success=False, reply_text=f"localFiles error: {e}")
 
     # Unknown tool
     if getattr(cfg, "voice_debug", False):
