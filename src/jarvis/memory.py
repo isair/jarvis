@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, List, Tuple, Union
 from .db import Database
-from .coach import ask_coach
+from .llm import call_llm_direct
 from .embed import get_embedding
 
 
@@ -227,7 +227,7 @@ SUMMARY: [your summary here]
 TOPICS: [topic1, topic2, topic3]"""
     
     try:
-        response = ask_coach(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, timeout_sec=timeout_sec, include_location=False)
+        response = call_llm_direct(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, timeout_sec=timeout_sec)
         if not response:
             # No fallback - if LLM fails to respond, skip summarization
             return None, None

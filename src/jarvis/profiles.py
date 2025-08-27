@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
-from .coach import ask_coach
+from .llm import call_llm_direct
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,7 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
 }
 
 
+
 def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str], text: str, timeout_sec: float = 10.0) -> str:
     candidates = [p for p in active_profiles if p in PROFILES]
     if not candidates:
@@ -101,7 +102,7 @@ def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str
         "User text (may be partial transcript):\n" + text[:2000] + "\n\n"
         "Answer with only one of: " + allowed
     )
-    resp = ask_coach(base_url, chat_model, sys_prompt, user_content, timeout_sec=timeout_sec, include_location=False)
+    resp = call_llm_direct(base_url, chat_model, sys_prompt, user_content, timeout_sec=timeout_sec)
     if isinstance(resp, str) and resp.strip():
         ans = resp.strip().lower()
         # Try exact match first
