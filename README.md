@@ -53,124 +53,115 @@ These examples show Jarvis in action with debug mode enabled to demonstrate the 
 
 <details>
 
-<summary>Personalized news search with multi-step planning</summary>
+<summary>Personalized news search with enhanced memory & multi-step planning</summary>
 
 ```bash
 [voice] heard: Jarvis, what are some news from today that might interest me?
 [debug] query collected (silence timeout): 'what are some news from today that might interest me?'
 [debug] selected profile: business
-🧠 [memory] searching with keywords=['news', 'interest'], time: 2025-08-22T00:00:00Z to 2025-08-22T23:59:59Z
-    🔍 RECALL_CONVERSATION: query='news interest', from=2025-08-22T00:00:00Z, to=2025-08-22T23:59:59Z
-      📋 match score 69.2: [2025-08-22] User discussed interests in AI startups, climate tech, and fintech developments...
-      📋 match score 53.8: [2025-08-21] User asked about renewable energy investments and carbon offset markets...
-      ✅ found 1 results
-  ✅ found context: 905 chars
-🤖 [multi-step] starting with 3 tools available
-📋 [planning] asking LLM to create response plan
-  📝 Created plan with 2 steps
-     Step 1: WEB_SEARCH - Search for current news in user's areas of interest
-     Step 2: FINAL_RESPONSE - Synthesize relevant stories conversationally
-⚙️  [step 1] executing: WEB_SEARCH - Search for current news in user's areas of interest
-    🌐 WEB_SEARCH: searching for 'August 22 2025 AI startups climate tech fintech news'
-[debug] WEB_SEARCH: DuckDuckGo found 5 results
-    ✅ WEB_SEARCH returned 1847 chars
-⚙️  [step 2] executing: FINAL_RESPONSE - Synthesize relevant stories conversationally
-🏁 [multi-step] completed with final response
+🧠 [memory] searching with keywords=['news', 'interest', 'technology'], time: 2025-01-15T00:00:00Z to 2025-01-15T23:59:59Z
+  ✅ found 3 results for memory enrichment
+✨ Working on it: what are some news from today that might interest me?
+🧠 Thinking…
+📝 Created plan with 2 steps
+     Step 1: webSearch - Search for current news in user's areas of interest  
+     Step 2: finalResponse - Synthesize relevant stories conversationally
+🧰 Tool: webSearch…
+    🌐 webSearch: searching for 'January 15 2025 AI startups climate tech fintech news'
+[debug] WEB_SEARCH: DuckDuckGo found 8 results
+    ✅ webSearch returned 2341 chars
+  ✅ Step complete.
+💬 Preparing your answer…
+  ✅ Step complete.
 
-[jarvis coach:business]
-Found a couple things you'd probably like - there's news about Anthropic's latest $400M funding round focusing on AI safety research, which matches what you mentioned being curious about. Also spotted that Swiss startup Climeworks just announced a breakthrough in direct air capture costs. Plus three new fintech unicorns were announced today, including that blockchain payments company we talked about last week hitting a $2B valuation. Want me to dig deeper into any of these?
+🤖 Jarvis (business)
+Perfect timing! Found several stories that match your interests. OpenAI just announced a major partnership with Google for enterprise AI infrastructure - interesting given your previous questions about AI consolidation. Also, that carbon credit startup we discussed last month, Patch, just closed a $55M Series B. And there's breaking news about the EU's new AI regulation enforcement starting today, which could impact the fintech regulatory landscape you've been tracking. The renewable energy markets you asked about last week are also moving - solar futures hit record highs after Germany's new subsidy announcement. Want me to dive deeper into any of these?
 ```
 
 </details>
 
 <details>
 
-<summary>Location-aware weather request</summary>
+<summary>Enhanced memory recall with contextual nutrition advice</summary>
 
 ```bash
-[voice] heard: Jarvis, how's the weather today?
-[debug] query collected (silence timeout): 'how is the weather today?'
+[voice] heard: Jarvis, should I order pizza tonight considering my health goals?
+[debug] query collected (silence timeout): 'should i order pizza tonight considering my health goals'
 [debug] selected profile: life
-🤖 [multi-step] starting with 3 tools available
-📋 [planning] asking LLM to create response plan
-  📝 Created plan with 2 steps
-     Step 1: WEB_SEARCH - Get current weather for user's location
-     Step 2: FINAL_RESPONSE - Provide weather summary with local context
-⚙️  [step 1] executing: WEB_SEARCH - Get current weather for user's location
-    🌐 WEB_SEARCH: searching for 'weather today NY1 New York'
-[debug] WEB_SEARCH: DuckDuckGo found 4 results
-    ✅ WEB_SEARCH returned 1234 chars
-⚙️  [step 2] executing: FINAL_RESPONSE - Provide weather summary with local context
-🏁 [multi-step] completed with final response
+🧠 [memory] searching with keywords=['health', 'goals', 'diet', 'food'], time: 2025-01-10T00:00:00Z to 2025-01-15T23:59:59Z
+  ✅ found 5 results for memory enrichment
+✨ Working on it: should i order pizza tonight considering my health goals
+🧠 Thinking…
+📝 Created plan with 2 steps
+     Step 1: fetchMeals - Check today's nutrition so far
+     Step 2: finalResponse - Provide personalized advice based on goals and intake
 
-[jarvis coach:life]
-Hey! Today in New York it's looking pretty nice – around 68-72°F with partly cloudy skies. There's a light chance of showers around 5 PM, so maybe grab a light jacket if you're heading out later. Evening temps will drop to about 60°F, perfect for a walk if the rain holds off. Should be a good day overall!
+🧰 Tool: fetchMeals…
+    ✅ fetchMeals returned 892 chars
+  ✅ Step complete.
+💬 Preparing your answer…
+  ✅ Step complete.
+
+🤖 Jarvis (life)
+Looking at your week - you mentioned wanting to lose 10 pounds by March and you've been doing really well! Today you've had overnight oats (320 cal), a salad with grilled chicken (380 cal), and some almonds (160 cal) - about 860 calories so far.
+
+Given your 1,800 calorie target and that you hit the gym yesterday, you've got room for pizza! But maybe consider:
+- Split a medium pizza instead of ordering a large
+- Add a side salad to get some extra nutrients  
+- Go for thin crust vs deep dish to save ~200 calories per slice
+
+You've been consistent with your goals this week (I see you logged workouts Monday, Tuesday, and yesterday), so don't stress about one pizza night. Balance is key!
 ```
 
 </details>
 
 <details>
 
-<summary>Nutrition tracking with meal recall</summary>
+<summary>Advanced debugging with screen analysis & MCP integration</summary>
 
 ```bash
-[voice] heard: Jarvis, what have I eaten so far today?
-[debug] query collected (silence timeout): 'what have i eaten so far today?'
-[debug] selected profile: life
-🧠 [memory] searching with keywords=['eaten', 'food'], time: 2025-08-22T00:00:00Z to 2025-08-22T23:59:59Z
-    🔍 RECALL_CONVERSATION: query='eaten food', from=2025-08-22T00:00:00Z, to=2025-08-22T23:59:59Z
-      📋 match score 85.5: [2025-08-22] User logged breakfast: Greek yogurt with berries (280 kcal), coffee with oat milk...
-      ✅ found 1 results
-  ✅ found context: 743 chars
-🤖 [multi-step] starting with 3 tools available
-📋 [planning] asking LLM to create response plan
-  📝 Created plan with 2 steps
-     Step 1: FETCH_MEALS - Retrieve detailed meal data for today
-     Step 2: FINAL_RESPONSE - Summarize nutrition and provide suggestions
-⚙️  [step 1] executing: FETCH_MEALS - Retrieve detailed meal data for today
-    ✅ FETCH_MEALS returned 456 chars
-⚙️  [step 2] executing: FINAL_RESPONSE - Summarize nutrition and provide suggestions
-🏁 [multi-step] completed with final response
-
-[jarvis coach:life]
-You've had Greek yogurt with berries and granola for breakfast (280 kcal) and a coffee with oat milk (45 kcal) - about 325 kcal total with decent protein from the yogurt. 
-
-For the rest of the day, maybe add some veggies and lean protein? A quinoa salad with chicken or a veggie wrap would round things out nicely. You're doing great with the balanced start!
-```
-
-</details>
-
-<details>
-
-<summary>Complex technical query with context recall</summary>
-
-```bash
-[voice] heard: Jarvis, help me debug this authentication error I mentioned yesterday
-[debug] query collected (silence timeout): 'help me debug this authentication error i mentioned yesterday'
+[voice] heard: Jarvis, I'm getting this weird GraphQL error, can you help debug it?
+[debug] query collected (silence timeout): 'i'm getting this weird graphql error can you help debug it'
 [debug] selected profile: developer
-🧠 [memory] searching with keywords=['authentication', 'error', 'debug'], time: 2025-08-21T00:00:00Z to 2025-08-21T23:59:59Z
-    🔍 RECALL_CONVERSATION: query='authentication error debug', from=2025-08-21T00:00:00Z, to=2025-08-21T23:59:59Z
-      📋 match score 92.1: [2025-08-21] User reported JWT token expiration issues in React app, 401 errors on protected routes...
-      📋 match score 78.3: [2025-08-21] Discussed implementing refresh token logic, current using localStorage for tokens...
-      ✅ found 2 results
-  ✅ found context: 1456 chars
-🤖 [multi-step] starting with 3 tools available
-📋 [planning] asking LLM to create response plan
-  📝 Created plan with 1 step
-     Step 1: FINAL_RESPONSE - Provide debugging steps based on previous context
-⚙️  [step 1] executing: FINAL_RESPONSE - Provide debugging steps based on previous context
-🏁 [multi-step] completed with final response
+🧠 [memory] searching with keywords=['graphql', 'error', 'debug', 'api'], time: 2025-01-10T00:00:00Z to 2025-01-15T23:59:59Z
+  ✅ found 4 results for memory enrichment
+✨ Working on it: i'm getting this weird graphql error can you help debug it
+🧠 Thinking…
+📝 Created plan with 3 steps
+     Step 1: screenshot - Capture current screen to see the error
+     Step 2: mcpTool - Use VSCode extension to examine code context
+     Step 3: finalResponse - Provide debugging analysis and solutions
 
-[jarvis coach:developer]
-Right, the JWT expiration issue in your React app. Based on what we discussed yesterday, let's check a few things:
+🧰 Tool: screenshot…
+    📸 screenshot: captured screen content
+    ✅ screenshot returned 2847 chars
+  ✅ Step complete.
+🧰 MCP: vscode:findReferences…
+    🔍 mcpTool: searching for GraphQL schema references
+    ✅ vscode:findReferences returned 1203 chars  
+  ✅ Step complete.
+💬 Preparing your answer…
+  ✅ Step complete.
 
-1. **Token expiry**: Log the decoded JWT payload to see the actual exp timestamp vs current time
-2. **Refresh logic**: The refresh token flow we talked about - is it firing before the 401 hits?
-3. **Storage timing**: You mentioned localStorage - check if tokens are being cleared unexpectedly
+🤖 Jarvis (developer)
+I can see the error on your screen - looks like a "Cannot return null for non-nullable field User.email" error. Based on your previous GraphQL work and what I'm seeing:
 
-Try adding `console.log(jwt_decode(token).exp, Date.now()/1000)` before your protected requests. That'll show if it's actually expiring when you think it is.
+**The Issue**: Your User type has `email: String!` (non-nullable) but the resolver is returning null, probably from the database.
 
-Want me to take a screenshot and help debug the specific error you're seeing?
+**Quick fixes to try**:
+
+1. **Check your resolver** - the getUserById function likely has a user record where email is null/undefined
+2. **Database query** - run `SELECT email FROM users WHERE email IS NULL` to confirm
+3. **Schema fix** - if emails can be null, change your schema to `email: String` (nullable)
+
+I remember you mentioned last week that you were migrating user data - this could be from incomplete migration where some users don't have emails set yet.
+
+**Immediate fix**: Add a null check in your resolver:
+\```javascript
+email: user.email || "pending@example.com"
+\```
+
+Want me to help you run a database query to check for null emails, or would you prefer to update the schema first?
 ```
 
 </details>
