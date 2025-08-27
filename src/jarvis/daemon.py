@@ -1105,17 +1105,43 @@ class VoiceListener(threading.Thread):
                             pass
                     return
         
-        # Guard against echo of our own TTS (but allow stop commands through)
+        # Enhanced echo detection for non-hot-window mode
         if self.tts is not None and self.tts.enabled:
             # Always allow stop commands to pass through echo protection
             if not self._is_stop_command(text_lower):
-                last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
-                is_same_as_tts = False
-                if last_tts and text_lower:
-                    ratio = difflib.SequenceMatcher(a=last_tts, b=text_lower).ratio()
-                    is_same_as_tts = ratio >= 0.74 or (text_lower in last_tts) or (last_tts in text_lower)
-                if is_same_as_tts:
-                    return
+                # Use enhanced echo detection combining timing, energy, and text
+                if self._is_in_echo_window():
+                    # Calculate current utterance energy
+                    current_energy = self._calculate_audio_energy(self._utterance_frames[-10:])
+                    
+                    # Check if this is likely echo based on energy
+                    if self._is_likely_echo_by_energy(current_energy):
+                        # Final check: text similarity (but only if energy suggests echo)
+                        last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                        if last_tts and self._is_likely_tts_echo(text_lower, last_tts):
+                            if self.cfg.voice_debug:
+                                try:
+                                    print(f"[debug] input rejected (TTS echo by timing+energy+text): {text_lower}", file=sys.stderr)
+                                except Exception:
+                                    pass
+                            return
+                    else:
+                        # High energy during echo window - likely real user input
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] high energy input accepted during echo window (energy: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                            except Exception:
+                                pass
+                else:
+                    # Outside echo window, still check text similarity as fallback
+                    last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                    if last_tts and self._is_likely_tts_echo(text_lower, last_tts):
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] input rejected (TTS echo by text similarity): {text_lower}", file=sys.stderr)
+                            except Exception:
+                                pass
+                        return
         if self.cfg.voice_debug and text:
             try:
                 print(f"[voice] heard: {text}", file=sys.stderr)
@@ -1236,6 +1262,13 @@ class VoiceListener(threading.Thread):
             self._pending_query = (self._pending_query + " " + text_lower).strip()
             self._last_voice_time = time.time()
             # Note: timeout check is now handled in _check_query_timeout() called from audio loop
+        else:
+            # Input doesn't contain wake word and we're not collecting - ignore it
+            if self.cfg.voice_debug:
+                try:
+                    print(f"[debug] input ignored (no wake word detected): {text_lower}", file=sys.stderr)
+                except Exception:
+                    pass
 
     def run(self) -> None:
         if WhisperModel is None or sd is None:
