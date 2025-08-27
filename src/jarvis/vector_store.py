@@ -125,3 +125,18 @@ def get_python_vector_store(db_path: str) -> PythonVectorStore:
     if _python_vector_store is None:
         _python_vector_store = PythonVectorStore(db_path)
     return _python_vector_store
+
+
+def get_best_vector_store(db_path: str, dimension: int = 768):
+    """Get the best available vector store (FAISS if available, otherwise Python fallback)."""
+    # Try FAISS first (much faster)
+    try:
+        from .fast_vector_store import get_faiss_vector_store
+        faiss_store = get_faiss_vector_store(db_path, dimension)
+        if faiss_store is not None:
+            return faiss_store
+    except ImportError:
+        pass
+    
+    # Fallback to Python implementation
+    return get_python_vector_store(db_path)
