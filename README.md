@@ -360,7 +360,8 @@ This shows voice detection, processing steps, tool usage, and internal decision-
 
 ## Privacy, storage, and search
 - **Redaction first**: Before saving or using any text, Jarvis replaces emails, tokens, cards, JWTs, 6‑digit OTPs, and long hex with placeholders.
-- **Intelligent search architecture**: Triple-layered retrieval combines SQLite FTS5 (full-text), vector embeddings (semantic), and fuzzy matching (typo-tolerant) for superior context discovery across both recent dialogue and historical conversations.
+- **Intelligent search architecture**: Built-in hybrid search combines vector embeddings (semantic similarity) with SQLite FTS5 (full-text) for superior context discovery across both recent dialogue and historical conversations.
+- **Works out of the box**: Vector search is built-in using pure Python - no additional setup required. For enhanced performance with large datasets, you can optionally configure sqlite-vss.
 
 ### Optional: vector search (recommended)
 If you install `sqlite-vss`, set `sqlite_vss_path` in your JSON config to the absolute path to the library (macOS `vss0.dylib`, Linux `.so`). Example:
@@ -500,58 +501,7 @@ Jarvis looks for a JSON config at:
 - `JARVIS_CONFIG_PATH` if set, otherwise
 - `~/.config/jarvis/config.json` (or `$XDG_CONFIG_HOME/jarvis/config.json`)
 
-Example `config.json`:
-```json
-{
-  "db_path": "~/.local/share/jarvis/jarvis.db",
-  "sqlite_vss_path": null,
-  "allowlist_bundles": [
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "com.microsoft.VSCode",
-    "com.jetbrains.intellij"
-  ],
-
-  "ollama_base_url": "http://127.0.0.1:11434",
-  "ollama_embed_model": "nomic-embed-text",
-  "ollama_chat_model": "gpt-oss:20b",
-  "llm_profile_select_timeout_sec": 30.0,
-  "use_stdin": false,
-  "active_profiles": [
-    "developer",
-    "business",
-    "life"
-  ],
-  "tts_enabled": true,
-  "tts_engine": "system",
-  "tts_voice": null,
-  "tts_rate": 200,
-  "voice_device": null,
-  "voice_block_seconds": 4.0,
-  "voice_collect_seconds": 2.5,
-  "wake_word": "jarvis",
-  "wake_aliases": [
-    "joris",
-    "jar is",
-    "jaivis",
-    "jervis",
-    "jarvus",
-    "jarviz",
-    "javis",
-    "jairus"
-  ],
-  "wake_fuzzy_ratio": 0.78,
-  "whisper_model": "small",
-  "whisper_compute_type": "int8",
-  "whisper_vad": true,
-  "vad_enabled": true,
-  "location_enabled": true,
-  "location_cache_minutes": 60,
-  "location_ip_address": null,
-  "location_auto_detect": true,
-  "web_search_enabled": true
-}
-```
+For an example `config.json`, see [here](./examples/config.stub.json).
 
 #### TTS Configuration
 - `tts_enabled`: Enable/disable text-to-speech (default: `true`)

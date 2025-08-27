@@ -2,10 +2,63 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 from .db import Database
 from .coach import ask_coach
 from .embed import get_embedding
+
+
+def _filter_contexts_by_time(
+    contexts: List[str], 
+    from_time: Optional[str], 
+    to_time: Optional[str], 
+    voice_debug: bool = False
+) -> List[str]:
+    """Helper to filter context strings by time range."""
+    if not from_time and not to_time:
+        return contexts
+        
+    filtered = []
+    from_dt = None
+    to_dt = None
+    
+    try:
+        if from_time:
+            from_dt = datetime.fromisoformat(from_time.replace('Z', '+00:00'))
+        if to_time:
+            to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
+    except Exception as e:
+        if voice_debug:
+            try:
+                import sys
+                print(f"      📋 Error parsing time: {e}", file=sys.stderr)
+            except Exception:
+                pass
+        return contexts
+    
+    import re
+    for ctx in contexts:
+        # Extract date from formatted text like "[2025-08-27] ..."
+        date_match = re.match(r'\[(\d{4}-\d{2}-\d{2})\]', ctx)
+        if date_match:
+            date_str = date_match.group(1)
+            try:
+                ctx_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
+                
+                in_range = True
+                if from_dt and ctx_date.date() < from_dt.date():
+                    in_range = False
+                if to_dt and ctx_date.date() > to_dt.date():
+                    in_range = False
+                
+                if in_range:
+                    filtered.append(ctx)
+            except Exception:
+                filtered.append(ctx)  # Keep if can't parse date
+        else:
+            filtered.append(ctx)  # Keep non-dated entries
+    
+    return filtered
 
 
 class DialogueMemory:
@@ -288,101 +341,316 @@ def update_daily_conversation_summary(
         return None
 
 
+def search_conversation_memory_by_keywords(
+    db: Database,
+    keywords: List[str],
+    from_time: Optional[str] = None,
+    to_time: Optional[str] = None,
+    ollama_base_url: Optional[str] = None,
+    ollama_embed_model: Optional[str] = None,
+    timeout_sec: float = 15.0,
+    voice_debug: bool = False,
+) -> List[str]:
+    """
+    Search conversation memory using multiple keywords with OR logic.
+    This is optimized for memory enrichment where we have extracted topic keywords.
+    
+    Args:
+        db: Database instance
+        keywords: List of keywords to search for (will be OR'd together)
+        from_time: Start timestamp (ISO format)
+        to_time: End timestamp (ISO format)
+        ollama_base_url: Base URL for embeddings
+        ollama_embed_model: Model for embeddings
+        timeout_sec: Timeout for embedding generation
+        voice_debug: Enable debug output
+        
+    Returns:
+        List of formatted context strings
+    """
+    contexts = []
+    
+    if not keywords:
+        return contexts
+    
+    # Clean keywords
+    clean_keywords = [k.strip() for k in keywords if k and k.strip()]
+    if not clean_keywords:
+        return contexts
+    
+    try:
+        if voice_debug:
+            try:
+                import sys
+                print(f"      🔍 Keyword-based search for: {clean_keywords}", file=sys.stderr)
+            except Exception:
+                pass
+        
+        # Build FTS OR query for better recall
+        fts_query = " OR ".join(clean_keywords[:5])  # Limit to 5 keywords
+        
+        # For embedding, combine keywords to get semantic meaning of the topic cluster
+        embed_query = " ".join(clean_keywords)
+        
+        if voice_debug:
+            try:
+                import sys
+                print(f"      📝 FTS query: '{fts_query}'", file=sys.stderr)
+                print(f"      📝 Embed query: '{embed_query}'", file=sys.stderr)
+            except Exception:
+                pass
+        
+        if ollama_base_url and ollama_embed_model:
+            try:
+                vec = get_embedding(embed_query, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
+                vec_json = json.dumps(vec) if vec is not None else None
+                
+                if vec_json:
+                    # Hybrid search with OR query for FTS and combined embedding
+                    search_results = db.search_hybrid(fts_query, vec_json, top_k=10)
+                else:
+                    # Fallback: FTS-only with OR query
+                    search_results = db.search_hybrid(fts_query, None, top_k=10)
+            except Exception as e:
+                if voice_debug:
+                    try:
+                        print(f"      ❌ Embedding failed, using FTS only: {e}", file=sys.stderr)
+                    except Exception:
+                        pass
+                # Fallback to FTS-only
+                search_results = db.search_hybrid(fts_query, None, top_k=10)
+        else:
+            # No embedding service available, use FTS-only
+            search_results = db.search_hybrid(fts_query, None, top_k=10)
+        
+        # Collect results
+        for result in search_results:
+            if isinstance(result, dict):
+                result_text = result.get('text', '')
+            else:
+                result_text = result[2] if len(result) > 2 else ''
+            if isinstance(result_text, str) and result_text:
+                contexts.append(result_text)
+        
+        if voice_debug:
+            try:
+                import sys
+                print(f"      ✅ found {len(contexts)} keyword search results", file=sys.stderr)
+                if contexts:
+                    # Show preview of first result
+                    preview = contexts[0][:150] + "..." if len(contexts[0]) > 150 else contexts[0]
+                    print(f"      📋 First result: {preview}", file=sys.stderr)
+            except Exception:
+                pass
+                
+    except Exception as e:
+        if voice_debug:
+            try:
+                import sys
+                print(f"[debug] keyword search failed: {e}", file=sys.stderr)
+            except Exception:
+                pass
+    
+    # Apply time filtering if needed
+    if from_time or to_time:
+        contexts = _filter_contexts_by_time(contexts, from_time, to_time, voice_debug)
+    
+    return contexts
+
+
+def search_conversation_memory(
+    db: Database,
+    search_query: Optional[str] = None,
+    from_time: Optional[str] = None,
+    to_time: Optional[str] = None,
+    ollama_base_url: Optional[str] = None,
+    ollama_embed_model: Optional[str] = None,
+    timeout_sec: float = 15.0,
+    voice_debug: bool = False,
+) -> List[str]:
+    """
+    Search conversation memory with a natural language query or phrase.
+    This is optimized for direct user queries and tool usage.
+    
+    Args:
+        db: Database instance
+        search_query: Natural language query or phrase to search for
+        from_time: Start timestamp (ISO format)
+        to_time: End timestamp (ISO format)
+        ollama_base_url: Base URL for embeddings (required if search_query provided)
+        ollama_embed_model: Model for embeddings (required if search_query provided)
+        timeout_sec: Timeout for embedding generation
+        voice_debug: Enable debug output
+        
+    Returns:
+        List of formatted context strings
+    """
+    contexts = []
+    
+    try:
+        if search_query and search_query.strip() and ollama_base_url and ollama_embed_model:
+            # Primary: Use vector search for semantic similarity
+            try:
+                vec = get_embedding(search_query, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
+                vec_json = json.dumps(vec) if vec is not None else None
+                
+                if vec_json:
+                    # Use database hybrid search (combines vector similarity with FTS)
+                    search_results = db.search_hybrid(search_query, vec_json, top_k=10)
+                else:
+                    # Fallback: Pure FTS if embedding fails
+                    search_results = db.search_hybrid(search_query, None, top_k=10)
+                    
+                # Add search results to context
+                for result in search_results:
+                    # Handle both tuple (sqlite-vss) and dict (python vector store) results
+                    if isinstance(result, dict):
+                        result_text = result.get('text', '')
+                    else:
+                        result_text = result[2] if len(result) > 2 else ''
+                    if isinstance(result_text, str) and result_text:
+                        contexts.append(result_text)
+                        
+            except Exception as e:
+                if voice_debug:
+                    try:
+                        import sys
+                        print(f"[debug] memory search failed: {e}", file=sys.stderr)
+                    except Exception:
+                        pass
+        
+        # Apply time filtering if provided
+        if voice_debug:
+            try:
+                print(f"      📋 Checking time filtering: from_time={from_time}, to_time={to_time}", file=sys.stderr)
+            except Exception:
+                pass
+                
+        if from_time or to_time:
+            filtered_contexts = []
+            from_dt = None
+            to_dt = None
+            
+            try:
+                if from_time:
+                    from_dt = datetime.fromisoformat(from_time.replace('Z', '+00:00'))
+                if to_time:
+                    to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
+            except Exception as e:
+                if voice_debug:
+                    try:
+                        print(f"      📋 Error parsing time: {e}", file=sys.stderr)
+                    except Exception:
+                        pass
+            
+            if voice_debug:
+                try:
+                    print(f"      📋 Time filtering: search_query='{search_query}', from_dt={from_dt}, to_dt={to_dt}", file=sys.stderr)
+                except Exception:
+                    pass
+            
+            # If we have time constraints but no search query, get all summaries in range
+            if (not search_query or not search_query.strip()) and (from_dt or to_dt):
+                recent_summaries = db.get_recent_conversation_summaries(days=30)
+                if voice_debug:
+                    try:
+                        print(f"      📋 Time filter: from={from_dt.date() if from_dt else None} to={to_dt.date() if to_dt else None}", file=sys.stderr)
+                        print(f"      📋 Found {len(recent_summaries)} summaries to check", file=sys.stderr)
+                    except Exception:
+                        pass
+                        
+                for summary_row in recent_summaries:
+                    date_str = summary_row['date_utc']
+                    summary_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
+                    
+                    in_range = True
+                    if from_dt and summary_date.date() < from_dt.date():
+                        in_range = False
+                        if voice_debug:
+                            try:
+                                print(f"      📋 Skipping {date_str}: before from_dt", file=sys.stderr)
+                            except Exception:
+                                pass
+                    if to_dt and summary_date.date() > to_dt.date():
+                        in_range = False
+                        if voice_debug:
+                            try:
+                                print(f"      📋 Skipping {date_str}: after to_dt", file=sys.stderr)
+                            except Exception:
+                                pass
+                    
+                    if in_range:
+                        summary_text = summary_row['summary']
+                        topics = summary_row['topics'] or ""
+                        context_str = f"[{date_str}] {summary_text}"
+                        if topics:
+                            context_str += f" (Topics: {topics})"
+                        contexts.append(context_str)
+                        if voice_debug:
+                            try:
+                                print(f"      📋 Including summary from {date_str} (length: {len(summary_text)})", file=sys.stderr)
+                            except Exception:
+                                pass
+                        
+            else:
+                # Filter existing search results by time
+                import re
+                for ctx in contexts:
+                    if ctx.startswith("---"):  # Skip headers
+                        filtered_contexts.append(ctx)
+                        continue
+                        
+                    # Extract date from formatted text
+                    date_match = re.match(r'\[(\d{4}-\d{2}-\d{2})\]', ctx)
+                    if date_match:
+                        date_str = date_match.group(1)
+                        try:
+                            summary_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
+                            
+                            in_range = True
+                            if from_dt and summary_date < from_dt:
+                                in_range = False
+                            if to_dt and summary_date > to_dt:
+                                in_range = False
+                            
+                            if in_range:
+                                filtered_contexts.append(ctx)
+                        except Exception:
+                            filtered_contexts.append(ctx)  # Keep if can't parse date
+                    else:
+                        filtered_contexts.append(ctx)  # Keep non-dated entries
+                
+                contexts = filtered_contexts
+        
+        return contexts[:15]  # Limit results
+        
+    except Exception:
+        return contexts[:15] if contexts else []
+
+
 def get_relevant_conversation_context(
     db: Database,
     query: str,
     ollama_base_url: str,
     ollama_embed_model: str,
     days_back: int = 7,
-    dialogue_memory: Optional[DialogueMemory] = None,
     timeout_sec: float = 15.0,
 ) -> List[str]:
     """
     Get relevant conversation summaries that might provide context for the current query.
-    Also includes recent dialogue memory for immediate context.
     
     Returns list of formatted context strings.
+    
+    This is a wrapper around search_conversation_memory for backward compatibility.
     """
-    try:
-        # Start with recent dialogue memory for immediate context
-        contexts = []
-        if dialogue_memory and dialogue_memory.has_recent_interactions():
-            recent_dialogue = dialogue_memory.get_recent_context()
-            if recent_dialogue:
-                # Add a header to distinguish recent vs historical context
-                contexts.append("--- Recent Conversation ---")
-                contexts.extend(recent_dialogue)
-                contexts.append("--- Historical Context ---")
-        
-        # Continue with existing logic for historical context
-        # Use fuzzy search for better matching
-        try:
-            from .fuzzy_search import fuzzy_search_summaries
-            fuzzy_results = fuzzy_search_summaries(
-                db=db,
-                query=query,
-                top_k=8,
-                fuzzy_threshold=50  # Moderate threshold for context retrieval
-            )
-            
-            # Convert to context format and add to existing contexts
-            for summary_id, formatted_text, fuzzy_score in fuzzy_results:
-                contexts.append(formatted_text)
-            
-            if len(contexts) > 1:  # We have both recent and historical context
-                return contexts[:15]  # Return more to include both recent and historical
-                
-        except ImportError:
-            # Fallback to hybrid search if fuzzy search not available
-            pass
-        
-        # Fallback: Use the database's hybrid search
-        try:
-            # Get vector embedding for semantic search if possible
-            vec = get_embedding(query, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
-            vec_json = json.dumps(vec) if vec is not None else None
-        except Exception:
-            vec_json = None
-        
-        # Use the database's hybrid search which now includes summaries
-        search_results = db.search_hybrid(query, vec_json, top_k=10)
-        
-        # Filter for summary results only and add to existing contexts
-        for result in search_results:
-            result_text = result[2]  # text column
-            result_type = result[3] if len(result) > 3 else 'chunk'  # result_type if available
-            
-            # Check if this is a summary result (contains date format)
-            if result_text.startswith('[') and ']' in result_text and '(Topics:' in result_text:
-                contexts.append(result_text)
-            elif result_type == 'summary':
-                contexts.append(result_text)
-        
-        if contexts:
-            return contexts[:15]  # Return combined recent and historical context
-        
-        # Final fallback: get recent summaries with simple matching
-        recent_summaries = db.get_recent_conversation_summaries(days_back)
-        if recent_summaries:
-            query_words = query.lower().split()
-            
-            for summary_row in recent_summaries:
-                date_str = summary_row['date_utc']
-                summary_text = summary_row['summary']
-                topics = summary_row['topics'] or ""
-                
-                # Check if any query words are in the summary or topics
-                full_text = f"{summary_text} {topics}".lower()
-                if any(word in full_text for word in query_words):
-                    context_str = f"[{date_str}] {summary_text}"
-                    if topics:
-                        context_str += f" (Topics: {topics})"
-                    contexts.append(context_str)
-        
-        return contexts[:15]  # Return combined recent dialogue and historical context
-        
-    except Exception:
-        return []
+    return search_conversation_memory(
+        db=db,
+        search_query=query,
+        ollama_base_url=ollama_base_url,
+        ollama_embed_model=ollama_embed_model,
+        timeout_sec=timeout_sec,
+        voice_debug=False
+    )
 
 
 def update_diary_from_dialogue_memory(

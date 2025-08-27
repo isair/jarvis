@@ -71,14 +71,14 @@ def _install_signal_handlers() -> None:
 
 def _extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False, timeout_sec: float = 8.0) -> dict:
     """
-    Extract search keywords and time parameters for RECALL_CONVERSATION.
+    Extract search keywords and time parameters for the recallConversation tool.
     Returns dict with 'keywords' and optional 'from'/'to' timestamps.
     """
     try:
         system_prompt = """Extract search parameters from the user's query for conversation memory search.
 
 Extract:
-1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words)
+1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words). Include general, high-level category tags that would be suitable for blog-style tagging when applicable (e.g., "cooking", "fitness", "travel", "finance").
 2. TIME RANGE: If mentioned, convert to exact timestamps
 
 Current date/time: {current_time}
@@ -87,14 +87,15 @@ Respond ONLY with JSON in this format:
 {{"keywords": ["keyword1", "keyword2"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 
 Rules:
-- keywords: content topics only (no time words like "yesterday", "today")
+- keywords: content topics only (no time words like "yesterday", "today"). Include both specific terms and general category tags when applicable (e.g., for recipes or meal prep you could include "cooking" and "nutrition").
+- prefer concise noun phrases; lowercase; no punctuation; deduplicate similar terms
 - from/to: only if time mentioned, convert to exact UTC timestamps
 - omit from/to if no time mentioned
 
 Examples:
-"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "discuss"]}}
-"what did I eat yesterday?" → {{"keywords": ["eat", "food"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
-"remember that password I mentioned today?" → {{"keywords": ["password", "remember"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
+"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}}
+"what did I eat yesterday?" → {{"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+"remember that password I mentioned today?" → {{"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
 """
         
         from datetime import datetime, timezone
@@ -202,7 +203,7 @@ def _execute_multi_step_plan(
         
         context_section = ""
         if conversation_context:
-            context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
+            context_section = f"\nInitial memory enrichment (keyword-based search):\n{conversation_context}\n"
         
         # Build planning prompt using concatenation to avoid f-string brace interpolation issues
         planning_prompt = (
@@ -211,8 +212,8 @@ def _execute_multi_step_plan(
             "Create a plan to answer this query effectively.\n\n"
             "INSTRUCTIONS:\n"
             "1. Analyze what the user is asking for\n"
-            "2. Review any conversation history to understand context\n"
-            "3. Create a strategic plan that provides targeted results\n\n"
+            "2. Keep in mind the memory enrichment above (if any) may be incomplete\n"
+            "3. Create a strategic plan that provides complete results\n\n"
             "Available tools: " + ", ".join(allowed_tools) + "\n\n"
             "Respond with ONLY a JSON object in this exact format:\n"
             "{\n"
@@ -314,19 +315,19 @@ def _execute_multi_step_plan(
             # This is the final synthesis step
             context_for_final = ""
             if conversation_context:
-                context_for_final += f"Relevant conversation history:\n{conversation_context}\n\n"
+                context_for_final += f"Initial memory enrichment (keyword-based search):\n{conversation_context}\n\n"
             if completed_results:
-                context_for_final += "Results from previous steps:\n"
+                context_for_final += "Tool execution results:\n"
                 for i, result in enumerate(completed_results, 1):
-                    context_for_final += f"\nStep {i} result:\n{result}\n"
+                    context_for_final += f"\nStep {i} successfully executed, results:\n{result}\n"
             
             final_prompt = f"""Original user query: {redacted_text}
 
 {context_for_final}
 
-Give a brief, conversational response to the user's question. Keep it:
+Give a brief, conversational response to the user's question, keeping your response:
 - Short and natural (like talking to a friend)
-- Focus on 2-3 most relevant items
+- Focus on 2-3 most relevant items from the successful results, summarize the rest
 - No bullet points or formal structure
 - Personal and direct tone
 
@@ -459,7 +460,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages()
     
-    # Simple approach: Always try to enrich with conversation memory using keywords and time
+    # Enrich conversation memory using keywords and time based search
     conversation_context = ""
     try:
         # Extract search parameters (keywords + time) for memory search
@@ -468,47 +469,46 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         )
         
         keywords = search_params.get('keywords', [])
-        if keywords and 'recallConversation' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
-            # Build tool arguments with both keywords and time parameters
-            tool_args = {"search_query": " ".join(keywords)}
-            
-            # Add time parameters if present
-            if 'from' in search_params:
-                tool_args['from'] = search_params['from']
-            if 'to' in search_params:
-                tool_args['to'] = search_params['to']
+        if keywords:
+            # Direct memory search without going through tool system
+            from_time = search_params.get('from')
+            to_time = search_params.get('to')
             
             if cfg.voice_debug:
                 try:
-                    time_info = f", time: {search_params.get('from', 'none')} to {search_params.get('to', 'none')}" if 'from' in search_params or 'to' in search_params else ""
+                    time_info = f", time: {from_time or 'none'} to {to_time or 'none'}" if from_time or to_time else ""
                     print(f"🧠 [memory] searching with keywords={keywords}{time_info}", file=sys.stderr)
                 except Exception:
                     pass
             
-            # Call recallConversation to enrich context
-            memory_result = run_tool_with_retries(
+            # Import the keyword search function
+            from .memory import search_conversation_memory_by_keywords
+            
+            # Directly search memory with keywords
+            context_results = search_conversation_memory_by_keywords(
                 db=db,
-                cfg=cfg,
-                tool_name="recallConversation",
-                tool_args=tool_args,
-                system_prompt=system_prompt,
-                original_prompt="",  # Not needed for memory search
-                redacted_text=redacted,
-                max_retries=1
+                keywords=keywords,
+                from_time=from_time,
+                to_time=to_time,
+                ollama_base_url=cfg.ollama_base_url,
+                ollama_embed_model=cfg.ollama_embed_model,
+                timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
+                voice_debug=cfg.voice_debug
             )
             
-            if memory_result.success and memory_result.reply_text:
-                conversation_context = memory_result.reply_text
+            if context_results:
+                # Format the results for context
+                conversation_context = "\n".join(context_results[:5])  # Limit to top 5 results
                 if cfg.voice_debug:
                     try:
-                        print(f"  ✅ found context: {len(conversation_context)} chars", file=sys.stderr)
+                        print(f"  ✅ found {len(context_results)} results, using top {min(5, len(context_results))}", file=sys.stderr)
                     except Exception:
                         pass
-    except Exception:
+    except Exception as e:
         # If keyword extraction or memory search fails, continue without it
         if cfg.voice_debug:
             try:
-                print("  ❌ [memory] enrichment failed, continuing without", file=sys.stderr)
+                print(f"  ❌ [memory] enrichment failed: {e}", file=sys.stderr)
             except Exception:
                 pass
     
