@@ -52,6 +52,9 @@ class TextToSpeech:
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None) -> None:
         if not self.enabled or not text.strip():
             return
+        # Lazy start the worker thread on first speak
+        if self._thread is None:
+            self.start()
         self._completion_callback = completion_callback
         try:
             self._q.put_nowait(text)
@@ -306,9 +309,9 @@ class ChatterboxTTS:
         self._model_error = None
         self._system_tts = None  # For setup announcements
         
-        # Perform eager initialization
-        if enabled:
-            self._initialize_with_logging()
+        # Lazy initialization flags
+        self._initialized = False
+        self._init_lock = threading.Lock()
         
     def _initialize_with_logging(self) -> None:
         """Initialize Chatterbox with proper logging and system announcements."""
@@ -363,18 +366,31 @@ class ChatterboxTTS:
                 self._system_tts.stop()
                 self._system_tts = None
                 
+    def _ensure_initialized(self) -> None:
+        """Initialize heavy dependencies only once, when actually needed."""
+        if self._initialized or not self.enabled:
+            return
+        with self._init_lock:
+            if self._initialized:
+                return
+            self._initialize_with_logging()
+            self._initialized = True
+
     def _ensure_model(self) -> bool:
         """Check if Chatterbox model is loaded. Returns True if successful."""
+        # Ensure lazy initialization happens before checking model
+        self._ensure_initialized()
         if self._model is not None:
             return True
         if self._model_error is not None:
             return False
-        # Model should already be loaded during initialization
         return False
     
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
+        # Initialize on first actual start
+        self._ensure_initialized()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -398,6 +414,9 @@ class ChatterboxTTS:
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None) -> None:
         if not self.enabled or not text.strip():
             return
+        # Lazy start the worker thread and lazy init on first speak
+        if self._thread is None:
+            self.start()
         self._completion_callback = completion_callback
         try:
             self._q.put_nowait(text)

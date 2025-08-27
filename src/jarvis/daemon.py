@@ -1308,7 +1308,13 @@ def _check_and_update_diary(db: Database, cfg, verbose: bool = False, force: boo
         return
         
     try:
-        if force or _global_dialogue_memory.should_update_diary():
+        # Determine if there is anything to update before printing/logging
+        should_update = force or _global_dialogue_memory.should_update_diary()
+        if should_update:
+            # Skip when there are no pending interactions (e.g., user pressed Ctrl+C without any dialogue)
+            pending_chunks = _global_dialogue_memory.get_pending_chunks()
+            if not pending_chunks:
+                return
             if verbose:
                 try:
                     print("📝 Updating your diary. Please wait… (don't press Ctrl+C again)", file=sys.stderr, flush=True)
