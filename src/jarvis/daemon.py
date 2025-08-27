@@ -869,6 +869,12 @@ class VoiceListener(threading.Thread):
                 print(f"[debug] hot window activated for {self.cfg.hot_window_seconds}s", file=sys.stderr)
             except Exception:
                 pass
+        else:
+            # Pretty output for non-debug mode
+            try:
+                print(f"\n👂 Listening for follow-up ({int(self.cfg.hot_window_seconds)}s)...\n", file=sys.stderr)
+            except Exception:
+                pass
     
     def _should_expire_hot_window(self) -> bool:
         """Check if hot window should expire due to timeout."""
@@ -884,6 +890,12 @@ class VoiceListener(threading.Thread):
             if self.cfg.voice_debug:
                 try:
                     print("[debug] hot window expired", file=sys.stderr)
+                except Exception:
+                    pass
+            else:
+                # Pretty output for non-debug mode
+                try:
+                    print("💤 Returning to wake word mode\n", file=sys.stderr)
                 except Exception:
                     pass
     
