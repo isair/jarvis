@@ -348,8 +348,9 @@ def search_conversation_memory_by_keywords(
     to_time: Optional[str] = None,
     ollama_base_url: Optional[str] = None,
     ollama_embed_model: Optional[str] = None,
-    timeout_sec: float = 15.0,
+    timeout_sec: float = 60.0,
     voice_debug: bool = False,
+    max_results: int = 10,
 ) -> List[str]:
     """
     Search conversation memory using multiple keywords with OR logic.
@@ -364,9 +365,10 @@ def search_conversation_memory_by_keywords(
         ollama_embed_model: Model for embeddings
         timeout_sec: Timeout for embedding generation
         voice_debug: Enable debug output
+        max_results: Maximum number of results to return (default: 10)
         
     Returns:
-        List of formatted context strings
+        List of formatted context strings (limited to max_results)
     """
     contexts = []
     
@@ -407,10 +409,10 @@ def search_conversation_memory_by_keywords(
                 
                 if vec_json:
                     # Hybrid search with OR query for FTS and combined embedding
-                    search_results = db.search_hybrid(fts_query, vec_json, top_k=10)
+                    search_results = db.search_hybrid(fts_query, vec_json, top_k=max_results)
                 else:
                     # Fallback: FTS-only with OR query
-                    search_results = db.search_hybrid(fts_query, None, top_k=10)
+                    search_results = db.search_hybrid(fts_query, None, top_k=max_results)
             except Exception as e:
                 if voice_debug:
                     try:
@@ -418,10 +420,10 @@ def search_conversation_memory_by_keywords(
                     except Exception:
                         pass
                 # Fallback to FTS-only
-                search_results = db.search_hybrid(fts_query, None, top_k=10)
+                search_results = db.search_hybrid(fts_query, None, top_k=max_results)
         else:
             # No embedding service available, use FTS-only
-            search_results = db.search_hybrid(fts_query, None, top_k=10)
+            search_results = db.search_hybrid(fts_query, None, top_k=max_results)
         
         # Collect results
         for result in search_results:
@@ -455,7 +457,7 @@ def search_conversation_memory_by_keywords(
     if from_time or to_time:
         contexts = _filter_contexts_by_time(contexts, from_time, to_time, voice_debug)
     
-    return contexts
+    return contexts[:max_results]
 
 
 def search_conversation_memory(
@@ -465,8 +467,9 @@ def search_conversation_memory(
     to_time: Optional[str] = None,
     ollama_base_url: Optional[str] = None,
     ollama_embed_model: Optional[str] = None,
-    timeout_sec: float = 15.0,
+    timeout_sec: float = 60.0,
     voice_debug: bool = False,
+    max_results: int = 15,
 ) -> List[str]:
     """
     Search conversation memory with a natural language query or phrase.
@@ -481,9 +484,10 @@ def search_conversation_memory(
         ollama_embed_model: Model for embeddings (required if search_query provided)
         timeout_sec: Timeout for embedding generation
         voice_debug: Enable debug output
+        max_results: Maximum number of results to return (default: 15)
         
     Returns:
-        List of formatted context strings
+        List of formatted context strings (limited to max_results)
     """
     contexts = []
     
@@ -496,10 +500,10 @@ def search_conversation_memory(
                 
                 if vec_json:
                     # Use database hybrid search (combines vector similarity with FTS)
-                    search_results = db.search_hybrid(search_query, vec_json, top_k=10)
+                    search_results = db.search_hybrid(search_query, vec_json, top_k=max_results)
                 else:
                     # Fallback: Pure FTS if embedding fails
-                    search_results = db.search_hybrid(search_query, None, top_k=10)
+                    search_results = db.search_hybrid(search_query, None, top_k=max_results)
                     
                 # Add search results to context
                 for result in search_results:
@@ -622,10 +626,10 @@ def search_conversation_memory(
                 
                 contexts = filtered_contexts
         
-        return contexts[:15]  # Limit results
+        return contexts[:max_results]  # Limit results
         
     except Exception:
-        return contexts[:15] if contexts else []
+        return contexts[:max_results] if contexts else []
 
 
 def get_relevant_conversation_context(
@@ -633,8 +637,8 @@ def get_relevant_conversation_context(
     query: str,
     ollama_base_url: str,
     ollama_embed_model: str,
-    days_back: int = 7,
-    timeout_sec: float = 15.0,
+    timeout_sec: float = 60.0,
+    max_results: int = 15,
 ) -> List[str]:
     """
     Get relevant conversation summaries that might provide context for the current query.
@@ -649,7 +653,8 @@ def get_relevant_conversation_context(
         ollama_base_url=ollama_base_url,
         ollama_embed_model=ollama_embed_model,
         timeout_sec=timeout_sec,
-        voice_debug=False
+        voice_debug=False,
+        max_results=max_results
     )
 
 

@@ -505,15 +505,16 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 ollama_base_url=cfg.ollama_base_url,
                 ollama_embed_model=cfg.ollama_embed_model,
                 timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
-                voice_debug=cfg.voice_debug
+                voice_debug=cfg.voice_debug,
+                max_results=cfg.memory_enrichment_max_results
             )
             
             if context_results:
                 # Format the results for context
-                conversation_context = "\n".join(context_results[:5])  # Limit to top 5 results
+                conversation_context = "\n".join(context_results)
                 if cfg.voice_debug:
                     try:
-                        print(f"  ✅ found {len(context_results)} results, using top {min(5, len(context_results))}", file=sys.stderr)
+                        print(f"  ✅ found {len(context_results)} results for memory enrichment", file=sys.stderr)
                     except Exception:
                         pass
     except Exception as e:

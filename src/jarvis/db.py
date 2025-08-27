@@ -142,17 +142,19 @@ class Database:
                 import json as _json
                 query_vec = _json.loads(query_vec_json)
                 
-                # Get vector search results
-                vector_results = self._python_vector_store.search(query_vec, top_k=100)
+                # Get vector search results (use max of top_k*3 and 50 for good hybrid scoring)
+                vector_search_limit = max(top_k * 3, 50)
+                vector_results = self._python_vector_store.search(query_vec, top_k=vector_search_limit)
                 
-                # Get FTS results
-                fts_sql = """
+                # Get FTS results (use max of top_k*3 and 50 for good hybrid scoring)
+                fts_search_limit = max(top_k * 3, 50)
+                fts_sql = f"""
                 SELECT s.id, bm25(summaries_fts) AS bm
                 FROM summaries_fts
                 JOIN conversation_summaries s ON s.id = summaries_fts.rowid
                 WHERE summaries_fts MATCH ?
                 ORDER BY bm
-                LIMIT 100
+                LIMIT {fts_search_limit}
                 """
                 fts_rows = cur.execute(fts_sql, (safe_q,)).fetchall()
                 fts_scores = {row['id']: row['bm'] for row in fts_rows}
@@ -204,19 +206,21 @@ class Database:
             elif self.is_vss_enabled and query_vec_json is not None and safe_q:
                 # Hybrid search: 60% vector similarity (semantic) + 40% FTS (exact terms)
                 # This balances finding semantically related content with keyword matches
+                # Use dynamic limits for efficiency on large datasets
+                search_limit = max(top_k * 3, 50)
                 summary_sql = f"""
                 WITH fts_sum AS (
                   SELECT s.id, bm25(summaries_fts) AS bm
                   FROM summaries_fts
                   JOIN conversation_summaries s ON s.id = summaries_fts.rowid
                   WHERE summaries_fts MATCH ?
-                  ORDER BY bm LIMIT 100
+                  ORDER BY bm LIMIT {search_limit}
                 ),
                 v_sum AS (
                   SELECT sv.summary_id AS id, distance
                   FROM vss_search(embeddings, 'vec', ?)
                   JOIN summary_vec sv ON sv.emb_id = rowid
-                  LIMIT 100
+                  LIMIT {search_limit}
                 )
                 SELECT s.id, (
                     (1.0/(1.0+COALESCE(v_sum.distance, 1))) * 0.6 +

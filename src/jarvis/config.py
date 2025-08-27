@@ -88,6 +88,8 @@ class Settings:
     
     # Memory & Dialogue
     dialogue_memory_timeout: float
+    memory_enrichment_max_results: int
+    memory_search_max_results: int
     
     # Location Services
     location_enabled: bool
@@ -231,6 +233,8 @@ def get_default_config() -> Dict[str, Any]:
         
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
+        "memory_enrichment_max_results": 10,
+        "memory_search_max_results": 15,
         
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -336,6 +340,8 @@ def load_settings() -> Settings:
     echo_suppression_window = float(merged.get("echo_suppression_window", 1.0))
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
+    memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
+    memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -425,6 +431,8 @@ def load_settings() -> Settings:
         
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,
+        memory_enrichment_max_results=memory_enrichment_max_results,
+        memory_search_max_results=memory_search_max_results,
         
         # Location Services
         location_enabled=location_enabled,

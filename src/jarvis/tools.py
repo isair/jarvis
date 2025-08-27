@@ -423,7 +423,8 @@ def run_tool_with_retries(
                 ollama_base_url=cfg.ollama_base_url,
                 ollama_embed_model=cfg.ollama_embed_model,
                 timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
-                voice_debug=getattr(cfg, "voice_debug", False)
+                voice_debug=getattr(cfg, "voice_debug", False),
+                max_results=cfg.memory_search_max_results
             )
             
             # Debug output for voice debug mode
