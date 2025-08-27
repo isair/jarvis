@@ -52,22 +52,27 @@ class MCPClient:
 
     async def list_tools_async(self, server_name: str) -> List[Dict[str, Any]]:
         async with self._session(server_name) as session:
-            tools = await session.list_tools()
-            return [
-                {
-                    "name": getattr(t, "name", None) or t.get("name"),
-                    "description": getattr(t, "description", None) or t.get("description"),
-                    "inputSchema": getattr(t, "inputSchema", None) or t.get("inputSchema"),
+            tools_result = await session.list_tools()
+            # Extract tools from the ListToolsResult object
+            tools_list = getattr(tools_result, "tools", tools_result) if hasattr(tools_result, "tools") else tools_result
+            
+            result = []
+            for t in tools_list:
+                # Handle Tool objects with attributes
+                tool_info = {
+                    "name": getattr(t, "name", None),
+                    "description": getattr(t, "description", None),
+                    "inputSchema": getattr(t, "inputSchema", None),
                 }
-                for t in tools
-            ]
+                result.append(tool_info)
+            return result
 
     async def invoke_tool_async(self, server_name: str, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         async with self._session(server_name) as session:
             res = await session.call_tool(tool_name, arguments or {})
-            raw_content = getattr(res, "content", None) or res.get("content")
-            is_error = getattr(res, "isError", False) if hasattr(res, "isError") else res.get("isError", False)
-            meta = getattr(res, "meta", None) or res.get("meta")
+            raw_content = getattr(res, "content", None)
+            is_error = getattr(res, "isError", False)
+            meta = getattr(res, "meta", None)
 
             def _flatten(content) -> str:
                 if content is None:
