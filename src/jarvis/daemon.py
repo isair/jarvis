@@ -213,7 +213,8 @@ def _execute_multi_step_plan(
             "INSTRUCTIONS:\n"
             "1. Analyze what the user is asking for\n"
             "2. Keep in mind the memory enrichment above (if any) may be incomplete\n"
-            "3. Create a strategic plan that provides complete results\n\n"
+            "3. Pay attention to when memory enrichment entries are from, they start with [date]"
+            "4. Create a strategic plan that provides complete results\n\n"
             "Available tools: " + ", ".join(allowed_tools) + "\n\n"
             "Respond with ONLY a JSON object in this exact format:\n"
             "{\n"
@@ -338,6 +339,7 @@ def _execute_multi_step_plan(
 Give a brief, conversational response to the user's question, keeping your response:
 - Short and natural (like talking to a friend)
 - Focus on 2-3 most relevant items from the successful results, summarize the rest
+- Pay attention to when memory enrichment entries are from, they start with [date]
 - No bullet points or formal structure
 - Personal and direct tone
 
