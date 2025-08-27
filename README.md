@@ -134,9 +134,7 @@ I can see the error on your screen - looks like a "Cannot return null for non-nu
 I remember you mentioned last week that you were migrating user data - this could be from incomplete migration where some users don't have emails set yet.
 
 **Immediate fix**: Add a null check in your resolver:
-```javascript
-email: user.email || "pending@example.com"
-```
+`email: user.email || "pending@example.com"`
 
 Want me to help you run a database query to check for null emails, or would you prefer to update the schema first?
 ```
