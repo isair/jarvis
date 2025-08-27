@@ -501,7 +501,7 @@ Jarvis looks for a JSON config at:
 - `JARVIS_CONFIG_PATH` if set, otherwise
 - `~/.config/jarvis/config.json` (or `$XDG_CONFIG_HOME/jarvis/config.json`)
 
-For an example `config.json`, see [here](./examples/config.stub.json).
+For an example `config.json`, see [here](examples/config.json).
 
 #### TTS Configuration
 - `tts_enabled`: Enable/disable text-to-speech (default: `true`)
@@ -518,7 +518,6 @@ To enable Chatterbox TTS:
 ```json
 {
   "tts_engine": "chatterbox",
-  "tts_chatterbox_exaggeration": 0.6
 }
 ```
 
