@@ -614,6 +614,10 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 # Fallback to original print if any issue occurs
                 print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
             if tts is not None and tts.enabled:
+                # Track TTS start for echo detection
+                if _global_voice_listener is not None:
+                    _global_voice_listener._track_tts_start()
+                
                 # Define completion callback for hot window activation
                 def _on_tts_complete():
                     global _global_voice_listener
@@ -688,6 +692,13 @@ class VoiceListener(threading.Thread):
         self._last_tts_finish_time: float = 0.0
         # Capture hot window state when voice input starts (before transcription)
         self._was_hot_window_active_at_voice_start: bool = False
+        
+        # Enhanced echo detection state
+        self._tts_start_time: float = 0.0
+        self._tts_energy_baseline: float = 0.0
+        self._echo_suppression_window: float = float(getattr(self.cfg, "echo_suppression_window", 1.0))  # seconds after TTS ends
+        self._energy_spike_threshold: float = float(getattr(self.cfg, "echo_energy_threshold", 2.0))  # multiplier for baseline energy
+        self._recent_audio_energy: deque = deque(maxlen=50)  # Track recent energy levels
         
         # Global tune management - single tune player for the whole system
         self._tune_player: Optional[TunePlayer] = None
@@ -774,9 +785,9 @@ class VoiceListener(threading.Thread):
         if not heard_text or not tts_text:
             return False
         
-        # Simple similarity check
+        # Simple similarity check - lowered threshold for better echo detection
         similarity = difflib.SequenceMatcher(a=tts_text, b=heard_text).ratio()
-        if similarity >= 0.7:  # High similarity suggests echo
+        if similarity >= 0.6:  # Lower threshold to catch more echoes
             return True
         
         # Check if heard text is a substring of TTS text (partial echo)
@@ -789,9 +800,9 @@ class VoiceListener(threading.Thread):
         heard_words = heard_text.split()
         
         # Look for consecutive sequences of TTS words in the heard text
-        if len(tts_words) >= 3:  # Only check for substantial sequences
-            for i in range(len(tts_words) - 2):  # Check 3-word sequences
-                sequence = " ".join(tts_words[i:i+3])
+        if len(tts_words) >= 2:  # Reduced from 3 to catch shorter sequences
+            for i in range(len(tts_words) - 1):  # Check 2-word sequences
+                sequence = " ".join(tts_words[i:i+2])
                 if sequence in heard_text:
                     if getattr(self.cfg, 'voice_debug', False):
                         try:
@@ -868,13 +879,64 @@ class VoiceListener(threading.Thread):
         # This method is no longer used - hot window timer should not be reset
         # The window should expire based on the original timer from TTS completion
         pass
+    
+    def _track_tts_start(self) -> None:
+        """Called when TTS starts speaking to track timing and baseline energy."""
+        self._tts_start_time = time.time()
+        # Calculate baseline energy from recent audio samples
+        if self._recent_audio_energy:
+            self._tts_energy_baseline = sum(self._recent_audio_energy) / len(self._recent_audio_energy)
+        else:
+            self._tts_energy_baseline = float(getattr(self.cfg, "voice_min_energy", 0.0045))
+        if self.cfg.voice_debug:
+            try:
+                print(f"[debug] TTS started, baseline energy: {self._tts_energy_baseline:.4f}", file=sys.stderr)
+            except Exception:
+                pass
+    
+    def _is_in_echo_window(self) -> bool:
+        """Check if we're within the echo suppression window after TTS."""
+        if self._last_tts_finish_time == 0:
+            return False
+        time_since_tts = time.time() - self._last_tts_finish_time
+        return time_since_tts < self._echo_suppression_window
+    
+    def _calculate_audio_energy(self, audio_frames: list) -> float:
+        """Calculate RMS energy from audio frames."""
+        if not audio_frames or np is None:
+            return 0.0
+        try:
+            # Concatenate all frames
+            audio_data = np.concatenate(audio_frames)
+            # Calculate RMS energy
+            rms = float(np.sqrt(np.mean(np.square(audio_data))))
+            return rms
+        except Exception:
+            return 0.0
+    
+    def _is_likely_echo_by_energy(self, current_energy: float) -> bool:
+        """Check if audio energy pattern suggests this is echo."""
+        if not self._is_in_echo_window():
+            return False
+        
+        # During echo window, check if energy is similar to baseline
+        # Real user speech typically has much higher energy than echo
+        if current_energy < self._tts_energy_baseline * self._energy_spike_threshold:
+            # Energy is not significantly higher than baseline - likely echo
+            return True
+        
+        return False
 
     def _is_speech_frame(self, frame_f32: "np.ndarray") -> bool:  # type: ignore[name-defined]
         # Fall back to RMS energy gate if no VAD or numpy unavailable
         if np is None:
             return True
+        
+        # Track energy for echo detection
+        rms = float(np.sqrt(np.mean(np.square(frame_f32))))
+        self._recent_audio_energy.append(rms)
+        
         if self._vad is None:
-            rms = float(np.sqrt(np.mean(np.square(frame_f32))))
             return rms >= float(getattr(self.cfg, "voice_min_energy", 0.0045))
         # Convert float32 [-1,1] to 16-bit PCM bytes as required by webrtcvad
         try:
@@ -1004,22 +1066,34 @@ class VoiceListener(threading.Thread):
             if self._should_expire_hot_window():
                 self._expire_hot_window()
             return
-        # Priority check for stop commands during TTS - process immediately
+        # Priority check for stop commands during TTS - but verify it's not echo
         if self.tts is not None and self.tts.enabled and self.tts.is_speaking():
             if self._is_stop_command(text_lower):
-                if self.cfg.voice_debug:
+                # Check energy to ensure this is real user input, not echo
+                current_energy = self._calculate_audio_energy(self._utterance_frames[-10:])
+                
+                # During TTS, require higher energy threshold for stop commands
+                if current_energy > self._tts_energy_baseline * self._energy_spike_threshold:
+                    if self.cfg.voice_debug:
+                        try:
+                            print(f"[voice] stop command detected during TTS (high energy: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                        except Exception:
+                            pass
+                    self.tts.interrupt()
+                    # Clear any pending audio to make stop more responsive
                     try:
-                        print(f"[voice] stop command detected during TTS: {text_lower}", file=sys.stderr)
+                        while not self._audio_q.empty():
+                            self._audio_q.get_nowait()
                     except Exception:
                         pass
-                self.tts.interrupt()
-                # Clear any pending audio to make stop more responsive
-                try:
-                    while not self._audio_q.empty():
-                        self._audio_q.get_nowait()
-                except Exception:
-                    pass
-                return
+                    return
+                else:
+                    if self.cfg.voice_debug:
+                        try:
+                            print(f"[debug] stop command ignored (low energy echo: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                        except Exception:
+                            pass
+                    return
         
         # Guard against echo of our own TTS (but allow stop commands through)
         if self.tts is not None and self.tts.enabled:
@@ -1044,6 +1118,34 @@ class VoiceListener(threading.Thread):
         # Hot window mode - accept input without wake word
         # Use the captured state from when voice input started (before transcription)
         if self._was_hot_window_active_at_voice_start:
+            # Enhanced echo detection combining timing, energy, and text
+            if self.tts is not None and self.tts.enabled:
+                # First check: are we in the echo suppression window?
+                if self._is_in_echo_window():
+                    # Calculate current utterance energy
+                    current_energy = self._calculate_audio_energy(self._utterance_frames[-10:])  # Last 10 frames
+                    
+                    # Check if this is likely echo based on energy
+                    if self._is_likely_echo_by_energy(current_energy):
+                        # Final check: text similarity (but only if energy suggests echo)
+                        last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                        if last_tts and self._is_likely_tts_echo(text_lower, last_tts):
+                            if self.cfg.voice_debug:
+                                try:
+                                    print(f"[debug] hot window input rejected (TTS echo by timing+energy+text): {text_lower}", file=sys.stderr)
+                                except Exception:
+                                    pass
+                            # Reset the captured state
+                            self._was_hot_window_active_at_voice_start = False
+                            return
+                    else:
+                        # High energy during echo window - likely real user input (e.g., stop command)
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] high energy input accepted during echo window (energy: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                            except Exception:
+                                pass
+            
             self._pending_query = (self._pending_query + " " + text_lower).strip()
             self._is_collecting = True
             self._last_voice_time = time.time()

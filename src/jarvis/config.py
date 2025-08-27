@@ -82,6 +82,10 @@ class Settings:
     hot_window_enabled: bool
     hot_window_seconds: float
     
+    # Echo Detection
+    echo_suppression_window: float
+    echo_energy_threshold: float
+    
     # Memory & Dialogue
     dialogue_memory_timeout: float
     
@@ -222,6 +226,8 @@ def get_default_config() -> Dict[str, Any]:
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 6.0,
+        "echo_suppression_window": 1.0,
+        "echo_energy_threshold": 2.0,
         
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
@@ -327,6 +333,8 @@ def load_settings() -> Settings:
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 6.0))
+    echo_suppression_window = float(merged.get("echo_suppression_window", 1.0))
+    echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
@@ -412,6 +420,8 @@ def load_settings() -> Settings:
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
+        echo_suppression_window=echo_suppression_window,
+        echo_energy_threshold=echo_energy_threshold,
         
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,

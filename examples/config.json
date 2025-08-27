@@ -86,6 +86,10 @@
   "hot_window_enabled": true,
   "hot_window_seconds": 6.0,
   
+  "__comment": "Echo Detection",
+  "echo_suppression_window": 1.0,
+  "echo_energy_threshold": 2.0,
+  
   "__comment": "Memory & Dialogue",
   "dialogue_memory_timeout": 300.0,
   
