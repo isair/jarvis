@@ -213,6 +213,7 @@ Done! Say "Jarvis" and start talking.
 ### 🛠️ **Built-in Tools**
 - Screenshot OCR and analysis
 - Web search (privacy-friendly)
+- Local file access (read, write, list, delete)
 - Nutrition tracking
 - Location awareness (optional)
 - MCP tool integration
@@ -271,9 +272,9 @@ Connect Jarvis to any tool using MCP (Model Context Protocol) servers:
 ```json
 {
   "mcps": {
-    "filesystem": {
+    "vscode": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/yourname/documents"]
+      "args": ["-y", "@niwang/mcp-server-vscode"]
     },
     "github": {
       "command": "npx", 
