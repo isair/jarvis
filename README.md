@@ -28,6 +28,7 @@ An offline, completely private AI voice assistant with unlimited memory that und
 - **Wake word detection**: Say "jarvis" and speak naturally. No buttons, no interfaces.
 - **Hot window mode**: After responding, stays active for follow-ups without repeating the wake word.
 - **Interruptible responses**: You can shush it or tell it to shut up and it will comply, no hard feelings.
+- **Advanced TTS options**: Choose between system TTS or experimental Chatterbox AI for high-quality, expressive speech with voice cloning capabilities.
 
 ### 🧠 **Unlimited memory**
 - **Never forgets anything**: Unlimited conversation history with intelligent search across everything you've ever discussed.
@@ -359,7 +360,8 @@ This shows voice detection, processing steps, tool usage, and internal decision-
 
 ## Privacy, storage, and search
 - **Redaction first**: Before saving or using any text, Jarvis replaces emails, tokens, cards, JWTs, 6‑digit OTPs, and long hex with placeholders.
-- **Intelligent search architecture**: Triple-layered retrieval combines SQLite FTS5 (full-text), vector embeddings (semantic), and fuzzy matching (typo-tolerant) for superior context discovery across both recent dialogue and historical conversations.
+- **Intelligent search architecture**: Built-in hybrid search combines vector embeddings (semantic similarity) with SQLite FTS5 (full-text) for superior context discovery across both recent dialogue and historical conversations.
+- **Works out of the box**: Vector search is built-in using pure Python - no additional setup required. For enhanced performance with large datasets, you can optionally configure sqlite-vss.
 
 ### Optional: vector search (recommended)
 If you install `sqlite-vss`, set `sqlite_vss_path` in your JSON config to the absolute path to the library (macOS `vss0.dylib`, Linux `.so`). Example:
@@ -499,62 +501,34 @@ Jarvis looks for a JSON config at:
 - `JARVIS_CONFIG_PATH` if set, otherwise
 - `~/.config/jarvis/config.json` (or `$XDG_CONFIG_HOME/jarvis/config.json`)
 
-Example `config.json`:
-```json
-{
-  "db_path": "~/.local/share/jarvis/jarvis.db",
-  "sqlite_vss_path": null,
-  "allowlist_bundles": [
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "com.microsoft.VSCode",
-    "com.jetbrains.intellij"
-  ],
-  "capture_interval_sec": 3.0,
-  "ollama_base_url": "http://127.0.0.1:11434",
-  "ollama_embed_model": "nomic-embed-text",
-  "ollama_chat_model": "gpt-oss:20b",
-  "llm_profile_select_timeout_sec": 30.0,
-  "use_stdin": false,
-  "active_profiles": [
-    "developer",
-    "business",
-    "life"
-  ],
-  "tts_enabled": true,
-  "tts_voice": null,
-  "tts_rate": 200,
-  "voice_device": null,
-  "voice_block_seconds": 4.0,
-  "voice_collect_seconds": 2.5,
-  "wake_word": "jarvis",
-  "wake_aliases": [
-    "joris",
-    "jar is",
-    "jaivis",
-    "jervis",
-    "jarvus",
-    "jarviz",
-    "javis",
-    "jairus"
-  ],
-  "wake_fuzzy_ratio": 0.78,
-  "whisper_model": "small",
-  "whisper_compute_type": "int8",
-  "whisper_vad": true,
-  "vad_enabled": true,
-  "location_enabled": true,
-  "location_cache_minutes": 60,
-  "location_ip_address": null,
-  "location_auto_detect": true,
-  "web_search_enabled": true
-}
-```
+For an example `config.json`, see [here](examples/config.json).
 
 #### TTS Configuration
 - `tts_enabled`: Enable/disable text-to-speech (default: `true`)
-- `tts_voice`: Voice to use (default: system default)
+- `tts_engine`: Choose TTS engine - `"system"` (default) or `"chatterbox"` (experimental AI TTS)
+- `tts_voice`: Voice to use for system TTS (default: system default)
 - `tts_rate`: Speech rate in words per minute (default: 200)
+
+**Experimental Chatterbox TTS (high-quality AI voices):**
+- `tts_chatterbox_audio_prompt`: Path to audio file for voice cloning (optional)
+- `tts_chatterbox_exaggeration`: Emotion intensity control 0.0-1.0+ (default: 0.5)
+- `tts_chatterbox_cfg_weight`: Quality/speed trade-off 0.0-1.0 (default: 0.5)
+
+To enable Chatterbox TTS:
+```json
+{
+  "tts_engine": "chatterbox",
+}
+```
+
+**Voice Cloning:** To clone a specific voice, add a reference audio file:
+```json
+{
+  "tts_engine": "chatterbox",
+  "tts_chatterbox_audio_prompt": "/path/to/voice_sample.wav"
+}
+```
+Use a clear 3-10 second WAV file of the target voice speaking naturally.
 
 ### Environment variables (debug only)
 - `JARVIS_CONFIG_PATH` — absolute path to JSON config

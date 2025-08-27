@@ -2,7 +2,7 @@ from __future__ import annotations
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Optional
 import threading
 import difflib
 import signal
@@ -10,10 +10,10 @@ import signal
 from .config import load_settings
 from .redact import redact
 from .db import Database
-from .triggers import evaluate_triggers
+
 from .coach import ask_coach, ask_coach_with_tools
 from .profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
-from .tts import TextToSpeech
+from .tts import TextToSpeech, create_tts_engine
 from .tune_player import TunePlayer
 from .nutrition import summarize_meals
 from .tools import run_tool_with_retries, generate_tools_description, TOOL_SPECS
@@ -68,24 +68,17 @@ def _install_signal_handlers() -> None:
  
 
 
-def _ingest_iter() -> Iterable[str]:
-    for line in sys.stdin:
-        s = line.strip()
-        if not s:
-            continue
-        yield s
-
 
 def _extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str, voice_debug: bool = False, timeout_sec: float = 8.0) -> dict:
     """
-    Extract search keywords and time parameters for RECALL_CONVERSATION.
+    Extract search keywords and time parameters for the recallConversation tool.
     Returns dict with 'keywords' and optional 'from'/'to' timestamps.
     """
     try:
         system_prompt = """Extract search parameters from the user's query for conversation memory search.
 
 Extract:
-1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words)
+1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words). Include general, high-level category tags that would be suitable for blog-style tagging when applicable (e.g., "cooking", "fitness", "travel", "finance").
 2. TIME RANGE: If mentioned, convert to exact timestamps
 
 Current date/time: {current_time}
@@ -94,14 +87,15 @@ Respond ONLY with JSON in this format:
 {{"keywords": ["keyword1", "keyword2"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 
 Rules:
-- keywords: content topics only (no time words like "yesterday", "today")
+- keywords: content topics only (no time words like "yesterday", "today"). Include both specific terms and general category tags when applicable (e.g., for recipes or meal prep you could include "cooking" and "nutrition").
+- prefer concise noun phrases; lowercase; no punctuation; deduplicate similar terms
 - from/to: only if time mentioned, convert to exact UTC timestamps
 - omit from/to if no time mentioned
 
 Examples:
-"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "discuss"]}}
-"what did I eat yesterday?" → {{"keywords": ["eat", "food"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
-"remember that password I mentioned today?" → {{"keywords": ["password", "remember"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
+"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}}
+"what did I eat yesterday?" → {{"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+"remember that password I mentioned today?" → {{"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
 """
         
         from datetime import datetime, timezone
@@ -209,7 +203,7 @@ def _execute_multi_step_plan(
         
         context_section = ""
         if conversation_context:
-            context_section = f"\nRelevant conversation history:\n{conversation_context}\n"
+            context_section = f"\nInitial memory enrichment (keyword-based search):\n{conversation_context}\n"
         
         # Build planning prompt using concatenation to avoid f-string brace interpolation issues
         planning_prompt = (
@@ -218,30 +212,41 @@ def _execute_multi_step_plan(
             "Create a plan to answer this query effectively.\n\n"
             "INSTRUCTIONS:\n"
             "1. Analyze what the user is asking for\n"
-            "2. Review any conversation history to understand context\n"
-            "3. Create a strategic plan that provides targeted results\n\n"
+            "2. Keep in mind the memory enrichment above (if any) may be incomplete\n"
+            "3. Pay attention to when memory enrichment entries are from, they start with [date]"
+            "4. Create a strategic plan that provides complete results\n\n"
             "Available tools: " + ", ".join(allowed_tools) + "\n\n"
             "Respond with ONLY a JSON object in this exact format:\n"
             "{\n"
             "  \"steps\": [\n"
             "    {\n"
             "      \"step\": 1,\n"
-            "      \"action\": \"tool or analyze\",\n"
+            "      \"action\": \"tool\",\n"
             "      \"description\": \"Brief description of what this step does\",\n"
-            "      \"tool_call\": {  // Only when action == \"tool\"\n"
-            "        // Internal tool example (no server):\n"
-            "        // {\"name\": \"fetchMeals\", \"args\": { \"since_utc\": \"2025-01-01T00:00:00Z\" } }\n"
-            "        // MCP tool example (requires server):\n"
-            "        // {\"server\": \"fs\", \"name\": \"list\", \"args\": { \"path\": \"~\" } }\n"
+            "      \"tool_call\": {\n"
+            "        \"name\": \"recallConversation\",\n"
+            "        \"args\": { \"search_query\": \"keywords\", \"from\": \"2025-08-22T00:00:00Z\", \"to\": \"2025-08-22T23:59:59Z\" }\n"
             "      }\n"
             "    },\n"
             "    {\n"
             "      \"step\": 2,\n"
+            "      \"action\": \"tool\",\n"
+            "      \"description\": \"Search for current information\",\n"
+            "      \"tool_call\": {\n"
+            "        \"name\": \"webSearch\",\n"
+            "        \"args\": { \"search_query\": \"current news topic\" }\n"
+            "      }\n"
+            "    },\n"
+            "    {\n"
+            "      \"step\": 3,\n"
             "      \"action\": \"finalResponse\",\n"
             "      \"description\": \"Synthesize and respond to user\"\n"
             "    }\n"
             "  ]\n"
             "}\n\n"
+            "CRITICAL: For tool steps, action must ALWAYS be \"tool\" with a tool_call object containing name and args.\n"
+            "Available tool names: " + ", ".join(allowed_tools) + "\n"
+            "For MCP tools, add \"server\" field: {\"server\": \"fs\", \"name\": \"list\", \"args\": {...}}\n\n"
             "Do NOT execute any tools. Just return the JSON plan."
         )
         
@@ -321,19 +326,20 @@ def _execute_multi_step_plan(
             # This is the final synthesis step
             context_for_final = ""
             if conversation_context:
-                context_for_final += f"Relevant conversation history:\n{conversation_context}\n\n"
+                context_for_final += f"Initial memory enrichment (keyword-based search):\n{conversation_context}\n\n"
             if completed_results:
-                context_for_final += "Results from previous steps:\n"
+                context_for_final += "Tool execution results:\n"
                 for i, result in enumerate(completed_results, 1):
-                    context_for_final += f"\nStep {i} result:\n{result}\n"
+                    context_for_final += f"\nStep {i} successfully executed, results:\n{result}\n"
             
             final_prompt = f"""Original user query: {redacted_text}
 
 {context_for_final}
 
-Give a brief, conversational response to the user's question. Keep it:
+Give a brief, conversational response to the user's question, keeping your response:
 - Short and natural (like talking to a friend)
-- Focus on 2-3 most relevant items
+- Focus on 2-3 most relevant items from the successful results, summarize the rest
+- Pay attention to when memory enrichment entries are from, they start with [date]
 - No bullet points or formal structure
 - Personal and direct tone
 
@@ -466,7 +472,7 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     if _global_dialogue_memory and _global_dialogue_memory.has_recent_interactions():
         recent_messages = _global_dialogue_memory.get_recent_messages()
     
-    # Simple approach: Always try to enrich with conversation memory using keywords and time
+    # Enrich conversation memory using keywords and time based search
     conversation_context = ""
     try:
         # Extract search parameters (keywords + time) for memory search
@@ -475,47 +481,47 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
         )
         
         keywords = search_params.get('keywords', [])
-        if keywords and 'recallConversation' in (PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())):
-            # Build tool arguments with both keywords and time parameters
-            tool_args = {"search_query": " ".join(keywords)}
-            
-            # Add time parameters if present
-            if 'from' in search_params:
-                tool_args['from'] = search_params['from']
-            if 'to' in search_params:
-                tool_args['to'] = search_params['to']
+        if keywords:
+            # Direct memory search without going through tool system
+            from_time = search_params.get('from')
+            to_time = search_params.get('to')
             
             if cfg.voice_debug:
                 try:
-                    time_info = f", time: {search_params.get('from', 'none')} to {search_params.get('to', 'none')}" if 'from' in search_params or 'to' in search_params else ""
+                    time_info = f", time: {from_time or 'none'} to {to_time or 'none'}" if from_time or to_time else ""
                     print(f"🧠 [memory] searching with keywords={keywords}{time_info}", file=sys.stderr)
                 except Exception:
                     pass
             
-            # Call recallConversation to enrich context
-            memory_result = run_tool_with_retries(
+            # Import the keyword search function
+            from .memory import search_conversation_memory_by_keywords
+            
+            # Directly search memory with keywords
+            context_results = search_conversation_memory_by_keywords(
                 db=db,
-                cfg=cfg,
-                tool_name="recallConversation",
-                tool_args=tool_args,
-                system_prompt=system_prompt,
-                original_prompt="",  # Not needed for memory search
-                redacted_text=redacted,
-                max_retries=1
+                keywords=keywords,
+                from_time=from_time,
+                to_time=to_time,
+                ollama_base_url=cfg.ollama_base_url,
+                ollama_embed_model=cfg.ollama_embed_model,
+                timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
+                voice_debug=cfg.voice_debug,
+                max_results=cfg.memory_enrichment_max_results
             )
             
-            if memory_result.success and memory_result.reply_text:
-                conversation_context = memory_result.reply_text
+            if context_results:
+                # Format the results for context
+                conversation_context = "\n".join(context_results)
                 if cfg.voice_debug:
                     try:
-                        print(f"  ✅ found context: {len(conversation_context)} chars", file=sys.stderr)
+                        print(f"  ✅ found {len(context_results)} results for memory enrichment", file=sys.stderr)
                     except Exception:
                         pass
-    except Exception:
+    except Exception as e:
         # If keyword extraction or memory search fails, continue without it
         if cfg.voice_debug:
             try:
-                print("  ❌ [memory] enrichment failed, continuing without", file=sys.stderr)
+                print(f"  ❌ [memory] enrichment failed: {e}", file=sys.stderr)
             except Exception:
                 pass
     
@@ -621,6 +627,10 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
                 # Fallback to original print if any issue occurs
                 print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
             if tts is not None and tts.enabled:
+                # Track TTS start for echo detection
+                if _global_voice_listener is not None:
+                    _global_voice_listener._track_tts_start()
+                
                 # Define completion callback for hot window activation
                 def _on_tts_complete():
                     global _global_voice_listener
@@ -659,17 +669,6 @@ def _run_coach_on_text(db: Database, cfg, tts: Optional[TextToSpeech], text: str
     return reply
 
 
-def _commit_buffer(db: Database, cfg, tts: Optional[TextToSpeech], buffer: list[str]) -> None:
-    if not buffer:
-        return
-    text = "\n".join(buffer)
-    buffer.clear()
-    if not text.strip():
-        return
-    trig = evaluate_triggers(text)
-    if trig.should_fire:
-        _run_coach_on_text(db, cfg, tts, text)
-
 
 class VoiceListener(threading.Thread):
     def __init__(self, db: Database, cfg, tts: Optional[TextToSpeech]) -> None:
@@ -707,6 +706,13 @@ class VoiceListener(threading.Thread):
         # Capture hot window state when voice input starts (before transcription)
         self._was_hot_window_active_at_voice_start: bool = False
         
+        # Enhanced echo detection state
+        self._tts_start_time: float = 0.0
+        self._tts_energy_baseline: float = 0.0
+        self._echo_suppression_window: float = float(getattr(self.cfg, "echo_suppression_window", 1.0))  # seconds after TTS ends
+        self._energy_spike_threshold: float = float(getattr(self.cfg, "echo_energy_threshold", 2.0))  # multiplier for baseline energy
+        self._recent_audio_energy: deque = deque(maxlen=50)  # Track recent energy levels
+        
         # Global tune management - single tune player for the whole system
         self._tune_player: Optional[TunePlayer] = None
 
@@ -736,20 +742,14 @@ class VoiceListener(threading.Thread):
             return False
             
         stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
-        stop_sounds = ["sh", "shhh", "shhhh", "ssh", "sssh", "ssssh"]  # Common representations of shushing
         
-        # Check if any stop command or sound is present
+        # Check if any stop command is present
         detected_commands = []
         
         # Check for stop commands
         for cmd in stop_commands:
             if cmd in text_lower:
                 detected_commands.append(cmd)
-        
-        # Check for shush sounds
-        for sound in stop_sounds:
-            if sound in text_lower:
-                detected_commands.append(sound)
         
         # Check fuzzy matches for short inputs
         if len(text_lower.split()) <= 2:
@@ -798,9 +798,9 @@ class VoiceListener(threading.Thread):
         if not heard_text or not tts_text:
             return False
         
-        # Simple similarity check
+        # Simple similarity check - lowered threshold for better echo detection
         similarity = difflib.SequenceMatcher(a=tts_text, b=heard_text).ratio()
-        if similarity >= 0.7:  # High similarity suggests echo
+        if similarity >= 0.6:  # Lower threshold to catch more echoes
             return True
         
         # Check if heard text is a substring of TTS text (partial echo)
@@ -813,9 +813,9 @@ class VoiceListener(threading.Thread):
         heard_words = heard_text.split()
         
         # Look for consecutive sequences of TTS words in the heard text
-        if len(tts_words) >= 3:  # Only check for substantial sequences
-            for i in range(len(tts_words) - 2):  # Check 3-word sequences
-                sequence = " ".join(tts_words[i:i+3])
+        if len(tts_words) >= 2:  # Reduced from 3 to catch shorter sequences
+            for i in range(len(tts_words) - 1):  # Check 2-word sequences
+                sequence = " ".join(tts_words[i:i+2])
                 if sequence in heard_text:
                     if getattr(self.cfg, 'voice_debug', False):
                         try:
@@ -892,13 +892,64 @@ class VoiceListener(threading.Thread):
         # This method is no longer used - hot window timer should not be reset
         # The window should expire based on the original timer from TTS completion
         pass
+    
+    def _track_tts_start(self) -> None:
+        """Called when TTS starts speaking to track timing and baseline energy."""
+        self._tts_start_time = time.time()
+        # Calculate baseline energy from recent audio samples
+        if self._recent_audio_energy:
+            self._tts_energy_baseline = sum(self._recent_audio_energy) / len(self._recent_audio_energy)
+        else:
+            self._tts_energy_baseline = float(getattr(self.cfg, "voice_min_energy", 0.0045))
+        if self.cfg.voice_debug:
+            try:
+                print(f"[debug] TTS started, baseline energy: {self._tts_energy_baseline:.4f}", file=sys.stderr)
+            except Exception:
+                pass
+    
+    def _is_in_echo_window(self) -> bool:
+        """Check if we're within the echo suppression window after TTS."""
+        if self._last_tts_finish_time == 0:
+            return False
+        time_since_tts = time.time() - self._last_tts_finish_time
+        return time_since_tts < self._echo_suppression_window
+    
+    def _calculate_audio_energy(self, audio_frames: list) -> float:
+        """Calculate RMS energy from audio frames."""
+        if not audio_frames or np is None:
+            return 0.0
+        try:
+            # Concatenate all frames
+            audio_data = np.concatenate(audio_frames)
+            # Calculate RMS energy
+            rms = float(np.sqrt(np.mean(np.square(audio_data))))
+            return rms
+        except Exception:
+            return 0.0
+    
+    def _is_likely_echo_by_energy(self, current_energy: float) -> bool:
+        """Check if audio energy pattern suggests this is echo."""
+        if not self._is_in_echo_window():
+            return False
+        
+        # During echo window, check if energy is similar to baseline
+        # Real user speech typically has much higher energy than echo
+        if current_energy < self._tts_energy_baseline * self._energy_spike_threshold:
+            # Energy is not significantly higher than baseline - likely echo
+            return True
+        
+        return False
 
     def _is_speech_frame(self, frame_f32: "np.ndarray") -> bool:  # type: ignore[name-defined]
         # Fall back to RMS energy gate if no VAD or numpy unavailable
         if np is None:
             return True
+        
+        # Track energy for echo detection
+        rms = float(np.sqrt(np.mean(np.square(frame_f32))))
+        self._recent_audio_energy.append(rms)
+        
         if self._vad is None:
-            rms = float(np.sqrt(np.mean(np.square(frame_f32))))
             return rms >= float(getattr(self.cfg, "voice_min_energy", 0.0045))
         # Convert float32 [-1,1] to 16-bit PCM bytes as required by webrtcvad
         try:
@@ -1028,34 +1079,72 @@ class VoiceListener(threading.Thread):
             if self._should_expire_hot_window():
                 self._expire_hot_window()
             return
-        # Priority check for stop commands during TTS - process immediately
+        # Priority check for stop commands during TTS - but verify it's not echo
         if self.tts is not None and self.tts.enabled and self.tts.is_speaking():
             if self._is_stop_command(text_lower):
-                if self.cfg.voice_debug:
+                # Check energy to ensure this is real user input, not echo
+                current_energy = self._calculate_audio_energy(self._utterance_frames[-10:])
+                
+                # During TTS, require higher energy threshold for stop commands
+                if current_energy > self._tts_energy_baseline * self._energy_spike_threshold:
+                    if self.cfg.voice_debug:
+                        try:
+                            print(f"[voice] stop command detected during TTS (high energy: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                        except Exception:
+                            pass
+                    self.tts.interrupt()
+                    # Clear any pending audio to make stop more responsive
                     try:
-                        print(f"[voice] stop command detected during TTS: {text_lower}", file=sys.stderr)
+                        while not self._audio_q.empty():
+                            self._audio_q.get_nowait()
                     except Exception:
                         pass
-                self.tts.interrupt()
-                # Clear any pending audio to make stop more responsive
-                try:
-                    while not self._audio_q.empty():
-                        self._audio_q.get_nowait()
-                except Exception:
-                    pass
-                return
+                    return
+                else:
+                    if self.cfg.voice_debug:
+                        try:
+                            print(f"[debug] stop command ignored (low energy echo: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                        except Exception:
+                            pass
+                    return
         
-        # Guard against echo of our own TTS (but allow stop commands through)
+        # Enhanced echo detection for non-hot-window mode
         if self.tts is not None and self.tts.enabled:
             # Always allow stop commands to pass through echo protection
             if not self._is_stop_command(text_lower):
-                last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
-                is_same_as_tts = False
-                if last_tts and text_lower:
-                    ratio = difflib.SequenceMatcher(a=last_tts, b=text_lower).ratio()
-                    is_same_as_tts = ratio >= 0.74 or (text_lower in last_tts) or (last_tts in text_lower)
-                if is_same_as_tts:
-                    return
+                # Use enhanced echo detection combining timing, energy, and text
+                if self._is_in_echo_window():
+                    # Calculate current utterance energy
+                    current_energy = self._calculate_audio_energy(self._utterance_frames[-10:])
+                    
+                    # Check if this is likely echo based on energy
+                    if self._is_likely_echo_by_energy(current_energy):
+                        # Final check: text similarity (but only if energy suggests echo)
+                        last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                        if last_tts and self._is_likely_tts_echo(text_lower, last_tts):
+                            if self.cfg.voice_debug:
+                                try:
+                                    print(f"[debug] input rejected (TTS echo by timing+energy+text): {text_lower}", file=sys.stderr)
+                                except Exception:
+                                    pass
+                            return
+                    else:
+                        # High energy during echo window - likely real user input
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] high energy input accepted during echo window (energy: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                            except Exception:
+                                pass
+                else:
+                    # Outside echo window, still check text similarity as fallback
+                    last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                    if last_tts and self._is_likely_tts_echo(text_lower, last_tts):
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] input rejected (TTS echo by text similarity): {text_lower}", file=sys.stderr)
+                            except Exception:
+                                pass
+                        return
         if self.cfg.voice_debug and text:
             try:
                 print(f"[voice] heard: {text}", file=sys.stderr)
@@ -1068,6 +1157,34 @@ class VoiceListener(threading.Thread):
         # Hot window mode - accept input without wake word
         # Use the captured state from when voice input started (before transcription)
         if self._was_hot_window_active_at_voice_start:
+            # Enhanced echo detection combining timing, energy, and text
+            if self.tts is not None and self.tts.enabled:
+                # First check: are we in the echo suppression window?
+                if self._is_in_echo_window():
+                    # Calculate current utterance energy
+                    current_energy = self._calculate_audio_energy(self._utterance_frames[-10:])  # Last 10 frames
+                    
+                    # Check if this is likely echo based on energy
+                    if self._is_likely_echo_by_energy(current_energy):
+                        # Final check: text similarity (but only if energy suggests echo)
+                        last_tts = (self.tts.get_last_spoken_text() or "").strip().lower()
+                        if last_tts and self._is_likely_tts_echo(text_lower, last_tts):
+                            if self.cfg.voice_debug:
+                                try:
+                                    print(f"[debug] hot window input rejected (TTS echo by timing+energy+text): {text_lower}", file=sys.stderr)
+                                except Exception:
+                                    pass
+                            # Reset the captured state
+                            self._was_hot_window_active_at_voice_start = False
+                            return
+                    else:
+                        # High energy during echo window - likely real user input (e.g., stop command)
+                        if self.cfg.voice_debug:
+                            try:
+                                print(f"[debug] high energy input accepted during echo window (energy: {current_energy:.4f}): {text_lower}", file=sys.stderr)
+                            except Exception:
+                                pass
+            
             self._pending_query = (self._pending_query + " " + text_lower).strip()
             self._is_collecting = True
             self._last_voice_time = time.time()
@@ -1148,6 +1265,13 @@ class VoiceListener(threading.Thread):
             self._pending_query = (self._pending_query + " " + text_lower).strip()
             self._last_voice_time = time.time()
             # Note: timeout check is now handled in _check_query_timeout() called from audio loop
+        else:
+            # Input doesn't contain wake word and we're not collecting - ignore it
+            if self.cfg.voice_debug:
+                try:
+                    print(f"[debug] input ignored (no wake word detected): {text_lower}", file=sys.stderr)
+                except Exception:
+                    pass
 
     def run(self) -> None:
         if WhisperModel is None or sd is None:
@@ -1326,7 +1450,13 @@ def _check_and_update_diary(db: Database, cfg, verbose: bool = False, force: boo
         return
         
     try:
-        if force or _global_dialogue_memory.should_update_diary():
+        # Determine if there is anything to update before printing/logging
+        should_update = force or _global_dialogue_memory.should_update_diary()
+        if should_update:
+            # Skip when there are no pending interactions (e.g., user pressed Ctrl+C without any dialogue)
+            pending_chunks = _global_dialogue_memory.get_pending_chunks()
+            if not pending_chunks:
+                return
             if verbose:
                 try:
                     print("📝 Updating your diary. Please wait… (don't press Ctrl+C again)", file=sys.stderr, flush=True)
@@ -1395,7 +1525,16 @@ def main() -> None:
     # Initialize dialogue memory with 5-minute inactivity timeout
     _global_dialogue_memory = DialogueMemory(inactivity_timeout=cfg.dialogue_memory_timeout, max_interactions=20)
 
-    tts: Optional[TextToSpeech] = TextToSpeech(enabled=cfg.tts_enabled, voice=cfg.tts_voice, rate=cfg.tts_rate)
+    tts = create_tts_engine(
+        engine=cfg.tts_engine,
+        enabled=cfg.tts_enabled,
+        voice=cfg.tts_voice,
+        rate=cfg.tts_rate,
+        device=cfg.tts_chatterbox_device,
+        audio_prompt_path=cfg.tts_chatterbox_audio_prompt,
+        exaggeration=cfg.tts_chatterbox_exaggeration,
+        cfg_weight=cfg.tts_chatterbox_cfg_weight
+    )
     if tts.enabled:
         tts.start()
 
@@ -1404,19 +1543,14 @@ def main() -> None:
         voice_thread = VoiceListener(db, cfg, tts)
         voice_thread.start()
 
-    buffer: list[str] = []
-    last_commit = time.time()
     last_diary_check = time.time()
-    commit_interval = max(1.0, cfg.capture_interval_sec)
     diary_check_interval = 60.0  # Check for diary updates every minute
 
     try:
-        for snippet in _ingest_iter():
-            buffer.append(snippet)
+        # Main daemon loop - just handle voice and periodic diary updates
+        while True:
+            time.sleep(1.0)  # Check for updates every second
             now = time.time()
-            if now - last_commit >= commit_interval:
-                _commit_buffer(db, cfg, tts, buffer)
-                last_commit = now
             
             # Periodically check if diary should be updated
             if now - last_diary_check >= diary_check_interval:
@@ -1439,7 +1573,7 @@ def main() -> None:
                 voice_thread.join(timeout=2.0)
             except Exception:
                 pass
-        _commit_buffer(db, cfg, tts, buffer)
+
         
         # Final diary update before shutdown to save any pending interactions
         _check_and_update_diary(db, cfg, verbose=True, force=True)

@@ -13,6 +13,7 @@ from .coach import ask_coach
 from .nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
 from .config import Settings
 from .mcp_client import MCPClient
+from .memory import search_conversation_memory
 
 
 
@@ -27,7 +28,7 @@ class ToolSpec:
 
 
 def _required_log_meal_fields() -> List[str]:
-    # Keep in sync with run_tool_with_retries LOG_MEAL required list
+    # Keep in sync with run_tool_with_retries logMeal required list
     return [
         "description",
         "calories_kcal",
@@ -252,13 +253,13 @@ def run_tool_with_retries(
         _user_print("📸 Capturing a screenshot for OCR…")
         if getattr(cfg, "voice_debug", False):
             try:
-                print("[debug] SCREENSHOT: capturing OCR...", file=sys.stderr)
+                print("[debug] screenshot: capturing OCR...", file=sys.stderr)
             except Exception:
                 pass
         ocr_text = capture_screenshot_and_ocr(interactive=True) or ""
         if getattr(cfg, "voice_debug", False):
             try:
-                print(f"[debug] SCREENSHOT: ocr_chars={len(ocr_text)}", file=sys.stderr)
+                print(f"[debug] screenshot: ocr_chars={len(ocr_text)}", file=sys.stderr)
             except Exception:
                 pass
         followup_prompt = original_prompt + "\n\n[SCREENSHOT_OCR]\n" + ocr_text[:4000]
@@ -267,7 +268,7 @@ def run_tool_with_retries(
         result = ToolExecutionResult(success=True, reply_text=(reply or "").strip())
         if getattr(cfg, "voice_debug", False):
             try:
-                print("[debug] SCREENSHOT: completed", file=sys.stderr)
+                print("[debug] screenshot: completed", file=sys.stderr)
             except Exception:
                 pass
         _user_print("✅ Screenshot processed.")
@@ -296,7 +297,7 @@ def run_tool_with_retries(
         if tool_args and isinstance(tool_args, dict) and _has_all_fields(tool_args):
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print("[debug] LOG_MEAL: using provided args", file=sys.stderr)
+                    print("[debug] logMeal: using provided args", file=sys.stderr)
                 except Exception:
                     pass
             meal_id = log_meal_from_args(db, tool_args, source_app=("stdin" if cfg.use_stdin else "unknown"))
@@ -316,7 +317,7 @@ def run_tool_with_retries(
                 reply_text = f"Logged meal #{meal_id}: {desc} — {approx}.\nFollow-ups: {follow_text}"
                 if getattr(cfg, "voice_debug", False):
                     try:
-                        print(f"[debug] LOG_MEAL: logged meal_id={meal_id}", file=sys.stderr)
+                        print(f"[debug] logMeal: logged meal_id={meal_id}", file=sys.stderr)
                     except Exception:
                         pass
                 _user_print("✅ Meal saved.")
@@ -326,14 +327,14 @@ def run_tool_with_retries(
             try:
                 if getattr(cfg, "voice_debug", False):
                     try:
-                        print(f"[debug] LOG_MEAL: extracting from text (attempt {attempt+1}/{max_retries+1})", file=sys.stderr)
+                        print(f"[debug] logMeal: extracting from text (attempt {attempt+1}/{max_retries+1})", file=sys.stderr)
                     except Exception:
                         pass
                 meal_summary = extract_and_log_meal(db, cfg, original_text=redacted_text, source_app=("stdin" if cfg.use_stdin else "unknown"))
                 if meal_summary:
                     if getattr(cfg, "voice_debug", False):
                         try:
-                            print("[debug] LOG_MEAL: extraction+log succeeded", file=sys.stderr)
+                            print("[debug] logMeal: extraction+log succeeded", file=sys.stderr)
                         except Exception:
                             pass
                     return ToolExecutionResult(success=True, reply_text=meal_summary)
@@ -341,7 +342,7 @@ def run_tool_with_retries(
                 pass
         if getattr(cfg, "voice_debug", False):
             try:
-                print("[debug] LOG_MEAL: failed", file=sys.stderr)
+                print("[debug] logMeal: failed", file=sys.stderr)
             except Exception:
                 pass
         _user_print("⚠️ I couldn't log that meal automatically.")
@@ -353,13 +354,13 @@ def run_tool_with_retries(
         since, until = _normalize_time_range(tool_args if isinstance(tool_args, dict) else None)
         if getattr(cfg, "voice_debug", False):
             try:
-                print(f"[debug] FETCH_MEALS: range since={since} until={until}", file=sys.stderr)
+                print(f"[debug] fetchMeals: range since={since} until={until}", file=sys.stderr)
             except Exception:
                 pass
         meals = db.get_meals_between(since, until)
         if getattr(cfg, "voice_debug", False):
             try:
-                print(f"[debug] FETCH_MEALS: count={len(meals)}", file=sys.stderr)
+                print(f"[debug] fetchMeals: count={len(meals)}", file=sys.stderr)
             except Exception:
                 pass
         summary = summarize_meals([dict(r) for r in meals])
@@ -409,111 +410,76 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    debug_msg = f"    🔍 RECALL_CONVERSATION: query='{search_query}', from={from_time}, to={to_time}"
+                    debug_msg = f"    🔍 recallConversation: query='{search_query}', from={from_time}, to={to_time}"
                     print(debug_msg, file=sys.stderr)
                 except Exception:
                     pass
+
+            context = search_conversation_memory(
+                db=db,
+                search_query=search_query,
+                from_time=from_time,
+                to_time=to_time,
+                ollama_base_url=cfg.ollama_base_url,
+                ollama_embed_model=cfg.ollama_embed_model,
+                timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
+                voice_debug=getattr(cfg, "voice_debug", False),
+                max_results=cfg.memory_search_max_results
+            )
             
-            # Search stored conversation summaries (recent dialogue is already in LLM context)
-            context = []
-            if search_query:
+            # Debug output for voice debug mode
+            if getattr(cfg, "voice_debug", False):
                 try:
-                    from .fuzzy_search import fuzzy_search_summaries
-                    fuzzy_results = fuzzy_search_summaries(
-                        db=db,
-                        query=search_query,
-                        top_k=10,
-                        fuzzy_threshold=40
-                    )
-                    
-                    for summary_id, formatted_text, fuzzy_score in fuzzy_results:
-                        context.append(formatted_text)
-                        if getattr(cfg, "voice_debug", False):
-                            try:
-                                print(f"      📋 match score {fuzzy_score}: {formatted_text[:100]}...", file=sys.stderr)
-                            except Exception:
-                                pass
-                                
-                except Exception as e:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] RECALL_CONVERSATION: fuzzy search failed: {e}", file=sys.stderr)
-                        except Exception:
-                            pass
-            
-            # Filter by time range if provided
-            if from_time or to_time:
-                try:
-                    # Parse time constraints
-                    from_dt = None
-                    to_dt = None
-                    if from_time:
-                        from_dt = datetime.fromisoformat(from_time.replace('Z', '+00:00'))
-                    if to_time:
-                        to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
-                    
-                    # If we only have time constraints (no search query), get all summaries in range
-                    if not search_query:
-                        recent_summaries = db.get_recent_conversation_summaries(days=30)
-                        for summary_row in recent_summaries:
-                            date_str = summary_row['date_utc']
-                            summary_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
-                            
-                            # Check if date is within range
-                            in_range = True
-                            if from_dt and summary_date < from_dt:
-                                in_range = False
-                            if to_dt and summary_date > to_dt:
-                                in_range = False
-                            
-                            if in_range:
-                                summary_text = summary_row['summary']
-                                topics = summary_row['topics'] or ""
-                                context_str = f"[{date_str}] {summary_text}"
-                                if topics:
-                                    context_str += f" (Topics: {topics})"
-                                context.append(context_str)
-                    else:
-                        # Filter existing search results by time
-                        filtered_context = []
-                        for ctx in context:
-                            # Extract date from formatted text
-                            date_match = re.match(r'\[(\d{4}-\d{2}-\d{2})\]', ctx)
-                            if date_match:
-                                date_str = date_match.group(1)
-                                summary_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
-                                
-                                # Check if date is within range
-                                in_range = True
-                                if from_dt and summary_date < from_dt:
-                                    in_range = False
-                                if to_dt and summary_date > to_dt:
-                                    in_range = False
-                                
-                                if in_range:
-                                    filtered_context.append(ctx)
-                        context = filtered_context
-                        
-                except Exception as e:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] RECALL_CONVERSATION: time filtering failed: {e}", file=sys.stderr)
-                        except Exception:
-                            pass
+                    print(f"      ✅ found {len(context)} results", file=sys.stderr)
+                    if context:
+                        # Show a preview of the first result
+                        preview = context[0][:200] + "..." if len(context[0]) > 200 else context[0]
+                        print(f"      📋 Preview: {preview}", file=sys.stderr)
+                except Exception:
+                    pass
             
             # Generate response
             if not context:
                 reply_text = "I couldn't find any conversations matching your criteria in my memory."
             else:
-                # Return raw memory context for profile processing
-                memory_context = "\n".join(context[:5])  # Use top 5 results
+                # Add temporal context awareness for memory enrichment
+                from datetime import datetime, timezone
+                today = datetime.now(timezone.utc).date()
+                
+                # Categorize results by temporal relevance
+                recent_results = []
+                older_results = []
+                
+                for ctx in context[:5]:  # Use top 5 results
+                    # Extract date from context string like "[2025-08-27] content..."
+                    if ctx.startswith('[') and '] ' in ctx:
+                        try:
+                            date_part = ctx.split(']')[0][1:]  # Extract "2025-08-27"
+                            ctx_date = datetime.fromisoformat(date_part).date()
+                            days_old = (today - ctx_date).days
+                            
+                            if days_old <= 7:
+                                recent_results.append(ctx)
+                            else:
+                                older_results.append(ctx)
+                        except:
+                            recent_results.append(ctx)  # Default to recent if can't parse
+                    else:
+                        recent_results.append(ctx)
+                
+                # Format response with temporal awareness
+                memory_parts = []
+                if recent_results:
+                    memory_parts.append("Recent memory (last 7 days):")
+                    memory_parts.extend(recent_results)
+                if older_results:
+                    memory_parts.append("\nOlder memory (may be less relevant):")
+                    memory_parts.extend(older_results)
+                
+                memory_context = "\n".join(memory_parts)
                 reply_text = f"I found this in my memory:\n\n{memory_context}"
             
-            if getattr(cfg, "voice_debug", False):
-                try:
-                    print(f"      ✅ found {len(context)} results", file=sys.stderr)
-                except Exception:
-                    pass
+
             _user_print("✅ Memory search complete.")
             
             return ToolExecutionResult(success=True, reply_text=reply_text)
@@ -521,7 +487,7 @@ def run_tool_with_retries(
         except Exception as e:
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"[debug] RECALL_CONVERSATION: error {e}", file=sys.stderr)
+                    print(f"[debug] recallConversation: error {e}", file=sys.stderr)
                 except Exception:
                     pass
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble searching my conversation memory.")
@@ -546,7 +512,7 @@ def run_tool_with_retries(
             
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"    🌐 WEB_SEARCH: searching for '{search_query}'", file=sys.stderr)
+                    print(f"    🌐 webSearch: searching for '{search_query}'", file=sys.stderr)
                 except Exception:
                     pass
             
@@ -607,7 +573,7 @@ def run_tool_with_retries(
                         
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] WEB_SEARCH: Found {len(links)} total links on DDG page", file=sys.stderr)
+                                print(f"[debug] webSearch: Found {len(links)} total links on DDG page", file=sys.stderr)
                             except Exception:
                                 pass
                         
@@ -621,7 +587,7 @@ def run_tool_with_retries(
                             # Debug: show first few links for troubleshooting
                             if getattr(cfg, "voice_debug", False) and i < 10:
                                 try:
-                                    print(f"[debug] WEB_SEARCH: Link {i}: href='{href[:50]}...', title='{title[:50]}...'", file=sys.stderr)
+                                    print(f"[debug] webSearch: Link {i}: href='{href[:50]}...', title='{title[:50]}...'", file=sys.stderr)
                                 except Exception:
                                     pass
                             
@@ -650,32 +616,32 @@ def run_tool_with_retries(
                                 
                                 if getattr(cfg, "voice_debug", False):
                                     try:
-                                        print(f"[debug] WEB_SEARCH: Accepted result {result_count}: '{title[:50]}...'", file=sys.stderr)
+                                        print(f"[debug] webSearch: Accepted result {result_count}: '{title[:50]}...'", file=sys.stderr)
                                     except Exception:
                                         pass
                         
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] WEB_SEARCH: DuckDuckGo found {result_count} results", file=sys.stderr)
+                                print(f"[debug] webSearch: DuckDuckGo found {result_count} results", file=sys.stderr)
                             except Exception:
                                 pass
                     else:
                         if getattr(cfg, "voice_debug", False):
                             try:
-                                print(f"[debug] WEB_SEARCH: DuckDuckGo returned status {ddg_response.status_code}", file=sys.stderr)
+                                print(f"[debug] webSearch: DuckDuckGo returned status {ddg_response.status_code}", file=sys.stderr)
                             except Exception:
                                 pass
                 
                 except ImportError:
                     if getattr(cfg, "voice_debug", False):
                         try:
-                            print(f"[debug] WEB_SEARCH: BeautifulSoup not available", file=sys.stderr)
+                            print(f"[debug] webSearch: BeautifulSoup not available", file=sys.stderr)
                         except Exception:
                             pass
                 except Exception as ddg_error:
                     if getattr(cfg, "voice_debug", False):
                         try:
-                            print(f"[debug] WEB_SEARCH: DuckDuckGo search failed: {ddg_error}", file=sys.stderr)
+                            print(f"[debug] webSearch: DuckDuckGo search failed: {ddg_error}", file=sys.stderr)
                         except Exception:
                             pass
                 
@@ -736,7 +702,7 @@ def run_tool_with_retries(
             except Exception as search_error:
                 if getattr(cfg, "voice_debug", False):
                     try:
-                        print(f"[debug] WEB_SEARCH: search failed: {search_error}", file=sys.stderr)
+                        print(f"[debug] webSearch: search failed: {search_error}", file=sys.stderr)
                     except Exception:
                         pass
                 
@@ -749,7 +715,7 @@ def run_tool_with_retries(
         except Exception as e:
             if getattr(cfg, "voice_debug", False):
                 try:
-                    print(f"[debug] WEB_SEARCH: error {e}", file=sys.stderr)
+                    print(f"[debug] webSearch: error {e}", file=sys.stderr)
                 except Exception:
                     pass
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble performing the web search.")

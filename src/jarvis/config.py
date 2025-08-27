@@ -35,12 +35,16 @@ class Settings:
     
     # Screen Capture
     allowlist_bundles: list[str]
-    capture_interval_sec: float
     
     # Text-to-Speech
     tts_enabled: bool
+    tts_engine: str  # "system" (default) or "chatterbox" (experimental)
     tts_voice: str | None
     tts_rate: int | None  # Words per minute (WPM), 200=normal
+    tts_chatterbox_device: str  # "cuda", "auto", or "cpu" for Chatterbox
+    tts_chatterbox_audio_prompt: str | None  # Path to audio file for voice cloning with Chatterbox
+    tts_chatterbox_exaggeration: float  # Emotion exaggeration control (0.0-1.0+)
+    tts_chatterbox_cfg_weight: float  # CFG weight for quality/speed trade-off
     
     # Voice Input & Audio
     voice_device: str | None
@@ -78,8 +82,14 @@ class Settings:
     hot_window_enabled: bool
     hot_window_seconds: float
     
+    # Echo Detection
+    echo_suppression_window: float
+    echo_energy_threshold: float
+    
     # Memory & Dialogue
     dialogue_memory_timeout: float
+    memory_enrichment_max_results: int
+    memory_search_max_results: int
     
     # Location Services
     location_enabled: bool
@@ -171,12 +181,17 @@ def get_default_config() -> Dict[str, Any]:
             "com.microsoft.VSCode",
             "com.jetbrains.intellij",
         ],
-        "capture_interval_sec": 3.0,
+
         
         # Text-to-Speech
         "tts_enabled": True,
+        "tts_engine": "system",  # "system" (default) or "chatterbox" (experimental)
         "tts_voice": None,
         "tts_rate": 200,  # Words per minute (WPM), 200=normal
+        "tts_chatterbox_device": "cuda",  # "cuda" (recommended), "auto", or "cpu"
+        "tts_chatterbox_audio_prompt": None,  # Path to audio file for voice cloning
+        "tts_chatterbox_exaggeration": 0.5,  # Emotion exaggeration (0.0-1.0+)
+        "tts_chatterbox_cfg_weight": 0.5,  # CFG weight for quality/speed trade-off
         
         # Voice Input & Audio
         "voice_device": None,
@@ -190,7 +205,7 @@ def get_default_config() -> Dict[str, Any]:
         
         # Wake Word Detection
         "wake_word": "jarvis",
-        "wake_aliases": ["joris", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus"],
+        "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus"],
         "wake_fuzzy_ratio": 0.78,
         
         # Whisper Speech Recognition
@@ -213,9 +228,13 @@ def get_default_config() -> Dict[str, Any]:
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 6.0,
+        "echo_suppression_window": 1.0,
+        "echo_energy_threshold": 2.0,
         
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
+        "memory_enrichment_max_results": 10,
+        "memory_search_max_results": 15,
         
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -272,13 +291,16 @@ def load_settings() -> Settings:
     db_path = str(merged.get("db_path") or _default_db_path())
     sqlite_vss_path = merged.get("sqlite_vss_path")
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
-    capture_interval_sec = float(merged.get("capture_interval_sec", 3.0))
+
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
     use_stdin = bool(merged.get("use_stdin", False))
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
+    tts_engine = str(merged.get("tts_engine", "system")).lower()
+    if tts_engine not in ("system", "chatterbox"):
+        tts_engine = "system"  # Default to system if invalid value
     tts_voice_val = merged.get("tts_voice")
     tts_voice = None if tts_voice_val in (None, "", "null") else str(tts_voice_val)
     tts_rate_val = merged.get("tts_rate")
@@ -286,6 +308,13 @@ def load_settings() -> Settings:
         tts_rate = None if tts_rate_val in (None, "", "null") else int(tts_rate_val)
     except Exception:
         tts_rate = None
+    tts_chatterbox_device = str(merged.get("tts_chatterbox_device", "cuda")).lower()
+    if tts_chatterbox_device not in ("cuda", "auto", "cpu"):
+        tts_chatterbox_device = "cuda"  # Default to cuda if invalid value
+    tts_chatterbox_audio_prompt_val = merged.get("tts_chatterbox_audio_prompt")
+    tts_chatterbox_audio_prompt = None if tts_chatterbox_audio_prompt_val in (None, "", "null") else str(tts_chatterbox_audio_prompt_val)
+    tts_chatterbox_exaggeration = float(merged.get("tts_chatterbox_exaggeration", 0.5))
+    tts_chatterbox_cfg_weight = float(merged.get("tts_chatterbox_cfg_weight", 0.5))
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
     voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
@@ -308,7 +337,11 @@ def load_settings() -> Settings:
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 6.0))
+    echo_suppression_window = float(merged.get("echo_suppression_window", 1.0))
+    echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
+    memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
+    memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -347,12 +380,16 @@ def load_settings() -> Settings:
         
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
-        capture_interval_sec=capture_interval_sec,
         
         # Text-to-Speech
         tts_enabled=tts_enabled,
+        tts_engine=tts_engine,
         tts_voice=tts_voice,
         tts_rate=tts_rate,
+        tts_chatterbox_device=tts_chatterbox_device,
+        tts_chatterbox_audio_prompt=tts_chatterbox_audio_prompt,
+        tts_chatterbox_exaggeration=tts_chatterbox_exaggeration,
+        tts_chatterbox_cfg_weight=tts_chatterbox_cfg_weight,
         
         # Voice Input & Audio
         voice_device=voice_device,
@@ -389,9 +426,13 @@ def load_settings() -> Settings:
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
+        echo_suppression_window=echo_suppression_window,
+        echo_energy_threshold=echo_energy_threshold,
         
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,
+        memory_enrichment_max_results=memory_enrichment_max_results,
+        memory_search_max_results=memory_search_max_results,
         
         # Location Services
         location_enabled=location_enabled,
