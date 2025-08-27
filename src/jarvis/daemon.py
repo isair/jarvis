@@ -718,20 +718,14 @@ class VoiceListener(threading.Thread):
             return False
             
         stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
-        stop_sounds = ["sh", "shhh", "shhhh", "ssh", "sssh", "ssssh"]  # Common representations of shushing
         
-        # Check if any stop command or sound is present
+        # Check if any stop command is present
         detected_commands = []
         
         # Check for stop commands
         for cmd in stop_commands:
             if cmd in text_lower:
                 detected_commands.append(cmd)
-        
-        # Check for shush sounds
-        for sound in stop_sounds:
-            if sound in text_lower:
-                detected_commands.append(sound)
         
         # Check fuzzy matches for short inputs
         if len(text_lower.split()) <= 2:
