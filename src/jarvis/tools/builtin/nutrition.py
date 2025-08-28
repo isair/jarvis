@@ -3,8 +3,8 @@ import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
-from .db import Database
-from .llm import call_llm_direct
+from ...memory.db import Database
+from ...llm import call_llm_direct
 
 
 NUTRITION_SYS = (

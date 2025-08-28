@@ -2,7 +2,7 @@ import os
 import requests
 import pytest
 
-from jarvis.coach import ask_coach, ask_coach_with_tools
+from jarvis.reply.coach import ask_coach, ask_coach_with_tools
 
 
 def _ollama_available(base_url: str) -> bool:

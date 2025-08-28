@@ -76,6 +76,7 @@ class Settings:
     vad_pre_roll_ms: int
     endpoint_silence_ms: int
     max_utterance_ms: int
+    tts_max_utterance_ms: int
     
     # UI/UX Features
     tune_enabled: bool
@@ -83,8 +84,8 @@ class Settings:
     hot_window_seconds: float
     
     # Echo Detection
-    echo_suppression_window: float
     echo_energy_threshold: float
+    echo_tolerance: float
     
     # Memory & Dialogue
     dialogue_memory_timeout: float
@@ -223,13 +224,14 @@ def get_default_config() -> Dict[str, Any]:
         "vad_pre_roll_ms": 240,
         "endpoint_silence_ms": 800,
         "max_utterance_ms": 12000,
+        "tts_max_utterance_ms": 3000,  # Shorter timeout during TTS for quick stop detection
         
         # UI/UX Features
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 6.0,
-        "echo_suppression_window": 1.0,
         "echo_energy_threshold": 2.0,
+        "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
         
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
@@ -332,13 +334,14 @@ def load_settings() -> Settings:
     vad_frame_ms = int(merged.get("vad_frame_ms", 20))
     vad_pre_roll_ms = int(merged.get("vad_pre_roll_ms", 240))
     endpoint_silence_ms = int(merged.get("endpoint_silence_ms", 800))
-    max_utterance_ms = int(merged.get("max_utterance_ms", 60000))
+    max_utterance_ms = int(merged.get("max_utterance_ms", 12000))
+    tts_max_utterance_ms = int(merged.get("tts_max_utterance_ms", 3000))
     sample_rate = int(merged.get("sample_rate", 16000))
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 6.0))
-    echo_suppression_window = float(merged.get("echo_suppression_window", 1.0))
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
+    echo_tolerance = float(merged.get("echo_tolerance", 0.3))
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
@@ -421,13 +424,14 @@ def load_settings() -> Settings:
         vad_pre_roll_ms=vad_pre_roll_ms,
         endpoint_silence_ms=endpoint_silence_ms,
         max_utterance_ms=max_utterance_ms,
+        tts_max_utterance_ms=tts_max_utterance_ms,
         
         # UI/UX Features
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
-        echo_suppression_window=echo_suppression_window,
         echo_energy_threshold=echo_energy_threshold,
+        echo_tolerance=echo_tolerance,
         
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,

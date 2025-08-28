@@ -6,6 +6,8 @@ import re
 import threading
 from datetime import datetime, timezone
 
+from ..debug import debug_log
+
 _SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -108,16 +110,16 @@ class Database:
         
         # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
         if not self.is_vss_enabled:
-            from .vector_store import get_best_vector_store
+            from ..utils.vector_store import get_best_vector_store
             self._python_vector_store = get_best_vector_store(db_path, dimension=768)
             
             # Log which vector store implementation is being used
             import sys
             store_type = type(self._python_vector_store).__name__
             if store_type == "FAISSVectorStore":
-                print(f"[jarvis] Using FAISS vector store for fast search", file=sys.stderr)
+                debug_log("Using FAISS vector store for fast search", "jarvis")
             else:
-                print(f"[jarvis] Using Python fallback vector store", file=sys.stderr)
+                debug_log("Using Python fallback vector store", "jarvis")
         
         self._init_schema()
 

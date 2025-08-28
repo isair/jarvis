@@ -5,7 +5,7 @@ import pytest
 @pytest.mark.unit
 def test_mcp_client_list_and_invoke(monkeypatch):
     # Import the real client and patch its external dependencies
-    from jarvis.mcp_client import MCPClient
+    from jarvis.tools.external.mcp_client import MCPClient
 
     # Prepare fake server config (command won't actually run because we mock stdio_client)
     mcps = {
@@ -19,6 +19,13 @@ def test_mcp_client_list_and_invoke(monkeypatch):
 
     client = MCPClient(mcps)
 
+    # Create fake tool objects that the MCP client expects
+    class FakeTool:
+        def __init__(self, name, description, inputSchema):
+            self.name = name
+            self.description = description
+            self.inputSchema = inputSchema
+
     # Create fake session object implementing the observable API used by MCPClient
     class FakeSession:
         async def initialize(self):
@@ -26,12 +33,18 @@ def test_mcp_client_list_and_invoke(monkeypatch):
 
         async def list_tools(self):
             return [
-                {"name": "alpha", "description": "desc", "inputSchema": {"type": "object"}},
-                {"name": "beta", "description": "desc", "inputSchema": {"type": "object"}},
+                FakeTool("alpha", "desc", {"type": "object"}),
+                FakeTool("beta", "desc", {"type": "object"}),
             ]
 
         async def call_tool(self, name, arguments):
-            return {"content": f"called:{name}:{arguments}", "isError": False}
+            # Create a response object with attributes that the MCP client expects
+            class FakeResponse:
+                def __init__(self):
+                    self.content = f"called:{name}:{arguments}"
+                    self.isError = False
+                    self.meta = None
+            return FakeResponse()
 
     # Mock stdio_client context manager to yield (read, write)
     class FakeCM:
@@ -58,10 +71,10 @@ def test_mcp_client_list_and_invoke(monkeypatch):
             return False
 
     # Patch public imports inside the module (observable seams)
-    monkeypatch.setattr("jarvis.mcp_client.stdio_client", lambda params: FakeCM(FakeSession()))
-    monkeypatch.setattr("jarvis.mcp_client.ClientSession", FakeClientSession)
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.stdio_client", lambda params: FakeCM(FakeSession()))
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.ClientSession", FakeClientSession)
     # Avoid PATH check failing in _connect_stdio
-    monkeypatch.setattr("jarvis.mcp_client.shutil.which", lambda cmd: cmd)
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: cmd)
 
     tools = asyncio.run(client.list_tools_async("fake"))
     assert isinstance(tools, list) and {t["name"] for t in tools} == {"alpha", "beta"}

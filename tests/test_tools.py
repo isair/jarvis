@@ -1,7 +1,7 @@
 import types
 import pytest
 
-from jarvis.tools import run_tool_with_retries, ToolExecutionResult
+from jarvis.tools.registry import run_tool_with_retries, ToolExecutionResult
 
 
 class DummyCfg:
@@ -80,7 +80,7 @@ def test_mcp_invocation_json(monkeypatch):
             return {"text": "ok", "isError": False}
 
     # Patch the symbol used by the tools module (observable seam)
-    import jarvis.tools as tools_mod
+    import jarvis.tools.registry as tools_mod
     monkeypatch.setattr(tools_mod, "MCPClient", FakeClient)
 
     res = run_tool_with_retries(
@@ -128,7 +128,7 @@ def test_mcp_client_error_propagates_to_reply_text(monkeypatch):
         def invoke_tool(self, server_name: str, tool_name: str, arguments=None):
             return {"text": "boom", "isError": True}
 
-    import jarvis.tools as tools_mod
+    import jarvis.tools.registry as tools_mod
     monkeypatch.setattr(tools_mod, "MCPClient", FakeClient)
 
     res = run_tool_with_retries(
@@ -160,7 +160,7 @@ def test_local_files_list_and_read(tmp_path):
     cfg = DummyCfg()
 
     # Monkeypatch expanduser to point to tmp home
-    import jarvis.tools as tools_mod
+    import jarvis.tools.registry as tools_mod
     import builtins
     from pathlib import Path as _P
 
@@ -203,7 +203,7 @@ def test_local_files_list_and_read(tmp_path):
 def test_local_files_write_append_delete(tmp_path):
     db = DummyDB()
     cfg = DummyCfg()
-    import jarvis.tools as tools_mod
+    import jarvis.tools.registry as tools_mod
 
     orig_expanduser = tools_mod.os.path.expanduser
     tools_mod.os.path.expanduser = lambda p: str(tmp_path) if p == "~" or p.startswith("~") else orig_expanduser(p)

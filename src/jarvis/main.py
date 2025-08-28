@@ -1,11 +1,11 @@
 """
-Jarvis Voice Assistant
+Jarvis Voice Assistant - Main Entry Point
 
 A modular voice assistant with conversation memory, tool integration,
 and natural language processing capabilities.
 """
 
 from .daemon import main
-from .config import load_settings
 
-__all__ = ["main", "load_settings"]
+if __name__ == "__main__":
+    main()

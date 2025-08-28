@@ -6,7 +6,21 @@ alwaysApply: true
 
 Data privacy comes first, always.
 
+## Utilities
+
+Any important point in our logical flows should have debug logs using the `debug_log` method from `src/jarvis/debug.py`. Avoid excessive logging to keep the logs easily readable and actionable.
+
 ## Architecture Decisions
+
+For any spec files, and architectural decisions mentioned below, any code change must either adhere to them perfectly or you should ask the user to confirm changes, which should also propagate to the specs themselves.
+
+### Listening Flow
+
+Check [here](/src/jarvis/listening/listening.spec.md) for the full listening flow specification.
+
+### Reply Flow
+
+Check [here](/src/jarvis/reply/reply.spec.md) for the full reply flow specification.
 
 ### Language-Agnostic Design
 

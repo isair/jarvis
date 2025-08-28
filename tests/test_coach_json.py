@@ -1,6 +1,6 @@
 import pytest
 
-from jarvis.coach import ask_coach_with_tools
+from jarvis.reply.coach import ask_coach_with_tools
 
 
 class DummyResp:
@@ -23,7 +23,7 @@ def test_json_directive_internal_tool(monkeypatch):
         msg = {"message": {"content": '{"tool": {"name": "fetchMeals", "args": {"since_utc": "2025-01-01T00:00:00Z"}}}'}}
         return DummyResp(msg)
 
-    monkeypatch.setattr("jarvis.coach.requests.post", _fake_post)
+    monkeypatch.setattr("jarvis.reply.coach.requests.post", _fake_post)
 
     final_text, tool_req, tool_args = ask_coach_with_tools(
         base_url="http://localhost:11434",
@@ -49,7 +49,7 @@ def test_json_directive_mcp_tool(monkeypatch):
         msg = {"message": {"content": '{"tool": {"server": "fs", "name": "list", "args": {"path": "~"}}}'}}
         return DummyResp(msg)
 
-    monkeypatch.setattr("jarvis.coach.requests.post", _fake_post)
+    monkeypatch.setattr("jarvis.reply.coach.requests.post", _fake_post)
 
     final_text, tool_req, tool_args = ask_coach_with_tools(
         base_url="http://localhost:11434",
@@ -83,7 +83,7 @@ def test_structured_tool_calls_function_path(monkeypatch):
         }
         return DummyResp(payload)
 
-    monkeypatch.setattr("jarvis.coach.requests.post", _fake_post)
+    monkeypatch.setattr("jarvis.reply.coach.requests.post", _fake_post)
 
     final_text, tool_req, tool_args = ask_coach_with_tools(
         base_url="http://localhost:11434",

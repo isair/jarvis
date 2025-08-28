@@ -8,12 +8,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import os
 
-from .ocr import capture_screenshot_and_ocr
-from .coach import ask_coach
-from .nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
-from .config import Settings
-from .mcp_client import MCPClient
-from .memory import search_conversation_memory
+from .builtin.ocr import capture_screenshot_and_ocr
+from .builtin.nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
+from ..config import Settings
+from .external.mcp_client import MCPClient
+from ..memory.conversation import search_conversation_memory
+from ..debug import debug_log
 
 
 
@@ -251,26 +251,17 @@ def run_tool_with_retries(
     # screenshot
     if name == "screenshot":
         _user_print("📸 Capturing a screenshot for OCR…")
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print("[debug] screenshot: capturing OCR...", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log("screenshot: capturing OCR...", "screenshot")
         ocr_text = capture_screenshot_and_ocr(interactive=True) or ""
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print(f"[debug] screenshot: ocr_chars={len(ocr_text)}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"screenshot: ocr_chars={len(ocr_text)}", "screenshot")
         followup_prompt = original_prompt + "\n\n[SCREENSHOT_OCR]\n" + ocr_text[:4000]
+        
+        # Import locally to avoid circular dependency
+        from ..reply.coach import ask_coach
         reply = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, followup_prompt, 
                          timeout_sec=cfg.llm_chat_timeout_sec, include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
         result = ToolExecutionResult(success=True, reply_text=(reply or "").strip())
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print("[debug] screenshot: completed", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log("screenshot: completed", "screenshot")
         _user_print("✅ Screenshot processed.")
         return result
 
@@ -295,11 +286,7 @@ def run_tool_with_retries(
             return all(k in a for k in required)
 
         if tool_args and isinstance(tool_args, dict) and _has_all_fields(tool_args):
-            if getattr(cfg, "voice_debug", False):
-                try:
-                    print("[debug] logMeal: using provided args", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log("logMeal: using provided args", "nutrition")
             meal_id = log_meal_from_args(db, tool_args, source_app=("stdin" if cfg.use_stdin else "unknown"))
             if meal_id is not None:
                 # Build follow-ups conversationally
@@ -315,36 +302,20 @@ def run_tool_with_retries(
                 approx = ", ".join(approx_bits) if approx_bits else "approximate macros logged"
                 follow_text = generate_followups_for_meal(cfg, desc, approx)
                 reply_text = f"Logged meal #{meal_id}: {desc} — {approx}.\nFollow-ups: {follow_text}"
-                if getattr(cfg, "voice_debug", False):
-                    try:
-                        print(f"[debug] logMeal: logged meal_id={meal_id}", file=sys.stderr)
-                    except Exception:
-                        pass
+                debug_log(f"logMeal: logged meal_id={meal_id}", "nutrition")
                 _user_print("✅ Meal saved.")
                 return ToolExecutionResult(success=True, reply_text=reply_text)
         # Retry path: extract and log from redacted text using extractor
         for attempt in range(max_retries + 1):
             try:
-                if getattr(cfg, "voice_debug", False):
-                    try:
-                        print(f"[debug] logMeal: extracting from text (attempt {attempt+1}/{max_retries+1})", file=sys.stderr)
-                    except Exception:
-                        pass
+                debug_log(f"logMeal: extracting from text (attempt {attempt+1}/{max_retries+1})", "nutrition")
                 meal_summary = extract_and_log_meal(db, cfg, original_text=redacted_text, source_app=("stdin" if cfg.use_stdin else "unknown"))
                 if meal_summary:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print("[debug] logMeal: extraction+log succeeded", file=sys.stderr)
-                        except Exception:
-                            pass
+                    debug_log("logMeal: extraction+log succeeded", "nutrition")
                     return ToolExecutionResult(success=True, reply_text=meal_summary)
             except Exception:
                 pass
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print("[debug] logMeal: failed", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log("logMeal: failed", "nutrition")
         _user_print("⚠️ I couldn't log that meal automatically.")
         return ToolExecutionResult(success=False, reply_text=None, error_message="Failed to log meal")
 
@@ -352,17 +323,9 @@ def run_tool_with_retries(
     if name == "fetchMeals":
         _user_print("📖 Retrieving your meals…")
         since, until = _normalize_time_range(tool_args if isinstance(tool_args, dict) else None)
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print(f"[debug] fetchMeals: range since={since} until={until}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"fetchMeals: range since={since} until={until}", "nutrition")
         meals = db.get_meals_between(since, until)
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print(f"[debug] fetchMeals: count={len(meals)}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"fetchMeals: count={len(meals)}", "nutrition")
         summary = summarize_meals([dict(r) for r in meals])
         # Return raw meal summary for profile processing
         _user_print("✅ Meals retrieved.")
@@ -383,11 +346,7 @@ def run_tool_with_retries(
                 is_deleted = db.delete_meal(mid)
             except Exception:
                 is_deleted = False
-        if getattr(cfg, "voice_debug", False):
-            try:
-                print(f"[debug] DELETE_MEAL: id={mid} deleted={is_deleted}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"DELETE_MEAL: id={mid} deleted={is_deleted}", "nutrition")
         _user_print("✅ Meal deleted." if is_deleted else "⚠️ I couldn't delete that meal.")
         return ToolExecutionResult(success=is_deleted, reply_text=("Meal deleted." if is_deleted else "Sorry, I couldn't delete that meal."))
 
@@ -409,11 +368,7 @@ def run_tool_with_retries(
                 return ToolExecutionResult(success=False, reply_text="Please provide either a search query or time range to recall conversations.")
             
             if getattr(cfg, "voice_debug", False):
-                try:
-                    debug_msg = f"    🔍 recallConversation: query='{search_query}', from={from_time}, to={to_time}"
-                    print(debug_msg, file=sys.stderr)
-                except Exception:
-                    pass
+                debug_log(f"    🔍 recallConversation: query='{search_query}', from={from_time}, to={to_time}", "memory")
 
             context = search_conversation_memory(
                 db=db,
@@ -428,15 +383,10 @@ def run_tool_with_retries(
             )
             
             # Debug output for voice debug mode
-            if getattr(cfg, "voice_debug", False):
-                try:
-                    print(f"      ✅ found {len(context)} results", file=sys.stderr)
-                    if context:
-                        # Show a preview of the first result
-                        preview = context[0][:200] + "..." if len(context[0]) > 200 else context[0]
-                        print(f"      📋 Preview: {preview}", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log(f"      ✅ found {len(context)} results", "memory")
+            if context:
+                preview = context[0][:200] + "..." if len(context[0]) > 200 else context[0]
+                debug_log(f"      📋 Preview: {preview}", "memory")
             
             # Generate response
             if not context:
@@ -485,11 +435,7 @@ def run_tool_with_retries(
             return ToolExecutionResult(success=True, reply_text=reply_text)
             
         except Exception as e:
-            if getattr(cfg, "voice_debug", False):
-                try:
-                    print(f"[debug] recallConversation: error {e}", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log(f"recallConversation: error {e}", "memory")
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble searching my conversation memory.")
 
     # webSearch
@@ -510,11 +456,7 @@ def run_tool_with_retries(
             if not search_query:
                 return ToolExecutionResult(success=False, reply_text="Please provide a search query for the web search.")
             
-            if getattr(cfg, "voice_debug", False):
-                try:
-                    print(f"    🌐 webSearch: searching for '{search_query}'", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log(f"    🌐 searching for '{search_query}'", "web")
             
             # Use DuckDuckGo search with web scraping for comprehensive results
             try:
@@ -571,11 +513,7 @@ def run_tool_with_retries(
                         links = soup.find_all('a', href=True)
                         result_count = 0
                         
-                        if getattr(cfg, "voice_debug", False):
-                            try:
-                                print(f"[debug] webSearch: Found {len(links)} total links on DDG page", file=sys.stderr)
-                            except Exception:
-                                pass
+                        debug_log(f"Found {len(links)} total links on DDG page", "web")
                         
                         for i, link in enumerate(links):
                             if result_count >= 5:  # Limit to top 5 results
@@ -585,11 +523,8 @@ def run_tool_with_retries(
                             title = link.get_text().strip()
                             
                             # Debug: show first few links for troubleshooting
-                            if getattr(cfg, "voice_debug", False) and i < 10:
-                                try:
-                                    print(f"[debug] webSearch: Link {i}: href='{href[:50]}...', title='{title[:50]}...'", file=sys.stderr)
-                                except Exception:
-                                    pass
+                            if i < 10:
+                                debug_log(f"Link {i}: href='{href[:50]}...', title='{title[:50]}...'", "web")
                             
                             # Extract actual URL from DuckDuckGo redirect if needed
                             actual_url = href
@@ -614,36 +549,16 @@ def run_tool_with_retries(
                                 search_results.append(f"   Link: {actual_url}")
                                 search_results.append("")
                                 
-                                if getattr(cfg, "voice_debug", False):
-                                    try:
-                                        print(f"[debug] webSearch: Accepted result {result_count}: '{title[:50]}...'", file=sys.stderr)
-                                    except Exception:
-                                        pass
+                                debug_log(f"Accepted result {result_count}: '{title[:50]}...'", "web")
                         
-                        if getattr(cfg, "voice_debug", False):
-                            try:
-                                print(f"[debug] webSearch: DuckDuckGo found {result_count} results", file=sys.stderr)
-                            except Exception:
-                                pass
+                        debug_log(f"DuckDuckGo found {result_count} results", "web")
                     else:
-                        if getattr(cfg, "voice_debug", False):
-                            try:
-                                print(f"[debug] webSearch: DuckDuckGo returned status {ddg_response.status_code}", file=sys.stderr)
-                            except Exception:
-                                pass
+                        debug_log(f"DuckDuckGo returned status {ddg_response.status_code}", "web")
                 
                 except ImportError:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] webSearch: BeautifulSoup not available", file=sys.stderr)
-                        except Exception:
-                            pass
+                    debug_log("BeautifulSoup not available", "web")
                 except Exception as ddg_error:
-                    if getattr(cfg, "voice_debug", False):
-                        try:
-                            print(f"[debug] webSearch: DuckDuckGo search failed: {ddg_error}", file=sys.stderr)
-                        except Exception:
-                            pass
+                    debug_log(f"DuckDuckGo search failed: {ddg_error}", "web")
                 
                 # No fallback - if primary search fails, the search fails
                 
@@ -685,7 +600,7 @@ def run_tool_with_retries(
                     try:
                         instant_count = len(instant_results)
                         web_count = len([r for r in search_results if r.strip() and not r.startswith("   ")])
-                        print(f"      ✅ found {instant_count} instant answers, {web_count} web results", file=sys.stderr)
+                        debug_log(f"      ✅ found {instant_count} instant answers, {web_count} web results", "web")
                     except Exception:
                         pass
                 try:
@@ -700,11 +615,7 @@ def run_tool_with_retries(
                 return ToolExecutionResult(success=True, reply_text=reply_text)
                 
             except Exception as search_error:
-                if getattr(cfg, "voice_debug", False):
-                    try:
-                        print(f"[debug] webSearch: search failed: {search_error}", file=sys.stderr)
-                    except Exception:
-                        pass
+                debug_log(f"search failed: {search_error}", "web")
                 
                 # Fallback response when search fails
                 return ToolExecutionResult(
@@ -713,11 +624,7 @@ def run_tool_with_retries(
                 )
                 
         except Exception as e:
-            if getattr(cfg, "voice_debug", False):
-                try:
-                    print(f"[debug] webSearch: error {e}", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log(f"error {e}", "web")
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble performing the web search.")
 
     # localFiles
@@ -830,11 +737,7 @@ def run_tool_with_retries(
             return ToolExecutionResult(success=False, reply_text=f"localFiles error: {e}")
 
     # Unknown tool
-    if getattr(cfg, "voice_debug", False):
-        try:
-            print(f"[debug] unknown tool requested: {tool_name}", file=sys.stderr)
-        except Exception:
-            pass
+    debug_log(f"unknown tool requested: {tool_name}", "tools")
     return ToolExecutionResult(success=False, reply_text=None, error_message=f"Unknown tool: {tool_name}")
 
 

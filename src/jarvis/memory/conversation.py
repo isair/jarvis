@@ -4,8 +4,9 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, List, Tuple, Union
 from .db import Database
-from .llm import call_llm_direct
-from .embed import get_embedding
+from ..llm import call_llm_direct
+from .embeddings import get_embedding
+from ..debug import debug_log
 
 
 def _filter_contexts_by_time(
@@ -29,11 +30,7 @@ def _filter_contexts_by_time(
             to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
     except Exception as e:
         if voice_debug:
-            try:
-                import sys
-                print(f"      📋 Error parsing time: {e}", file=sys.stderr)
-            except Exception:
-                pass
+            debug_log(f"      📋 Error parsing time: {e}", "memory")
         return contexts
     
     import re
@@ -276,15 +273,10 @@ def update_daily_conversation_summary(
     
     try:
         # Debug: Log the new chunks being processed
-        if voice_debug:
-            try:
-                import sys
-                print(f"[debug] updating conversation memory with {len(new_chunks)} new chunks:", file=sys.stderr)
-                for i, chunk in enumerate(new_chunks):
-                    chunk_preview = chunk[:100] + "..." if len(chunk) > 100 else chunk
-                    print(f"[debug]   chunk {i+1}: {chunk_preview}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"updating conversation memory with {len(new_chunks)} new chunks:", "memory")
+        for i, chunk in enumerate(new_chunks):
+            chunk_preview = chunk[:100] + "..." if len(chunk) > 100 else chunk
+            debug_log(f"  chunk {i+1}: {chunk_preview}", "memory")
         
         # Get existing summary for today
         existing = db.get_conversation_summary(today, source_app)
@@ -297,27 +289,19 @@ def update_daily_conversation_summary(
         
         # Skip summarization if LLM failed
         if summary is None or topics is None:
-            if voice_debug:
-                try:
-                    print(f"[debug] conversation summary skipped - LLM failed to generate summary", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log("conversation summary skipped - LLM failed to generate summary", "memory")
             return  # Skip summarization entirely
         
         # Debug: Log the generated summary and topics
-        if voice_debug:
-            try:
-                summary_preview = summary[:200] + "..." if len(summary) > 200 else summary
-                print(f"[debug] conversation memory updated to:", file=sys.stderr)
-                print(f"[debug]   summary: {summary_preview}", file=sys.stderr)
-                print(f"[debug]   topics: {topics}", file=sys.stderr)
-                if previous_summary:
-                    prev_preview = previous_summary[:100] + "..." if len(previous_summary) > 100 else previous_summary
-                    print(f"[debug]   previous summary: {prev_preview}", file=sys.stderr)
-                else:
-                    print(f"[debug]   previous summary: (none)", file=sys.stderr)
-            except Exception:
-                pass
+        summary_preview = summary[:200] + "..." if len(summary) > 200 else summary
+        debug_log("conversation memory updated to:", "memory")
+        debug_log(f"  summary: {summary_preview}", "memory")
+        debug_log(f"  topics: {topics}", "memory")
+        if previous_summary:
+            prev_preview = previous_summary[:100] + "..." if len(previous_summary) > 100 else previous_summary
+            debug_log(f"  previous summary: {prev_preview}", "memory")
+        else:
+            debug_log("  previous summary: (none)", "memory")
         
         # Store the summary
         summary_id = db.upsert_conversation_summary(
@@ -381,12 +365,7 @@ def search_conversation_memory_by_keywords(
         return contexts
     
     try:
-        if voice_debug:
-            try:
-                import sys
-                print(f"      🔍 Keyword-based search for: {clean_keywords}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"      🔍 Keyword-based search for: {clean_keywords}", "memory")
         
         # Build FTS OR query for better recall
         fts_query = " OR ".join(clean_keywords[:5])  # Limit to 5 keywords
@@ -394,13 +373,8 @@ def search_conversation_memory_by_keywords(
         # For embedding, combine keywords to get semantic meaning of the topic cluster
         embed_query = " ".join(clean_keywords)
         
-        if voice_debug:
-            try:
-                import sys
-                print(f"      📝 FTS query: '{fts_query}'", file=sys.stderr)
-                print(f"      📝 Embed query: '{embed_query}'", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"      📝 FTS query: '{fts_query}'", "memory")
+        debug_log(f"      📝 Embed query: '{embed_query}'", "memory")
         
         if ollama_base_url and ollama_embed_model:
             try:
@@ -414,11 +388,7 @@ def search_conversation_memory_by_keywords(
                     # Fallback: FTS-only with OR query
                     search_results = db.search_hybrid(fts_query, None, top_k=max_results)
             except Exception as e:
-                if voice_debug:
-                    try:
-                        print(f"      ❌ Embedding failed, using FTS only: {e}", file=sys.stderr)
-                    except Exception:
-                        pass
+                debug_log(f"      ❌ Embedding failed, using FTS only: {e}", "memory")
                 # Fallback to FTS-only
                 search_results = db.search_hybrid(fts_query, None, top_k=max_results)
         else:
@@ -434,24 +404,14 @@ def search_conversation_memory_by_keywords(
             if isinstance(result_text, str) and result_text:
                 contexts.append(result_text)
         
-        if voice_debug:
-            try:
-                import sys
-                print(f"      ✅ found {len(contexts)} keyword search results", file=sys.stderr)
-                if contexts:
-                    # Show preview of first result
-                    preview = contexts[0][:150] + "..." if len(contexts[0]) > 150 else contexts[0]
-                    print(f"      📋 First result: {preview}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"      ✅ found {len(contexts)} keyword search results", "memory")
+        if contexts:
+            # Show preview of first result
+            preview = contexts[0][:150] + "..." if len(contexts[0]) > 150 else contexts[0]
+            debug_log(f"      📋 First result: {preview}", "memory")
                 
     except Exception as e:
-        if voice_debug:
-            try:
-                import sys
-                print(f"[debug] keyword search failed: {e}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"keyword search failed: {e}", "memory")
     
     # Apply time filtering if needed
     if from_time or to_time:
@@ -517,18 +477,10 @@ def search_conversation_memory(
                         
             except Exception as e:
                 if voice_debug:
-                    try:
-                        import sys
-                        print(f"[debug] memory search failed: {e}", file=sys.stderr)
-                    except Exception:
-                        pass
+                    debug_log(f"memory search failed: {e}", "memory")
         
         # Apply time filtering if provided
-        if voice_debug:
-            try:
-                print(f"      📋 Checking time filtering: from_time={from_time}, to_time={to_time}", file=sys.stderr)
-            except Exception:
-                pass
+        debug_log(f"      📋 Checking time filtering: from_time={from_time}, to_time={to_time}", "memory")
                 
         if from_time or to_time:
             filtered_contexts = []
@@ -541,27 +493,15 @@ def search_conversation_memory(
                 if to_time:
                     to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
             except Exception as e:
-                if voice_debug:
-                    try:
-                        print(f"      📋 Error parsing time: {e}", file=sys.stderr)
-                    except Exception:
-                        pass
+                debug_log(f"      📋 Error parsing time: {e}", "memory")
             
-            if voice_debug:
-                try:
-                    print(f"      📋 Time filtering: search_query='{search_query}', from_dt={from_dt}, to_dt={to_dt}", file=sys.stderr)
-                except Exception:
-                    pass
+            debug_log(f"      📋 Time filtering: search_query='{search_query}', from_dt={from_dt}, to_dt={to_dt}", "memory")
             
             # If we have time constraints but no search query, get all summaries in range
             if (not search_query or not search_query.strip()) and (from_dt or to_dt):
                 recent_summaries = db.get_recent_conversation_summaries(days=30)
-                if voice_debug:
-                    try:
-                        print(f"      📋 Time filter: from={from_dt.date() if from_dt else None} to={to_dt.date() if to_dt else None}", file=sys.stderr)
-                        print(f"      📋 Found {len(recent_summaries)} summaries to check", file=sys.stderr)
-                    except Exception:
-                        pass
+                debug_log(f"      📋 Time filter: from={from_dt.date() if from_dt else None} to={to_dt.date() if to_dt else None}", "memory")
+                debug_log(f"      📋 Found {len(recent_summaries)} summaries to check", "memory")
                         
                 for summary_row in recent_summaries:
                     date_str = summary_row['date_utc']
@@ -570,18 +510,10 @@ def search_conversation_memory(
                     in_range = True
                     if from_dt and summary_date.date() < from_dt.date():
                         in_range = False
-                        if voice_debug:
-                            try:
-                                print(f"      📋 Skipping {date_str}: before from_dt", file=sys.stderr)
-                            except Exception:
-                                pass
+                        debug_log(f"      📋 Skipping {date_str}: before from_dt", "memory")
                     if to_dt and summary_date.date() > to_dt.date():
                         in_range = False
-                        if voice_debug:
-                            try:
-                                print(f"      📋 Skipping {date_str}: after to_dt", file=sys.stderr)
-                            except Exception:
-                                pass
+                        debug_log(f"      📋 Skipping {date_str}: after to_dt", "memory")
                     
                     if in_range:
                         summary_text = summary_row['summary']
@@ -590,11 +522,7 @@ def search_conversation_memory(
                         if topics:
                             context_str += f" (Topics: {topics})"
                         contexts.append(context_str)
-                        if voice_debug:
-                            try:
-                                print(f"      📋 Including summary from {date_str} (length: {len(summary_text)})", file=sys.stderr)
-                            except Exception:
-                                pass
+                        debug_log(f"      📋 Including summary from {date_str} (length: {len(summary_text)})", "memory")
                         
             else:
                 # Filter existing search results by time

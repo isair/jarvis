@@ -4,7 +4,7 @@ import pytest
 @pytest.mark.unit
 def test_planning_prompt_no_formatting_error(monkeypatch):
     # Import here to ensure module load after monkeypatch if needed
-    import jarvis.daemon as daemon
+    import jarvis.reply.planner as planner
 
     # Provide a minimal plan with only a finalResponse step
     plan_json = (
@@ -26,8 +26,8 @@ def test_planning_prompt_no_formatting_error(monkeypatch):
     def _fake_ask_coach(base_url, chat_model, system_prompt, user_content, **kwargs):
         return "ok"
 
-    monkeypatch.setattr(daemon, "ask_coach_with_tools", _fake_ask_coach_with_tools)
-    monkeypatch.setattr(daemon, "ask_coach", _fake_ask_coach)
+    monkeypatch.setattr(planner, "ask_coach_with_tools", _fake_ask_coach_with_tools)
+    monkeypatch.setattr(planner, "ask_coach", _fake_ask_coach)
 
     class _Cfg:
         # Minimal attributes used in the code path
@@ -43,7 +43,7 @@ def test_planning_prompt_no_formatting_error(monkeypatch):
     cfg = _Cfg()
 
     # Call the function under test; should not raise and should return "ok"
-    result = daemon._execute_multi_step_plan(
+    result = planner.execute_multi_step_plan(
         db=None,
         cfg=cfg,
         system_prompt="sys",
