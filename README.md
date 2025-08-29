@@ -1,6 +1,6 @@
 # Jarvis
 
-Your AI assistant that never forgets, understands context like a human, and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers. No subscriptions, no cloud, just say "Jarvis" and talk naturally.
+Your AI assistant that never forgets and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers (e.g. home automation). No subscriptions, no cloud, just say "Jarvis" and talk naturally.
 
 ---
 
@@ -13,9 +13,11 @@ Your AI assistant that never forgets, understands context like a human, and runs
 
 ### 🎬 **Movie-like AI experience**
 - Always listening, never interrupting - no buttons, no "new chat"
+- Responds to "stop" or "shush" but ignores background noise
 - Hot window mode - stays active after responding for natural follow-ups
 - Unlimited memory across days, weeks, months
 - Understands context and chains tools together intelligently
+- Real-time awareness (knows current time, location, etc.)
 - Switches personalities automatically (developer/business/life coach)
 
 ### 🔒 **Your data never leaves your machine**
@@ -35,23 +37,21 @@ Your AI assistant that never forgets, understands context like a human, and runs
 <summary>Personalized news search with memory & multi-step planning</summary>
 
 ```bash
-[voice] heard: Jarvis, what are some news from today that might interest me?
-[debug] query collected (silence timeout): 'what are some news from today that might interest me?'
-[debug] selected profile: business
-🧠 [memory] searching with keywords=['news', 'interest', 'technology'], time: 2025-01-15T00:00:00Z to 2025-01-15T23:59:59Z
-  ✅ found 3 results for memory enrichment
+[  voice   ] heard: Jarvis, what are some news from today that might interest me?
 ✨ Working on it: what are some news from today that might interest me?
+[  voice   ] dispatching query: 'what are some news from today that might interest me?'
+[ profile  ] selected profile: business
+[  memory  ] 🧠 searching with keywords=['news', 'interest', 'technology'], time: 2025-01-15T00:00:00Z to 2025-01-15T23:59:59Z
+[  memory  ]   ✅ found 3 results for memory enrichment
 🧠 Thinking…
-📝 Created plan with 2 steps
-     Step 1: webSearch - Search for current news in user's areas of interest  
-     Step 2: finalResponse - Synthesize relevant stories conversationally
+📝 Plan created (2 steps)
+  • Step 1: tool — Search for current news in user's areas of interest
+  • Step 2: finalResponse — Synthesize relevant stories conversationally
+[ planning ] ⚙️  [step 1] executing: tool - Search for current news in user's areas of interest...
 🧰 Tool: webSearch…
     🌐 webSearch: searching for 'January 15 2025 AI startups climate tech fintech news'
-[debug] WEB_SEARCH: DuckDuckGo found 8 results
-    ✅ webSearch returned 2341 chars
-  ✅ Step complete.
+[ planning ] ⚙️  [step 2] executing: finalResponse - Synthesize relevant stories conversationally...
 💬 Preparing your answer…
-  ✅ Step complete.
 
 🤖 Jarvis (business)
 Perfect timing! Found several stories that match your interests. OpenAI just announced a major partnership with Google for enterprise AI infrastructure - interesting given your previous questions about AI consolidation. Also, that carbon credit startup we discussed last month, Patch, just closed a $55M Series B. And there's breaking news about the EU's new AI regulation enforcement starting today, which could impact the fintech regulatory landscape you've been tracking. The renewable energy markets you asked about last week are also moving - solar futures hit record highs after Germany's new subsidy announcement. Want me to dive deeper into any of these?
@@ -63,22 +63,21 @@ Perfect timing! Found several stories that match your interests. OpenAI just ann
 <summary>Health-aware advice with nutrition tracking</summary>
 
 ```bash
-[voice] heard: Jarvis, should I order pizza tonight considering my health goals?
-[debug] query collected (silence timeout): 'should i order pizza tonight considering my health goals'
-[debug] selected profile: life
-🧠 [memory] searching with keywords=['health', 'goals', 'diet', 'food'], time: 2025-01-10T00:00:00Z to 2025-01-15T23:59:59Z
-  ✅ found 5 results for memory enrichment
+[  voice   ] heard: Jarvis, should I order pizza tonight considering my health goals?
 ✨ Working on it: should i order pizza tonight considering my health goals
+[  voice   ] dispatching query: 'should i order pizza tonight considering my health goals'
+[ profile  ] selected profile: life
+[  memory  ] 🧠 searching with keywords=['health', 'goals', 'diet', 'food'], time: 2025-01-10T00:00:00Z to 2025-01-15T23:59:59Z
+[  memory  ]   ✅ found 5 results for memory enrichment
 🧠 Thinking…
-📝 Created plan with 2 steps
-     Step 1: fetchMeals - Check today's nutrition so far
-     Step 2: finalResponse - Provide personalized advice based on goals and intake
-
+📝 Plan created (2 steps)
+  • Step 1: tool — Check today's nutrition so far
+  • Step 2: finalResponse — Provide personalized advice based on goals and intake
+[ planning ] ⚙️  [step 1] executing: tool - Check today's nutrition so far...
 🧰 Tool: fetchMeals…
     ✅ fetchMeals returned 892 chars
-  ✅ Step complete.
+[ planning ] ⚙️  [step 2] executing: finalResponse - Provide personalized advice based on goals and intake...
 💬 Preparing your answer…
-  ✅ Step complete.
 
 🤖 Jarvis (life)
 Looking at your week - you mentioned wanting to lose 10 pounds by March and you've been doing really well! Today you've had overnight oats (320 cal), a salad with grilled chicken (380 cal), and some almonds (160 cal) - about 860 calories so far.
@@ -97,28 +96,27 @@ You've been consistent with your goals this week (I see you logged workouts Mond
 <summary>Advanced debugging with screen analysis</summary>
 
 ```bash
-[voice] heard: Jarvis, I'm getting this weird GraphQL error, can you help debug it?
-[debug] query collected (silence timeout): 'i'm getting this weird graphql error can you help debug it'
-[debug] selected profile: developer
-🧠 [memory] searching with keywords=['graphql', 'error', 'debug', 'api'], time: 2025-01-10T00:00:00Z to 2025-01-15T23:59:59Z
-  ✅ found 4 results for memory enrichment
+[  voice   ] heard: Jarvis, I'm getting this weird GraphQL error, can you help debug it?
 ✨ Working on it: i'm getting this weird graphql error can you help debug it
+[  voice   ] dispatching query: 'i'm getting this weird graphql error can you help debug it'
+[ profile  ] selected profile: developer
+[  memory  ] 🧠 searching with keywords=['graphql', 'error', 'debug', 'api'], time: 2025-01-10T00:00:00Z to 2025-01-15T23:59:59Z
+[  memory  ]   ✅ found 4 results for memory enrichment
 🧠 Thinking…
-📝 Created plan with 3 steps
-     Step 1: screenshot - Capture current screen to see the error
-     Step 2: mcpTool - Use VSCode extension to examine code context
-     Step 3: finalResponse - Provide debugging analysis and solutions
-
+📝 Plan created (3 steps)
+  • Step 1: tool — Capture current screen to see the error
+  • Step 2: tool — Use VSCode extension to examine code context
+  • Step 3: finalResponse — Provide debugging analysis and solutions
+[ planning ] ⚙️  [step 1] executing: tool - Capture current screen to see the error...
 🧰 Tool: screenshot…
     📸 screenshot: captured screen content
     ✅ screenshot returned 2847 chars
-  ✅ Step complete.
+[ planning ] ⚙️  [step 2] executing: tool - Use VSCode extension to examine code context...
 🧰 MCP: vscode:findReferences…
     🔍 mcpTool: searching for GraphQL schema references
-    ✅ vscode:findReferences returned 1203 chars  
-  ✅ Step complete.
+    ✅ vscode:findReferences returned 1203 chars
+[ planning ] ⚙️  [step 3] executing: finalResponse - Provide debugging analysis and solutions...
 💬 Preparing your answer…
-  ✅ Step complete.
 
 🤖 Jarvis (developer)
 I can see the error on your screen - looks like a "Cannot return null for non-nullable field User.email" error. Based on your previous GraphQL work and what I'm seeing:
@@ -220,7 +218,7 @@ Done! Say "Jarvis" and start talking.
 
 ### 🎙️ **Natural Voice Interface**
 - Wake word activation ("Jarvis")
-- Interruptible responses
+- Interruptible responses ("stop", "shush")
 - Stays active for follow-ups
 - Multiple TTS options including voice cloning
 
@@ -288,6 +286,66 @@ Connect Jarvis to any tool using MCP (Model Context Protocol) servers:
 ```
 
 Find more MCP servers at [github.com/topics/mcp-server](https://github.com/topics/mcp-server)
+
+#### Home Automation (Home Assistant)
+
+Control your lights, switches, sensors, scenes, and other exposed Home Assistant entities directly by voice: “Jarvis, turn on the living room lights”. This uses the official Home Assistant MCP Server integration.
+
+Quick steps (≈3 min):
+
+1. In Home Assistant add the MCP Server integration (Settings → Devices & services → Add integration → search “Model Context Protocol Server”).  
+2. Expose only the entities you want Jarvis to control: Settings → Voice assistants → Exposed entities.  
+3. Create a Long‑lived Access Token: Profile (bottom left avatar) → Security → Create token (copy it).  
+4. Install the local proxy that bridges stdio ↔ Home Assistant SSE transport (pick one):  
+   - Using uv (recommended): `uv tool install git+https://github.com/sparfenyuk/mcp-proxy`  
+   - Or with pip: `pip install git+https://github.com/sparfenyuk/mcp-proxy`  
+5. Add the MCP server to your Jarvis `config.json`:
+
+```jsonc
+{
+  "mcps": {
+    "home_assistant": {
+      "command": "mcp-proxy",
+      "args": ["http://localhost:8123/mcp_server/sse"],
+      "env": {
+        "API_ACCESS_TOKEN": "YOUR_LONG_LIVED_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Alternative (env-only) form if you prefer not to pass the URL as an arg:
+
+```jsonc
+{
+  "mcps": {
+    "home_assistant": {
+      "command": "mcp-proxy",
+      "env": {
+        "SSE_URL": "http://localhost:8123/mcp_server/sse",
+        "API_ACCESS_TOKEN": "YOUR_LONG_LIVED_TOKEN"
+      }
+    }
+  }
+}
+```
+
+6. Restart Jarvis.  
+7. Try: “Jarvis, what’s the temperature in the bedroom?” or “Jarvis, turn off all the kitchen lights”.
+
+Notes & safety:
+- Jarvis can only see/control entities you explicitly exposed in Home Assistant. Review that list if access seems too broad or too limited.
+- If you change exposed entities, just restart Jarvis (or wait for the next tool schema refresh).
+- token scopes: Long‑lived tokens inherit your user’s permissions—treat them like a password. Revoke from Profile → Security if compromised.
+
+Troubleshooting (fast):
+- 404 Not Found (URL with `/mcp_server/sse`): The MCP Server integration isn’t installed/enabled. Add it in step 1.
+- 401 Unauthorized: Token invalid/expired. Create a new token and update config.
+- Command not found `mcp-proxy`: Re‑install (step 4) and ensure your Python tool install path is on PATH (restart shell if needed).
+- Jarvis says no tools available: Confirm the entity is exposed and restart Jarvis.
+
+That’s it—your home is now voice-controllable via private, local AI.
 
 ## Troubleshooting
 
