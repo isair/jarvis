@@ -144,9 +144,10 @@ Want me to help you run a database query to check for null emails, or would you 
 ### 1. Install Ollama
 Download from [ollama.com/download](https://ollama.com/download)
 
-### 2. Get the AI model
+### 2. Get the AI models
 ```bash
 ollama pull gpt-oss:20b
+ollama pull nomic-embed-text
 ```
 
 ### 3. Install Jarvis
