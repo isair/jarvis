@@ -1,0 +1,13 @@
+---
+description: Rules for all code files
+alwaysApply: false
+---
+# Code Quality Standards
+
+Write code that is clear, maintainable, and easy to understand.
+
+The best code is the least amount of code.
+
+Prioritize readability and simplicity over cleverness.
+
+Always document complex logic and follow established style guides to ensure consistency across the codebase.
