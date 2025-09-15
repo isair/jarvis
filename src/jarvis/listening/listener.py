@@ -167,58 +167,51 @@ class VoiceListener(threading.Thread):
         end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
         
-        # Priority 1: Check for echo (during TTS or echo window)
-        if self.tts and self.tts.enabled:
-            # Determine if the utterance started while TTS was active, accounting for processing delays.
-            is_speaking_now = self.tts.is_speaking()
-            if is_speaking_now:
-                is_during_tts = True
-            else:
-                tts_finish_time = self.echo_detector._last_tts_finish_time
-                echo_tolerance = self.echo_detector.echo_tolerance
-                is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
-
-            # Check if this should be rejected as echo
-            if self.echo_detector.should_reject_as_echo(
-                text_lower, 
-                utterance_energy, 
-                is_during_tts,
-                getattr(self.cfg, 'tts_rate', 200),
-                utterance_start_time
-            ):
-                return
-            
-            # Use the live state for stop command check, as we only care about interrupting active speech.
-            if is_speaking_now:
-                stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
-                if is_stop_command(text_lower, stop_commands):
-                    # Since echo detection already passed (we reached here), trust that decision
-                    # Now we have proper energy calculation from before frames were cleared
-                    debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f}, post-echo-check)", "voice")
-                    self.tts.interrupt()
-                    # Clear pending audio
-                    try:
-                        while not self._audio_q.empty():
-                            self._audio_q.get_nowait()
-                    except Exception:
-                        pass
-                    return
-        
-        # Priority 3: Hot window processing (check before expiry to handle long utterances)
+        # Priority 1: Hot window processing (check first to allow salvaged input during hot window)
         if self.state_manager.was_hot_window_active_at_voice_start():
-            # Even during hot window, check if this might still be echo from recent TTS
+            # During hot window, apply echo detection but be more permissive
             if self.tts and self.tts.enabled and self.echo_detector._last_tts_text:
-                # Use timing-based segment matching, as a user could say "stop" here too.
-                if self.echo_detector._matches_tts_segment(text_lower, getattr(self.cfg, 'tts_rate', 200), utterance_start_time):
+                # Try salvaging during TTS first
+                is_speaking_now = self.tts.is_speaking()
+                if is_speaking_now:
+                    is_during_tts = True
+                else:
+                    tts_finish_time = self.echo_detector._last_tts_finish_time
+                    echo_tolerance = self.echo_detector.echo_tolerance
+                    is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
+
+                if is_during_tts and self.echo_detector.should_reject_as_echo(
+                    text_lower, utterance_energy, is_during_tts,
+                    getattr(self.cfg, 'tts_rate', 200), utterance_start_time
+                ):
+                    # Attempt to salvage suffix during TTS in hot window
+                    salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
+                        text_lower,
+                        getattr(self.cfg, 'tts_rate', 200),
+                        utterance_start_time,
+                    )
+                    if salvaged and salvaged.strip() and salvaged != text_lower:
+                        debug_log(f"hot window: accepted salvaged suffix during TTS: '{salvaged}'", "voice")
+                        text_lower = salvaged
+                    else:
+                        # Only reject in hot window if we can't salvage anything
+                        if self.echo_detector._matches_tts_segment(text_lower, getattr(self.cfg, 'tts_rate', 200), utterance_start_time):
+                            debug_log(f"rejected as echo during hot window (segment match, no salvage): '{text_lower}'", "echo")
+                            if not self.cfg.voice_debug:
+                                try:
+                                    print("🔇 Ignoring echo from previous response")
+                                except Exception:
+                                    pass
+                            self.state_manager.expire_hot_window(self.cfg.voice_debug)
+                            self.state_manager.clear_hot_window_voice_state()
+                            return
+                elif not is_during_tts and self.echo_detector._matches_tts_segment(text_lower, getattr(self.cfg, 'tts_rate', 200), utterance_start_time):
                     debug_log(f"rejected as delayed echo during hot window (segment match): '{text_lower}'", "echo")
-                    
-                    # Pretty output for user
                     if not self.cfg.voice_debug:
                         try:
                             print("🔇 Ignoring echo from previous response")
                         except Exception:
                             pass
-                    
                     self.state_manager.expire_hot_window(self.cfg.voice_debug)
                     self.state_manager.clear_hot_window_voice_state()
                     return
@@ -242,6 +235,57 @@ class VoiceListener(threading.Thread):
                 except Exception:
                     pass
             return
+
+        # Priority 2: Check for echo (during TTS or echo window) - strict rejection outside hot window
+        if self.tts and self.tts.enabled:
+            # Determine if the utterance started while TTS was active, accounting for processing delays.
+            is_speaking_now = self.tts.is_speaking()
+            if is_speaking_now:
+                is_during_tts = True
+            else:
+                tts_finish_time = self.echo_detector._last_tts_finish_time
+                echo_tolerance = self.echo_detector.echo_tolerance
+                is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
+
+            # Check if this should be rejected as echo; during TTS try salvaging suffix
+            if self.echo_detector.should_reject_as_echo(
+                text_lower, 
+                utterance_energy, 
+                is_during_tts,
+                getattr(self.cfg, 'tts_rate', 200),
+                utterance_start_time
+            ):
+                if is_during_tts:
+                    # Attempt to remove leading echo and accept the remainder
+                    salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
+                        text_lower,
+                        getattr(self.cfg, 'tts_rate', 200),
+                        utterance_start_time,
+                    )
+                    if salvaged and salvaged.strip() and salvaged != text_lower:
+                        debug_log(f"accepted salvaged suffix during TTS: '{salvaged}'", "voice")
+                        # Pass through as if this were the text
+                        text_lower = salvaged
+                    else:
+                        return
+                else:
+                    return
+            
+            # Use the live state for stop command check, as we only care about interrupting active speech.
+            if is_speaking_now:
+                stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
+                if is_stop_command(text_lower, stop_commands):
+                    # Since echo detection already passed (we reached here), trust that decision
+                    # Now we have proper energy calculation from before frames were cleared
+                    debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f}, post-echo-check)", "voice")
+                    self.tts.interrupt()
+                    # Clear pending audio
+                    try:
+                        while not self._audio_q.empty():
+                            self._audio_q.get_nowait()
+                    except Exception:
+                        pass
+                    return
         
         # Check hot window expiry (only if not processed as hot window input)
         self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)

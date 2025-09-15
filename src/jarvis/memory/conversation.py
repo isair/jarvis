@@ -61,78 +61,61 @@ def _filter_contexts_by_time(
 class DialogueMemory:
     """
     In-memory storage for recent dialogue interactions.
-    Provides short-term context without immediately updating the diary.
+    Provides short-term context for the last 5 minutes of conversation.
     """
     
     def __init__(self, inactivity_timeout: float = 300.0, max_interactions: int = 20):
-        """
-        Initialize dialogue memory.
-        
-        Args:
-            inactivity_timeout: Seconds of inactivity before triggering diary update
-            max_interactions: Maximum number of interactions to keep in memory
-        """
-        self._interactions: List[Tuple[float, str, str]] = []  # (timestamp, user_text, assistant_text)
+        """Initialize dialogue memory."""
+        self._messages: List[Tuple[float, str, str]] = []  # (timestamp, role, content)
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
-        self._max_interactions = max_interactions  # kept for backward-compat; not used for cropping
         self._is_pending_diary_update = False
     
-    def add_interaction(self, user_text: str, assistant_text: str) -> None:
-        """Add a new interaction to memory."""
+    def add_message(self, role: str, content: str) -> None:
+        """Add a message to recent memory."""
         timestamp = time.time()
-        self._interactions.append((timestamp, user_text.strip(), assistant_text.strip()))
+        self._messages.append((timestamp, role.strip(), content.strip()))
         self._last_activity_time = timestamp
         self._is_pending_diary_update = True
-        # Do not crop by count; retrieval applies a 5-minute window
     
-    def get_recent_context(self, max_interactions: Optional[int] = None) -> List[str]:
-        """
-        Get recent interactions formatted for context.
-        
-        Args:
-            max_interactions: Deprecated; ignored. Context is limited by time window only.
-            
-        Returns:
-            List of formatted interaction strings
-        """
-        if not self._interactions:
-            return []
-        # Filter to last 5 minutes
-        cutoff = time.time() - 300.0
-        interactions_to_return = [it for it in self._interactions if it[0] >= cutoff]
-        context = []
-        for timestamp, user_text, assistant_text in interactions_to_return:
-            if user_text:
-                context.append(f"User: {user_text}")
-            if assistant_text:
-                context.append(f"Assistant: {assistant_text}")
-        
-        return context
+    def get_recent_context(self) -> List[str]:
+        """Get recent messages formatted as context strings."""
+        messages = self.get_recent_messages()
+        return [f"{msg['role'].title()}: {msg['content']}" for msg in messages]
     
-    def get_recent_messages(self, max_interactions: Optional[int] = None) -> List[dict]:
+    def get_recent_messages(self) -> List[dict]:
         """
-        Get recent interactions formatted as conversation messages for LLM API.
+        Get recent messages (last 5 minutes) formatted for LLM API.
         
-        Args:
-            max_interactions: Deprecated; ignored. Messages are limited by time window only.
-            
         Returns:
             List of message dictionaries with 'role' and 'content' keys
         """
-        if not self._interactions:
+        if not self._messages:
             return []
+        
         # Filter to last 5 minutes
         cutoff = time.time() - 300.0
-        interactions_to_return = [it for it in self._interactions if it[0] >= cutoff]
-        messages = []
-        for timestamp, user_text, assistant_text in interactions_to_return:
-            if user_text:
-                messages.append({"role": "user", "content": user_text})
-            if assistant_text:
-                messages.append({"role": "assistant", "content": assistant_text})
+        recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
         
-        return messages
+        return [{"role": role, "content": content} for _, role, content in recent_messages]
+    
+    def has_recent_messages(self) -> bool:
+        """Check if there are any messages in the last 5 minutes."""
+        cutoff = time.time() - 300.0
+        return any(ts >= cutoff for ts, _, _ in self._messages)
+
+    # Compatibility and diary functionality
+    def add_interaction(self, user_text: str, assistant_text: str) -> None:
+        """Compatibility method - use add_message() instead."""
+        if user_text.strip():
+            self.add_message("user", user_text.strip())
+        if assistant_text.strip():
+            self.add_message("assistant", assistant_text.strip())
+    
+    def get_pending_chunks(self) -> List[str]:
+        """Get recent messages as formatted chunks for diary update."""
+        messages = self.get_recent_messages()
+        return [f"{msg['role'].title()}: {msg['content']}" for msg in messages]
     
     def should_update_diary(self) -> bool:
         """Check if diary should be updated based on inactivity timeout."""
@@ -142,34 +125,9 @@ class DialogueMemory:
         current_time = time.time()
         return (current_time - self._last_activity_time) >= self._inactivity_timeout
     
-    def get_pending_chunks(self) -> List[str]:
-        """Get all pending interactions as chunks for diary update."""
-        if not self._interactions:
-            return []
-        
-        chunks = []
-        for timestamp, user_text, assistant_text in self._interactions:
-            if user_text:
-                chunks.append(f"User: {user_text}")
-            if assistant_text:
-                chunks.append(f"Assistant: {assistant_text}")
-        
-        return chunks
-    
     def clear_pending_updates(self) -> None:
-        """Clear the pending diary update flag and remove processed interactions."""
+        """Clear the pending diary update flag."""
         self._is_pending_diary_update = False
-        # Keep the last few interactions for immediate context but mark as processed
-        # We'll keep them for context but they won't trigger another diary update
-        
-    def has_recent_interactions(self) -> bool:
-        """Check if there are any interactions in the last 5 minutes."""
-        cutoff = time.time() - 300.0
-        return any(ts >= cutoff for ts, _, _ in self._interactions)
-    
-    def get_time_since_last_activity(self) -> float:
-        """Get seconds since last activity."""
-        return time.time() - self._last_activity_time
 
 
 def generate_conversation_summary(
@@ -272,9 +230,13 @@ def update_daily_conversation_summary(
     today = datetime.now(timezone.utc).date().isoformat()  # YYYY-MM-DD format
     
     try:
-        # Debug: Log the new chunks being processed
-        debug_log(f"updating conversation memory with {len(new_chunks)} new chunks:", "memory")
-        for i, chunk in enumerate(new_chunks):
+        # Redact sensitive information from chunks before processing
+        from ..utils.redact import redact
+        redacted_chunks = [redact(chunk) for chunk in new_chunks]
+        
+        # Debug: Log the redacted chunks being processed
+        debug_log(f"updating conversation memory with {len(redacted_chunks)} new chunks:", "memory")
+        for i, chunk in enumerate(redacted_chunks):
             chunk_preview = chunk[:100] + "..." if len(chunk) > 100 else chunk
             debug_log(f"  chunk {i+1}: {chunk_preview}", "memory")
         
@@ -282,9 +244,9 @@ def update_daily_conversation_summary(
         existing = db.get_conversation_summary(today, source_app)
         previous_summary = existing['summary'] if existing else None
         
-        # Generate updated summary
+        # Generate updated summary using redacted chunks
         summary, topics = generate_conversation_summary(
-            new_chunks, previous_summary, ollama_base_url, ollama_chat_model, timeout_sec=timeout_sec
+            redacted_chunks, previous_summary, ollama_base_url, ollama_chat_model, timeout_sec=timeout_sec
         )
         
         # Skip summarization if LLM failed

@@ -4,6 +4,7 @@ import socket
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
+from ..debug import debug_log
 
 try:
     import geoip2.database
@@ -179,6 +180,21 @@ def _get_database_path() -> Path:
     return base_dir / "GeoLite2-City.mmdb"
 
 
+def _print_location_setup_instructions(db_path: Path) -> None:
+    """Print user-friendly location setup instructions with proper formatting."""
+    print("📍 Location features are not available")
+    print()
+    print("   To enable location-based features:")
+    print("   1. 🌐 Register for a free MaxMind account:")
+    print("      https://www.maxmind.com/en/geolite2/signup")
+    print()
+    print("   2. 📥 Download the GeoLite2 City database (MMDB format)")
+    print()
+    print("   3. 📂 Save the database file as:")
+    print(f"      {db_path}")
+    print()
+
+
 def _download_geolite2_database() -> bool:
     """
     Download the GeoLite2 City database from MaxMind.
@@ -192,18 +208,16 @@ def _download_geolite2_database() -> bool:
         if db_path.exists():
             age_days = (datetime.now() - datetime.fromtimestamp(db_path.stat().st_mtime)).days
             if age_days < 30:
+                debug_log("GeoLite2 database found and up to date", "location")
                 return True
         
-        print(f"[location] GeoLite2 database not found or outdated at: {db_path}", file=sys.stderr)
-        print("[location] To enable location features:", file=sys.stderr)
-        print("[location] 1. Register for a free MaxMind account at: https://www.maxmind.com/en/geolite2/signup", file=sys.stderr)
-        print("[location] 2. Download GeoLite2 City database (MMDB format)", file=sys.stderr)
-        print(f"[location] 3. Save it as: {db_path}", file=sys.stderr)
+        debug_log(f"GeoLite2 database not found or outdated at: {db_path}", "location")
+        _print_location_setup_instructions(db_path)
         
         return False
         
     except Exception as e:
-        print(f"[location] Error checking database: {e}", file=sys.stderr)
+        debug_log(f"Error checking database: {e}", "location")
         return False
 
 
@@ -263,11 +277,15 @@ def get_location_info(ip_address: Optional[str] = None, config_ip: Optional[str]
             }
             
             # Clean up None values and empty strings
-            return {k: v for k, v in location_info.items() if v is not None and v != ""}
+            cleaned_info = {k: v for k, v in location_info.items() if v is not None and v != ""}
+            debug_log(f"Location detected: {cleaned_info.get('city', 'Unknown city')}, {cleaned_info.get('country', 'Unknown country')}", "location")
+            return cleaned_info
             
     except geoip2.errors.AddressNotFoundError:
+        debug_log(f"IP address {ip_address} not found in database", "location")
         return {"error": f"IP address {ip_address} not found in database", "ip": ip_address}
     except Exception as e:
+        debug_log(f"Error looking up location: {e}", "location")
         return {"error": f"Error looking up location: {e}", "ip": ip_address}
 
 
@@ -321,7 +339,12 @@ def setup_location_database() -> bool:
         True if database is available and ready, False otherwise.
     """
     if not GEOIP2_AVAILABLE:
-        print("[location] geoip2 library not installed. Install with: pip install geoip2", file=sys.stderr)
+        print("📦 Location library not installed")
+        print()
+        print("   To install the required geoip2 library:")
+        print("   pip install geoip2")
+        print()
+        debug_log("geoip2 library not available", "location")
         return False
     
     return _download_geolite2_database()
