@@ -92,6 +92,9 @@ class Settings:
     memory_enrichment_max_results: int
     memory_search_max_results: int
     
+    # Agentic Loop
+    agentic_max_turns: int
+    
     # Location Services
     location_enabled: bool
     location_cache_minutes: int
@@ -238,6 +241,9 @@ def get_default_config() -> Dict[str, Any]:
         "memory_enrichment_max_results": 10,
         "memory_search_max_results": 15,
         
+        # Agentic Loop
+        "agentic_max_turns": 8,
+        
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
@@ -345,6 +351,7 @@ def load_settings() -> Settings:
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
+    agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -437,6 +444,7 @@ def load_settings() -> Settings:
         dialogue_memory_timeout=dialogue_memory_timeout,
         memory_enrichment_max_results=memory_enrichment_max_results,
         memory_search_max_results=memory_search_max_results,
+        agentic_max_turns=agentic_max_turns,
         
         # Location Services
         location_enabled=location_enabled,

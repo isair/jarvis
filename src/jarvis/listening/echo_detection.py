@@ -3,6 +3,7 @@
 import time
 import difflib
 from typing import Optional, List
+import re
 
 from ..debug import debug_log
 
@@ -32,6 +33,8 @@ class EchoDetector:
         self._last_tts_finish_time: float = 0.0
         self._last_tts_text: str = ""
         self._tts_energy_baseline: float = 0.0
+        # Acceptance policy
+        self._min_overlap_accept_words: int = 3  # require at least this many words to overlap
         
         # Utterance timing
         self._utterance_start_time: float = 0.0
@@ -139,6 +142,58 @@ class EchoDetector:
             return self._check_text_similarity(heard_text, relevant_tts_text)
             
         return False
+
+    def cleanup_leading_echo_during_tts(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> str:
+        """Remove leading overlap against the current TTS segment to salvage user suffix during TTS.
+
+        If the user starts speaking while TTS is active and their transcript begins with the
+        current TTS segment, trim that segment and return the remainder so we can accept it.
+        """
+        if not heard_text or not self._last_tts_text or not (self._tts_start_time > 0 and utterance_start_time > 0):
+            return heard_text
+
+        # Reconstruct the relevant TTS segment similar to _matches_tts_segment
+        time_offset = utterance_start_time - self._tts_start_time
+        time_offset_with_tolerance = max(0, time_offset - self.echo_tolerance)
+        estimated_words_per_sec = tts_rate / 60.0
+        tts_words = self._last_tts_text.lower().strip().split()
+        if not tts_words:
+            return heard_text
+
+        estimated_word_index = int(time_offset_with_tolerance * estimated_words_per_sec)
+        heard_words = heard_text.lower().strip().split()
+        tolerance_words = round(self.echo_tolerance * estimated_words_per_sec) + 5
+        start_idx = max(0, estimated_word_index - tolerance_words)
+        end_idx = min(len(tts_words), estimated_word_index + len(heard_words) + tolerance_words)
+        segment_words = tts_words[start_idx:end_idx]
+
+        if not segment_words or not heard_words:
+            return heard_text
+
+        # Normalize tokens to ignore punctuation and curly quotes while comparing
+        def _clean_token(token: str) -> str:
+            t = token.replace("’", "'")
+            # drop all non-alphanumeric except apostrophe
+            return re.sub(r"[^a-z0-9']+", "", t)
+
+        seg_clean = [_clean_token(w) for w in segment_words]
+        heard_clean = [_clean_token(w) for w in heard_words]
+
+        # Find the longest prefix of heard_clean matching a suffix of seg_clean
+        max_overlap = 0
+        limit = min(len(seg_clean), len(heard_clean))
+        for i in range(limit, 0, -1):
+            if seg_clean[-i:] == heard_clean[:i]:
+                max_overlap = i
+                break
+
+        if 0 < max_overlap < len(heard_words) and max_overlap >= self._min_overlap_accept_words:
+            cleaned_text = " ".join(heard_words[max_overlap:])
+            overlap_text = " ".join(heard_words[:max_overlap])
+            debug_log(f"cleaned leading echo during TTS. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
+            return cleaned_text
+
+        return heard_text
     
     def cleanup_leading_echo(self, heard_text: str) -> str:
         """Removes leading text from a query if it overlaps with the end of the last TTS."""

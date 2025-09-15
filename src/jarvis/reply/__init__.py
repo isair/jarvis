@@ -1,13 +1,9 @@
-"""Reply module - Response generation and planning."""
+"""Reply module - Agentic messages-based response generation."""
 
 from .engine import run_reply_engine
-from .planner import execute_multi_step_plan, extract_search_params_for_memory
-from .coach import ask_coach, ask_coach_with_tools
+from .enrichment import extract_search_params_for_memory
 
 __all__ = [
     "run_reply_engine",
-    "execute_multi_step_plan",
-    "extract_search_params_for_memory", 
-    "ask_coach",
-    "ask_coach_with_tools"
+    "extract_search_params_for_memory",
 ]

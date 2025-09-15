@@ -107,11 +107,11 @@ def main() -> None:
                 tools = client.list_tools(server_name)
                 names = [str(t.get("name")) for t in (tools or []) if t and t.get("name")]
                 preview = ", ".join(names[:10])
-                print(f"[mcp] {server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", file=sys.stderr)
+                debug_log(f"{server_name}: {len(names)} tools available{(': ' + preview) if names else ''}", "mcp")
             except FileNotFoundError as e:
-                print(f"[mcp] {server_name}: command not found – {e}", file=sys.stderr)
+                debug_log(f"{server_name}: command not found – {e}", "mcp")
             except Exception as e:
-                print(f"[mcp] {server_name}: error listing tools: {e}", file=sys.stderr)
+                debug_log(f"{server_name}: error listing tools: {e}", "mcp")
     
     # Initialize dialogue memory with timeout
     _global_dialogue_memory = DialogueMemory(

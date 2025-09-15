@@ -254,16 +254,9 @@ def run_tool_with_retries(
         debug_log("screenshot: capturing OCR...", "screenshot")
         ocr_text = capture_screenshot_and_ocr(interactive=True) or ""
         debug_log(f"screenshot: ocr_chars={len(ocr_text)}", "screenshot")
-        followup_prompt = original_prompt + "\n\n[SCREENSHOT_OCR]\n" + ocr_text[:4000]
-        
-        # Import locally to avoid circular dependency
-        from ..reply.coach import ask_coach
-        reply = ask_coach(cfg.ollama_base_url, cfg.ollama_chat_model, system_prompt, followup_prompt, 
-                         timeout_sec=cfg.llm_chat_timeout_sec, include_location=cfg.location_enabled, config_ip=cfg.location_ip_address, auto_detect=cfg.location_auto_detect)
-        result = ToolExecutionResult(success=True, reply_text=(reply or "").strip())
-        debug_log("screenshot: completed", "screenshot")
         _user_print("✅ Screenshot processed.")
-        return result
+        # Return raw OCR text as tool result (no LLM processing here)
+        return ToolExecutionResult(success=True, reply_text=ocr_text)
 
     # logMeal
     if name == "logMeal":

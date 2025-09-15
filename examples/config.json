@@ -69,6 +69,7 @@
   "dialogue_memory_timeout": 300.0,
   "memory_enrichment_max_results": 10,
   "memory_search_max_results": 15,
+  "agentic_max_turns": 8,
   "stop_commands": [
     "stop",
     "quiet",
