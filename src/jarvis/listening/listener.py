@@ -231,7 +231,7 @@ class VoiceListener(threading.Thread):
                 # Start thinking tune and show processing message
                 self._start_thinking_tune()
                 try:
-                    print(f"✨ Working on it: {self.state_manager.get_pending_query()}")
+                    print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
                 except Exception:
                     pass
             return
@@ -302,7 +302,7 @@ class VoiceListener(threading.Thread):
             # Start thinking tune and show processing message
             self._start_thinking_tune()
             try:
-                print(f"✨ Working on it: {self.state_manager.get_pending_query()}")
+                print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
             except Exception:
                 pass
             return

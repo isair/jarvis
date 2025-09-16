@@ -50,7 +50,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         redacted,
         timeout_sec=float(getattr(cfg, 'llm_profile_select_timeout_sec', 30.0))
     )
-    debug_log(f"selected profile: {profile_name}", "profile")
+    print(f"  🎭 Profile selected: {profile_name}", flush=True)
+
     system_prompt = PROFILES.get(profile_name, PROFILES["developer"]).system_prompt
     
     # Step 3: Recent dialogue context

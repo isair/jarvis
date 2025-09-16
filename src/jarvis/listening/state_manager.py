@@ -189,7 +189,7 @@ class StateManager:
                 # Pretty output for non-debug mode
                 if not voice_debug:
                     try:
-                        print(f"\n👂 Listening for follow-up ({int(self.hot_window_seconds)}s)...\n")
+                        print(f"👂 Listening for follow-up ({int(self.hot_window_seconds)}s)...")
                     except Exception:
                         pass
         
@@ -246,7 +246,7 @@ class StateManager:
             # Pretty output for non-debug mode
             if not voice_debug:
                 try:
-                    print("💤 Returning to wake word mode\n")
+                    print("💤 Returning to wake word mode")
                 except Exception:
                     pass
     

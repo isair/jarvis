@@ -243,7 +243,7 @@ def run_tool_with_retries(
     def _user_print(message: str) -> None:
         if not getattr(cfg, "voice_debug", False):
             try:
-                print(message)
+                print(f"  {message}")
             except Exception:
                 pass
 

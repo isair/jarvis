@@ -1,5 +1,4 @@
 from __future__ import annotations
-import sys
 import socket
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -18,6 +17,9 @@ try:
     MINIUPNPC_AVAILABLE = True
 except ImportError:
     MINIUPNPC_AVAILABLE = False
+
+# Session flag to show location warning only once per session
+_location_warning_shown = False
 
 
 def _get_local_network_ip() -> Optional[str]:
@@ -182,17 +184,24 @@ def _get_database_path() -> Path:
 
 def _print_location_setup_instructions(db_path: Path) -> None:
     """Print user-friendly location setup instructions with proper formatting."""
-    print("📍 Location features are not available")
+    global _location_warning_shown
+    
+    # Only show warning once per session
+    if _location_warning_shown:
+        return
+    
+    _location_warning_shown = True
+    
+    print("  📍 Location features are not available")
     print()
-    print("   To enable location-based features:")
-    print("   1. 🌐 Register for a free MaxMind account:")
-    print("      https://www.maxmind.com/en/geolite2/signup")
+    print("     To enable location-based features:")
+    print("     1. 🌐 Register for a free MaxMind account:")
+    print("        https://www.maxmind.com/en/geolite2/signup")
     print()
-    print("   2. 📥 Download the GeoLite2 City database (MMDB format)")
+    print("     2. 📥 Download the GeoLite2 City database (MMDB format)")
     print()
-    print("   3. 📂 Save the database file as:")
-    print(f"      {db_path}")
-    print()
+    print("     3. 📂 Save the database file as:")
+    print(f"        {db_path}")
 
 
 def _download_geolite2_database() -> bool:
