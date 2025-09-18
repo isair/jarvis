@@ -178,3 +178,74 @@ def test_local_files_write_append_delete(tmp_path):
         assert res_del.success is True
     finally:
         tools_mod.os.path.expanduser = orig_expanduser
+
+
+@pytest.mark.unit
+def test_fetch_web_page_success(monkeypatch):
+    """Test fetchWebPage tool with a mocked successful response."""
+    import jarvis.tools.registry as tools_mod
+    
+    # Mock a successful HTTP response
+    class MockResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.content = b'''
+            <html>
+                <head><title>Test Page</title></head>
+                <body>
+                    <h1>Welcome</h1>
+                    <p>This is a test page with some content.</p>
+                    <a href="https://example.com">Example Link</a>
+                </body>
+            </html>
+            '''
+            self.text = self.content.decode()
+        
+        def raise_for_status(self):
+            pass
+    
+    def mock_requests_get(url, **kwargs):
+        return MockResponse()
+    
+    monkeypatch.setattr(tools_mod.requests, 'get', mock_requests_get)
+    
+    db = DummyDB()
+    cfg = DummyCfg()
+    
+    res = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="fetchWebPage",
+        tool_args={"url": "https://example.com"},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    
+    assert isinstance(res, ToolExecutionResult)
+    assert res.success is True
+    # Should contain the URL even without BeautifulSoup
+    assert "https://example.com" in (res.reply_text or "")
+
+
+@pytest.mark.unit
+def test_fetch_web_page_missing_url():
+    """Test fetchWebPage tool with missing URL."""
+    db = DummyDB()
+    cfg = DummyCfg()
+    
+    res = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="fetchWebPage",
+        tool_args={},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    
+    assert isinstance(res, ToolExecutionResult)
+    assert res.success is False
+    assert "url" in (res.reply_text or "").lower()
