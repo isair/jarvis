@@ -1,5 +1,6 @@
 from __future__ import annotations
 import sqlite3
+import re
 from typing import Sequence, Optional
 from pathlib import Path
 import threading
