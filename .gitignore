@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 .mamba_env/
 .micromamba/
+
+# Release artifacts
+release_output.log
+node_modules/

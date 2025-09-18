@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install semantic-release
+        run: |
+          npm install -g semantic-release@22 \
+            @semantic-release/github@9 \
+            conventional-changelog-conventionalcommits@7
+
+      - name: Create semantic-release config
+        run: |
+          cat > .releaserc.json << 'EOF'
+          {
+            "branches": [
+              "main"
+            ],
+            "plugins": [
+              [
+                "@semantic-release/commit-analyzer",
+                {
+                  "preset": "conventionalcommits",
+                  "releaseRules": [
+                    { "type": "feat", "release": "minor" },
+                    { "type": "fix", "release": "patch" },
+                    { "type": "perf", "release": "patch" },
+                    { "type": "revert", "release": "patch" },
+                    { "type": "docs", "release": false },
+                    { "type": "style", "release": false },
+                    { "type": "chore", "release": false },
+                    { "type": "refactor", "release": "patch" },
+                    { "type": "test", "release": false },
+                    { "type": "build", "release": false },
+                    { "type": "ci", "release": false },
+                    { "breaking": true, "release": "major" }
+                  ]
+                }
+              ],
+              [
+                "@semantic-release/release-notes-generator",
+                {
+                  "preset": "conventionalcommits",
+                  "presetConfig": {
+                    "types": [
+                      { "type": "feat", "section": "✨ Features" },
+                      { "type": "fix", "section": "🐛 Bug Fixes" },
+                      { "type": "perf", "section": "⚡ Performance Improvements" },
+                      { "type": "revert", "section": "🔄 Reverts" },
+                      { "type": "docs", "section": "📝 Documentation", "hidden": false },
+                      { "type": "style", "section": "💄 Styles", "hidden": true },
+                      { "type": "chore", "section": "🔧 Miscellaneous Chores", "hidden": true },
+                      { "type": "refactor", "section": "♻️ Code Refactoring" },
+                      { "type": "test", "section": "✅ Tests", "hidden": true },
+                      { "type": "build", "section": "👷 Build System", "hidden": true },
+                      { "type": "ci", "section": "🔁 Continuous Integration", "hidden": true }
+                    ]
+                  }
+                }
+              ],
+              [
+                "@semantic-release/github",
+                {
+                  "successComment": false,
+                  "failTitle": false,
+                  "failComment": false,
+                  "releasedLabels": false
+                }
+              ]
+            ]
+          }
+          EOF
+
+      - name: Release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Run semantic-release and capture output
+          npx semantic-release --debug > release_output.log 2>&1 || true
+          
+          # Check if a release was created
+          if grep -q "Published release" release_output.log; then
+            echo "released=true" >> $GITHUB_OUTPUT
+            # Extract version from the log
+            VERSION=$(grep "Published release" release_output.log | sed -n 's/.*Published release \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+            echo "✅ Released version $VERSION"
+          else
+            echo "released=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No release created (no releasable changes found)"
+          fi
+          
+          # Show the full log for debugging
+          cat release_output.log
+
+  notify:
+    name: Notify Release
+    runs-on: ubuntu-latest
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    steps:
+      - name: Notify successful release
+        run: |
+          echo "🎉 Successfully released version ${{ needs.release.outputs.version }}"
+          echo "📋 Tag: ${{ needs.release.outputs.tag }}"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.release.outputs.tag }}"
