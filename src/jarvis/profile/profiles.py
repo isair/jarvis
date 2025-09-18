@@ -60,12 +60,14 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
         "recallConversation",
         "localFiles",
         "webSearch",
+        "fetchWebPage",
     ],
     "business": [
         "screenshot",
         "recallConversation",
         "localFiles",
         "webSearch",
+        "fetchWebPage",
     ],
     "life": [
         "screenshot",
@@ -75,6 +77,7 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
         "deleteMeal",
         "localFiles",
         "webSearch",
+        "fetchWebPage",
     ],
 }
 
