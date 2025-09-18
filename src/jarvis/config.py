@@ -24,7 +24,6 @@ class Settings:
     ollama_chat_model: str
     llm_chat_timeout_sec: float
     llm_tools_timeout_sec: float
-    llm_multi_step_timeout_sec: float
     llm_embedding_timeout_sec: float
     llm_profile_select_timeout_sec: float
     
@@ -170,7 +169,6 @@ def get_default_config() -> Dict[str, Any]:
         "ollama_chat_model": "gpt-oss:20b",
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
-        "llm_multi_step_timeout_sec": 600.0,
         "llm_embedding_timeout_sec": 60.0,
         "llm_profile_select_timeout_sec": 30.0,
         
@@ -364,7 +362,6 @@ def load_settings() -> Settings:
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
-    llm_multi_step_timeout_sec = float(merged.get("llm_multi_step_timeout_sec", 600.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
@@ -379,7 +376,6 @@ def load_settings() -> Settings:
         ollama_chat_model=ollama_chat_model,
         llm_chat_timeout_sec=llm_chat_timeout_sec,
         llm_tools_timeout_sec=llm_tools_timeout_sec,
-        llm_multi_step_timeout_sec=llm_multi_step_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
         llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
         

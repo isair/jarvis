@@ -5,7 +5,6 @@ Main orchestrator that coordinates listening, reply generation, and output.
 """
 
 from __future__ import annotations
-import sys
 import time
 import signal
 import threading

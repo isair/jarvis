@@ -2,7 +2,6 @@ from __future__ import annotations
 import sqlite3
 from typing import Sequence, Optional
 from pathlib import Path
-import re
 import threading
 from datetime import datetime, timezone
 
