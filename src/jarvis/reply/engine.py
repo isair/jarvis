@@ -127,28 +127,43 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         
         # General inference and context usage guidance
         inference_guidance = (
-            "Feel confident making reasonable inferences from available context, memory, and patterns. "
-            "When you make assumptions or inferences, be transparent about them (e.g., 'Based on our past conversations, it seems like you're interested in X. Let me know if that's wrong.'). "
-            "Don't ask for clarification when you can reasonably infer what's needed from context."
+            "Prioritize reasonable inference from available context, memory, and patterns over asking for clarification. "
+            "When you make assumptions or inferences, be transparent about them. "
+            "Only ask clarifying questions when the request is genuinely ambiguous and inference would likely be wrong."
         )
         guidance.append(inference_guidance)
         
+        # Tool usage incentives and best practices
+        tool_incentives = (
+            "Proactively use available tools to provide better, more accurate responses. "
+            "Prefer tools over guessing when you can get definitive, current, or personalized information. "
+            "Tools enhance your capabilities - use them confidently to deliver superior assistance."
+        )
+        guidance.append(tool_incentives)
+        
+        # Voice assistant communication style
+        voice_style = (
+            "Keep responses concise and conversational since this is a voice assistant. "
+            "Prioritize clarity and brevity - users are listening, not reading. "
+            "Avoid unnecessary elaboration unless specifically requested."
+        )
+        guidance.append(voice_style)
         
         # Describe the standard message format and capabilities
         formats = [
-            "You can respond in multiple ways:",
-            "1) Make tool calls using the standard tool_calls field in your response",
+            "Tool-first approach - leverage your capabilities:",
+            "1) PREFER tool calls when you need current/specific information or can perform helpful actions",
             "2) Use the thinking field for internal reasoning (not shown to user)",
-            "3) Provide natural language responses in the content field",
+            "3) Provide natural language responses based on tool results or when no tools are needed",
             "",
-            "For tool calls:",
-            "- Internal tools: use function name directly (e.g., webSearch, recallConversation)",
-            "- External/MCP tools: specify server in your tool call",
+            "Tool calling format:",
+            "- Use the standard tool_calls field with function name and arguments",
+            "- All tools follow the same OpenAI-compatible format regardless of source",
             "",
-            "After receiving tool results, you can:",
-            "- Provide a final natural language response if you have sufficient information",
-            "- Use thinking to reason about next steps, then make additional tool calls if needed",
-            "- Ask clarifying questions if the request is ambiguous",
+            "After receiving tool results:",
+            "- Continue the conversation naturally based on the information gathered",
+            "- Chain additional tool calls if more information or actions are needed to fully address the request",
+            "- Use thinking to plan your approach for complex multi-step tasks",
             "",
             "Your thinking field is for internal reasoning and won't be shown to the user."
         ]
