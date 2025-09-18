@@ -21,9 +21,9 @@ from ..debug import debug_log
 @dataclass(frozen=True)
 class ToolSpec:
     name: str  # canonical tool identifier (camelCase)
-    summary: str
-    usage_line: str
-    args_help: Optional[str] = None
+    description: str  # Human-readable description (matches MCP format)
+    inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
+    usage_line: Optional[str] = None  # Usage instructions for LLM
     example: Optional[str] = None
 
 
@@ -47,104 +47,127 @@ def _required_log_meal_fields() -> List[str]:
 TOOL_SPECS: Dict[str, ToolSpec] = {
     "screenshot": ToolSpec(
         name="screenshot",
-        summary=(
-            "Capture a selected screen region and OCR the text. Use only if the OCR will materially help."
-        ),
-        usage_line='{"tool": { "name": "screenshot", "args": {} }}',
-        args_help=(
-            "No arguments. Reply with ONLY a single JSON object as shown."
-        ),
-        example='{"tool": { "name": "screenshot", "args": {} }}',
+        description="Capture a selected screen region and OCR the text. Use only if the OCR will materially help.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": []
+        },
+        usage_line='Use tool_calls field in your response message',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}}]',
     ),
     "logMeal": ToolSpec(
         name="logMeal",
-        summary=(
-            "Log a single meal when the user mentions eating or drinking something specific (e.g., 'I ate chicken curry', 'I had a sandwich', 'I drank a protein shake'). "
-            "Estimate approximate macros and key micronutrients based on typical portions."
-        ),
-        usage_line='{"tool": { "name": "logMeal", "args": { ... } }}',
-        args_help=(
-            "JSON object with required fields: "
-            + ", ".join(_required_log_meal_fields())
-            + ". Provide conservative estimates in numeric fields."
-        ),
-        example=(
-            '{"tool": { "name": "logMeal", "args": {"description":"small curry","calories_kcal":300,"protein_g":10,"carbs_g":45,"fat_g":5,"fiber_g":4,"sugar_g":6,"sodium_mg":600,"potassium_mg":350,"micros":{"iron_mg":3,"vitamin_a_iu":800,"vitamin_c_mg":30},"confidence":0.7} }}'
-        ),
+        description="Log a single meal when the user mentions eating or drinking something specific (e.g., 'I ate chicken curry', 'I had a sandwich', 'I drank a protein shake'). Estimate approximate macros and key micronutrients based on typical portions.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "Description of the meal"},
+                "calories_kcal": {"type": "number", "description": "Calories in kcal"},
+                "protein_g": {"type": "number", "description": "Protein in grams"},
+                "carbs_g": {"type": "number", "description": "Carbohydrates in grams"},
+                "fat_g": {"type": "number", "description": "Fat in grams"},
+                "fiber_g": {"type": "number", "description": "Fiber in grams"},
+                "sugar_g": {"type": "number", "description": "Sugar in grams"},
+                "sodium_mg": {"type": "number", "description": "Sodium in mg"},
+                "potassium_mg": {"type": "number", "description": "Potassium in mg"},
+                "micros": {"type": "object", "description": "Micronutrients as key-value pairs"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in estimates (0-1)"}
+            },
+            "required": _required_log_meal_fields()
+        },
+        usage_line='Use tool_calls field in your response message',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "logMeal", "arguments": "{\\"description\\":\\"small curry\\",\\"calories_kcal\\":300,\\"protein_g\\":10,\\"carbs_g\\":45,\\"fat_g\\":5,\\"fiber_g\\":4,\\"sugar_g\\":6,\\"sodium_mg\\":600,\\"potassium_mg\\":350,\\"micros\\":{\\"iron_mg\\":3,\\"vitamin_a_iu\\":800,\\"vitamin_c_mg\\":30},\\"confidence\\":0.7}"}}]'
     ),
     "fetchMeals": ToolSpec(
         name="fetchMeals",
-        summary=(
-            "Fetch logged meals when the user asks about their eating history (e.g., 'what have I eaten today?', 'show me my meals', 'what did I eat yesterday?'). "
-            "Retrieves meal data for the specified time range."
-        ),
-        usage_line='{"tool": { "name": "fetchMeals", "args": { ... } }}',
-        args_help=(
-            "JSON with ISO8601 strings: since_utc and/or until_utc. Provide at least one."
-        ),
-        example=(
-            '{"tool": { "name": "fetchMeals", "args": {"since_utc":"2025-01-01T00:00:00Z","until_utc":"2025-01-02T00:00:00Z"} }}'
-        ),
+        description="Fetch logged meals when the user asks about their eating history (e.g., 'what have I eaten today?', 'show me my meals', 'what did I eat yesterday?'). Retrieves meal data for the specified time range.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "since_utc": {"type": "string", "format": "date-time", "description": "Start time in ISO8601 UTC format"},
+                "until_utc": {"type": "string", "format": "date-time", "description": "End time in ISO8601 UTC format"}
+            },
+            "anyOf": [
+                {"required": ["since_utc"]},
+                {"required": ["until_utc"]},
+                {"required": ["since_utc", "until_utc"]}
+            ]
+        },
+        usage_line='Use tool_calls field in your response message',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "fetchMeals", "arguments": "{\\"since_utc\\":\\"2025-01-01T00:00:00Z\\",\\"until_utc\\":\\"2025-01-02T00:00:00Z\\"}"}}]'
     ),
     "deleteMeal": ToolSpec(
         name="deleteMeal",
-        summary=(
-            "Delete a single meal by id."
-        ),
-        usage_line='{"tool": { "name": "deleteMeal", "args": { ... } }}',
-        args_help='JSON with integer id field.',
-        example='{"tool": { "name": "deleteMeal", "args": {"id":123} }}',
+        description="Delete a single meal by id.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "The meal ID to delete"}
+            },
+            "required": ["id"]
+        },
+        usage_line='Use tool_calls field in your response message',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "deleteMeal", "arguments": "{\\"id\\":123}"}}]'
     ),
     "recallConversation": ToolSpec(
         name="recallConversation",
-        summary=(
-            "Search conversation history when the user asks about past conversations or wants to recall what we've discussed. "
-            "Use this for: recap requests ('what have we talked about?', 'what did we discuss today?'), "
-            "specific memory queries ('what did I tell you about X?', 'remember when we talked about Y?'), "
-            "or when they reference something from before ('that password I mentioned', 'the plan we made')."
-        ),
-        usage_line='{"tool": { "name": "recallConversation", "args": { ... } }}',
-        args_help=(
-            "JSON with optional fields: search_query (keywords to search for), from (start timestamp), to (end timestamp). "
-            "IMPORTANT: For temporal queries, convert natural language to exact timestamps:\n"
-            "- 'today': from='2025-08-22T00:00:00Z', to='2025-08-22T23:59:59Z'\n"
-            "- 'yesterday': from='2025-08-21T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
-            "- 'last week': from='2025-08-15T00:00:00Z', to='2025-08-21T23:59:59Z'\n"
-            "Use the current date/time context to calculate exact timestamps. Always include both from AND to for temporal queries."
-        ),
-        example='{"tool": { "name": "recallConversation", "args": {"search_query":"what I ate","from":"2025-08-21T00:00:00Z","to":"2025-08-21T23:59:59Z"} }}',
+        description="Search conversation history when the user asks about past conversations or wants to recall what we've discussed. Use this for: recap requests ('what have we talked about?', 'what did we discuss today?'), specific memory queries ('what did I tell you about X?', 'remember when we talked about Y?'), or when they reference something from before ('that password I mentioned', 'the plan we made').",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "search_query": {"type": "string", "description": "Keywords to search for"},
+                "from": {"type": "string", "format": "date-time", "description": "Start timestamp in ISO8601 UTC format"},
+                "to": {"type": "string", "format": "date-time", "description": "End timestamp in ISO8601 UTC format"}
+            },
+            "anyOf": [
+                {"required": ["search_query"]},
+                {"required": ["from", "to"]},
+                {"required": ["search_query", "from", "to"]}
+            ]
+        },
+        usage_line='Use tool_calls field in your response message. For temporal queries, convert natural language to exact timestamps: today=2025-08-22T00:00:00Z to 2025-08-22T23:59:59Z, yesterday=2025-08-21T00:00:00Z to 2025-08-21T23:59:59Z, etc.',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "recallConversation", "arguments": "{\\"search_query\\":\\"what I ate\\",\\"from\\":\\"2025-08-21T00:00:00Z\\",\\"to\\":\\"2025-08-21T23:59:59Z\\"}"}}]'
     ),
     "webSearch": ToolSpec(
         name="webSearch",
-        summary=(
-            "Search the web using DuckDuckGo to find current information on any topic. "
-            "Use this for: educational topics, current news, weather, stock prices, sports scores, "
-            "recent events, breaking news, or any question requiring information that may not be in your knowledge base. "
-            "When asked about current events, news, or today's information, always use this tool to get up-to-date information rather than relying on stored knowledge. "
-            "Automatically fetches and synthesizes content from the most relevant results. "
-            "Note: This feature can be disabled in configuration if desired."
-        ),
-        usage_line='{"tool": { "name": "webSearch", "args": { ... } }}',
-        args_help=(
-            "JSON with required field: search_query (the search terms to use). "
-            "Make search queries specific and include relevant keywords for better results."
-        ),
-        example='{"tool": { "name": "webSearch", "args": {"search_query":"weather London today"} }}',
+        description="Search the web using DuckDuckGo to find current information on any topic. Use this for: educational topics, current news, weather, stock prices, sports scores, recent events, breaking news, or any question requiring information that may not be in your knowledge base. When asked about current events, news, or today's information, always use this tool to get up-to-date information rather than relying on stored knowledge.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "search_query": {"type": "string", "description": "The search terms to use. Make search queries specific and include relevant keywords for better results."}
+            },
+            "required": ["search_query"]
+        },
+        usage_line='Use tool_calls field in your response message',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "webSearch", "arguments": "{\\"search_query\\":\\"weather London today\\"}"}}]'
     ),
     "localFiles": ToolSpec(
         name="localFiles",
-        summary=(
-            "Safely access local files in the user's home directory. Use to list, read, write, append, or delete files as requested by the user. "
-            "Always operate within the allowed root; never request or disclose sensitive system paths."
-        ),
-        usage_line='{"tool": { "name": "localFiles", "args": { ... } }}',
-        args_help=(
-            "JSON with fields: operation ('list'|'read'|'write'|'append'|'delete'), path (string, absolute or relative to home). "
-            "Optional for 'list': glob (string), recursive (bool). Optional for 'write'/'append': content (string)."
-        ),
-        example=(
-            '{"tool": { "name": "localFiles", "args": {"operation":"read","path":"~/notes/todo.txt"} }}'
-        ),
+        description="Safely access local files in the user's home directory. Use to list, read, write, append, or delete files as requested by the user. Always operate within the allowed root; never request or disclose sensitive system paths.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string", "enum": ["list", "read", "write", "append", "delete"], "description": "The file operation to perform"},
+                "path": {"type": "string", "description": "File path, absolute or relative to home directory"},
+                "glob": {"type": "string", "description": "Glob pattern for list operation (optional)"},
+                "recursive": {"type": "boolean", "description": "Whether to list recursively (optional, for list operation)"},
+                "content": {"type": "string", "description": "Content to write or append (required for write/append operations)"}
+            },
+            "required": ["operation", "path"],
+            "allOf": [
+                {
+                    "if": {"properties": {"operation": {"const": "write"}}},
+                    "then": {"required": ["content"]}
+                },
+                {
+                    "if": {"properties": {"operation": {"const": "append"}}},
+                    "then": {"required": ["content"]}
+                }
+            ]
+        },
+        usage_line='Use tool_calls field in your response message',
+        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "localFiles", "arguments": "{\\"operation\\":\\"read\\",\\"path\\":\\"~/notes/todo.txt\\"}"}}]'
     ),
 }
 
@@ -171,12 +194,13 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
                     
                     # Create a ToolSpec for this MCP tool
                     description = tool_info.get("description", f"Tool from {server_name} MCP server")
+                    input_schema = tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []})
                     discovered_tools[full_tool_name] = ToolSpec(
                         name=full_tool_name,
-                        summary=description,
-                        usage_line=f'{{"tool": {{ "name": "{full_tool_name}", "args": {{ ... }} }}}}',
-                        args_help=f"Arguments for {tool_name} tool from {server_name} server",
-                        example=f'{{"tool": {{ "name": "{full_tool_name}", "args": {{}} }}}}'
+                        description=description,
+                        inputSchema=input_schema,
+                        usage_line='Use tool_calls field in your response message',
+                        example=f'tool_calls: [{{"id": "<system_generated>", "type": "function", "function": {{"name": "{full_tool_name}", "arguments": "{{}}"}}}}]'
                     )
                 
             except Exception as e:
@@ -191,11 +215,11 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
 
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
-    """Produce a compact, JSON-only tool help string for the system prompt."""
+    """Produce a compact tool help string for the system prompt using OpenAI standard format."""
     names = list(allowed_tools or list(TOOL_SPECS.keys()))
     lines: List[str] = []
-    lines.append("Tool-use protocol: Reply with ONLY a JSON object:")
-    lines.append("{\"tool\": { \"name\": \"<camelCaseToolName>\", \"args\": { ... } }}")
+    lines.append("Tool-use protocol: Use the tool_calls field in your response:")
+    lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": "<json_string>"}}]')
     lines.append("\nAvailable tools and when to use them:")
     
     # Add built-in tools
@@ -203,17 +227,37 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
         spec = TOOL_SPECS.get(nm)
         if not spec:
             continue
-        lines.append(f"\n{spec.name}: {spec.summary}")
-        if spec.args_help:
-            lines.append(f"Input: {spec.args_help}")
+        lines.append(f"\n{spec.name}: {spec.description}")
+        if spec.inputSchema:
+            # Extract a simple parameter summary from the JSON schema
+            props = spec.inputSchema.get("properties", {})
+            required = spec.inputSchema.get("required", [])
+            param_descriptions = []
+            for prop_name, prop_def in props.items():
+                prop_type = prop_def.get("type", "any")
+                is_required = prop_name in required
+                req_marker = " (required)" if is_required else ""
+                param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
+            if param_descriptions:
+                lines.append(f"Input: {', '.join(param_descriptions)}")
     
     # Add discovered MCP tools
     if mcp_tools:
         for tool_name, spec in mcp_tools.items():
             if tool_name in names:  # Only include if allowed
-                lines.append(f"\n{spec.name}: {spec.summary}")
-                if spec.args_help:
-                    lines.append(f"Input: {spec.args_help}")
+                lines.append(f"\n{spec.name}: {spec.description}")
+                if spec.inputSchema:
+                    # Extract a simple parameter summary from the JSON schema
+                    props = spec.inputSchema.get("properties", {})
+                    required = spec.inputSchema.get("required", [])
+                    param_descriptions = []
+                    for prop_name, prop_def in props.items():
+                        prop_type = prop_def.get("type", "any")
+                        is_required = prop_name in required
+                        req_marker = " (required)" if is_required else ""
+                        param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
+                    if param_descriptions:
+                        lines.append(f"Input: {', '.join(param_descriptions)}")
                     
     return "\n".join(lines)
 

@@ -70,8 +70,8 @@ def test_discover_mcp_tools_with_fake_server(monkeypatch):
     # Check tool spec properties
     read_tool = result["test-server__read"]
     assert read_tool.name == "test-server__read"
-    assert "Read a file" in read_tool.summary
-    assert "test-server__read" in read_tool.usage_line
+    assert "Read a file" in read_tool.description
+    assert "tool_calls" in read_tool.usage_line
 
 
 @pytest.mark.unit
@@ -111,10 +111,19 @@ def test_generate_tools_description_includes_mcp_tools():
     mcp_tools = {
         "server__read": ToolSpec(
             name="server__read",
-            summary="Read a file from the server",
-            usage_line='{"tool": {"name": "server__read", "args": {...}}}',
-            args_help="File path to read",
-            example='{"tool": {"name": "server__read", "args": {"path": "file.txt"}}}'
+            description="Read a file from the server",
+            usage_line='Use tool_calls field in your response message',
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path to read"
+                    }
+                },
+                "required": ["path"]
+            },
+            example='tool_calls: [{"id": "call_123", "type": "function", "function": {"name": "server__read", "arguments": "{\\"path\\": \\"file.txt\\"}"}}]'
         )
     }
     

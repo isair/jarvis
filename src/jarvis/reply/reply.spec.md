@@ -145,13 +145,10 @@ sequenceDiagram
     Engine->>LLM: chat(messages)
     LLM-->>Engine: assistant content
     
-    alt content is JSON {"tool": {...}}
+    alt assistant message has tool_calls
       Engine->>Tools: run(tool)
       Tools-->>Engine: result text
       Engine->>Engine: append tool message with result
-    else content is planning JSON {"plan": "..."}
-      Engine->>Engine: append planning message
-      Note over Engine: Continue loop for next reasoning step
     else content is natural language
       Engine-->>Out: print/speak
       Note over Engine: Exit loop - final response ready

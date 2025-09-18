@@ -169,44 +169,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     # Current user message
     messages.append({"role": "user", "content": redacted})
 
-    def _try_parse_tool_directive(text: str):
-        # First try parsing the entire text as JSON
-        try:
-            obj = json.loads(text.strip())
-            if isinstance(obj, dict) and isinstance(obj.get("tool"), dict):
-                tool = obj["tool"]
-                server = tool.get("server")
-                name = tool.get("name")
-                args = tool.get("args") if isinstance(tool.get("args"), dict) else {}
-                if isinstance(name, str) and name.strip():
-                    if isinstance(server, str) and server.strip():
-                        # MCP invocation
-                        return "MCP", {"server": server.strip(), "name": name.strip(), "args": args}
-                    return name.strip(), args
-        except Exception:
-            pass
-        
-        # If that fails, look for JSON objects within the text (line by line)
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                try:
-                    obj = json.loads(line)
-                    if isinstance(obj, dict) and isinstance(obj.get("tool"), dict):
-                        tool = obj["tool"]
-                        server = tool.get("server")
-                        name = tool.get("name")
-                        args = tool.get("args") if isinstance(tool.get("args"), dict) else {}
-                        if isinstance(name, str) and name.strip():
-                            if isinstance(server, str) and server.strip():
-                                # MCP invocation
-                                return "MCP", {"server": server.strip(), "name": name.strip(), "args": args}
-                            return name.strip(), args
-                except Exception:
-                    continue
-        
-        return None, None
-
     def _extract_structured_tool_call(resp: dict):
         try:
             if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
@@ -360,15 +322,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 break
             break
         
-        # Parse for tool calls - prioritize structured tool_calls over JSON in content
+        # Parse for tool calls using OpenAI standard format
         tool_name = None
         tool_args = None
         tool_call_id = None
         
-        # First check for structured tool calls (preferred)
+        # Check for structured tool calls in the response
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
-        # No need for JSON parsing in content anymore - we use standard fields
         
         # If we have thinking but no content and no tool calls, treat as planning step
         if not content and not tool_name and thinking:

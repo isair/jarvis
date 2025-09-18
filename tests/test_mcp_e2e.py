@@ -110,17 +110,25 @@ def test_tool_registration_in_descriptions():
     mock_mcp_tools = {
         "server1__tool1": ToolSpec(
             name="server1__tool1",
-            summary="Test tool 1 from server1", 
-            usage_line='{"tool": {"name": "server1__tool1", "args": {...}}}',
-            args_help="Test arguments",
-            example='{"tool": {"name": "server1__tool1", "args": {}}}'
+            description="Test tool 1 from server1", 
+            usage_line='Use tool_calls field in your response message',
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            },
+            example='tool_calls: [{"id": "call_123", "type": "function", "function": {"name": "server1__tool1", "arguments": "{}"}}]'
         ),
         "server2__tool2": ToolSpec(
             name="server2__tool2",
-            summary="Test tool 2 from server2",
-            usage_line='{"tool": {"name": "server2__tool2", "args": {...}}}', 
-            args_help="Test arguments",
-            example='{"tool": {"name": "server2__tool2", "args": {}}}'
+            description="Test tool 2 from server2",
+            usage_line='Use tool_calls field in your response message', 
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            },
+            example='tool_calls: [{"id": "call_123", "type": "function", "function": {"name": "server2__tool2", "arguments": "{}"}}]'
         )
     }
     
