@@ -9,6 +9,7 @@ from src.jarvis.reply.engine import run_reply_engine
 from src.jarvis.utils.redact import redact
 
 
+@pytest.mark.unit
 class TestDialogueMemory:
     """Test dialogue memory conversation flow preservation."""
     
@@ -189,9 +190,10 @@ class TestReplyEngineDialogueMemory:
         # Should include user input and final response
         assert "User: What's the weather in London?" in chunks
         assert "Assistant: It's sunny in London today!" in chunks
-        # Should NOT include the JSON tool call
+
+        # Should NOT include the tool call
         for chunk in chunks:
-            assert '{"tool":' not in chunk
+            assert 'call_12345' not in chunk
 
 
 class TestDiaryRedaction:

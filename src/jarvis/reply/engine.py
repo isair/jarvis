@@ -101,41 +101,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     # Step 6: Tool allowlist and description
     allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
     
-    # Add MCP if configured
+    # Discover and add MCP tools if configured
+    mcp_tools = {}
     if getattr(cfg, "mcps", {}):
-        if "MCP" not in allowed_tools:
-            allowed_tools = list(allowed_tools) + ["MCP"]
+        from ..tools.registry import discover_mcp_tools
+        mcp_tools = discover_mcp_tools(cfg.mcps)
+        # Add all discovered MCP tools to allowed tools
+        for mcp_tool_name in mcp_tools.keys():
+            if mcp_tool_name not in allowed_tools:
+                allowed_tools.append(mcp_tool_name)
     
-    tools_desc = generate_tools_description(allowed_tools)
-    
-    # Append MCP server information
-    if getattr(cfg, "mcps", {}):
-        try:
-            mcp_lines = [
-                "",
-                "External MCP servers available:",
-            ]
-            for srv in (cfg.mcps or {}).keys():
-                mcp_lines.append(f"- {srv}")
-            mcp_lines.extend([
-                'Call MCP with: {"tool": {"server": "<SERVER>", "name": "<tool>", "args": { ... } }}',
-                "",
-                "Guidance:",
-                "- Prefer MCP tools when the user asks for actual data (e.g., listing files, reading files)",
-                "- Do NOT reply with shell commands if a tool can return the real data",
-            ])
-            
-            # Provide concrete example
-            default_srv = next(iter((cfg.mcps or {}).keys()), None)
-            if default_srv:
-                mcp_lines.extend([
-                    "",
-                    "Example (list home directory):",
-                    f'{{"tool": {{"server": "{default_srv}", "name": "list", "args": {{"path": "~"}} }}}}',
-                ])
-            tools_desc = tools_desc + "\n" + "\n".join(mcp_lines)
-        except Exception:
-            pass
+    tools_desc = generate_tools_description(allowed_tools, mcp_tools)
     
     debug_log(f"🤖 starting with {len(allowed_tools)} tools available", "planning")
     
@@ -452,7 +428,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 continue
 
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
-            if tool_name not in allowed_tools and tool_name != "MCP":
+            if tool_name not in allowed_tools:
                 debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
                 # Inform the agent via system note and continue
                 messages.append({

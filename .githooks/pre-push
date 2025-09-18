@@ -7,7 +7,7 @@ if [ "${SKIP_TESTS:-}" = "1" ]; then
   exit 0
 fi
 
-echo "[pre-push] Running unit tests (pytest -m unit)"
+echo "[pre-push] Running all tests (unit, integration, and e2e)"
 
 # Prefer python -m pytest to avoid PATH issues
 if ! command -v python >/dev/null 2>&1; then
@@ -20,13 +20,13 @@ if ! python -c "import pytest" >/dev/null 2>&1; then
   exit 0
 fi
 
-# Run only unit tests to keep the hook fast
-if ! python -m pytest -q -m unit; then
-  echo "[pre-push] Unit tests failed. Aborting push."
+# Run all tests for comprehensive validation before push
+if ! python -m pytest -q; then
+  echo "[pre-push] Tests failed. Aborting push."
   exit 1
 fi
 
-echo "[pre-push] Unit tests passed"
+echo "[pre-push] All tests passed"
 exit 0
 
 

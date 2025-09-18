@@ -149,15 +149,56 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
 }
 
 
-def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str:
+def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
+    """Discover all tools from configured MCP servers and create ToolSpec entries for them."""
+    if not mcps_config:
+        return {}
+    
+    try:
+        client = MCPClient(mcps_config)
+        discovered_tools = {}
+        
+        for server_name in mcps_config.keys():
+            try:
+                tools = client.list_tools(server_name)
+                for tool_info in tools:
+                    tool_name = tool_info.get("name")
+                    if not tool_name:
+                        continue
+                        
+                    # Create a unique tool name: server__toolname
+                    full_tool_name = f"{server_name}__{tool_name}"
+                    
+                    # Create a ToolSpec for this MCP tool
+                    description = tool_info.get("description", f"Tool from {server_name} MCP server")
+                    discovered_tools[full_tool_name] = ToolSpec(
+                        name=full_tool_name,
+                        summary=description,
+                        usage_line=f'{{"tool": {{ "name": "{full_tool_name}", "args": {{ ... }} }}}}',
+                        args_help=f"Arguments for {tool_name} tool from {server_name} server",
+                        example=f'{{"tool": {{ "name": "{full_tool_name}", "args": {{}} }}}}'
+                    )
+                
+            except Exception as e:
+                debug_log(f"Failed to discover tools from MCP server '{server_name}': {e}", "mcp")
+                continue
+                
+        return discovered_tools
+        
+    except Exception as e:
+        debug_log(f"Failed to discover MCP tools: {e}", "mcp")
+        return {}
+
+
+def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
     """Produce a compact, JSON-only tool help string for the system prompt."""
     names = list(allowed_tools or list(TOOL_SPECS.keys()))
     lines: List[str] = []
     lines.append("Tool-use protocol: Reply with ONLY a JSON object:")
     lines.append("{\"tool\": { \"name\": \"<camelCaseToolName>\", \"args\": { ... } }}")
-    lines.append("For external MCP tools (include 'server'):")
-    lines.append("{\"tool\": { \"server\": \"<SERVER>\", \"name\": \"<TOOL_NAME>\", \"args\": { ... } }}")
     lines.append("\nAvailable tools and when to use them:")
+    
+    # Add built-in tools
     for nm in names:
         spec = TOOL_SPECS.get(nm)
         if not spec:
@@ -165,6 +206,15 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None) -> str
         lines.append(f"\n{spec.name}: {spec.summary}")
         if spec.args_help:
             lines.append(f"Input: {spec.args_help}")
+    
+    # Add discovered MCP tools
+    if mcp_tools:
+        for tool_name, spec in mcp_tools.items():
+            if tool_name in names:  # Only include if allowed
+                lines.append(f"\n{spec.name}: {spec.summary}")
+                if spec.args_help:
+                    lines.append(f"Input: {spec.args_help}")
+                    
     return "\n".join(lines)
 
 
@@ -219,25 +269,22 @@ def run_tool_with_retries(
     raw_name = (tool_name or "").strip()
     name = raw_name
 
-    # JSON-based MCP invocation
-    if raw_name.upper() == "MCP":
-        try:
-            if MCPClient is None:
-                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
-            if not (tool_args and isinstance(tool_args, dict)):
-                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP requires args with 'server' and 'name'.")
-            server_name = str(tool_args.get("server") or "")
-            mcp_tool = str(tool_args.get("name") or "")
-            arguments = tool_args.get("args") if isinstance(tool_args.get("args"), dict) else {}
-            if not server_name or not mcp_tool:
-                return ToolExecutionResult(success=False, reply_text=None, error_message="MCP requires both 'server' and 'name'.")
-            client = MCPClient(getattr(cfg, "mcps", {}))
-            result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool, arguments=arguments)
-            is_error = bool(result.get("isError", False))
-            text = result.get("text") or None
-            return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
-        except Exception as e:
-            return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP error: {e}")
+    # Check if tool name is a discovered MCP tool (server__toolname format)
+    if "__" in raw_name:
+        server_name, mcp_tool_name = raw_name.split("__", 1)
+        mcps_config = getattr(cfg, "mcps", {})
+        if mcps_config and server_name in mcps_config:
+            try:
+                if MCPClient is None:
+                    return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
+                
+                client = MCPClient(mcps_config)
+                result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool_name, arguments=tool_args or {})
+                is_error = bool(result.get("isError", False))
+                text = result.get("text") or None
+                return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
+            except Exception as e:
+                return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP tool '{raw_name}' error: {e}")
 
     # Friendly user print helper (non-debug only)
     def _user_print(message: str) -> None:
