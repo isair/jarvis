@@ -1,9 +1,10 @@
 """Web search tool implementation using DuckDuckGo."""
 
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from ...debug import debug_log
 from ...config import Settings
+from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
 
@@ -208,3 +209,29 @@ def execute_web_search(
     except Exception as e:
         debug_log(f"error {e}", "web")
         return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble performing the web search.")
+
+
+class WebSearchTool(Tool):
+    """Tool for performing web searches using DuckDuckGo."""
+    
+    @property
+    def name(self) -> str:
+        return "webSearch"
+    
+    @property
+    def description(self) -> str:
+        return "Search the web using DuckDuckGo for current information, news, or general queries."
+    
+    @property
+    def inputSchema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "search_query": {"type": "string", "description": "The search query to look up"}
+            },
+            "required": ["search_query"]
+        }
+    
+    def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        """Execute the web search tool."""
+        return execute_web_search(context.cfg, args, context.user_print)

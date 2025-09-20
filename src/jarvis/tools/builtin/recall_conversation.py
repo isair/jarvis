@@ -1,10 +1,11 @@
 """Recall conversation tool implementation for searching conversation memory."""
 
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from ...debug import debug_log
 from ...config import Settings
 from ...memory.conversation import search_conversation_memory
+from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
 
@@ -109,3 +110,31 @@ def execute_recall_conversation(
     except Exception as e:
         debug_log(f"recallConversation: error {e}", "memory")
         return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble searching my conversation memory.")
+
+
+class RecallConversationTool(Tool):
+    """Tool for searching conversation memory for past interactions."""
+    
+    @property
+    def name(self) -> str:
+        return "recallConversation"
+    
+    @property
+    def description(self) -> str:
+        return "Search through past conversations to find relevant context or information."
+    
+    @property
+    def inputSchema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "search_query": {"type": "string", "description": "What to search for in conversation history"},
+                "from": {"type": "string", "description": "Start date for search (YYYY-MM-DD format)"},
+                "to": {"type": "string", "description": "End date for search (YYYY-MM-DD format)"}
+            },
+            "required": ["search_query"]
+        }
+    
+    def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        """Execute the recall conversation tool."""
+        return execute_recall_conversation(context.db, context.cfg, args, context.user_print)

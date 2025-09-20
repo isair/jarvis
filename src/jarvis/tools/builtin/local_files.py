@@ -2,8 +2,9 @@
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from ...debug import debug_log
+from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
 
@@ -122,3 +123,33 @@ def execute_local_files(tool_args: Optional[Dict[str, Any]]) -> ToolExecutionRes
         return ToolExecutionResult(success=False, reply_text=f"Permission error: {pe}")
     except Exception as e:
         return ToolExecutionResult(success=False, reply_text=f"localFiles error: {e}")
+
+
+class LocalFilesTool(Tool):
+    """Tool for safe local file operations within user's home directory."""
+    
+    @property
+    def name(self) -> str:
+        return "localFiles"
+    
+    @property
+    def description(self) -> str:
+        return "Safely read, write, list, append, or delete files within your home directory."
+    
+    @property
+    def inputSchema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string", "description": "Operation to perform: list, read, write, append, delete"},
+                "path": {"type": "string", "description": "File or directory path (relative to home directory)"},
+                "content": {"type": "string", "description": "Content to write/append (for write/append operations)"},
+                "glob": {"type": "string", "description": "Glob pattern for listing (default: *)"},
+                "recursive": {"type": "boolean", "description": "Whether to search recursively (for list operation)"}
+            },
+            "required": ["operation", "path"]
+        }
+    
+    def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        """Execute the local files tool."""
+        return execute_local_files(args)

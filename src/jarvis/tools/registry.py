@@ -8,19 +8,32 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import os
 
-from .builtin.ocr import capture_screenshot_and_ocr
-from .builtin.nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
-from .builtin.web_search import execute_web_search
-from .builtin.local_files import execute_local_files
-from .builtin.fetch_web_page import execute_fetch_web_page
-from .builtin.recall_conversation import execute_recall_conversation
-from .builtin.meal_tools import execute_log_meal, execute_fetch_meals, execute_delete_meal
-from .builtin.screenshot import execute_screenshot
+from .builtin.screenshot import ScreenshotTool
+from .builtin.web_search import WebSearchTool
+from .builtin.local_files import LocalFilesTool
+from .builtin.fetch_web_page import FetchWebPageTool
+from .builtin.recall_conversation import RecallConversationTool
+from .builtin.nutrition.log_meal import LogMealTool
+from .builtin.nutrition.fetch_meals import FetchMealsTool
+from .builtin.nutrition.delete_meal import DeleteMealTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
 from ..memory.conversation import search_conversation_memory
 from ..debug import debug_log
+
+
+# Registry of all builtin tools
+BUILTIN_TOOLS = {
+    "screenshot": ScreenshotTool(),
+    "webSearch": WebSearchTool(),
+    "localFiles": LocalFilesTool(),
+    "fetchWebPage": FetchWebPageTool(),
+    "recallConversation": RecallConversationTool(),
+    "logMeal": LogMealTool(),
+    "fetchMeals": FetchMealsTool(),
+    "deleteMeal": DeleteMealTool(),
+}
 
 
 
@@ -30,167 +43,22 @@ class ToolSpec:
     name: str  # canonical tool identifier (camelCase)
     description: str  # Human-readable description (matches MCP format)
     inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
-    usage_line: Optional[str] = None  # Usage instructions for LLM
-    example: Optional[str] = None
 
 
-def _required_log_meal_fields() -> List[str]:
-    # Keep in sync with run_tool_with_retries logMeal required list
-    return [
-        "description",
-        "calories_kcal",
-        "protein_g",
-        "carbs_g",
-        "fat_g",
-        "fiber_g",
-        "sugar_g",
-        "sodium_mg",
-        "potassium_mg",
-        "micros",
-        "confidence",
-    ]
+def get_builtin_tool_specs() -> Dict[str, ToolSpec]:
+    """Generate ToolSpec objects from the builtin tool registry."""
+    specs = {}
+    for tool_name, tool_instance in BUILTIN_TOOLS.items():
+        specs[tool_name] = ToolSpec(
+            name=tool_instance.name,
+            description=tool_instance.description,
+            inputSchema=tool_instance.inputSchema
+        )
+    return specs
 
 
-TOOL_SPECS: Dict[str, ToolSpec] = {
-    "screenshot": ToolSpec(
-        name="screenshot",
-        description="Capture a selected screen region and OCR the text. Use only if the OCR will materially help.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "required": []
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}}]',
-    ),
-    "logMeal": ToolSpec(
-        name="logMeal",
-        description="Log a single meal when the user mentions eating or drinking something specific (e.g., 'I ate chicken curry', 'I had a sandwich', 'I drank a protein shake'). Estimate approximate macros and key micronutrients based on typical portions.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "description": {"type": "string", "description": "Description of the meal"},
-                "calories_kcal": {"type": "number", "description": "Calories in kcal"},
-                "protein_g": {"type": "number", "description": "Protein in grams"},
-                "carbs_g": {"type": "number", "description": "Carbohydrates in grams"},
-                "fat_g": {"type": "number", "description": "Fat in grams"},
-                "fiber_g": {"type": "number", "description": "Fiber in grams"},
-                "sugar_g": {"type": "number", "description": "Sugar in grams"},
-                "sodium_mg": {"type": "number", "description": "Sodium in mg"},
-                "potassium_mg": {"type": "number", "description": "Potassium in mg"},
-                "micros": {"type": "object", "description": "Micronutrients as key-value pairs"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in estimates (0-1)"}
-            },
-            "required": _required_log_meal_fields()
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "logMeal", "arguments": "{\\"description\\":\\"small curry\\",\\"calories_kcal\\":300,\\"protein_g\\":10,\\"carbs_g\\":45,\\"fat_g\\":5,\\"fiber_g\\":4,\\"sugar_g\\":6,\\"sodium_mg\\":600,\\"potassium_mg\\":350,\\"micros\\":{\\"iron_mg\\":3,\\"vitamin_a_iu\\":800,\\"vitamin_c_mg\\":30},\\"confidence\\":0.7}"}}]'
-    ),
-    "fetchMeals": ToolSpec(
-        name="fetchMeals",
-        description="Fetch logged meals when the user asks about their eating history (e.g., 'what have I eaten today?', 'show me my meals', 'what did I eat yesterday?'). Retrieves meal data for the specified time range.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "since_utc": {"type": "string", "format": "date-time", "description": "Start time in ISO8601 UTC format"},
-                "until_utc": {"type": "string", "format": "date-time", "description": "End time in ISO8601 UTC format"}
-            },
-            "anyOf": [
-                {"required": ["since_utc"]},
-                {"required": ["until_utc"]},
-                {"required": ["since_utc", "until_utc"]}
-            ]
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "fetchMeals", "arguments": "{\\"since_utc\\":\\"2025-01-01T00:00:00Z\\",\\"until_utc\\":\\"2025-01-02T00:00:00Z\\"}"}}]'
-    ),
-    "deleteMeal": ToolSpec(
-        name="deleteMeal",
-        description="Delete a single meal by id.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "id": {"type": "integer", "description": "The meal ID to delete"}
-            },
-            "required": ["id"]
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "deleteMeal", "arguments": "{\\"id\\":123}"}}]'
-    ),
-    "recallConversation": ToolSpec(
-        name="recallConversation",
-        description="Search conversation history when the user asks about past conversations or wants to recall what we've discussed. Use this for: recap requests ('what have we talked about?', 'what did we discuss today?'), specific memory queries ('what did I tell you about X?', 'remember when we talked about Y?'), or when they reference something from before ('that password I mentioned', 'the plan we made').",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "search_query": {"type": "string", "description": "Keywords to search for"},
-                "from": {"type": "string", "format": "date-time", "description": "Start timestamp in ISO8601 UTC format"},
-                "to": {"type": "string", "format": "date-time", "description": "End timestamp in ISO8601 UTC format"}
-            },
-            "anyOf": [
-                {"required": ["search_query"]},
-                {"required": ["from", "to"]},
-                {"required": ["search_query", "from", "to"]}
-            ]
-        },
-        usage_line='Use tool_calls field in your response message. For temporal queries, convert natural language to exact timestamps: today=2025-08-22T00:00:00Z to 2025-08-22T23:59:59Z, yesterday=2025-08-21T00:00:00Z to 2025-08-21T23:59:59Z, etc.',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "recallConversation", "arguments": "{\\"search_query\\":\\"what I ate\\",\\"from\\":\\"2025-08-21T00:00:00Z\\",\\"to\\":\\"2025-08-21T23:59:59Z\\"}"}}]'
-    ),
-    "webSearch": ToolSpec(
-        name="webSearch",
-        description="Search the web using DuckDuckGo to find current information on any topic. Use this for: educational topics, current news, weather, stock prices, sports scores, recent events, breaking news, or any question requiring information that may not be in your knowledge base. When asked about current events, news, or today's information, always use this tool to get up-to-date information rather than relying on stored knowledge.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "search_query": {"type": "string", "description": "The search terms to use. Make search queries specific and include relevant keywords for better results."}
-            },
-            "required": ["search_query"]
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "webSearch", "arguments": "{\\"search_query\\":\\"weather London today\\"}"}}]'
-    ),
-    "localFiles": ToolSpec(
-        name="localFiles",
-        description="Safely access local files in the user's home directory. Use to list, read, write, append, or delete files as requested by the user. Always operate within the allowed root; never request or disclose sensitive system paths.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "operation": {"type": "string", "enum": ["list", "read", "write", "append", "delete"], "description": "The file operation to perform"},
-                "path": {"type": "string", "description": "File path, absolute or relative to home directory"},
-                "glob": {"type": "string", "description": "Glob pattern for list operation (optional)"},
-                "recursive": {"type": "boolean", "description": "Whether to list recursively (optional, for list operation)"},
-                "content": {"type": "string", "description": "Content to write or append (required for write/append operations)"}
-            },
-            "required": ["operation", "path"],
-            "allOf": [
-                {
-                    "if": {"properties": {"operation": {"const": "write"}}},
-                    "then": {"required": ["content"]}
-                },
-                {
-                    "if": {"properties": {"operation": {"const": "append"}}},
-                    "then": {"required": ["content"]}
-                }
-            ]
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "localFiles", "arguments": "{\\"operation\\":\\"read\\",\\"path\\":\\"~/notes/todo.txt\\"}"}}]'
-    ),
-    "fetchWebPage": ToolSpec(
-        name="fetchWebPage",
-        description="Fetch and extract the text content from a web page URL. Use this to retrieve the full content of a specific webpage for reading, analysis, or when the user asks to fetch or read a particular URL. This provides the actual page content rather than search results.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "The URL of the web page to fetch"},
-                "include_links": {"type": "boolean", "description": "Whether to include links found on the page (optional, default: false)"}
-            },
-            "required": ["url"]
-        },
-        usage_line='Use tool_calls field in your response message',
-        example='tool_calls: [{"id": "<system_generated>", "type": "function", "function": {"name": "fetchWebPage", "arguments": "{\\"url\\":\\"https://example.com\\",\\"include_links\\":false}"}}]'
-    ),
-}
+# Legacy TOOL_SPECS for backward compatibility - now dynamically generated from tool registry
+TOOL_SPECS: Dict[str, ToolSpec] = get_builtin_tool_specs()
 
 
 def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
@@ -351,38 +219,19 @@ def run_tool_with_retries(
             except Exception:
                 pass
 
-
-    # screenshot
-    if name == "screenshot":
-        return execute_screenshot(_user_print)
-
-    # logMeal
-    if name == "logMeal":
-        return execute_log_meal(db, cfg, tool_args, redacted_text, max_retries, _user_print)
-
-    # fetchMeals
-    if name == "fetchMeals":
-        return execute_fetch_meals(db, tool_args, _user_print)
-
-    # deleteMeal
-    if name == "deleteMeal":
-        return execute_delete_meal(db, tool_args, _user_print)
-
-    # recallConversation
-    if name == "recallConversation":
-        return execute_recall_conversation(db, cfg, tool_args, _user_print)
-
-    # webSearch
-    if name == "webSearch":
-        return execute_web_search(cfg, tool_args, _user_print)
-
-    # localFiles
-    if name == "localFiles":
-        return execute_local_files(tool_args)
-
-    # fetchWebPage
-    if name == "fetchWebPage":
-        return execute_fetch_web_page(tool_args, _user_print)
+    # Check builtin tools first
+    if name in BUILTIN_TOOLS:
+        tool = BUILTIN_TOOLS[name]
+        return tool.execute(
+            db=db,
+            cfg=cfg,
+            tool_args=tool_args,
+            system_prompt=system_prompt,
+            original_prompt=original_prompt,
+            redacted_text=redacted_text,
+            max_retries=max_retries,
+            user_print=_user_print
+        )
 
     # Unknown tool
     debug_log(f"unknown tool requested: {tool_name}", "tools")

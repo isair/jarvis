@@ -1,8 +1,9 @@
 """Fetch web page tool implementation for extracting content from URLs."""
 
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from ...debug import debug_log
+from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
 
@@ -142,3 +143,30 @@ def execute_fetch_web_page(
         debug_log(f"fetchWebPage: error: {e}", "web")
         _user_print("⚠️ Error fetching page.")
         return ToolExecutionResult(success=False, reply_text=f"Error fetching page: {e}")
+
+
+class FetchWebPageTool(Tool):
+    """Tool for fetching and extracting content from web pages."""
+    
+    @property
+    def name(self) -> str:
+        return "fetchWebPage"
+    
+    @property
+    def description(self) -> str:
+        return "Fetch and extract text content from a web page URL."
+    
+    @property
+    def inputSchema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to fetch content from"},
+                "include_links": {"type": "boolean", "description": "Whether to include links found on the page"}
+            },
+            "required": ["url"]
+        }
+    
+    def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        """Execute the fetch web page tool."""
+        return execute_fetch_web_page(args, context.user_print)

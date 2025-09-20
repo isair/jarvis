@@ -1,10 +1,16 @@
+"""Log meal tool for nutrition tracking."""
+
 from __future__ import annotations
 import json
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timezone
 
-from ...memory.db import Database
-from ...llm import call_llm_direct
+from ....debug import debug_log
+from ....config import Settings
+from ....memory.db import Database
+from ....llm import call_llm_direct
+from ...base import Tool, ToolContext
+from ...types import ToolExecutionResult
 
 
 NUTRITION_SYS = (
@@ -17,12 +23,30 @@ NUTRITION_SYS = (
 
 
 def _safe_float(x: Any) -> Optional[float]:
+    """Safely convert value to float."""
     try:
         if x is None:
             return None
         return float(x)
     except Exception:
         return None
+
+
+def _required_log_meal_fields() -> List[str]:
+    """Get required fields for log meal tool."""
+    return [
+        "description",
+        "calories_kcal", 
+        "protein_g",
+        "carbs_g",
+        "fat_g",
+        "fiber_g",
+        "sugar_g",
+        "sodium_mg",
+        "potassium_mg",
+        "micros",
+        "confidence",
+    ]
 
 
 def extract_and_log_meal(db: Database, cfg, original_text: str, source_app: str) -> Optional[str]:
@@ -112,42 +136,6 @@ def log_meal_from_args(db: Database, args: Dict[str, Any], source_app: str) -> O
         return None
 
 
-def summarize_meals(meals: List[Any]) -> str:
-    lines: List[str] = []
-    total_kcal = 0.0
-    total_protein = 0.0
-    total_carbs = 0.0
-    total_fat = 0.0
-    for m in meals:
-        try:
-            desc = m["description"] if isinstance(m, dict) else m["description"]
-        except Exception:
-            desc = "meal"
-        try:
-            kcal = float(m["calories_kcal"]) if m["calories_kcal"] is not None else 0.0
-        except Exception:
-            kcal = 0.0
-        try:
-            prot = float(m["protein_g"]) if m["protein_g"] is not None else 0.0
-        except Exception:
-            prot = 0.0
-        try:
-            carbs = float(m["carbs_g"]) if m["carbs_g"] is not None else 0.0
-        except Exception:
-            carbs = 0.0
-        try:
-            fat = float(m["fat_g"]) if m["fat_g"] is not None else 0.0
-        except Exception:
-            fat = 0.0
-        total_kcal += kcal
-        total_protein += prot
-        total_carbs += carbs
-        total_fat += fat
-        lines.append(f"- {desc} (~{int(round(kcal))} kcal, {int(round(prot))}g P, {int(round(carbs))}g C, {int(round(fat))}g F)")
-    header = f"Meals: {len(meals)} | Total ~{int(round(total_kcal))} kcal, {int(round(total_protein))}g P, {int(round(total_carbs))}g C, {int(round(total_fat))}g F"
-    return header + ("\n" + "\n".join(lines) if lines else "")
-
-
 def generate_followups_for_meal(cfg, description: str, approx: str) -> str:
     """
     Ask the coach for concise, pragmatic follow-ups given a logged meal summary.
@@ -162,3 +150,79 @@ def generate_followups_for_meal(cfg, description: str, approx: str) -> str:
     return (follow_text or "").strip()
 
 
+class LogMealTool(Tool):
+    """Tool for logging meals to the nutrition database."""
+    
+    @property
+    def name(self) -> str:
+        return "logMeal"
+    
+    @property
+    def description(self) -> str:
+        return "Log a single meal when the user mentions eating or drinking something specific (e.g., 'I ate chicken curry', 'I had a sandwich', 'I drank a protein shake'). Estimate approximate macros and key micronutrients based on typical portions."
+    
+    @property
+    def inputSchema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "Description of the meal"},
+                "calories_kcal": {"type": "number", "description": "Calories in kcal"},
+                "protein_g": {"type": "number", "description": "Protein in grams"},
+                "carbs_g": {"type": "number", "description": "Carbohydrates in grams"},
+                "fat_g": {"type": "number", "description": "Fat in grams"},
+                "fiber_g": {"type": "number", "description": "Fiber in grams"},
+                "sugar_g": {"type": "number", "description": "Sugar in grams"},
+                "sodium_mg": {"type": "number", "description": "Sodium in mg"},
+                "potassium_mg": {"type": "number", "description": "Potassium in mg"},
+                "micros": {"type": "object", "description": "Micronutrients as key-value pairs"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in estimates (0-1)"}
+            },
+            "required": _required_log_meal_fields()
+        }
+    
+    def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        """Execute the log meal tool."""
+        context.user_print("🥗 Logging your meal…")
+        
+        # First attempt: use provided args if complete
+        required = _required_log_meal_fields()
+        
+        def _has_all_fields(a: Dict[str, Any]) -> bool:
+            return all(k in a for k in required)
+
+        if args and isinstance(args, dict) and _has_all_fields(args):
+            debug_log("logMeal: using provided args", "nutrition")
+            meal_id = log_meal_from_args(context.db, args, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
+            if meal_id is not None:
+                # Build follow-ups conversationally
+                desc = str(args.get("description") or "meal")
+                approx_bits: List[str] = []
+                for k, label in (("calories_kcal", "kcal"), ("protein_g", "g protein"), ("carbs_g", "g carbs"), ("fat_g", "g fat"), ("fiber_g", "g fiber")):
+                    try:
+                        v = args.get(k)
+                        if isinstance(v, (int, float)):
+                            approx_bits.append(f"{int(round(float(v)))} {label}")
+                    except Exception:
+                        pass
+                approx = ", ".join(approx_bits) if approx_bits else "approximate macros logged"
+                follow_text = generate_followups_for_meal(context.cfg, desc, approx)
+                reply_text = f"Logged meal #{meal_id}: {desc} — {approx}.\nFollow-ups: {follow_text}"
+                debug_log(f"logMeal: logged meal_id={meal_id}", "nutrition")
+                context.user_print("✅ Meal saved.")
+                return ToolExecutionResult(success=True, reply_text=reply_text)
+        
+        # Retry path: extract and log from redacted text using extractor
+        for attempt in range(context.max_retries + 1):
+            try:
+                debug_log(f"logMeal: extracting from text (attempt {attempt+1}/{context.max_retries+1})", "nutrition")
+                meal_summary = extract_and_log_meal(context.db, context.cfg, original_text=context.redacted_text, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
+                if meal_summary:
+                    debug_log("logMeal: extraction+log succeeded", "nutrition")
+                    return ToolExecutionResult(success=True, reply_text=meal_summary)
+            except Exception:
+                pass
+        
+        debug_log("logMeal: failed", "nutrition")
+        context.user_print("⚠️ I couldn't log that meal automatically.")
+        return ToolExecutionResult(success=False, reply_text=None, error_message="Failed to log meal")

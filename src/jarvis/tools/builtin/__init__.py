@@ -1,34 +1,33 @@
 """Builtin tools module.
 
 This module contains all the built-in tools available to the Jarvis system.
-Each tool is implemented in its own file for better organization and maintainability.
+Each tool is implemented using the common Tool interface for consistency.
 """
 
-# Import all tool functions for easy access
-from .web_search import execute_web_search
-from .local_files import execute_local_files  
-from .fetch_web_page import execute_fetch_web_page
-from .recall_conversation import execute_recall_conversation
-from .meal_tools import execute_log_meal, execute_fetch_meals, execute_delete_meal
-from .screenshot import execute_screenshot
+# Import all tool classes
+from .screenshot import ScreenshotTool
+from .web_search import WebSearchTool
+from .local_files import LocalFilesTool
+from .fetch_web_page import FetchWebPageTool
+from .recall_conversation import RecallConversationTool
+from .nutrition.log_meal import LogMealTool
+from .nutrition.fetch_meals import FetchMealsTool
+from .nutrition.delete_meal import DeleteMealTool
+
+# Import supporting functions that may still be used elsewhere
 from .ocr import capture_screenshot_and_ocr
-from .nutrition import extract_and_log_meal, log_meal_from_args, summarize_meals, generate_followups_for_meal
 
 __all__ = [
-    # Tool execution functions
-    'execute_web_search',
-    'execute_local_files',
-    'execute_fetch_web_page',
-    'execute_recall_conversation',
-    'execute_log_meal',
-    'execute_fetch_meals',
-    'execute_delete_meal',
-    'execute_screenshot',
+    # Tool classes
+    'ScreenshotTool',
+    'WebSearchTool', 
+    'LocalFilesTool',
+    'FetchWebPageTool',
+    'RecallConversationTool',
+    'LogMealTool',
+    'FetchMealsTool',
+    'DeleteMealTool',
     
     # Supporting functions
     'capture_screenshot_and_ocr',
-    'extract_and_log_meal',
-    'log_meal_from_args',
-    'summarize_meals',
-    'generate_followups_for_meal',
 ]
