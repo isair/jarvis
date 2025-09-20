@@ -288,13 +288,171 @@ Connect Jarvis to any tool using MCP (Model Context Protocol) servers:
 
 Find more MCP servers at [github.com/topics/mcp-server](https://github.com/topics/mcp-server)
 
-#### Home Automation (Home Assistant)
+### Popular MCP Integrations
 
-Control your lights, switches, sensors, scenes, and other exposed Home Assistant entities directly by voice: “Jarvis, turn on the living room lights”. This uses the official Home Assistant MCP Server integration.
+Transform Jarvis into a comprehensive AI assistant that goes far beyond current solutions like ChatGPT or Gemini. These integrations provide deep access to your actual data and workflows:
 
-Quick steps (≈3 min):
+#### 🏠 **Productivity & Cloud Services**
 
-1. In Home Assistant add the MCP Server integration (Settings → Devices & services → Add integration → search “Model Context Protocol Server”).  
+<details>
+<summary><strong>Google Workspace (Gmail, Drive, Calendar, Docs, Sheets)</strong></summary>
+
+**Most comprehensive Google integration** - Full access to Gmail, Drive, Calendar, Docs, Sheets, and more.
+
+```json
+{
+  "mcps": {
+    "google_workspace": {
+      "command": "npx",
+      "args": ["-y", "google-workspace-mcp"],
+      "env": {
+        "GOOGLE_CLIENT_ID": "your-client-id",
+        "GOOGLE_CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+**Setup:** Follow OAuth setup guide at [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp)
+
+**What you can do:** "Jarvis, check my calendar for today", "create a spreadsheet with my expenses", "draft an email to the team", "find that document about the project"
+</details>
+
+<details>
+<summary><strong>Notion - Knowledge Management</strong></summary>
+
+**Official Notion integration** - Read, create, and update pages and databases.
+
+```json
+{
+  "mcps": {
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "@makenotion/mcp-server-notion"],
+      "env": {
+        "NOTION_API_KEY": "your-notion-integration-token"
+      }
+    }
+  }
+}
+```
+
+**Setup:** Create integration at [notion.so/my-integrations](https://notion.so/my-integrations)
+
+**What you can do:** "Jarvis, add this to my reading list", "create a project plan", "search my knowledge base", "update the meeting notes"
+</details>
+
+<details>
+<summary><strong>Slack - Team Communication</strong></summary>
+
+**Complete Slack integration** - Send messages, read channels, manage workspaces.
+
+```json
+{
+  "mcps": {
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "slack-mcp-server"],
+      "env": {
+        "SLACK_BOT_TOKEN": "xoxb-your-bot-token",
+        "SLACK_USER_TOKEN": "xoxp-your-user-token"
+      }
+    }
+  }
+}
+```
+
+**Setup:** Create Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+
+**What you can do:** "Jarvis, send a status update to the team", "check recent messages in #general", "schedule a reminder for the standup"
+</details>
+
+#### 🗄️ **Database & Data Management**
+
+<details>
+<summary><strong>Universal Database Access (MySQL, PostgreSQL, SQLite, MongoDB)</strong></summary>
+
+**Multi-database support** - Query and analyze data across different database systems.
+
+```json
+{
+  "mcps": {
+    "database": {
+      "command": "npx",
+      "args": ["-y", "mcp-database-server"],
+      "env": {
+        "DATABASE_URL": "your-connection-string"
+      }
+    }
+  }
+}
+```
+
+**Popular options:**
+- [bytebase/dbhub](https://github.com/bytebase/dbhub) - Universal SQL databases
+- [mongodb-js/mongodb-mcp-server](https://github.com/mongodb-js/mongodb-mcp-server) - MongoDB & Atlas
+- [neondatabase/mcp-server-neon](https://github.com/neondatabase/mcp-server-neon) - Neon PostgreSQL
+
+**What you can do:** "Jarvis, show me this month's sales data", "find users who signed up last week", "analyze the performance metrics"
+</details>
+
+#### 🤖 **Development & Automation**
+
+<details>
+<summary><strong>GitHub Integration</strong></summary>
+
+**Official GitHub MCP server** - Manage repositories, issues, PRs, and workflows.
+
+```json
+{
+  "mcps": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "your-personal-access-token"
+      }
+    }
+  }
+}
+```
+
+**What you can do:** "Jarvis, create an issue for this bug", "review recent commits", "check CI status", "merge that PR"
+</details>
+
+<details>
+<summary><strong>Discord Integration</strong></summary>
+
+**Community management** - Read messages, send notifications, manage servers.
+
+```json
+{
+  "mcps": {
+    "discord": {
+      "command": "npx",
+      "args": ["-y", "discord-mcp-server"],
+      "env": {
+        "DISCORD_BOT_TOKEN": "your-bot-token"
+      }
+    }
+  }
+}
+```
+
+**What you can do:** "Jarvis, check what's happening in the dev channel", "announce the new release", "moderate recent messages"
+</details>
+
+#### 🏠 **Smart Home & IoT**
+
+<details>
+<summary><strong>Home Assistant Integration</strong></summary>
+
+Control your lights, switches, sensors, scenes, and other exposed Home Assistant entities directly by voice: "Jarvis, turn on the living room lights". This uses the official Home Assistant MCP Server integration.
+
+**Quick steps (≈3 min):**
+
+1. In Home Assistant add the MCP Server integration (Settings → Devices & services → Add integration → search "Model Context Protocol Server").  
 2. Expose only the entities you want Jarvis to control: Settings → Voice assistants → Exposed entities.  
 3. Create a Long‑lived Access Token: Profile (bottom left avatar) → Security → Create token (copy it).  
 4. Install the local proxy that bridges stdio ↔ Home Assistant SSE transport (pick one):  
@@ -333,20 +491,80 @@ Alternative (env-only) form if you prefer not to pass the URL as an arg:
 ```
 
 6. Restart Jarvis.  
-7. Try: “Jarvis, what’s the temperature in the bedroom?” or “Jarvis, turn off all the kitchen lights”.
+7. Try: "Jarvis, what's the temperature in the bedroom?" or "Jarvis, turn off all the kitchen lights".
 
-Notes & safety:
+**Notes & safety:**
 - Jarvis can only see/control entities you explicitly exposed in Home Assistant. Review that list if access seems too broad or too limited.
 - If you change exposed entities, just restart Jarvis (or wait for the next tool schema refresh).
-- token scopes: Long‑lived tokens inherit your user’s permissions—treat them like a password. Revoke from Profile → Security if compromised.
+- token scopes: Long‑lived tokens inherit your user's permissions—treat them like a password. Revoke from Profile → Security if compromised.
 
-Troubleshooting (fast):
-- 404 Not Found (URL with `/mcp_server/sse`): The MCP Server integration isn’t installed/enabled. Add it in step 1.
+**Troubleshooting (fast):**
+- 404 Not Found (URL with `/mcp_server/sse`): The MCP Server integration isn't installed/enabled. Add it in step 1.
 - 401 Unauthorized: Token invalid/expired. Create a new token and update config.
 - Command not found `mcp-proxy`: Re‑install (step 4) and ensure your Python tool install path is on PATH (restart shell if needed).
 - Jarvis says no tools available: Confirm the entity is exposed and restart Jarvis.
 
-That’s it—your home is now voice-controllable via private, local AI.
+**What you can do:** "Jarvis, turn on the living room lights", "set bedroom temperature to 72°", "is the front door locked?", "run the good night scene"
+</details>
+
+#### 🔧 **Advanced Integrations**
+
+<details>
+<summary><strong>500+ Apps with Composio (Rube)</strong></summary>
+
+**Ultimate integration hub** - Connect to Gmail, Slack, GitHub, Notion, Trello, Jira, and 500+ other apps.
+
+```json
+{
+  "mcps": {
+    "composio": {
+      "command": "npx",
+      "args": ["-y", "@composiohq/rube"],
+      "env": {
+        "COMPOSIO_API_KEY": "your-composio-api-key"
+      }
+    }
+  }
+}
+```
+
+**Setup:** Get API key at [composio.dev](https://composio.dev)
+
+**What you can do:** Access virtually any web service through a single integration
+</details>
+
+<details>
+<summary><strong>Web Scraping & Data Extraction</strong></summary>
+
+**Advanced web scraping** - Extract data from any website with stealth capabilities and Cloudflare bypass.
+
+```json
+{
+  "mcps": {
+    "web_scraper": {
+      "command": "scrapling",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Setup:** Install with `pip install "scrapling[ai]"` then `scrapling install`
+
+**What you can do:** "Jarvis, get the latest prices from this website", "scrape all product URLs from this category", "extract contact info bypassing Cloudflare protection"
+</details>
+
+### 🎯 **Why These Integrations Matter**
+
+Unlike ChatGPT or Gemini, Jarvis with these integrations can:
+- **Actually send emails** instead of just drafting them
+- **Read your real calendar** and schedule meetings  
+- **Access your private documents** and knowledge bases
+- **Control your smart home** with voice commands
+- **Query your databases** and analyze business data
+- **Manage your GitHub repos** and development workflow
+- **Monitor team communications** in Slack/Discord
+- **Automate complex workflows** across multiple services
 
 ## Troubleshooting
 
