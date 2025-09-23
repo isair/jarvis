@@ -1,5 +1,6 @@
 from __future__ import annotations
 import socket
+import ipaddress
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -26,7 +27,7 @@ def _get_local_network_ip() -> Optional[str]:
     """
     Get the local network IP address without making external calls.
     This respects privacy by not contacting third-party services.
-    
+
     Note: This returns the local IP, not the public IP, so geolocation
     will only work if the user manually configures their public IP.
     """
@@ -41,10 +42,10 @@ def _get_local_network_ip() -> Optional[str]:
             return local_ip
         except Exception:
             s.close()
-            
+
     except Exception:
         pass
-    
+
     return None
 
 
@@ -52,68 +53,74 @@ def _get_external_ip_via_upnp() -> Optional[str]:
     """
     Get external IP address by querying the local router via UPnP.
     This is privacy-friendly as it only communicates with your local router.
-    
+
     Returns:
         External IP address if successful, None otherwise.
     """
     if not MINIUPNPC_AVAILABLE:
         return None
-    
+
     try:
         upnp = miniupnpc.UPnP()
         upnp.discoverdelay = 200  # milliseconds
-        
+
         # Discover UPnP devices
         device_count = upnp.discover()
         if device_count == 0:
             return None
-        
+
         # Select the Internet Gateway Device
         upnp.selectigd()
-        
+
         # Get the external IP address
         external_ip = upnp.externalipaddress()
-        
+
         # Validate the IP address and ensure it's not private
         if external_ip and not _is_private_ip(external_ip) and "." in external_ip:
             return external_ip
-            
+
     except Exception:
         # UPnP might not be supported or enabled
         pass
-    
+
     return None
 
 
 def _is_private_ip(ip: str) -> bool:
-    """Check if an IP address is private/local."""
+    """Check if an IP address is private/local or special-use (non-geolocatable)."""
     if not ip:
         return True
-    
-    # Common private IP ranges
-    private_ranges = [
-        "127.",      # localhost
-        "10.",       # Class A private
-        "172.16.",   # Class B private (172.16.0.0 to 172.31.255.255)
-        "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
-        "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
-        "192.168.",  # Class C private
-        "169.254.",  # Link-local
-        "0.0.0.0",   # Invalid
-    ]
-    
-    return any(ip.startswith(prefix) for prefix in private_ranges)
+    try:
+        addr = ipaddress.ip_address(ip)
+        # RFC 6598 shared address space (CGNAT) will be treated separately; don't mark as private here
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
+            return True
+        # 0.0.0.0 and unspecified
+        if addr.is_unspecified:
+            return True
+    except ValueError:
+        return True
+    return False
+
+
+def _is_cgnat_ip(ip: str) -> bool:
+    """Return True if IP is in carrier-grade NAT (100.64.0.0/10)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr in ipaddress.ip_network("100.64.0.0/10")
+    except ValueError:
+        return False
 
 
 def _get_external_ip_via_socket() -> Optional[str]:
     """
     Get external IP address by creating a socket connection to determine
     which local interface would be used for external communication.
-    
+
     This method creates a connection to a well-known external server (Google DNS)
     to determine the local IP address used for external communication.
     No data is actually sent.
-    
+
     Returns:
         IP address used for external communication, None if failed.
     """
@@ -124,7 +131,7 @@ def _get_external_ip_via_socket() -> Optional[str]:
             ("1.1.1.1", 80),      # Cloudflare DNS
             ("208.67.222.222", 80), # OpenDNS
         ]
-        
+
         for server_ip, port in servers:
             try:
                 # Create a UDP socket (no actual data transmission)
@@ -134,20 +141,20 @@ def _get_external_ip_via_socket() -> Optional[str]:
                     s.connect((server_ip, port))
                     detected_ip = s.getsockname()[0]
                     s.close()
-                    
+
                     # Return the first non-private IP we find
                     if detected_ip and not _is_private_ip(detected_ip):
                         return detected_ip
-                        
+
                 except Exception:
                     s.close()
-                    
+
             except Exception:
                 continue
-                
+
     except Exception:
         pass
-    
+
     return None
 
 
@@ -155,10 +162,10 @@ def _get_external_ip_automatically() -> Optional[str]:
     """
     Attempt to automatically determine the external IP address using
     privacy-friendly methods in order of preference:
-    
+
     1. UPnP (query local router) - most privacy-friendly
     2. Socket connection (determine external interface) - minimal external contact
-    
+
     Returns:
         External IP address if successful, None otherwise.
     """
@@ -166,12 +173,12 @@ def _get_external_ip_automatically() -> Optional[str]:
     ip = _get_external_ip_via_upnp()
     if ip:
         return ip
-    
+
     # Fallback to socket method
     ip = _get_external_ip_via_socket()
     if ip:
         return ip
-    
+
     return None
 
 
@@ -185,13 +192,13 @@ def _get_database_path() -> Path:
 def _print_location_setup_instructions(db_path: Path) -> None:
     """Print user-friendly location setup instructions with proper formatting."""
     global _location_warning_shown
-    
+
     # Only show warning once per session
     if _location_warning_shown:
         return
-    
+
     _location_warning_shown = True
-    
+
     print("  📍 Location features are not available")
     print()
     print("     To enable location-based features:")
@@ -212,39 +219,76 @@ def _download_geolite2_database() -> bool:
     """
     try:
         db_path = _get_database_path()
-        
+
         # Check if database already exists and is recent (less than 30 days old)
         if db_path.exists():
             age_days = (datetime.now() - datetime.fromtimestamp(db_path.stat().st_mtime)).days
             if age_days < 30:
                 debug_log("GeoLite2 database found and up to date", "location")
                 return True
-        
+
         debug_log(f"GeoLite2 database not found or outdated at: {db_path}", "location")
         _print_location_setup_instructions(db_path)
-        
+
         return False
-        
+
     except Exception as e:
         debug_log(f"Error checking database: {e}", "location")
         return False
 
 
-def get_location_info(ip_address: Optional[str] = None, config_ip: Optional[str] = None, auto_detect: bool = True) -> Dict[str, Any]:
-    """
-    Get location information for the given IP address.
-    
+def _resolve_public_ip_via_opendns(timeout: float = 1.5) -> Optional[str]:
+    """Resolve true public IP via a single DNS query to OpenDNS (myip.opendns.com)."""
+    try:
+        resolver_ip = ("208.67.222.222", 53)
+        import random
+        tid = random.randint(0, 0xFFFF)
+        header = tid.to_bytes(2, 'big') + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+        labels = b"".join(len(part).to_bytes(1, 'big') + part.encode('ascii') for part in "myip.opendns.com".split('.')) + b"\x00"
+        qtype_qclass = b"\x00\x01\x00\x01"
+        packet = header + labels + qtype_qclass
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(timeout)
+        try:
+            s.sendto(packet, resolver_ip)
+            data, _ = s.recvfrom(512)
+        finally:
+            s.close()
+        if len(data) < 12 or data[0:2] != tid.to_bytes(2, 'big'):
+            return None
+        question_len = len(labels) + 4
+        answer_start = 12 + question_len
+        if len(data) < answer_start + 12:
+            return None
+        rdlength = int.from_bytes(data[answer_start + 10:answer_start + 12], 'big') if len(data) >= answer_start + 12 else 0
+        rdata_start = answer_start + 12
+        rdata_end = rdata_start + rdlength
+        if rdlength == 4 and len(data) >= rdata_end:
+            ip_bytes = data[rdata_start:rdata_end]
+            return '.'.join(str(b) for b in ip_bytes)
+    except Exception:
+        return None
+    return None
+
+
+def get_location_info(
+    ip_address: Optional[str] = None,
+    *,
+    config_ip: Optional[str] = None,
+    auto_detect: bool = True,
+    resolve_cgnat_public_ip: bool = True,
+) -> Dict[str, Any]:
+    """Get location information for an IP address.
+
     Args:
-        ip_address: IP address to lookup. If None, tries other sources.
-        config_ip: IP address from configuration. Used when ip_address is None.
-        auto_detect: Whether to attempt automatic IP detection via UPnP/socket.
-    
-    Returns:
-        Dictionary with location information or empty dict if unavailable.
+        ip_address: Direct IP address to look up. If provided it is used as-is.
+        config_ip: Manually configured public IP (takes precedence over auto-detect when ip_address is None).
+        auto_detect: Attempt to discover an external IP via UPnP / socket heuristics if neither ip_address nor config_ip given.
+        resolve_cgnat_public_ip: If True and a CGNAT (100.64.0.0/10) address is detected, attempt a single DNS query via OpenDNS to discover the true public IP (privacy-light).
     """
     if not GEOIP2_AVAILABLE:
         return {"error": "geoip2 library not available"}
-    
+
     # Get IP address to lookup (prioritize parameter, then config, then auto-detect)
     if ip_address is None:
         if config_ip:
@@ -258,20 +302,28 @@ def get_location_info(ip_address: Optional[str] = None, config_ip: Optional[str]
         else:
             # Fall back to local IP without auto-detection
             ip_address = _get_local_network_ip()
-    
+
     if not ip_address:
         return {"error": "No IP address available. Try enabling auto-detection or configure 'location_ip_address' in your config."}
-    
+
+    # Mark CGNAT and optionally resolve public IP via OpenDNS if enabled in settings
+    cgnat_flag = _is_cgnat_ip(ip_address)
+    if cgnat_flag and resolve_cgnat_public_ip:
+        resolved = _resolve_public_ip_via_opendns()
+        if resolved and not _is_cgnat_ip(resolved) and not _is_private_ip(resolved):
+            debug_log(f"CGNAT IP {ip_address} resolved to public {resolved} via OpenDNS", "location")
+            ip_address = resolved
+
     # Check if database is available
     db_path = _get_database_path()
     if not db_path.exists():
         if not _download_geolite2_database():
             return {"error": "GeoLite2 database not available"}
-    
+
     try:
         with geoip2.database.Reader(str(db_path)) as reader:
             response = reader.city(ip_address)
-            
+
             location_info = {
                 "ip": ip_address,
                 "country": response.country.name,
@@ -284,29 +336,49 @@ def get_location_info(ip_address: Optional[str] = None, config_ip: Optional[str]
                 "timezone": response.location.time_zone,
                 "accuracy_radius": response.location.accuracy_radius,
             }
-            
+
             # Clean up None values and empty strings
             cleaned_info = {k: v for k, v in location_info.items() if v is not None and v != ""}
             debug_log(f"Location detected: {cleaned_info.get('city', 'Unknown city')}, {cleaned_info.get('country', 'Unknown country')}", "location")
             return cleaned_info
-            
+
     except geoip2.errors.AddressNotFoundError:
         debug_log(f"IP address {ip_address} not found in database", "location")
-        return {"error": f"IP address {ip_address} not found in database", "ip": ip_address}
+        reason = "cgnat_not_found" if cgnat_flag else "not_found"
+        advice = (
+            "Detected CGNAT (100.64.0.0/10). Configure 'location_ip_address' with a real public IP or disable auto-detect."
+            if cgnat_flag else
+            "If this is CGNAT or a very new allocation, configure 'location_ip_address' manually."
+        )
+        return {
+            "error": f"IP address {ip_address} not found in database",
+            "ip": ip_address,
+            "reason": reason,
+            "advice": advice,
+        }
     except Exception as e:
         debug_log(f"Error looking up location: {e}", "location")
         return {"error": f"Error looking up location: {e}", "ip": ip_address}
 
 
-def get_location_context(config_ip: Optional[str] = None, auto_detect: bool = True) -> str:
-    """Generate location context string for the agent."""
-    location_info = get_location_info(config_ip=config_ip, auto_detect=auto_detect)
-    
+def get_location_context(
+    *,
+    config_ip: Optional[str] = None,
+    auto_detect: bool = True,
+    resolve_cgnat_public_ip: bool = True,
+) -> str:
+    """Generate a concise location context string using explicit parameters."""
+    location_info = get_location_info(
+        config_ip=config_ip,
+        auto_detect=auto_detect,
+        resolve_cgnat_public_ip=resolve_cgnat_public_ip,
+    )
+
     if "error" in location_info:
         return "Location: Unknown"
-    
+
     parts = []
-    
+
     # Add city and region if available
     if location_info.get("city"):
         if location_info.get("region"):
@@ -315,15 +387,15 @@ def get_location_context(config_ip: Optional[str] = None, auto_detect: bool = Tr
             parts.append(location_info["city"])
     elif location_info.get("region"):
         parts.append(location_info["region"])
-    
+
     # Add country
     if location_info.get("country"):
         parts.append(location_info["country"])
-    
+
     # Add timezone if different from what we might expect
     if location_info.get("timezone"):
         parts.append(f"({location_info['timezone']})")
-    
+
     if parts:
         return f"Location: {', '.join(parts)}"
     else:
@@ -334,7 +406,7 @@ def is_location_available() -> bool:
     """Check if location detection is available and working."""
     if not GEOIP2_AVAILABLE:
         return False
-    
+
     db_path = _get_database_path()
     return db_path.exists()
 
@@ -343,7 +415,7 @@ def setup_location_database() -> bool:
     """
     Setup the location database. This will check for the database
     and provide instructions if it's not available.
-    
+
     Returns:
         True if database is available and ready, False otherwise.
     """
@@ -355,55 +427,63 @@ def setup_location_database() -> bool:
         print()
         debug_log("geoip2 library not available", "location")
         return False
-    
+
     return _download_geolite2_database()
 
 
-def get_detailed_location_info(ip_address: Optional[str] = None, config_ip: Optional[str] = None, auto_detect: bool = True) -> Dict[str, Any]:
-    """
-    Get detailed location information including coordinates.
-    This is useful for more advanced location-based features.
-    """
-    location_info = get_location_info(ip_address, config_ip=config_ip, auto_detect=auto_detect)
-    
+def get_detailed_location_info(
+    ip_address: Optional[str] = None,
+    *,
+    config_ip: Optional[str] = None,
+    auto_detect: bool = True,
+    resolve_cgnat_public_ip: bool = True,
+) -> Dict[str, Any]:
+    """Get detailed location information including coordinates and formatted address."""
+    location_info = get_location_info(
+        ip_address,
+        config_ip=config_ip,
+        auto_detect=auto_detect,
+        resolve_cgnat_public_ip=resolve_cgnat_public_ip,
+    )
+
     if "error" in location_info:
         return location_info
-    
+
     # Add computed fields
     if location_info.get("latitude") and location_info.get("longitude"):
         location_info["coordinates"] = f"{location_info['latitude']}, {location_info['longitude']}"
-    
+
     # Add formatted address
     address_parts = []
     for field in ["city", "region", "country"]:
         if location_info.get(field):
             address_parts.append(location_info[field])
-    
+
     if address_parts:
         location_info["formatted_address"] = ", ".join(address_parts)
-    
+
     return location_info
 
 
 # For testing and debugging
 if __name__ == "__main__":
     print("Testing location detection...")
-    
+
     # Test local IP detection (privacy-focused)
     ip = _get_local_network_ip()
     print(f"Local IP: {ip}")
-    
+
     # Test location lookup (will likely fail without public IP)
     location = get_location_info()
     print(f"Location info: {location}")
-    
+
     # Test context generation
     context = get_location_context()
     print(f"Location context: {context}")
-    
+
     # Test detailed info
     detailed = get_detailed_location_info()
     print(f"Detailed location: {detailed}")
-    
+
     print("\nNote: For accurate location detection, configure 'location_ip_address' in your config")
     print("or provide an IP address explicitly to respect privacy.")

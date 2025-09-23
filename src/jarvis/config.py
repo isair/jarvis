@@ -17,7 +17,7 @@ class Settings:
     # Database & Storage
     db_path: str
     sqlite_vss_path: str | None
-    
+
     # LLM & AI Models
     ollama_base_url: str
     ollama_embed_model: str
@@ -26,15 +26,15 @@ class Settings:
     llm_tools_timeout_sec: float
     llm_embedding_timeout_sec: float
     llm_profile_select_timeout_sec: float
-    
+
     # Profiles & Behavior
     active_profiles: list[str]
     use_stdin: bool
     voice_debug: bool
-    
+
     # Screen Capture
     allowlist_bundles: list[str]
-    
+
     # Text-to-Speech
     tts_enabled: bool
     tts_engine: str  # "system" (default) or "chatterbox" (experimental)
@@ -44,22 +44,22 @@ class Settings:
     tts_chatterbox_audio_prompt: str | None  # Path to audio file for voice cloning with Chatterbox
     tts_chatterbox_exaggeration: float  # Emotion exaggeration control (0.0-1.0+)
     tts_chatterbox_cfg_weight: float  # CFG weight for quality/speed trade-off
-    
+
     # Voice Input & Audio
     voice_device: str | None
     sample_rate: int
     voice_min_energy: float
-    
+
     # Voice Collection & Timing
     voice_block_seconds: float
     voice_collect_seconds: float
     voice_max_collect_seconds: float
-    
+
     # Wake Word Detection
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
-    
+
     # Whisper Speech Recognition
     whisper_model: str
     whisper_compute_type: str
@@ -67,7 +67,7 @@ class Settings:
     whisper_min_confidence: float
     whisper_min_audio_duration: float
     whisper_min_word_length: int
-    
+
     # Voice Activity Detection (VAD)
     vad_enabled: bool
     vad_aggressiveness: int
@@ -76,36 +76,37 @@ class Settings:
     endpoint_silence_ms: int
     max_utterance_ms: int
     tts_max_utterance_ms: int
-    
+
     # UI/UX Features
     tune_enabled: bool
     hot_window_enabled: bool
     hot_window_seconds: float
-    
+
     # Echo Detection
     echo_energy_threshold: float
     echo_tolerance: float
-    
+
     # Memory & Dialogue
     dialogue_memory_timeout: float
     memory_enrichment_max_results: int
     memory_search_max_results: int
-    
+
     # Agentic Loop
     agentic_max_turns: int
-    
+
     # Location Services
     location_enabled: bool
     location_cache_minutes: int
     location_ip_address: str | None
     location_auto_detect: bool
-    
+    location_cgnat_resolve_public_ip: bool
+
     # Web Search
     web_search_enabled: bool
-    
+
     # MCP Integration
     mcps: Dict[str, Any]
-    
+
 
 
 def _default_config_path() -> Path:
@@ -162,7 +163,7 @@ def get_default_config() -> Dict[str, Any]:
         # Database & Storage
         "db_path": _default_db_path(),
         "sqlite_vss_path": None,
-        
+
         # LLM & AI Models
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
@@ -171,11 +172,11 @@ def get_default_config() -> Dict[str, Any]:
         "llm_tools_timeout_sec": 300.0,
         "llm_embedding_timeout_sec": 60.0,
         "llm_profile_select_timeout_sec": 30.0,
-        
+
         # Profiles & Behavior
         "active_profiles": ["developer", "business", "life"],
         "use_stdin": False,
-        
+
         # Screen Capture
         "allowlist_bundles": [
             "com.apple.Terminal",
@@ -184,7 +185,7 @@ def get_default_config() -> Dict[str, Any]:
             "com.jetbrains.intellij",
         ],
 
-        
+
         # Text-to-Speech
         "tts_enabled": True,
         "tts_engine": "system",  # "system" (default) or "chatterbox" (experimental)
@@ -194,22 +195,22 @@ def get_default_config() -> Dict[str, Any]:
         "tts_chatterbox_audio_prompt": None,  # Path to audio file for voice cloning
         "tts_chatterbox_exaggeration": 0.5,  # Emotion exaggeration (0.0-1.0+)
         "tts_chatterbox_cfg_weight": 0.5,  # CFG weight for quality/speed trade-off
-        
+
         # Voice Input & Audio
         "voice_device": None,
         "sample_rate": 16000,
         "voice_min_energy": 0.02,
-        
+
         # Voice Collection & Timing
         "voice_block_seconds": 4.0,
         "voice_collect_seconds": 4.5,
         "voice_max_collect_seconds": 180.0,
-        
+
         # Wake Word Detection
         "wake_word": "jarvis",
         "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus"],
         "wake_fuzzy_ratio": 0.78,
-        
+
         # Whisper Speech Recognition
         "whisper_model": "small",
         "whisper_compute_type": "int8",
@@ -217,7 +218,7 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_min_confidence": 0.3,
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
-        
+
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
         "vad_aggressiveness": 2,
@@ -226,32 +227,35 @@ def get_default_config() -> Dict[str, Any]:
         "endpoint_silence_ms": 800,
         "max_utterance_ms": 12000,
         "tts_max_utterance_ms": 3000,  # Shorter timeout during TTS for quick stop detection
-        
+
         # UI/UX Features
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 6.0,
         "echo_energy_threshold": 2.0,
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
-        
+
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 10,
         "memory_search_max_results": 15,
-        
+
         # Agentic Loop
         "agentic_max_turns": 8,
-        
+
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
-        
+
         # Location Services
         "location_enabled": True,
         "location_cache_minutes": 60,
         "location_ip_address": None,
         "location_auto_detect": True,
-        
+    # When behind CGNAT (100.64.0.0/10), attempt a privacy-light external DNS query to discover true public IP
+    # Uses a single OpenDNS resolver lookup of myip.opendns.com over DNS (no HTTP services). Disable to avoid any external request.
+    "location_cgnat_resolve_public_ip": True,
+
         # Web Search
         "web_search_enabled": True,
 
@@ -355,6 +359,7 @@ def load_settings() -> Settings:
     location_ip_address_val = merged.get("location_ip_address")
     location_ip_address = None if location_ip_address_val in (None, "", "null") else str(location_ip_address_val)
     location_auto_detect = bool(merged.get("location_auto_detect", True))
+    location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.7))
@@ -369,7 +374,7 @@ def load_settings() -> Settings:
         # Database & Storage
         db_path=db_path,
         sqlite_vss_path=sqlite_vss_path,
-        
+
         # LLM & AI Models
         ollama_base_url=ollama_base_url,
         ollama_embed_model=ollama_embed_model,
@@ -378,15 +383,15 @@ def load_settings() -> Settings:
         llm_tools_timeout_sec=llm_tools_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
         llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
-        
+
         # Profiles & Behavior
         active_profiles=active_profiles,
         use_stdin=use_stdin,
         voice_debug=voice_debug,
-        
+
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
-        
+
         # Text-to-Speech
         tts_enabled=tts_enabled,
         tts_engine=tts_engine,
@@ -396,22 +401,22 @@ def load_settings() -> Settings:
         tts_chatterbox_audio_prompt=tts_chatterbox_audio_prompt,
         tts_chatterbox_exaggeration=tts_chatterbox_exaggeration,
         tts_chatterbox_cfg_weight=tts_chatterbox_cfg_weight,
-        
+
         # Voice Input & Audio
         voice_device=voice_device,
         sample_rate=sample_rate,
         voice_min_energy=voice_min_energy,
-        
+
         # Voice Collection & Timing
         voice_block_seconds=voice_block_seconds,
         voice_collect_seconds=voice_collect_seconds,
         voice_max_collect_seconds=voice_max_collect_seconds,
-        
+
         # Wake Word Detection
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
-        
+
         # Whisper Speech Recognition
         whisper_model=whisper_model,
         whisper_compute_type=whisper_compute_type,
@@ -419,7 +424,7 @@ def load_settings() -> Settings:
         whisper_min_confidence=whisper_min_confidence,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
-        
+
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,
         vad_aggressiveness=vad_aggressiveness,
@@ -428,26 +433,27 @@ def load_settings() -> Settings:
         endpoint_silence_ms=endpoint_silence_ms,
         max_utterance_ms=max_utterance_ms,
         tts_max_utterance_ms=tts_max_utterance_ms,
-        
+
         # UI/UX Features
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
-        
+
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,
         memory_enrichment_max_results=memory_enrichment_max_results,
         memory_search_max_results=memory_search_max_results,
         agentic_max_turns=agentic_max_turns,
-        
+
         # Location Services
         location_enabled=location_enabled,
         location_cache_minutes=location_cache_minutes,
         location_ip_address=location_ip_address,
         location_auto_detect=location_auto_detect,
-        
+        location_cgnat_resolve_public_ip=location_cgnat_resolve_public_ip,
+
         # Web Search
         web_search_enabled=web_search_enabled,
 

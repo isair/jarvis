@@ -221,10 +221,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         try:
             now = datetime.now(timezone.utc)
             current_time = now.strftime("%A, %B %d, %Y at %H:%M UTC")
-            location_context = get_location_context(
-                config_ip=getattr(cfg, 'location_ip_address', None),
-                auto_detect=getattr(cfg, 'location_auto_detect', True)
-            )
+            # Respect global location_enabled flag early to avoid unnecessary work
+            if not getattr(cfg, 'location_enabled', True):
+                location_context = "Location: Disabled"
+            else:
+                location_context = get_location_context(
+                    config_ip=getattr(cfg, 'location_ip_address', None),
+                    auto_detect=getattr(cfg, 'location_auto_detect', True),
+                    resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
+                )
 
             context_message = {
                 "role": "system",

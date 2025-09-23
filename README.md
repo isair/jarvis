@@ -4,7 +4,7 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 
 ---
 
-**💖 Support Jarvis**  
+**💖 Support Jarvis**
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ff69b4?logo=github)](https://github.com/sponsors/isair) [![Ko-fi](https://img.shields.io/badge/Support-Ko--fi-ff5722?logo=kofi&logoColor=white)](https://ko-fi.com/isair)
 
 ---
@@ -84,7 +84,7 @@ Looking at your week - you mentioned wanting to lose 10 pounds by March and you'
 
 Given your 1,800 calorie target and that you hit the gym yesterday, you've got room for pizza! But maybe consider:
 - Split a medium pizza instead of ordering a large
-- Add a side salad to get some extra nutrients  
+- Add a side salad to get some extra nutrients
 - Go for thin crust vs deep dish to save ~200 calories per slice
 
 You've been consistent with your goals this week (I see you logged workouts Monday, Tuesday, and yesterday), so don't stress about one pizza night. Balance is key!
@@ -276,7 +276,7 @@ Connect Jarvis to any tool using MCP (Model Context Protocol) servers:
       "args": ["-y", "@niwang/mcp-server-vscode"]
     },
     "github": {
-      "command": "npx", 
+      "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
         "GITHUB_TOKEN": "your-token-here"
@@ -452,12 +452,12 @@ Control your lights, switches, sensors, scenes, and other exposed Home Assistant
 
 **Quick steps (≈3 min):**
 
-1. In Home Assistant add the MCP Server integration (Settings → Devices & services → Add integration → search "Model Context Protocol Server").  
-2. Expose only the entities you want Jarvis to control: Settings → Voice assistants → Exposed entities.  
-3. Create a Long‑lived Access Token: Profile (bottom left avatar) → Security → Create token (copy it).  
-4. Install the local proxy that bridges stdio ↔ Home Assistant SSE transport (pick one):  
-   - Using uv (recommended): `uv tool install git+https://github.com/sparfenyuk/mcp-proxy`  
-   - Or with pip: `pip install git+https://github.com/sparfenyuk/mcp-proxy`  
+1. In Home Assistant add the MCP Server integration (Settings → Devices & services → Add integration → search "Model Context Protocol Server").
+2. Expose only the entities you want Jarvis to control: Settings → Voice assistants → Exposed entities.
+3. Create a Long‑lived Access Token: Profile (bottom left avatar) → Security → Create token (copy it).
+4. Install the local proxy that bridges stdio ↔ Home Assistant SSE transport (pick one):
+   - Using uv (recommended): `uv tool install git+https://github.com/sparfenyuk/mcp-proxy`
+   - Or with pip: `pip install git+https://github.com/sparfenyuk/mcp-proxy`
 5. Add the MCP server to your Jarvis `config.json`:
 
 ```jsonc
@@ -490,7 +490,7 @@ Alternative (env-only) form if you prefer not to pass the URL as an arg:
 }
 ```
 
-6. Restart Jarvis.  
+6. Restart Jarvis.
 7. Try: "Jarvis, what's the temperature in the bedroom?" or "Jarvis, turn off all the kitchen lights".
 
 **Notes & safety:**
@@ -558,7 +558,7 @@ Alternative (env-only) form if you prefer not to pass the URL as an arg:
 
 Unlike ChatGPT or Gemini, Jarvis with these integrations can:
 - **Actually send emails** instead of just drafting them
-- **Read your real calendar** and schedule meetings  
+- **Read your real calendar** and schedule meetings
 - **Access your private documents** and knowledge bases
 - **Control your smart home** with voice commands
 - **Query your databases** and analyze business data
@@ -586,6 +586,38 @@ Unlike ChatGPT or Gemini, Jarvis with these integrations can:
 - **Auto-redaction** - Emails, tokens, passwords automatically removed
 - **Local storage** - Everything in `~/.local/share/jarvis`
 - **Your control** - Delete anytime, export anytime
+
+## Quick Harden (Stay 100% Offline)
+
+Want the shortest path to “no unexpected traffic”? Set these and avoid calling network tools:
+
+```jsonc
+{
+  "web_search_enabled": false,      // disable DuckDuckGo queries
+  "mcps": {},                       // no external tool integrations
+  "location_auto_detect": false,    // skip route probe / UPnP / DNS
+  "location_cgnat_resolve_public_ip": false, // never perform CGNAT DNS query
+  "location_ip_address": null,      // or set a static public IP if you still want location
+  "location_enabled": false         // (leave true + set location_ip_address for manual location)
+}
+```
+
+Keep Ollama local (default `http://127.0.0.1:11434`) and simply don’t invoke `webSearch` or `fetchWebPage`. Leave `mcps` empty to prevent any third‑party service access. That’s it.
+
+Minimal location while still offline:
+```jsonc
+{ "location_enabled": true, "location_ip_address": "203.0.113.42", "location_auto_detect": false, "location_cgnat_resolve_public_ip": false }
+```
+
+Check yourself:
+```bash
+# macOS
+sudo lsof -i -n -P | grep jarvis || echo "(no sockets)"
+# Linux
+ss -tupan | grep jarvis || echo "(no sockets)"
+```
+
+In hardened mode you should only see 127.0.0.1 connections to Ollama.
 
 ## License
 
