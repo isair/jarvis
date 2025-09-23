@@ -29,20 +29,36 @@ class TestWebSearchTool:
         assert "search_query" in self.tool.inputSchema["required"]
 
     @patch('requests.get')
-    def test_run_success(self, mock_get):
-        """Test successful web search."""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = '<html><body><div class="result">Test result</div></body></html>'
-        mock_get.return_value = mock_response
+    def test_run_success_with_instant_and_lite(self, mock_get):
+        """Test successful web search with instant answer + lite HTML page parsing."""
+        # First call: instant answer JSON
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {"Abstract": "A quick fact", "AbstractURL": "https://example.com/fact"}
+        instant.raise_for_status = Mock()
+        # Second call: lite HTML page
+        lite = Mock()
+        lite.status_code = 200
+        lite.content = (
+            b'<html><body>'
+            b'<a href="https://site1.test/">First site result about something</a>'
+            b'<a href="https://site2.test/">Second site detailed result here</a>'
+            b'</body></html>'
+        )
+        mock_get.side_effect = [instant, lite]
 
         args = {"search_query": "test query"}
         result = self.tool.run(args, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True
+        assert "Quick Answer:" in result.reply_text
+        # At least one parsed site result should appear
+        assert ("First site result" in result.reply_text) or ("Second site" in result.reply_text)
+        # Should include the query echo
         assert "test query" in result.reply_text
-        self.context.user_print.assert_called()
+        # user_print called at least once for start + success/failure
+        assert self.context.user_print.call_count >= 1
 
     def test_run_disabled(self):
         """Test web search when disabled."""
@@ -86,16 +102,11 @@ class TestWebSearchTool:
 
     @patch('requests.get')
     def test_run_network_failure_graceful(self, mock_get):
-        """Test web search with network failure - shows graceful handling."""
-        # Simulate network failure - web search handles this gracefully
-        mock_get.side_effect = requests.exceptions.ConnectionError("Network unreachable")
-
+        """Test web search with network failure - graceful fallback returns success with guidance."""
+        # First request (instant) fails, second (lite) fails
+        mock_get.side_effect = [requests.exceptions.ConnectionError("down"), requests.exceptions.ConnectionError("down")]  # both phases fail
         args = {"search_query": "test query"}
         result = self.tool.run(args, self.context)
-
         assert isinstance(result, ToolExecutionResult)
-        # Web search is designed to be graceful - even with network failures,
-        # it returns success=True with helpful guidance for the user
-        assert result.success is True
-        assert "search" in result.reply_text.lower()
+        assert result.success is True  # still returns guidance
         assert "wasn't able to find" in result.reply_text.lower()

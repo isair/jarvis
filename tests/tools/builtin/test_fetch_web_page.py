@@ -68,6 +68,7 @@ class TestFetchWebPageTool:
         mock_response.status_code = 200
         mock_response.text = '<html><body>Raw content</body></html>'
         mock_response.headers = {'content-type': 'text/html'}
+        mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
         with patch('builtins.__import__', side_effect=ImportError):
@@ -109,7 +110,33 @@ class TestFetchWebPageTool:
         """Test fetch web page with invalid URL."""
         args = {"url": "not-a-url"}
         result = self.tool.run(args, self.context)
-
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
         assert "failed" in result.reply_text.lower() or "error" in result.reply_text.lower()
+
+    @patch('requests.get')
+    def test_run_with_links_extraction(self, mock_get):
+        """Test fetch web page including link extraction when include_links=True."""
+        html = (
+            '<html><head><title>Links Page</title></head>'
+            '<body><p>Intro</p>'
+            '<a href="/relative">Relative Link</a>'
+            '<a href="https://absolute.test/page">Absolute Link</a>'
+            '<a href="mailto:test@example.com">Mail</a>'
+            '</body></html>'
+        )
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = html
+        mock_response.content = html.encode()
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        args = {"url": "https://example.com", "include_links": True}
+        result = self.tool.run(args, self.context)
+        assert result.success is True
+        assert isinstance(result, ToolExecutionResult)
+        assert "Links found on page" in result.reply_text
+        # relative link should be resolved to absolute
+        assert "https://example.com/relative" in result.reply_text
+        assert "absolute.test" in result.reply_text
