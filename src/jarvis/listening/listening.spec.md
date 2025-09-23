@@ -1,71 +1,74 @@
 # Listening Flow Specification
 
-This document outlines the high-level logic for the voice listening flow. The system operates primarily in three distinct states or "windows" to handle user input intelligently.
+This document outlines the voice listening flow using streaming transcription with speaker diarization.
 
-## The Three Listening Windows
+## Core Architecture
 
-The listening system can be understood as a state machine that transitions between three main windows.
+The listening system uses **WhisperLiveKit** with **speaker diarization** for real-time voice processing.
 
-### 1. During TTS & Echo Window (`TTS start` to `TTS end + echo_tolerance`)
+### Key Features
 
-This is the state for aggressive echo suppression to prevent the assistant from hearing itself.
+- **🎯 Speaker-based Processing:** Each transcript includes a speaker ID for reliable command detection
+- **⚡ Real-time Transcription:** Streaming results provide immediate feedback for stop commands
+- **🚀 Direct Command Processing:** Stop commands, wake words, and queries are processed immediately
+- **🎙️ Audio Device Selection:** Support for specific microphone selection
 
--   **While TTS is speaking:** Any incoming audio is checked against a time-calculated *segment* of the TTS text. This is critical for allowing "stop" commands to be recognized as interruptions, not echo.
--   **Post-TTS Cooldown (`echo_tolerance`):** For a brief period after TTS finishes (e.g., 0.3s), any audio matching the full TTS text is checked against the ambient noise level measured just *before* the TTS began. Low-energy audio is rejected as echo, while high-energy audio is accepted as a quick user reply.
--   **Extended Cooldown:** For a slightly longer period (e.g., up to 1.5s), this handles delayed echoes caused by audio processing lag. In this slightly longer window, any audio that fully matches the last TTS text is rejected based on the text match alone (without an energy check). This is a stricter check to prevent the system from responding to its own delayed transcription.
+## The Two Listening States
 
-### 2. Hot Window Mode
+### 1. Wake Word Listening (Default)
 
-This window allows for natural, wake-word-free follow-up conversation.
+The system's baseline state.
 
--   **Activation:** Begins immediately after the "Echo Window" ends.
--   **Behavior:** Listens for a short duration (e.g., 6s) for any user speech.
--   **Action:** If speech is detected, the system transitions into **collection mode**, allowing the user to provide a full, multi-part response. Any leading text that overlaps with the end of the previous TTS is removed to clean up the query.
--   **Termination:** The hot window state ends as soon as collection begins. The collection itself will then timeout normally after a pause from the user.
+-   **Behavior:** Continuously processes streaming transcription results
+-   **Action:** When wake word detected from any speaker, begin collecting query
+-   **Simplification:** No complex timing or energy analysis needed
 
-### 3. Wake Word Listening (Default)
+### 2. Active Conversation Mode
 
-This is the system's baseline state.
+Activated after wake word detection or during hot window.
 
--   The system is passively listening only for the "wake word" (e.g., "Jarvis").
--   All other audio is ignored.
--   Upon detecting the wake word, the system begins collecting the user's full query.
+-   **Collection:** Accumulate speech from the same speaker until pause
+-   **Hot Window:** Brief period after TTS completion for follow-up questions
+-   **Stop Commands:** Immediate TTS interruption when detected from any speaker
+-   **Simplification:** Speaker ID eliminates need for echo detection
 
 ## State Transition Diagram
-
-This diagram illustrates the flow between the three primary listening windows.
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> WakeWord: System Starts
 
-    state "1. During TTS & Echo Window" as EchoCheck {
-        DuringTTS: TTS Speaking
-        EchoWindow: Post-TTS Cooldown
-        DuringTTS --> EchoWindow: TTS Finishes
-    }
-
-    WakeWord: 3. Listening for Wake Word
-    HotWindow: 2. Listening for Follow-up
-    Collecting: 4. Collecting Query
+    WakeWord: Wake Word Listening
+    Collecting: Collecting Query
+    HotWindow: Hot Window (Follow-up)
 
     WakeWord --> Collecting: Wake word detected
-    EchoWindow --> HotWindow: echo_tolerance delay passes
-    HotWindow --> Collecting: Follow-up command detected
-    Collecting --> DuringTTS: Query dispatched, TTS starts
+    Collecting --> HotWindow: Query dispatched, TTS starts
+    HotWindow --> Collecting: Follow-up detected
     HotWindow --> WakeWord: Hot window expires
+    
+    note right of Collecting: Stop commands interrupt TTS immediately
+    note right of HotWindow: Speaker diarization eliminates echo detection
 ```
 
-## Processing Priorities
+## Processing Logic
 
-When transcribed text is received, it's processed in a strict order of priority:
+When a streaming transcript is received with speaker ID:
 
-1.  **Echo Check:** Is the audio an echo of the TTS? This is a multi-step check:
-    *   If during TTS, check against a *segment* of the TTS text.
-    *   If in the post-TTS cooldown, check against the *full* text with an energy comparison.
-    *   If in the extended cooldown, check against the *full* text with a stricter text-only match.
-2.  **Stop Command Check:** Is it a stop command during TTS? If so, interrupt TTS.
-3.  **Hot Window Check:** Was the user speaking during an active hot window? If so, clean up any leading echo and start collecting their full query.
-4.  **Wake Word Check:** Does the audio contain the wake word? If so, start collecting a new query.
-5.  **Ignore:** If none of the above, ignore the audio.
+1.  **Stop Command Check:** If TTS is speaking and transcript contains stop command → interrupt TTS
+2.  **Collection Mode:** If actively collecting → add to current query
+3.  **Hot Window:** If in hot window → start new collection
+4.  **Wake Word:** If contains wake word → start new collection
+5.  **Ignore:** Otherwise ignore (not in active listening state)
+
+## Configuration
+
+**Essential Settings:**
+- ✅ `voice_device` - Audio input device selection
+- ✅ `wake_word` and `wake_aliases` - Wake word detection
+- ✅ `stop_commands` - Stop command phrases
+- ✅ `hot_window_seconds` - Follow-up conversation timeout
+- ✅ WhisperLiveKit streaming settings - Model and backend configuration
+- ✅ Speaker diarization settings - Real-time speaker identification
+- ✅ MLX acceleration - Automatic detection on macOS ARM64 (no config needed)

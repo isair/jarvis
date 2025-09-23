@@ -5,16 +5,17 @@ lxml>=4.9.0
 html2text>=2020.1.16
 playwright>=1.40.0
 numpy<2.0.0
-faster-whisper==1.0.3
+whisperlivekit>=0.2.9
+mlx-whisper>=0.1.0; sys_platform == "darwin" and platform_machine == "arm64"
 sounddevice==0.4.7
 pytesseract==0.3.13
 Pillow==10.4.0
-webrtcvad==2.0.10
-rapidfuzz==3.6.1
+rapidfuzz>=3.9.7
 geoip2==4.8.0
 miniupnpc==2.2.8
 pytest==8.3.2
 mcp==1.13.1
-chatterbox-tts==0.1.2
+# chatterbox-tts==0.1.2  # Disabled by default because diarization (NeMo) is critical and conflicts via transformers
 pygame>=2.1.0
 faiss-cpu==1.7.4
+git+https://github.com/NVIDIA/NeMo.git@main#egg=nemo_toolkit[asr]
