@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
 from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
-from ..tools.registry import run_tool_with_retries, generate_tools_description, TOOL_SPECS
+from ..tools.registry import run_tool_with_retries, generate_tools_description, BUILTIN_TOOLS
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response
 from .enrichment import extract_search_params_for_memory
@@ -24,24 +24,24 @@ if TYPE_CHECKING:
     from ..output.tts import TextToSpeech
 
 
-def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"], 
+def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                     text: str, dialogue_memory: "DialogueMemory") -> Optional[str]:
     """
     Main entry point for reply generation.
-    
+
     Args:
         db: Database instance
         cfg: Configuration object
         tts: Text-to-speech engine (optional)
         text: User query text
         dialogue_memory: Dialogue memory instance
-        
+
     Returns:
         Generated reply text or None
     """
     # Step 1: Redact sensitive information
     redacted = redact(text)
-    
+
     # Step 2: Profile selection
     profile_name = select_profile_llm(
         cfg.ollama_base_url,
@@ -53,12 +53,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     print(f"  🎭 Profile selected: {profile_name}", flush=True)
 
     system_prompt = PROFILES.get(profile_name, PROFILES["developer"]).system_prompt
-    
+
     # Step 3: Recent dialogue context
     recent_messages = []
     if dialogue_memory and dialogue_memory.has_recent_messages():
         recent_messages = dialogue_memory.get_recent_messages()
-    
+
     # Step 4: Conversation memory enrichment
     conversation_context = ""
     try:
@@ -92,15 +92,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 debug_log(f"  ✅ found {len(context_results)} results for memory enrichment", "memory")
     except Exception as e:
         debug_log(f"  ❌ [memory] enrichment failed: {e}", "memory")
-    
+
     # Step 5: Build initial system message context only (no monolithic prompt)
     context = []
     if conversation_context:
         context.append(f"Relevant conversation history:\n{conversation_context}")
-    
+
     # Step 6: Tool allowlist and description
-    allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(TOOL_SPECS.keys())
-    
+    allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(BUILTIN_TOOLS.keys())
+
     # Discover and add MCP tools if configured
     mcp_tools = {}
     if getattr(cfg, "mcps", {}):
@@ -110,11 +110,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         for mcp_tool_name in mcp_tools.keys():
             if mcp_tool_name not in allowed_tools:
                 allowed_tools.append(mcp_tool_name)
-    
+
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
-    
+
     debug_log(f"🤖 starting with {len(allowed_tools)} tools available", "planning")
-    
+
     # Step 7: Messages-based loop with tool handling
     def _build_initial_system_message() -> str:
         guidance = [system_prompt.strip()]
@@ -124,7 +124,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             "Prioritize the user's intent over literal wording. If meaning is uncertain, ask a brief clarifying question."
         )
         guidance.append(asr_note)
-        
+
         # General inference and context usage guidance
         inference_guidance = (
             "Prioritize reasonable inference from available context, memory, and patterns over asking for clarification. "
@@ -132,7 +132,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             "Only ask clarifying questions when the request is genuinely ambiguous and inference would likely be wrong."
         )
         guidance.append(inference_guidance)
-        
+
         # Tool usage incentives and best practices
         tool_incentives = (
             "Proactively use available tools to provide better, more accurate responses. "
@@ -140,7 +140,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             "Tools enhance your capabilities - use them confidently to deliver superior assistance."
         )
         guidance.append(tool_incentives)
-        
+
         # Voice assistant communication style
         voice_style = (
             "Keep responses concise and conversational since this is a voice assistant. "
@@ -148,7 +148,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             "Avoid unnecessary elaboration unless specifically requested."
         )
         guidance.append(voice_style)
-        
+
         # Describe the standard message format and capabilities
         formats = [
             "Tool-first approach - leverage your capabilities:",
@@ -199,7 +199,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                         if not tool_call_id:
                             # Generate a shorthand ID if LLM didn't provide one
                             tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
-                        
+
                         # Handle malformed arguments where LLM nests tool info inside arguments
                         if isinstance(args, dict) and "tool" in args:
                             # Extract from nested structure: {'tool': {'args': {...}, 'name': ...}}
@@ -209,7 +209,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                                 actual_name = tool_info.get("name", name)
                                 if actual_name:
                                     return actual_name, (actual_args if isinstance(actual_args, dict) else {}), tool_call_id
-                        
+
                         if name:
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
         except Exception:
@@ -225,7 +225,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 config_ip=getattr(cfg, 'location_ip_address', None),
                 auto_detect=getattr(cfg, 'location_auto_detect', True)
             )
-            
+
             context_message = {
                 "role": "system",
                 "content": f"Current context:\n• Time: {current_time}\n• {location_context}",
@@ -235,7 +235,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         except Exception:
             # Don't fail if context gathering fails
             pass
-    
+
     def _cleanup_context_messages(messages_list):
         """Remove context messages from previous turns."""
         # Remove messages marked as context messages
@@ -247,14 +247,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
-        
+
         # Clean up context messages from previous turns
         if turn > 1:
             _cleanup_context_messages(messages)
-        
+
         # Add fresh context (time/location) before each LLM call
         _add_fresh_context_message(messages)
-        
+
         # Debug: log current messages array structure (original)
         if getattr(cfg, 'voice_debug', False):
             debug_log(f"  📋 Messages array has {len(messages)} messages:", "planning")
@@ -263,7 +263,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 content = msg.get("content", "")[:100] + ("..." if len(msg.get("content", "")) > 100 else "")
                 has_tool_calls = " (has tool_calls)" if msg.get("tool_calls") else ""
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
-        
+
         # Send messages to Ollama
         llm_resp = chat_with_messages(
             base_url=cfg.ollama_base_url,
@@ -275,39 +275,39 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break
-            
+
         # Debug: log raw LLM response structure
         if getattr(cfg, 'voice_debug', False):
             debug_log(f"  🔍 Raw LLM response keys: {list(llm_resp.keys()) if isinstance(llm_resp, dict) else type(llm_resp)}", "planning")
             if isinstance(llm_resp, dict) and "message" in llm_resp:
                 debug_log(f"  🔍 Message field: {llm_resp['message']}", "planning")
-        
+
         content = extract_text_from_response(llm_resp) or ""
         content = content.strip() if isinstance(content, str) else ""
-        
+
         # Check if there's a thinking field when content is empty
         thinking = ""
         if isinstance(llm_resp, dict) and "message" in llm_resp:
             msg = llm_resp["message"]
             if isinstance(msg, dict) and "thinking" in msg:
                 thinking = msg.get("thinking", "")
-        
+
         # Debug: log what we got from the LLM
         if content:
             debug_log(f"  📝 LLM response: '{content[:200]}{'...' if len(content) > 200 else ''}'", "planning")
         else:
             debug_log("  📝 LLM response: (empty content)", "planning")
-        
+
         # Always show thinking if present, regardless of content
         if thinking:
             debug_log(f"  💭 LLM thinking: '{thinking[:300]}{'...' if len(thinking) > 300 else ''}'", "planning")
-        
+
         # Extract tool call if present
         t_name, t_args, t_call_id = _extract_structured_tool_call(llm_resp)
-        
+
         # ALWAYS append the assistant's response to messages exactly as received
         assistant_msg = {"role": "assistant", "content": content}
-        
+
         # Preserve all fields from the LLM response
         if isinstance(llm_resp, dict) and "message" in llm_resp:
             msg = llm_resp["message"]
@@ -316,19 +316,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                     assistant_msg["thinking"] = msg["thinking"]
                 if "tool_calls" in msg and msg["tool_calls"]:
                     assistant_msg["tool_calls"] = msg["tool_calls"]
-        
+
         messages.append(assistant_msg)
-        
+
         # Check if we're stuck
         if not content and not t_name:
             # Empty response with no tool calls - this is problematic
             debug_log("  ⚠️ Empty assistant response with no tool calls", "planning")
-            
+
             # Check if we're stuck
             has_tool_results = any(msg.get("role") == "tool" for msg in messages[-8:])
             if turn > 3 and has_tool_results:
                 messages.append({
-                    "role": "system", 
+                    "role": "system",
                     "content": "Please provide a natural language response based on the tool results above."
                 })
                 continue
@@ -336,20 +336,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 debug_log("  🚨 Force exit - too many empty responses", "planning")
                 break
             break
-        
+
         # Parse for tool calls using OpenAI standard format
         tool_name = None
         tool_args = None
         tool_call_id = None
-        
+
         # Check for structured tool calls in the response
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
-        
+
         # If we have thinking but no content and no tool calls, treat as planning step
         if not content and not tool_name and thinking:
             debug_log(f"  🧠 Thinking step (no action needed)", "planning")
-            
+
             # Check if we have tool results but LLM is just thinking without taking action
             has_tool_results = any(msg.get("role") == "tool" for msg in messages[-6:])
             if turn > 2 and has_tool_results:
@@ -362,18 +362,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         if tool_name:
             # Check if we already have results for this type of tool
             has_this_tool_result = any(
-                msg.get("role") == "tool" and 
+                msg.get("role") == "tool" and
                 msg.get("tool_name") == tool_name
                 for msg in messages[-10:]
             )
-            
+
             if has_this_tool_result:
                 debug_log(f"  ⚠️ Blocking repeated {tool_name} call", "planning")
-                
+
                 # Count how many times we've told the LLM to stop
-                stop_messages = sum(1 for msg in messages[-8:] 
+                stop_messages = sum(1 for msg in messages[-8:]
                                   if msg.get("role") == "system" and "STOP:" in msg.get("content", ""))
-                
+
                 if stop_messages >= 3:
                     # The LLM is completely stuck - force it to give a text response
                     debug_log("  🛑 LLM stuck in tool loop - forcing text-only response", "planning")
@@ -382,13 +382,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                         "content": "You MUST provide a natural language answer NOW. No more tool calls."
                     })
                     continue
-                
+
                 messages.append({
                     "role": "system",
                     "content": f"STOP: You already have {tool_name} results in the messages above. Read those results and provide a natural language response to the user. Do not make another {tool_name} call."
                 })
                 continue
-            
+
             # Also check exact signature for duplicate suppression
             try:
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
@@ -456,7 +456,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         break
 
     # No plain retry path using legacy coach; if no reply, leave as None
-    
+
     # Step 9: Output and memory update
     if reply:
         safe_reply = reply.strip()
@@ -469,23 +469,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                     print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
             except Exception:
                 print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
-            
+
             # TTS output - callbacks handled by calling code
             if tts is not None and tts.enabled:
                 tts.speak(safe_reply)
-    
+
     # Step 10: Add to dialogue memory
     if dialogue_memory is not None:
         try:
             # Add user message
             dialogue_memory.add_message("user", redacted)
-            
+
             # Add assistant reply if we have one
             if reply and reply.strip():
                 dialogue_memory.add_message("assistant", reply.strip())
-            
+
             debug_log("interaction added to dialogue memory", "memory")
         except Exception as e:
             debug_log(f"dialogue memory error: {e}", "memory")
-    
+
     return reply

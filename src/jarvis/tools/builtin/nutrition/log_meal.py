@@ -32,24 +32,9 @@ def _safe_float(x: Any) -> Optional[float]:
         return None
 
 
-def _required_log_meal_fields() -> List[str]:
-    """Get required fields for log meal tool."""
-    return [
-        "description",
-        "calories_kcal", 
-        "protein_g",
-        "carbs_g",
-        "fat_g",
-        "fiber_g",
-        "sugar_g",
-        "sodium_mg",
-        "potassium_mg",
-        "micros",
-        "confidence",
-    ]
 
 
-def extract_and_log_meal(db: Database, cfg, original_text: str, source_app: str) -> Optional[str]:
+def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app: str) -> Optional[str]:
     """
     Uses the chat model to extract a structured meal from the redacted user text, logs it to DB,
     and returns a short user-facing confirmation + healthy follow-ups.
@@ -136,7 +121,7 @@ def log_meal_from_args(db: Database, args: Dict[str, Any], source_app: str) -> O
         return None
 
 
-def generate_followups_for_meal(cfg, description: str, approx: str) -> str:
+def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
     """
     Ask the coach for concise, pragmatic follow-ups given a logged meal summary.
     """
@@ -152,15 +137,15 @@ def generate_followups_for_meal(cfg, description: str, approx: str) -> str:
 
 class LogMealTool(Tool):
     """Tool for logging meals to the nutrition database."""
-    
+
     @property
     def name(self) -> str:
         return "logMeal"
-    
+
     @property
     def description(self) -> str:
         return "Log a single meal when the user mentions eating or drinking something specific (e.g., 'I ate chicken curry', 'I had a sandwich', 'I drank a protein shake'). Estimate approximate macros and key micronutrients based on typical portions."
-    
+
     @property
     def inputSchema(self) -> Dict[str, Any]:
         return {
@@ -178,16 +163,31 @@ class LogMealTool(Tool):
                 "micros": {"type": "object", "description": "Micronutrients as key-value pairs"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in estimates (0-1)"}
             },
-            "required": _required_log_meal_fields()
+            "required": [
+                "description",
+                "calories_kcal",
+                "protein_g",
+                "carbs_g",
+                "fat_g",
+                "fiber_g",
+                "sugar_g",
+                "sodium_mg",
+                "potassium_mg",
+                "micros",
+                "confidence"
+            ]
         }
-    
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the log meal tool."""
         context.user_print("🥗 Logging your meal…")
-        
+
         # First attempt: use provided args if complete
-        required = _required_log_meal_fields()
-        
+        required = [
+            "description", "calories_kcal", "protein_g", "carbs_g", "fat_g",
+            "fiber_g", "sugar_g", "sodium_mg", "potassium_mg", "micros", "confidence"
+        ]
+
         def _has_all_fields(a: Dict[str, Any]) -> bool:
             return all(k in a for k in required)
 
@@ -211,7 +211,7 @@ class LogMealTool(Tool):
                 debug_log(f"logMeal: logged meal_id={meal_id}", "nutrition")
                 context.user_print("✅ Meal saved.")
                 return ToolExecutionResult(success=True, reply_text=reply_text)
-        
+
         # Retry path: extract and log from redacted text using extractor
         for attempt in range(context.max_retries + 1):
             try:
@@ -222,7 +222,7 @@ class LogMealTool(Tool):
                     return ToolExecutionResult(success=True, reply_text=meal_summary)
             except Exception:
                 pass
-        
+
         debug_log("logMeal: failed", "nutrition")
         context.user_print("⚠️ I couldn't log that meal automatically.")
-        return ToolExecutionResult(success=False, reply_text=None, error_message="Failed to log meal")
+        return ToolExecutionResult(success=False, reply_text="Failed to log meal")

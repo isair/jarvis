@@ -37,7 +37,7 @@ BUILTIN_TOOLS = {
 
 
 
-# Centralized tool specifications and standardized description generator
+# ToolSpec for MCP compatibility
 @dataclass(frozen=True)
 class ToolSpec:
     name: str  # canonical tool identifier (camelCase)
@@ -45,31 +45,15 @@ class ToolSpec:
     inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
 
 
-def get_builtin_tool_specs() -> Dict[str, ToolSpec]:
-    """Generate ToolSpec objects from the builtin tool registry."""
-    specs = {}
-    for tool_name, tool_instance in BUILTIN_TOOLS.items():
-        specs[tool_name] = ToolSpec(
-            name=tool_instance.name,
-            description=tool_instance.description,
-            inputSchema=tool_instance.inputSchema
-        )
-    return specs
-
-
-# Legacy TOOL_SPECS for backward compatibility - now dynamically generated from tool registry
-TOOL_SPECS: Dict[str, ToolSpec] = get_builtin_tool_specs()
-
-
 def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
     """Discover all tools from configured MCP servers and create ToolSpec entries for them."""
     if not mcps_config:
         return {}
-    
+
     try:
         client = MCPClient(mcps_config)
         discovered_tools = {}
-        
+
         for server_name in mcps_config.keys():
             try:
                 tools = client.list_tools(server_name)
@@ -77,27 +61,25 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
                     tool_name = tool_info.get("name")
                     if not tool_name:
                         continue
-                        
+
                     # Create a unique tool name: server__toolname
                     full_tool_name = f"{server_name}__{tool_name}"
-                    
+
                     # Create a ToolSpec for this MCP tool
                     description = tool_info.get("description", f"Tool from {server_name} MCP server")
                     input_schema = tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []})
                     discovered_tools[full_tool_name] = ToolSpec(
                         name=full_tool_name,
                         description=description,
-                        inputSchema=input_schema,
-                        usage_line='Use tool_calls field in your response message',
-                        example=f'tool_calls: [{{"id": "<system_generated>", "type": "function", "function": {{"name": "{full_tool_name}", "arguments": "{{}}"}}}}]'
+                        inputSchema=input_schema
                     )
-                
+
             except Exception as e:
                 debug_log(f"Failed to discover tools from MCP server '{server_name}': {e}", "mcp")
                 continue
-                
+
         return discovered_tools
-        
+
     except Exception as e:
         debug_log(f"Failed to discover MCP tools: {e}", "mcp")
         return {}
@@ -105,22 +87,22 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
     """Produce a compact tool help string for the system prompt using OpenAI standard format."""
-    names = list(allowed_tools or list(TOOL_SPECS.keys()))
+    names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
     lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": "<json_string>"}}]')
     lines.append("\nAvailable tools and when to use them:")
-    
+
     # Add built-in tools
-    for nm in names:
-        spec = TOOL_SPECS.get(nm)
-        if not spec:
+    for tool_name in names:
+        tool = BUILTIN_TOOLS.get(tool_name)
+        if not tool:
             continue
-        lines.append(f"\n{spec.name}: {spec.description}")
-        if spec.inputSchema:
+        lines.append(f"\n{tool.name}: {tool.description}")
+        if tool.inputSchema:
             # Extract a simple parameter summary from the JSON schema
-            props = spec.inputSchema.get("properties", {})
-            required = spec.inputSchema.get("required", [])
+            props = tool.inputSchema.get("properties", {})
+            required = tool.inputSchema.get("required", [])
             param_descriptions = []
             for prop_name, prop_def in props.items():
                 prop_type = prop_def.get("type", "any")
@@ -129,7 +111,7 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
                 param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
             if param_descriptions:
                 lines.append(f"Input: {', '.join(param_descriptions)}")
-    
+
     # Add discovered MCP tools
     if mcp_tools:
         for tool_name, spec in mcp_tools.items():
@@ -147,7 +129,7 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
                         param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
                     if param_descriptions:
                         lines.append(f"Input: {', '.join(param_descriptions)}")
-                    
+
     return "\n".join(lines)
 
 def _normalize_time_range(args: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -202,7 +184,7 @@ def run_tool_with_retries(
             try:
                 if MCPClient is None:
                     return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
-                
+
                 client = MCPClient(mcps_config)
                 result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool_name, arguments=tool_args or {})
                 is_error = bool(result.get("isError", False))

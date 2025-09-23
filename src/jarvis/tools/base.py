@@ -11,7 +11,7 @@ from .types import ToolExecutionResult
 
 class ToolContext:
     """Context object containing all the resources a tool might need."""
-    
+
     def __init__(
         self,
         db,
@@ -33,45 +33,52 @@ class ToolContext:
 
 class Tool(ABC):
     """Base class for all Jarvis tools.
-    
+
     This interface matches the MCP tool format with name, description, and inputSchema
-    properties, while providing a simple execution interface focused on tool logic.
+        properties, while providing a simple execution interface focused on tool logic.
+
+        Implementation guideline:
+        - Put all operational logic directly in the `run` method.
+        - Keep helper functions module-level only when they provide clear reuse (e.g. nutrition
+            extraction helpers used by multiple code paths / tests). Otherwise inline.
+        - `run` receives validated args (per schema) and a `ToolContext` giving access to db, cfg,
+            prompts, redacted_text, retry allowance, and a user_print callable.
     """
-    
+
     @property
     @abstractmethod
     def name(self) -> str:
         """The canonical tool identifier (camelCase)."""
         pass
-    
+
     @property
     @abstractmethod
     def description(self) -> str:
         """Human-readable description of what the tool does."""
         pass
-    
+
     @property
     @abstractmethod
     def inputSchema(self) -> Dict[str, Any]:
         """JSON Schema for tool arguments (matches MCP format)."""
         pass
-    
+
     @abstractmethod
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the tool with the given arguments and context.
-        
+
         This is the only method tools need to implement. All common concerns
         like user printing, database access, config, etc. are provided via context.
-        
+
         Args:
             args: Dictionary containing tool arguments (validated against inputSchema)
             context: ToolContext with db, cfg, user_print, etc.
-            
+
         Returns:
             ToolExecutionResult with execution results
         """
         pass
-    
+
     def execute(
         self,
         db,
@@ -84,7 +91,7 @@ class Tool(ABC):
         user_print: Callable[[str], None]
     ) -> ToolExecutionResult:
         """Execute the tool (internal method used by registry).
-        
+
         This method creates the context and calls the tool's run method.
         Tools should implement run(), not this method.
         """
