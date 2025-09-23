@@ -15,19 +15,15 @@ from .nutrition.fetch_meals import FetchMealsTool
 from .nutrition.delete_meal import DeleteMealTool
 
 # Import supporting functions that may still be used elsewhere
-from .ocr import capture_screenshot_and_ocr
 
 __all__ = [
     # Tool classes
     'ScreenshotTool',
-    'WebSearchTool', 
+    'WebSearchTool',
     'LocalFilesTool',
     'FetchWebPageTool',
     'RecallConversationTool',
     'LogMealTool',
     'FetchMealsTool',
     'DeleteMealTool',
-    
-    # Supporting functions
-    'capture_screenshot_and_ocr',
 ]
