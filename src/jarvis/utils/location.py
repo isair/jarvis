@@ -3,7 +3,9 @@ import socket
 import ipaddress
 from pathlib import Path
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
+import json
+import threading
 from ..debug import debug_log
 
 try:
@@ -21,6 +23,113 @@ except ImportError:
 
 # Session flag to show location warning only once per session
 _location_warning_shown = False
+
+# Simple in-memory caches (module scoped)
+# Cache for location lookups keyed by final resolved IP -> location_info dict
+_location_cache: Dict[str, Dict[str, Any]] = {}
+
+# Cache for CGNAT OpenDNS public IP resolution attempts keyed by original CGNAT IP.
+# Value is tuple: (timestamp, resolved_public_ip or None). We avoid re-querying OpenDNS
+# more than once per hour for the same CGNAT IP. This respects user privacy by
+# minimizing external DNS queries.
+_cgnat_resolution_cache: Dict[str, tuple[datetime, Optional[str]]] = {}
+
+# TTL for CGNAT OpenDNS resolution attempts
+_CGNAT_RESOLUTION_TTL = timedelta(hours=1)
+
+# Disk cache paths (share directory with geoip DB for locality)
+def _cache_base_dir() -> Path:
+    return Path.home() / ".local" / "share" / "jarvis"
+
+_LOCATION_CACHE_FILE = _cache_base_dir() / "location_cache.json"
+_CGNAT_CACHE_FILE = _cache_base_dir() / "cgnat_cache.json"
+
+_cache_lock = threading.RLock()
+
+def _load_disk_caches() -> None:
+    """Load caches from disk into memory (best-effort)."""
+    try:
+        base = _cache_base_dir()
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    now = datetime.utcnow()
+    # Location cache
+    try:
+        if _LOCATION_CACHE_FILE.exists():
+            with _LOCATION_CACHE_FILE.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            # Expect mapping ip -> {data: {...}, ts: iso}
+            for ip, payload in raw.items():
+                data = payload.get("data") if isinstance(payload, dict) else None
+                ts_str = payload.get("ts") if isinstance(payload, dict) else None
+                if not isinstance(data, dict) or not ts_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                except Exception:
+                    continue
+                # TTL for location cache can vary; default 60 minutes (aligned with config default). We'll store ttl minutes in payload optionally.
+                ttl_minutes = payload.get("ttl") if isinstance(payload, dict) else None
+                try:
+                    ttl_minutes = int(ttl_minutes)
+                except Exception:
+                    ttl_minutes = 60
+                if now - ts < timedelta(minutes=ttl_minutes):
+                    _location_cache[ip] = data
+    except Exception:
+        pass
+    # CGNAT resolution cache
+    try:
+        if _CGNAT_CACHE_FILE.exists():
+            with _CGNAT_CACHE_FILE.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            for cgnat_ip, payload in raw.items():
+                if not isinstance(payload, dict):
+                    continue
+                ts_str = payload.get("ts")
+                resolved = payload.get("resolved")
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                except Exception:
+                    continue
+                if now - ts < _CGNAT_RESOLUTION_TTL:
+                    _cgnat_resolution_cache[cgnat_ip] = (ts, resolved)
+    except Exception:
+        pass
+
+def _persist_disk_caches(location_cache_minutes: int = 60) -> None:
+    """Persist in-memory caches to disk (best-effort)."""
+    with _cache_lock:
+        try:
+            base = _cache_base_dir()
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return
+        # Location cache serialization
+        try:
+            loc_out = {}
+            now = datetime.utcnow().isoformat()
+            for ip, data in _location_cache.items():
+                loc_out[ip] = {"data": data, "ts": now, "ttl": int(location_cache_minutes)}
+            with _LOCATION_CACHE_FILE.open("w", encoding="utf-8") as f:
+                json.dump(loc_out, f)
+        except Exception:
+            pass
+        # CGNAT cache
+        try:
+            cgnat_out = {}
+            for ip, (ts, resolved) in _cgnat_resolution_cache.items():
+                cgnat_out[ip] = {"ts": ts.isoformat(), "resolved": resolved}
+            with _CGNAT_CACHE_FILE.open("w", encoding="utf-8") as f:
+                json.dump(cgnat_out, f)
+        except Exception:
+            pass
+
+# Load caches on module import
+_load_disk_caches()
 
 
 def _get_local_network_ip() -> Optional[str]:
@@ -309,10 +418,36 @@ def get_location_info(
     # Mark CGNAT and optionally resolve public IP via OpenDNS if enabled in settings
     cgnat_flag = _is_cgnat_ip(ip_address)
     if cgnat_flag and resolve_cgnat_public_ip:
-        resolved = _resolve_public_ip_via_opendns()
-        if resolved and not _is_cgnat_ip(resolved) and not _is_private_ip(resolved):
-            debug_log(f"CGNAT IP {ip_address} resolved to public {resolved} via OpenDNS", "location")
-            ip_address = resolved
+        # Check CGNAT resolution cache first
+        cache_entry = _cgnat_resolution_cache.get(ip_address)
+        now = datetime.utcnow()
+        if cache_entry:
+            ts, cached_public = cache_entry
+            if now - ts < _CGNAT_RESOLUTION_TTL:
+                # Use cached result (even if None to avoid extra queries)
+                if cached_public and not _is_cgnat_ip(cached_public) and not _is_private_ip(cached_public):
+                    debug_log(f"CGNAT IP {ip_address} used cached public {cached_public}", "location")
+                    ip_address = cached_public
+            else:
+                # Expired entry
+                _cgnat_resolution_cache.pop(ip_address, None)
+                cache_entry = None
+        if not cache_entry:
+            resolved = _resolve_public_ip_via_opendns()
+            _cgnat_resolution_cache[ip_address] = (now, resolved)
+            # Persist CGNAT cache change
+            _persist_disk_caches()
+            if resolved and not _is_cgnat_ip(resolved) and not _is_private_ip(resolved):
+                debug_log(f"CGNAT IP {ip_address} resolved to public {resolved} via OpenDNS", "location")
+                ip_address = resolved
+
+    # Return cached location result if we already computed for this final ip_address
+    if ip_address in _location_cache:
+        cached = _location_cache[ip_address]
+        # Ensure we always include ip key even if older cache missing it
+        if 'ip' not in cached:
+            cached['ip'] = ip_address
+        return cached.copy()
 
     # Check if database is available
     db_path = _get_database_path()
@@ -340,6 +475,9 @@ def get_location_info(
             # Clean up None values and empty strings
             cleaned_info = {k: v for k, v in location_info.items() if v is not None and v != ""}
             debug_log(f"Location detected: {cleaned_info.get('city', 'Unknown city')}, {cleaned_info.get('country', 'Unknown country')}", "location")
+            # Cache successful lookup
+            _location_cache[ip_address] = cleaned_info.copy()
+            _persist_disk_caches()
             return cleaned_info
 
     except geoip2.errors.AddressNotFoundError:
@@ -350,15 +488,22 @@ def get_location_info(
             if cgnat_flag else
             "If this is CGNAT or a very new allocation, configure 'location_ip_address' manually."
         )
-        return {
+        result = {
             "error": f"IP address {ip_address} not found in database",
             "ip": ip_address,
             "reason": reason,
             "advice": advice,
         }
+        # Cache negative result to avoid repeated DB lookups for same IP (could revisit TTL policy later)
+        _location_cache[ip_address] = result.copy()
+        _persist_disk_caches()
+        return result
     except Exception as e:
         debug_log(f"Error looking up location: {e}", "location")
-        return {"error": f"Error looking up location: {e}", "ip": ip_address}
+        result = {"error": f"Error looking up location: {e}", "ip": ip_address}
+        _location_cache[ip_address] = result.copy()
+        _persist_disk_caches()
+        return result
 
 
 def get_location_context(
