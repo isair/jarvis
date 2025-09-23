@@ -10,10 +10,10 @@ from ..types import ToolExecutionResult
 
 def execute_local_files(tool_args: Optional[Dict[str, Any]]) -> ToolExecutionResult:
     """Execute local file operations safely within user's home directory.
-    
+
     Args:
         tool_args: Dictionary containing operation, path, and optional parameters
-        
+
     Returns:
         ToolExecutionResult with operation results
     """
@@ -127,15 +127,15 @@ def execute_local_files(tool_args: Optional[Dict[str, Any]]) -> ToolExecutionRes
 
 class LocalFilesTool(Tool):
     """Tool for safe local file operations within user's home directory."""
-    
+
     @property
     def name(self) -> str:
         return "localFiles"
-    
+
     @property
     def description(self) -> str:
         return "Safely read, write, list, append, or delete files within your home directory."
-    
+
     @property
     def inputSchema(self) -> Dict[str, Any]:
         return {
@@ -149,7 +149,7 @@ class LocalFilesTool(Tool):
             },
             "required": ["operation", "path"]
         }
-    
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the local files tool."""
         return execute_local_files(args)

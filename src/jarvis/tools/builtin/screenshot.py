@@ -9,10 +9,10 @@ from ..types import ToolExecutionResult
 
 def execute_screenshot(_user_print: callable) -> ToolExecutionResult:
     """Capture a screenshot and perform OCR.
-    
+
     Args:
         _user_print: Function to print user-facing messages
-        
+
     Returns:
         ToolExecutionResult with OCR text
     """
@@ -27,15 +27,15 @@ def execute_screenshot(_user_print: callable) -> ToolExecutionResult:
 
 class ScreenshotTool(Tool):
     """Tool for capturing screenshots and performing OCR."""
-    
+
     @property
     def name(self) -> str:
         return "screenshot"
-    
+
     @property
     def description(self) -> str:
         return "Capture a selected screen region and OCR the text. Use only if the OCR will materially help."
-    
+
     @property
     def inputSchema(self) -> Dict[str, Any]:
         return {
@@ -43,7 +43,7 @@ class ScreenshotTool(Tool):
             "properties": {},
             "required": []
         }
-    
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the screenshot tool."""
         return execute_screenshot(context.user_print)
