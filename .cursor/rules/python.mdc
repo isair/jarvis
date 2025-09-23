@@ -2,7 +2,7 @@
 globs: *.py
 alwaysApply: false
 ---
-# Python Guidelines
+# Python guidelines
 
 Follow Python best practices: use idiomatic constructs, leverage built-in modules, and write code that is explicit and readable.
 

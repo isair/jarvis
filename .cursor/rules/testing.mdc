@@ -2,7 +2,7 @@
 description: Rules for all testing logic
 alwaysApply: false
 ---
-# Testing Guidelines
+# Testing guidelines
 
 Tests should focus on observable outcomes and behaviors, not internal implementation details.
 

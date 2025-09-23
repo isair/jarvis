@@ -1,6 +1,35 @@
----
-alwaysApply: true
----
+# Code quality standards
+
+Write code that is clear, maintainable, and easy to understand.
+
+Prioritize readability and simplicity over cleverness.
+
+The best code is the least amount of code possible.
+
+Always document complex logic and follow established style guides to ensure consistency across the codebase.
+
+No need to keep old parameters or logic for backwards compatibility.
+
+Every new piece of code should have tests that cover its functionality.
+
+Do not add comments or documentation mentioning something is different than before. Comments and documentation should always be about the current state of the code.
+
+# Testing guidelines
+
+Tests should focus on observable outcomes and behaviors, not internal implementation details.
+
+Treat the system as a black box: verify that inputs produce the correct outputs and side effects, regardless of how the result is achieved.
+
+Write tests that are reliable, isolated, and easy to understand.
+
+# Python guidelines
+
+Follow Python best practices: use idiomatic constructs, leverage built-in modules, and write code that is explicit and readable.
+
+Prefer list comprehensions and generator expressions for concise data processing.
+
+Use type hints to improve code clarity and maintainability.
+
 # Project specific rules
 
 Data privacy comes first, always.
