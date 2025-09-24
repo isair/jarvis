@@ -5,6 +5,7 @@ Main orchestrator that coordinates listening, reply generation, and output.
 """
 
 from __future__ import annotations
+import sys
 import time
 import signal
 import threading
@@ -18,7 +19,7 @@ from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memo
 from .output.tts import create_tts_engine
 from .tools.external.mcp_client import MCPClient
 from .debug import debug_log
-from .listening.listener import VoiceListener
+from .listening import VoiceListener
 
 # Global instances for coordination between modules
 _global_dialogue_memory: Optional[DialogueMemory] = None

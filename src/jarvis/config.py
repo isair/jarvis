@@ -45,46 +45,30 @@ class Settings:
     tts_chatterbox_exaggeration: float  # Emotion exaggeration control (0.0-1.0+)
     tts_chatterbox_cfg_weight: float  # CFG weight for quality/speed trade-off
 
-    # Voice Input & Audio
-    voice_device: str | None
-    sample_rate: int
-    voice_min_energy: float
-
-    # Voice Collection & Timing
-    voice_block_seconds: float
-    voice_collect_seconds: float
-    voice_max_collect_seconds: float
+    # Audio Input
+    voice_device: str | None  # Audio input device (None = system default)
 
     # Wake Word Detection
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
 
-    # Whisper Speech Recognition
-    whisper_model: str
-    whisper_compute_type: str
-    whisper_vad: bool
-    whisper_min_confidence: float
-    whisper_min_audio_duration: float
-    whisper_min_word_length: int
+    # Stop Commands
+    stop_commands: list[str]
+    stop_command_fuzzy_ratio: float
 
-    # Voice Activity Detection (VAD)
-    vad_enabled: bool
-    vad_aggressiveness: int
-    vad_frame_ms: int
-    vad_pre_roll_ms: int
-    endpoint_silence_ms: int
-    max_utterance_ms: int
-    tts_max_utterance_ms: int
+    # WhisperLiveKit Streaming
+    whisperlivekit_backend: str  # "simulstreaming" or "whisperstreaming"
+    whisperlivekit_diarization_enabled: bool
+    whisperlivekit_diarization_backend: str  # "diart" or "sortformer"
+    whisperlivekit_frame_threshold: int  # AlignAtt frame threshold (lower = faster)
+    whisperlivekit_beams: int  # Number of beams for beam search
+    whisperlivekit_model: str  # Model size (small, medium, large, etc.)
 
     # UI/UX Features
     tune_enabled: bool
     hot_window_enabled: bool
     hot_window_seconds: float
-
-    # Echo Detection
-    echo_energy_threshold: float
-    echo_tolerance: float
 
     # Memory & Dialogue
     dialogue_memory_timeout: float
@@ -196,44 +180,30 @@ def get_default_config() -> Dict[str, Any]:
         "tts_chatterbox_exaggeration": 0.5,  # Emotion exaggeration (0.0-1.0+)
         "tts_chatterbox_cfg_weight": 0.5,  # CFG weight for quality/speed trade-off
 
-        # Voice Input & Audio
-        "voice_device": None,
-        "sample_rate": 16000,
-        "voice_min_energy": 0.02,
-
-        # Voice Collection & Timing
-        "voice_block_seconds": 4.0,
-        "voice_collect_seconds": 4.5,
-        "voice_max_collect_seconds": 180.0,
+        # Audio Input
+        "voice_device": None,  # Audio input device (None = system default)
 
         # Wake Word Detection
         "wake_word": "jarvis",
         "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus"],
         "wake_fuzzy_ratio": 0.78,
 
-        # Whisper Speech Recognition
-        "whisper_model": "small",
-        "whisper_compute_type": "int8",
-        "whisper_vad": True,
-        "whisper_min_confidence": 0.3,
-        "whisper_min_audio_duration": 0.15,
-        "whisper_min_word_length": 1,
+        # Stop Commands
+        "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
+        "stop_command_fuzzy_ratio": 0.8,
 
-        # Voice Activity Detection (VAD)
-        "vad_enabled": True,
-        "vad_aggressiveness": 2,
-        "vad_frame_ms": 20,
-        "vad_pre_roll_ms": 240,
-        "endpoint_silence_ms": 800,
-        "max_utterance_ms": 12000,
-        "tts_max_utterance_ms": 3000,  # Shorter timeout during TTS for quick stop detection
+        # WhisperLiveKit Streaming
+        "whisperlivekit_backend": "simulstreaming",  # Use SOTA 2025 backend
+        "whisperlivekit_diarization_enabled": True,
+        "whisperlivekit_diarization_backend": "sortformer",  # Use SOTA 2025 diarization
+        "whisperlivekit_frame_threshold": 25,  # Balanced latency/accuracy
+        "whisperlivekit_beams": 1,  # Greedy decoding for speed
+        "whisperlivekit_model": "medium",  # Good balance of speed and accuracy
 
         # UI/UX Features
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 6.0,
-        "echo_energy_threshold": 2.0,
-        "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
 
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
@@ -243,18 +213,14 @@ def get_default_config() -> Dict[str, Any]:
         # Agentic Loop
         "agentic_max_turns": 8,
 
-        # Stop Commands
-        "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
-        "stop_command_fuzzy_ratio": 0.8,
-
         # Location Services
         "location_enabled": True,
         "location_cache_minutes": 60,
         "location_ip_address": None,
         "location_auto_detect": True,
-    # When behind CGNAT (100.64.0.0/10), attempt a privacy-light external DNS query to discover true public IP
-    # Uses a single OpenDNS resolver lookup of myip.opendns.com over DNS (no HTTP services). Disable to avoid any external request.
-    "location_cgnat_resolve_public_ip": True,
+        # When behind CGNAT (100.64.0.0/10), attempt a privacy-light external DNS query to discover true public IP
+        # Uses a single OpenDNS resolver lookup of myip.opendns.com over DNS (no HTTP services). Disable to avoid any external request.
+        "location_cgnat_resolve_public_ip": True,
 
         # Web Search
         "web_search_enabled": True,
@@ -327,29 +293,22 @@ def load_settings() -> Settings:
     tts_chatterbox_cfg_weight = float(merged.get("tts_chatterbox_cfg_weight", 0.5))
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
-    voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
-    voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
-    voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 60.0))
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "small"))
-    whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
-    whisper_vad = bool(merged.get("whisper_vad", True))
-    voice_min_energy = float(merged.get("voice_min_energy", 0.02))
-    vad_enabled = bool(merged.get("vad_enabled", True))
-    vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
-    vad_frame_ms = int(merged.get("vad_frame_ms", 20))
-    vad_pre_roll_ms = int(merged.get("vad_pre_roll_ms", 240))
-    endpoint_silence_ms = int(merged.get("endpoint_silence_ms", 800))
-    max_utterance_ms = int(merged.get("max_utterance_ms", 12000))
-    tts_max_utterance_ms = int(merged.get("tts_max_utterance_ms", 3000))
-    sample_rate = int(merged.get("sample_rate", 16000))
+    stop_commands = _ensure_list(merged.get("stop_commands"))
+    stop_command_fuzzy_ratio = float(merged.get("stop_command_fuzzy_ratio", 0.8))
+
+    # WhisperLiveKit (new streaming stack)
+    whisperlivekit_backend = str(merged.get("whisperlivekit_backend", "simulstreaming"))
+    whisperlivekit_diarization_enabled = bool(merged.get("whisperlivekit_diarization_enabled", True))
+    whisperlivekit_diarization_backend = str(merged.get("whisperlivekit_diarization_backend", "sortformer"))
+    whisperlivekit_frame_threshold = int(merged.get("whisperlivekit_frame_threshold", 25))
+    whisperlivekit_beams = int(merged.get("whisperlivekit_beams", 1))
+    whisperlivekit_model = str(merged.get("whisperlivekit_model", "medium"))
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 6.0))
-    echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
-    echo_tolerance = float(merged.get("echo_tolerance", 0.3))
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
@@ -362,9 +321,6 @@ def load_settings() -> Settings:
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     mcps = _ensure_dict(merged.get("mcps"))
-    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.7))
-    whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
-    whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
@@ -402,45 +358,28 @@ def load_settings() -> Settings:
         tts_chatterbox_exaggeration=tts_chatterbox_exaggeration,
         tts_chatterbox_cfg_weight=tts_chatterbox_cfg_weight,
 
-        # Voice Input & Audio
+        # Audio Input
         voice_device=voice_device,
-        sample_rate=sample_rate,
-        voice_min_energy=voice_min_energy,
 
-        # Voice Collection & Timing
-        voice_block_seconds=voice_block_seconds,
-        voice_collect_seconds=voice_collect_seconds,
-        voice_max_collect_seconds=voice_max_collect_seconds,
-
-        # Wake Word Detection
+        # Wake Word Detection & Stop Commands
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
+        stop_commands=stop_commands,
+        stop_command_fuzzy_ratio=stop_command_fuzzy_ratio,
 
-        # Whisper Speech Recognition
-        whisper_model=whisper_model,
-        whisper_compute_type=whisper_compute_type,
-        whisper_vad=whisper_vad,
-        whisper_min_confidence=whisper_min_confidence,
-        whisper_min_audio_duration=whisper_min_audio_duration,
-        whisper_min_word_length=whisper_min_word_length,
-
-        # Voice Activity Detection (VAD)
-        vad_enabled=vad_enabled,
-        vad_aggressiveness=vad_aggressiveness,
-        vad_frame_ms=vad_frame_ms,
-        vad_pre_roll_ms=vad_pre_roll_ms,
-        endpoint_silence_ms=endpoint_silence_ms,
-        max_utterance_ms=max_utterance_ms,
-        tts_max_utterance_ms=tts_max_utterance_ms,
+        # WhisperLiveKit Streaming
+        whisperlivekit_backend=whisperlivekit_backend,
+        whisperlivekit_diarization_enabled=whisperlivekit_diarization_enabled,
+        whisperlivekit_diarization_backend=whisperlivekit_diarization_backend,
+        whisperlivekit_frame_threshold=whisperlivekit_frame_threshold,
+        whisperlivekit_beams=whisperlivekit_beams,
+        whisperlivekit_model=whisperlivekit_model,
 
         # UI/UX Features
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
-        echo_energy_threshold=echo_energy_threshold,
-        echo_tolerance=echo_tolerance,
-
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,
         memory_enrichment_max_results=memory_enrichment_max_results,
