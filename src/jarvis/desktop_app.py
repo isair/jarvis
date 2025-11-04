@@ -19,6 +19,7 @@ from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject
 
 from .debug import debug_log
+from .config import _default_config_path, _default_db_path
 
 
 class LogSignals(QObject):
@@ -165,6 +166,17 @@ class JarvisSystemTray:
 
         menu.addSeparator()
 
+        # Open directories actions
+        open_config_action = QAction("📁 Open Config Directory")
+        open_config_action.triggered.connect(self.open_config_directory)
+        menu.addAction(open_config_action)
+
+        open_data_action = QAction("💾 Open Data Directory")
+        open_data_action.triggered.connect(self.open_data_directory)
+        menu.addAction(open_data_action)
+
+        menu.addSeparator()
+
         # Status action (non-clickable)
         self.status_action = QAction("⚪ Status: Stopped")
         self.status_action.setEnabled(False)
@@ -187,6 +199,44 @@ class JarvisSystemTray:
             self.log_viewer.show()
             self.log_viewer.raise_()
             self.log_viewer.activateWindow()
+
+    def open_directory(self, directory_path: Path, directory_name: str) -> None:
+        """Open a directory in the system file manager."""
+        try:
+            # Ensure directory exists
+            directory_path.mkdir(parents=True, exist_ok=True)
+            
+            # Open directory based on platform
+            if sys.platform == "darwin":  # macOS
+                subprocess.Popen(["open", str(directory_path)])
+            elif sys.platform == "win32":  # Windows
+                os.startfile(str(directory_path))
+            else:  # Linux and other Unix-like systems
+                subprocess.Popen(["xdg-open", str(directory_path)])
+            
+            debug_log(f"opened {directory_name} directory: {directory_path}", "desktop")
+            self.log_signals.new_log.emit(f"📂 Opened {directory_name} directory\n")
+        except Exception as e:
+            debug_log(f"failed to open {directory_name} directory: {e}", "desktop")
+            self.log_signals.new_log.emit(f"❌ Failed to open {directory_name} directory: {str(e)}\n")
+            self.tray_icon.showMessage(
+                f"Error Opening {directory_name} Directory",
+                f"Failed to open directory: {str(e)}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                3000
+            )
+
+    def open_config_directory(self) -> None:
+        """Open the configuration directory in the system file manager."""
+        config_path = _default_config_path()
+        config_dir = config_path.parent
+        self.open_directory(config_dir, "Config")
+
+    def open_data_directory(self) -> None:
+        """Open the data directory (where database is stored) in the system file manager."""
+        db_path = Path(_default_db_path())
+        data_dir = db_path.parent
+        self.open_directory(data_dir, "Data")
 
     def get_icon_path(self, icon_name: str) -> Path:
         """Get the path to an icon file."""
