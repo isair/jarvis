@@ -25,15 +25,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 🐍 Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install semantic-release
+        run: |
+          npm install -g semantic-release@22 \
+            @semantic-release/github@9 \
+            conventional-changelog-conventionalcommits@7
+
       - name: 🏷️ Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v4
-        with:
-          extra_plugins: |
-            @semantic-release/changelog
-            @semantic-release/git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Run semantic-release and capture output
+          npx semantic-release --debug > release_output.log 2>&1 || true
+
+          # Check if a release was created
+          if grep -q "Published release" release_output.log; then
+            echo "new_release_published=true" >> $GITHUB_OUTPUT
+            # Extract version from the log
+            VERSION=$(grep "Published release" release_output.log | sed -n 's/.*Published release \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
+            echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
+            echo "new_release_git_tag=v$VERSION" >> $GITHUB_OUTPUT
+            echo "✅ Released version $VERSION"
+          else
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No release created (no releasable changes found)"
+          fi
+
+          # Show the full log for debugging
+          cat release_output.log
 
   # Build desktop apps for all platforms
   build-windows:
