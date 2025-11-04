@@ -2,132 +2,277 @@ name: Release
 
 on:
   push:
-    branches: [main]
-
-permissions:
-  contents: write
-  pull-requests: write
+    branches:
+      - main
+      - develop
 
 jobs:
-  release:
-    name: Release
+  # Semantic versioning analysis (main only)
+  semantic-release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
-      released: ${{ steps.release.outputs.released }}
-      version: ${{ steps.release.outputs.version }}
-      tag: ${{ steps.release.outputs.tag }}
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+      new_release_git_tag: ${{ steps.semantic.outputs.new_release_git_tag }}
+
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node.js
+      - name: 🐍 Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install semantic-release
+      - name: 📦 Install semantic-release
         run: |
           npm install -g semantic-release@22 \
             @semantic-release/github@9 \
             conventional-changelog-conventionalcommits@7
 
-      - name: Create semantic-release config
-        run: |
-          cat > .releaserc.json << 'EOF'
-          {
-            "branches": [
-              "main"
-            ],
-            "plugins": [
-              [
-                "@semantic-release/commit-analyzer",
-                {
-                  "preset": "conventionalcommits",
-                  "releaseRules": [
-                    { "type": "feat", "release": "minor" },
-                    { "type": "fix", "release": "patch" },
-                    { "type": "perf", "release": "patch" },
-                    { "type": "revert", "release": "patch" },
-                    { "type": "docs", "release": false },
-                    { "type": "style", "release": false },
-                    { "type": "chore", "release": false },
-                    { "type": "refactor", "release": "patch" },
-                    { "type": "test", "release": false },
-                    { "type": "build", "release": false },
-                    { "type": "ci", "release": false },
-                    { "breaking": true, "release": "major" }
-                  ]
-                }
-              ],
-              [
-                "@semantic-release/release-notes-generator",
-                {
-                  "preset": "conventionalcommits",
-                  "presetConfig": {
-                    "types": [
-                      { "type": "feat", "section": "✨ Features" },
-                      { "type": "fix", "section": "🐛 Bug Fixes" },
-                      { "type": "perf", "section": "⚡ Performance Improvements" },
-                      { "type": "revert", "section": "🔄 Reverts" },
-                      { "type": "docs", "section": "📝 Documentation", "hidden": false },
-                      { "type": "style", "section": "💄 Styles", "hidden": true },
-                      { "type": "chore", "section": "🔧 Miscellaneous Chores", "hidden": true },
-                      { "type": "refactor", "section": "♻️ Code Refactoring" },
-                      { "type": "test", "section": "✅ Tests", "hidden": true },
-                      { "type": "build", "section": "👷 Build System", "hidden": true },
-                      { "type": "ci", "section": "🔁 Continuous Integration", "hidden": true }
-                    ]
-                  }
-                }
-              ],
-              [
-                "@semantic-release/github",
-                {
-                  "successComment": false,
-                  "failTitle": false,
-                  "failComment": false,
-                  "releasedLabels": false
-                }
-              ]
-            ]
-          }
-          EOF
-
-      - name: Release
-        id: release
+      - name: 🏷️ Semantic Release
+        id: semantic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Run semantic-release and capture output
           npx semantic-release --debug > release_output.log 2>&1 || true
-          
+
           # Check if a release was created
           if grep -q "Published release" release_output.log; then
-            echo "released=true" >> $GITHUB_OUTPUT
+            echo "new_release_published=true" >> $GITHUB_OUTPUT
             # Extract version from the log
             VERSION=$(grep "Published release" release_output.log | sed -n 's/.*Published release \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+            echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
+            echo "new_release_git_tag=v$VERSION" >> $GITHUB_OUTPUT
             echo "✅ Released version $VERSION"
           else
-            echo "released=false" >> $GITHUB_OUTPUT
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
             echo "ℹ️ No release created (no releasable changes found)"
           fi
-          
+
           # Show the full log for debugging
           cat release_output.log
 
-  notify:
-    name: Notify Release
-    runs-on: ubuntu-latest
-    needs: release
-    if: needs.release.outputs.released == 'true'
+  # Build desktop apps for all platforms
+  build-windows:
+    runs-on: windows-latest
+
     steps:
-      - name: Notify successful release
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
         run: |
-          echo "🎉 Successfully released version ${{ needs.release.outputs.version }}"
-          echo "📋 Tag: ${{ needs.release.outputs.tag }}"
-          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.release.outputs.tag }}"
+          python -m pip install --upgrade pip
+          # Install requirements but skip heavy optional packages (PyTorch, etc.)
+          # Filter out chatterbox-tts and mlx-whisper (heavy/platform-specific)
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper)' } | Set-Content requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/jarvis/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 📦 Package Windows build
+        run: |
+          cd dist
+          Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
+
+      - name: 📤 Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Windows
+          path: dist/Jarvis-Windows-x64.zip
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install requirements but skip heavy optional packages (PyTorch/Chatterbox)
+          # MLX Whisper is included - it's lightweight and provides fast speech recognition on Apple Silicon
+          grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/jarvis/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build application
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 🔐 Ad-hoc code sign the app
+        run: |
+          # Ad-hoc sign all binaries in the app bundle for macOS compatibility
+          codesign --force --deep --sign - dist/Jarvis.app || true
+
+      - name: 📦 Package macOS build
+        run: |
+          cd dist
+          # Detect architecture and name zip accordingly
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ]; then
+            zip -r Jarvis-macOS-arm64.zip Jarvis.app
+          else
+            zip -r Jarvis-macOS-x64.zip Jarvis.app
+          fi
+
+      - name: 📤 Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-macOS
+          path: dist/Jarvis-macOS-*.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧹 Free up disk space
+        run: |
+          # Remove unnecessary large packages to free up disk space
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 portaudio19-dev binutils
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install requirements but skip heavy optional packages (PyTorch, etc.)
+          grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/jarvis/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 📦 Package Linux build
+        run: |
+          cd dist
+          # Package the Jarvis directory (not a single file anymore)
+          tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
+
+      - name: 📤 Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Linux
+          path: dist/Jarvis-Linux-x64.tar.gz
+
+  # Create versioned release (main only, if semantic-release published)
+  release-main:
+    needs: [semantic-release, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && needs.semantic-release.outputs.new_release_published == 'true'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📎 Attach binaries to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.semantic-release.outputs.new_release_git_tag }}
+          files: |
+            artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
+            artifacts/Jarvis-macOS/Jarvis-macOS-*.zip
+            artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create/update latest pre-release (develop only)
+  release-develop:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📝 Create/Update Latest Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest
+          name: Latest Development Build
+          files: |
+            artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
+            artifacts/Jarvis-macOS/Jarvis-macOS-*.zip
+            artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
+          draft: false
+          prerelease: true
+          body: |
+            🚀 **Latest development build from develop branch**
+
+            This is an automated build from the latest commit on develop.
+            These builds may be unstable. For stable releases, use versioned releases.
+
+            ### 📦 Downloads:
+            - **Windows**: Jarvis-Windows-x64.zip
+            - **macOS**: Jarvis-macOS-x64.zip
+            - **Linux**: Jarvis-Linux-x64.tar.gz
+
+            **Branch**: develop
+            **Commit**: ${{ github.sha }}
+            **Date**: ${{ github.event.head_commit.timestamp }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

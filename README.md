@@ -9,6 +9,17 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/img/setup-wizard-initial-check.png" alt="Setup Wizard" width="400">
+  <img src="docs/img/logs.png" alt="Real-time Logs" width="400">
+</p>
+<p align="center">
+  <img src="docs/img/memory-viewer-memories.png" alt="Memory Viewer - Conversations" width="400">
+  <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Nutrition" width="400">
+</p>
+
 ## Why Jarvis?
 
 ### 🎬 **Movie-like AI experience**
@@ -153,45 +164,43 @@ ollama pull gpt-oss:20b
 ollama pull nomic-embed-text
 ```
 
-### 3. Install Jarvis
+### 3. Download Jarvis
 
-**Mac:**
-```bash
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-bash scripts/run_macos.sh
-```
+Get the latest desktop app from [GitHub Releases](https://github.com/isair/jarvis/releases):
 
-**Windows (Recommended - with Micromamba):**
-```powershell
-# First install Micromamba (avoids build issues)
-Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1).Content)
+**Windows:**
+1. Download `Jarvis-Windows-x64.zip`
+2. Extract and run `Jarvis.exe`
+3. Click the system tray icon → Start Listening
 
-# Then install Jarvis
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
-```
-
-**Windows (Alternative - requires build tools):**
-```powershell
-# Install Visual C++ Build Tools first from:
-# https://visualstudio.microsoft.com/visual-cpp-build-tools/
-# (Select "Desktop development with C++" workload)
-
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
-```
+**macOS:**
+1. Download `Jarvis-macOS-arm64.zip` (Apple Silicon) or `Jarvis-macOS-x64.zip` (Intel)
+2. Extract and move `Jarvis.app` to Applications
+3. Right-click → Open (first time only, bypasses Gatekeeper)
+4. Click the menu bar icon → Start Listening
 
 **Linux:**
-```bash
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-bash scripts/run_linux.sh
-```
+1. Download `Jarvis-Linux-x64.tar.gz`
+2. Extract: `tar -xzf Jarvis-Linux-x64.tar.gz`
+3. Run: `./Jarvis/Jarvis`
+4. Click the system tray icon → Start Listening
 
 Done! Say "Jarvis" and start talking.
+
+### Desktop App Features
+
+The desktop app includes a full graphical interface:
+
+- **Setup Wizard** - Guided first-run experience that checks all dependencies
+- **System Tray/Menu Bar** - Click the icon to control Jarvis
+- **Real-time Logs** - Watch Jarvis think, plan, and execute in real-time
+- **Memory Viewer** - Browse all conversations and tracked meals with search & filters
+- **Start/Stop** listening with one click
+- **Gray icon** = stopped, **Green icon** = listening
+
+<p align="center">
+  <img src="docs/img/setup-wizard-complete.png" alt="Setup Complete" width="500">
+</p>
 
 ## System Requirements
 
@@ -206,6 +215,7 @@ Done! Say "Jarvis" and start talking.
 - Never forgets conversations
 - Intelligent search across all history
 - No token limits or resets
+- **Memory Viewer** - Browse, search, and filter all memories through a beautiful GUI
 
 ### 🎯 **Smart Personalities**
 - **Developer**: Debugging, code reviews, technical help
@@ -226,15 +236,33 @@ Done! Say "Jarvis" and start talking.
 - Wake word activation ("Jarvis")
 - Interruptible responses ("stop", "shush")
 - Stays active for follow-ups
-- Multiple TTS options including voice cloning
+- System TTS built-in, AI voice cloning optional (requires PyTorch)
 
 ## Configuration
 
 Most users won't need to change anything. For advanced options, see the [config example](examples/config.json).
 
-### High-Quality AI Voice (Chatterbox TTS)
+### Text-to-Speech Options
 
-Enable experimental AI-powered text-to-speech with emotion and voice cloning:
+Jarvis uses your **system's built-in TTS** by default - no extra setup needed. This works great on all platforms:
+- **macOS**: High-quality Siri voices
+- **Windows**: Microsoft speech synthesis
+- **Linux**: espeak/festival
+
+#### High-Quality AI Voice (Chatterbox TTS) - Optional
+
+> ⚠️ **Not included in desktop app downloads** - requires running from source with PyTorch (~2GB download).
+
+For AI-powered speech with emotion and voice cloning, install PyTorch and Chatterbox:
+
+```bash
+# Clone the repo and install with Chatterbox support
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+pip install -r requirements.txt  # Includes PyTorch + Chatterbox
+```
+
+Then enable in your config (`~/.config/jarvis/config.json`):
 
 ```json
 {
@@ -583,9 +611,62 @@ Unlike ChatGPT or Gemini, Jarvis with these integrations can:
 - Switch to smaller model: `ollama pull llama3:8b`
 - Add to config: `{"ollama_chat_model": "llama3:8b"}`
 
-**Windows build errors**
-- Use the Micromamba installation method (recommended)
-- Or install [Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+**Windows: App won't start**
+- Extract the full zip file before running
+- Check Windows Defender hasn't blocked it
+
+**macOS: "App can't be opened"**
+- Right-click → Open (first time only)
+- Or: System Settings → Privacy & Security → Allow
+
+**Linux: No system tray icon**
+- Install: `sudo apt install libayatana-appindicator3-1`
+
+## For Developers
+
+<details>
+<summary><strong>Running from Source (Full Features)</strong></summary>
+
+Running from source gives you access to all features including:
+- **Chatterbox TTS** - AI voice with emotion and voice cloning (requires PyTorch)
+- **Latest updates** - Get new features before desktop releases
+
+**macOS:**
+```bash
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+bash scripts/run_macos.sh
+```
+
+**Windows (with Micromamba):**
+```powershell
+# First install Micromamba
+Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1).Content)
+
+# Then install Jarvis
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
+**Windows (with build tools):**
+```powershell
+# Install Visual C++ Build Tools from:
+# https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
+**Linux:**
+```bash
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+bash scripts/run_linux.sh
+```
+
+</details>
 
 ## Privacy & Storage
 

@@ -10,19 +10,19 @@ from ..debug import debug_log
 
 
 def _filter_contexts_by_time(
-    contexts: List[str], 
-    from_time: Optional[str], 
-    to_time: Optional[str], 
+    contexts: List[str],
+    from_time: Optional[str],
+    to_time: Optional[str],
     voice_debug: bool = False
 ) -> List[str]:
     """Helper to filter context strings by time range."""
     if not from_time and not to_time:
         return contexts
-        
+
     filtered = []
     from_dt = None
     to_dt = None
-    
+
     try:
         if from_time:
             from_dt = datetime.fromisoformat(from_time.replace('Z', '+00:00'))
@@ -32,7 +32,7 @@ def _filter_contexts_by_time(
         if voice_debug:
             debug_log(f"      📋 Error parsing time: {e}", "memory")
         return contexts
-    
+
     import re
     for ctx in contexts:
         # Extract date from formatted text like "[2025-08-27] ..."
@@ -41,20 +41,20 @@ def _filter_contexts_by_time(
             date_str = date_match.group(1)
             try:
                 ctx_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
-                
+
                 in_range = True
                 if from_dt and ctx_date.date() < from_dt.date():
                     in_range = False
                 if to_dt and ctx_date.date() > to_dt.date():
                     in_range = False
-                
+
                 if in_range:
                     filtered.append(ctx)
             except Exception:
                 filtered.append(ctx)  # Keep if can't parse date
         else:
             filtered.append(ctx)  # Keep non-dated entries
-    
+
     return filtered
 
 
@@ -63,42 +63,42 @@ class DialogueMemory:
     In-memory storage for recent dialogue interactions.
     Provides short-term context for the last 5 minutes of conversation.
     """
-    
+
     def __init__(self, inactivity_timeout: float = 300.0, max_interactions: int = 20):
         """Initialize dialogue memory."""
         self._messages: List[Tuple[float, str, str]] = []  # (timestamp, role, content)
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
         self._is_pending_diary_update = False
-    
+
     def add_message(self, role: str, content: str) -> None:
         """Add a message to recent memory."""
         timestamp = time.time()
         self._messages.append((timestamp, role.strip(), content.strip()))
         self._last_activity_time = timestamp
         self._is_pending_diary_update = True
-    
+
     def get_recent_context(self) -> List[str]:
         """Get recent messages formatted as context strings."""
         messages = self.get_recent_messages()
         return [f"{msg['role'].title()}: {msg['content']}" for msg in messages]
-    
+
     def get_recent_messages(self) -> List[dict]:
         """
         Get recent messages (last 5 minutes) formatted for LLM API.
-        
+
         Returns:
             List of message dictionaries with 'role' and 'content' keys
         """
         if not self._messages:
             return []
-        
+
         # Filter to last 5 minutes
         cutoff = time.time() - 300.0
         recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
-        
+
         return [{"role": role, "content": content} for _, role, content in recent_messages]
-    
+
     def has_recent_messages(self) -> bool:
         """Check if there are any messages in the last 5 minutes."""
         cutoff = time.time() - 300.0
@@ -111,20 +111,20 @@ class DialogueMemory:
             self.add_message("user", user_text.strip())
         if assistant_text.strip():
             self.add_message("assistant", assistant_text.strip())
-    
+
     def get_pending_chunks(self) -> List[str]:
         """Get recent messages as formatted chunks for diary update."""
         messages = self.get_recent_messages()
         return [f"{msg['role'].title()}: {msg['content']}" for msg in messages]
-    
+
     def should_update_diary(self) -> bool:
         """Check if diary should be updated based on inactivity timeout."""
         if not self._is_pending_diary_update:
             return False
-        
+
         current_time = time.time()
         return (current_time - self._last_activity_time) >= self._inactivity_timeout
-    
+
     def clear_pending_updates(self) -> None:
         """Clear the pending diary update flag."""
         self._is_pending_diary_update = False
@@ -139,12 +139,12 @@ def generate_conversation_summary(
 ) -> Tuple[str, str]:
     """
     Generate a concise conversation summary from recent chunks and previous summary.
-    
+
     Returns:
         Tuple of (summary, topics) where topics is comma-separated
     """
     chunks_text = "\n".join(recent_chunks[-10:])  # Last 10 chunks to keep context manageable
-    
+
     system_prompt = """You are a conversation summarizer for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
 
 Create a summary that:
@@ -155,7 +155,7 @@ Create a summary that:
 5. Maintains a neutral, factual tone
 
 Also extract 3-5 main topics as comma-separated keywords."""
-    
+
     if previous_summary:
         user_prompt = f"""Previous summary for today: {previous_summary}
 
@@ -180,30 +180,30 @@ Create a summary of today's conversations. Provide:
 Format your response as:
 SUMMARY: [your summary here]
 TOPICS: [topic1, topic2, topic3]"""
-    
+
     try:
         response = call_llm_direct(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, timeout_sec=timeout_sec)
         if not response:
             # No fallback - if LLM fails to respond, skip summarization
             return None, None
-            
+
         # Parse the response
         lines = response.strip().split('\n')
         summary = ""
         topics = ""
-        
+
         for line in lines:
             if line.startswith("SUMMARY:"):
                 summary = line[8:].strip()
             elif line.startswith("TOPICS:"):
                 topics = line[7:].strip()
-        
+
         # No fallback - if parsing fails, skip summarization
         if not summary or not topics:
             return None, None
-            
+
         return summary, topics
-        
+
     except Exception:
         # No fallback - if LLM fails, skip summarization entirely
         return None, None
@@ -221,39 +221,39 @@ def update_daily_conversation_summary(
 ) -> Optional[int]:
     """
     Update the conversation summary for today with new chunks.
-    
+
     Returns the summary ID if successful, None otherwise.
     """
     if not new_chunks:
         return None
-        
+
     today = datetime.now(timezone.utc).date().isoformat()  # YYYY-MM-DD format
-    
+
     try:
         # Redact sensitive information from chunks before processing
         from ..utils.redact import redact
         redacted_chunks = [redact(chunk) for chunk in new_chunks]
-        
+
         # Debug: Log the redacted chunks being processed
         debug_log(f"updating conversation memory with {len(redacted_chunks)} new chunks:", "memory")
         for i, chunk in enumerate(redacted_chunks):
             chunk_preview = chunk[:100] + "..." if len(chunk) > 100 else chunk
             debug_log(f"  chunk {i+1}: {chunk_preview}", "memory")
-        
+
         # Get existing summary for today
         existing = db.get_conversation_summary(today, source_app)
         previous_summary = existing['summary'] if existing else None
-        
+
         # Generate updated summary using redacted chunks
         summary, topics = generate_conversation_summary(
             redacted_chunks, previous_summary, ollama_base_url, ollama_chat_model, timeout_sec=timeout_sec
         )
-        
+
         # Skip summarization if LLM failed
         if summary is None or topics is None:
             debug_log("conversation summary skipped - LLM failed to generate summary", "memory")
             return  # Skip summarization entirely
-        
+
         # Debug: Log the generated summary and topics
         summary_preview = summary[:200] + "..." if len(summary) > 200 else summary
         debug_log("conversation memory updated to:", "memory")
@@ -264,7 +264,7 @@ def update_daily_conversation_summary(
             debug_log(f"  previous summary: {prev_preview}", "memory")
         else:
             debug_log("  previous summary: (none)", "memory")
-        
+
         # Store the summary
         summary_id = db.upsert_conversation_summary(
             date_utc=today,
@@ -272,7 +272,7 @@ def update_daily_conversation_summary(
             topics=topics,
             source_app=source_app,
         )
-        
+
         # Generate and store embedding for semantic search
         if db.is_vss_enabled:
             # Combine summary and topics for embedding
@@ -280,9 +280,9 @@ def update_daily_conversation_summary(
             vec = get_embedding(text_for_embedding, ollama_base_url, ollama_embed_model, timeout_sec=15.0)  # Use shorter timeout for embeddings
             if vec is not None:
                 db.upsert_summary_embedding(summary_id, vec)
-        
+
         return summary_id
-        
+
     except Exception:
         return None
 
@@ -301,7 +301,7 @@ def search_conversation_memory_by_keywords(
     """
     Search conversation memory using multiple keywords with OR logic.
     This is optimized for memory enrichment where we have extracted topic keywords.
-    
+
     Args:
         db: Database instance
         keywords: List of keywords to search for (will be OR'd together)
@@ -312,37 +312,37 @@ def search_conversation_memory_by_keywords(
         timeout_sec: Timeout for embedding generation
         voice_debug: Enable debug output
         max_results: Maximum number of results to return (default: 10)
-        
+
     Returns:
         List of formatted context strings (limited to max_results)
     """
     contexts = []
-    
+
     if not keywords:
         return contexts
-    
+
     # Clean keywords
     clean_keywords = [k.strip() for k in keywords if k and k.strip()]
     if not clean_keywords:
         return contexts
-    
+
     try:
         debug_log(f"      🔍 Keyword-based search for: {clean_keywords}", "memory")
-        
+
         # Build FTS OR query for better recall
         fts_query = " OR ".join(clean_keywords[:5])  # Limit to 5 keywords
-        
+
         # For embedding, combine keywords to get semantic meaning of the topic cluster
         embed_query = " ".join(clean_keywords)
-        
+
         debug_log(f"      📝 FTS query: '{fts_query}'", "memory")
         debug_log(f"      📝 Embed query: '{embed_query}'", "memory")
-        
+
         if ollama_base_url and ollama_embed_model:
             try:
                 vec = get_embedding(embed_query, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
                 vec_json = json.dumps(vec) if vec is not None else None
-                
+
                 if vec_json:
                     # Hybrid search with OR query for FTS and combined embedding
                     search_results = db.search_hybrid(fts_query, vec_json, top_k=max_results)
@@ -356,7 +356,7 @@ def search_conversation_memory_by_keywords(
         else:
             # No embedding service available, use FTS-only
             search_results = db.search_hybrid(fts_query, None, top_k=max_results)
-        
+
         # Collect results
         for result in search_results:
             if isinstance(result, dict):
@@ -365,20 +365,20 @@ def search_conversation_memory_by_keywords(
                 result_text = result[2] if len(result) > 2 else ''
             if isinstance(result_text, str) and result_text:
                 contexts.append(result_text)
-        
+
         debug_log(f"      ✅ found {len(contexts)} keyword search results", "memory")
         if contexts:
             # Show preview of first result
             preview = contexts[0][:150] + "..." if len(contexts[0]) > 150 else contexts[0]
             debug_log(f"      📋 First result: {preview}", "memory")
-                
+
     except Exception as e:
         debug_log(f"keyword search failed: {e}", "memory")
-    
+
     # Apply time filtering if needed
     if from_time or to_time:
         contexts = _filter_contexts_by_time(contexts, from_time, to_time, voice_debug)
-    
+
     return contexts[:max_results]
 
 
@@ -396,7 +396,7 @@ def search_conversation_memory(
     """
     Search conversation memory with a natural language query or phrase.
     This is optimized for direct user queries and tool usage.
-    
+
     Args:
         db: Database instance
         search_query: Natural language query or phrase to search for
@@ -407,26 +407,26 @@ def search_conversation_memory(
         timeout_sec: Timeout for embedding generation
         voice_debug: Enable debug output
         max_results: Maximum number of results to return (default: 15)
-        
+
     Returns:
         List of formatted context strings (limited to max_results)
     """
     contexts = []
-    
+
     try:
         if search_query and search_query.strip() and ollama_base_url and ollama_embed_model:
             # Primary: Use vector search for semantic similarity
             try:
                 vec = get_embedding(search_query, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
                 vec_json = json.dumps(vec) if vec is not None else None
-                
+
                 if vec_json:
                     # Use database hybrid search (combines vector similarity with FTS)
                     search_results = db.search_hybrid(search_query, vec_json, top_k=max_results)
                 else:
                     # Fallback: Pure FTS if embedding fails
                     search_results = db.search_hybrid(search_query, None, top_k=max_results)
-                    
+
                 # Add search results to context
                 for result in search_results:
                     # Handle both tuple (sqlite-vss) and dict (python vector store) results
@@ -436,19 +436,19 @@ def search_conversation_memory(
                         result_text = result[2] if len(result) > 2 else ''
                     if isinstance(result_text, str) and result_text:
                         contexts.append(result_text)
-                        
+
             except Exception as e:
                 if voice_debug:
                     debug_log(f"memory search failed: {e}", "memory")
-        
+
         # Apply time filtering if provided
         debug_log(f"      📋 Checking time filtering: from_time={from_time}, to_time={to_time}", "memory")
-                
+
         if from_time or to_time:
             filtered_contexts = []
             from_dt = None
             to_dt = None
-            
+
             try:
                 if from_time:
                     from_dt = datetime.fromisoformat(from_time.replace('Z', '+00:00'))
@@ -456,19 +456,19 @@ def search_conversation_memory(
                     to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
             except Exception as e:
                 debug_log(f"      📋 Error parsing time: {e}", "memory")
-            
+
             debug_log(f"      📋 Time filtering: search_query='{search_query}', from_dt={from_dt}, to_dt={to_dt}", "memory")
-            
+
             # If we have time constraints but no search query, get all summaries in range
             if (not search_query or not search_query.strip()) and (from_dt or to_dt):
                 recent_summaries = db.get_recent_conversation_summaries(days=30)
                 debug_log(f"      📋 Time filter: from={from_dt.date() if from_dt else None} to={to_dt.date() if to_dt else None}", "memory")
                 debug_log(f"      📋 Found {len(recent_summaries)} summaries to check", "memory")
-                        
+
                 for summary_row in recent_summaries:
                     date_str = summary_row['date_utc']
                     summary_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
-                    
+
                     in_range = True
                     if from_dt and summary_date.date() < from_dt.date():
                         in_range = False
@@ -476,7 +476,7 @@ def search_conversation_memory(
                     if to_dt and summary_date.date() > to_dt.date():
                         in_range = False
                         debug_log(f"      📋 Skipping {date_str}: after to_dt", "memory")
-                    
+
                     if in_range:
                         summary_text = summary_row['summary']
                         topics = summary_row['topics'] or ""
@@ -485,7 +485,7 @@ def search_conversation_memory(
                             context_str += f" (Topics: {topics})"
                         contexts.append(context_str)
                         debug_log(f"      📋 Including summary from {date_str} (length: {len(summary_text)})", "memory")
-                        
+
             else:
                 # Filter existing search results by time
                 import re
@@ -493,31 +493,31 @@ def search_conversation_memory(
                     if ctx.startswith("---"):  # Skip headers
                         filtered_contexts.append(ctx)
                         continue
-                        
+
                     # Extract date from formatted text
                     date_match = re.match(r'\[(\d{4}-\d{2}-\d{2})\]', ctx)
                     if date_match:
                         date_str = date_match.group(1)
                         try:
                             summary_date = datetime.fromisoformat(date_str + 'T00:00:00+00:00')
-                            
+
                             in_range = True
                             if from_dt and summary_date < from_dt:
                                 in_range = False
                             if to_dt and summary_date > to_dt:
                                 in_range = False
-                            
+
                             if in_range:
                                 filtered_contexts.append(ctx)
                         except Exception:
                             filtered_contexts.append(ctx)  # Keep if can't parse date
                     else:
                         filtered_contexts.append(ctx)  # Keep non-dated entries
-                
+
                 contexts = filtered_contexts
-        
+
         return contexts[:max_results]  # Limit results
-        
+
     except Exception:
         return contexts[:max_results] if contexts else []
 
@@ -532,9 +532,9 @@ def get_relevant_conversation_context(
 ) -> List[str]:
     """
     Get relevant conversation summaries that might provide context for the current query.
-    
+
     Returns list of formatted context strings.
-    
+
     This is a wrapper around search_conversation_memory for backward compatibility.
     """
     return search_conversation_memory(
@@ -561,19 +561,26 @@ def update_diary_from_dialogue_memory(
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
-    
+
     Returns the summary ID if successful, None otherwise.
     """
+    debug_log(f"update_diary_from_dialogue_memory called: force={force}", "memory")
+
     if not force and not dialogue_memory.should_update_diary():
+        debug_log("diary update skipped: should_update_diary=False and force=False", "memory")
         return None
-        
+
     try:
         # Get pending chunks from dialogue memory
         pending_chunks = dialogue_memory.get_pending_chunks()
+        debug_log(f"diary update: got {len(pending_chunks)} pending chunks from dialogue_memory", "memory")
+
         if not pending_chunks:
+            debug_log("diary update skipped: no pending chunks in dialogue_memory", "memory")
             return None
-        
+
         # Update the daily conversation summary
+        debug_log("calling update_daily_conversation_summary...", "memory")
         summary_id = update_daily_conversation_summary(
             db=db,
             new_chunks=pending_chunks,
@@ -584,12 +591,15 @@ def update_diary_from_dialogue_memory(
             voice_debug=voice_debug,
             timeout_sec=timeout_sec,
         )
-        
+
+        debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")
+
         # Clear the pending updates flag
         if summary_id is not None:
             dialogue_memory.clear_pending_updates()
-        
+
         return summary_id
-        
-    except Exception:
+
+    except Exception as e:
+        debug_log(f"update_diary_from_dialogue_memory error: {e}", "memory")
         return None
