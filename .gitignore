@@ -9,3 +9,8 @@ __pycache__/
 # Release artifacts
 release_output.log
 node_modules/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.backup

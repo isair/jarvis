@@ -18,3 +18,8 @@ mcp==1.13.1
 chatterbox-tts==0.1.2
 pygame>=2.1.0
 faiss-cpu==1.7.4
+
+# Desktop app dependencies
+PyQt6>=6.6.0
+psutil>=5.9.0
+pyinstaller>=6.0.0

@@ -1,0 +1,188 @@
+name: Build and Release Desktop App
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 psutil pyinstaller pillow
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/jarvis/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 📦 Package Windows build
+        run: |
+          cd dist
+          Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
+
+      - name: 📤 Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Windows
+          path: dist/Jarvis-Windows-x64.zip
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 psutil pyinstaller pillow
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/jarvis/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build application
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 📦 Package macOS build
+        run: |
+          cd dist
+          zip -r Jarvis-macOS-x64.zip Jarvis.app
+
+      - name: 📤 Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-macOS
+          path: dist/Jarvis-macOS-x64.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 psutil pyinstaller pillow
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/jarvis/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 📦 Package Linux build
+        run: |
+          cd dist
+          tar -czf Jarvis-Linux-x64.tar.gz Jarvis
+
+      - name: 📤 Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Linux
+          path: dist/Jarvis-Linux-x64.tar.gz
+
+  create-release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📎 Attach binaries to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
+            artifacts/Jarvis-macOS/Jarvis-macOS-x64.zip
+            artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  create-latest-build:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📝 Create/Update Latest Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest
+          name: Latest Development Build
+          files: |
+            artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
+            artifacts/Jarvis-macOS/Jarvis-macOS-x64.zip
+            artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
+          draft: false
+          prerelease: true
+          body: |
+            🚀 **Latest development build from main branch**
+
+            This is an automated build from the latest commit on main.
+            These builds may be unstable. For stable releases, use versioned releases.
+
+            ### 📦 Downloads:
+            - **Windows**: Jarvis-Windows-x64.zip
+            - **macOS**: Jarvis-macOS-x64.zip
+            - **Linux**: Jarvis-Linux-x64.tar.gz
+
+            **Commit**: ${{ github.sha }}
+            **Date**: ${{ github.event.head_commit.timestamp }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
