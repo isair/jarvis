@@ -150,45 +150,35 @@ ollama pull gpt-oss:20b
 ollama pull nomic-embed-text
 ```
 
-### 3. Install Jarvis
+### 3. Download Jarvis
 
-**Mac:**
-```bash
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-bash scripts/run_macos.sh
-```
+Get the latest desktop app from [GitHub Releases](https://github.com/isair/jarvis/releases):
 
-**Windows (Recommended - with Micromamba):**
-```powershell
-# First install Micromamba (avoids build issues)
-Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1).Content)
+**Windows:**
+1. Download `Jarvis-Windows-x64.zip`
+2. Extract and run `Jarvis.exe`
+3. Click the system tray icon → Start Listening
 
-# Then install Jarvis
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
-```
-
-**Windows (Alternative - requires build tools):**
-```powershell
-# Install Visual C++ Build Tools first from:
-# https://visualstudio.microsoft.com/visual-cpp-build-tools/
-# (Select "Desktop development with C++" workload)
-
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
-```
+**macOS:**
+1. Download `Jarvis-macOS-x64.zip`
+2. Extract and move `Jarvis.app` to Applications
+3. Right-click → Open (first time only)
+4. Click the menu bar icon → Start Listening
 
 **Linux:**
-```bash
-git clone https://github.com/isair/jarvis.git
-cd jarvis
-bash scripts/run_linux.sh
-```
+1. Download `Jarvis-Linux-x64.tar.gz`
+2. Extract: `tar -xzf Jarvis-Linux-x64.tar.gz`
+3. Run: `./Jarvis`
+4. Click the system tray icon → Start Listening
 
 Done! Say "Jarvis" and start talking.
+
+### Desktop App Features
+
+- **Click icon** to open menu
+- **View real-time logs** to see what Jarvis is doing
+- **Start/Stop** listening with one click
+- **Gray icon** = stopped, **Green icon** = listening
 
 ## System Requirements
 
@@ -576,9 +566,60 @@ Unlike ChatGPT or Gemini, Jarvis with these integrations can:
 - Switch to smaller model: `ollama pull llama3:8b`
 - Add to config: `{"ollama_chat_model": "llama3:8b"}`
 
-**Windows build errors**
-- Use the Micromamba installation method (recommended)
-- Or install [Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+**Windows: App won't start**
+- Extract the full zip file before running
+- Check Windows Defender hasn't blocked it
+
+**macOS: "App can't be opened"**
+- Right-click → Open (first time only)
+- Or: System Settings → Privacy & Security → Allow
+
+**Linux: No system tray icon**
+- Install: `sudo apt install libayatana-appindicator3-1`
+
+## For Developers
+
+<details>
+<summary><strong>Command-Line Installation (Advanced)</strong></summary>
+
+If you prefer to run Jarvis from the command line or want to contribute to development:
+
+**macOS:**
+```bash
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+bash scripts/run_macos.sh
+```
+
+**Windows (with Micromamba):**
+```powershell
+# First install Micromamba
+Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1).Content)
+
+# Then install Jarvis
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
+**Windows (with build tools):**
+```powershell
+# Install Visual C++ Build Tools from:
+# https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
+```
+
+**Linux:**
+```bash
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+bash scripts/run_linux.sh
+```
+
+</details>
 
 ## Privacy & Storage
 
