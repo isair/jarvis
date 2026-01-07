@@ -62,6 +62,7 @@ class Settings:
 
     # Whisper Speech Recognition
     whisper_model: str
+    whisper_device: str  # "cuda", "auto", or "cpu"
     whisper_compute_type: str
     whisper_vad: bool
     whisper_min_confidence: float
@@ -213,6 +214,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Whisper Speech Recognition
         "whisper_model": "small",
+        "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu"
         "whisper_compute_type": "int8",
         "whisper_vad": True,
         "whisper_min_confidence": 0.3,
@@ -334,6 +336,9 @@ def load_settings() -> Settings:
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
     whisper_model = str(merged.get("whisper_model", "small"))
+    whisper_device = str(merged.get("whisper_device", "auto")).lower()
+    if whisper_device not in ("cuda", "auto", "cpu"):
+        whisper_device = "auto"
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
     whisper_vad = bool(merged.get("whisper_vad", True))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
@@ -419,6 +424,7 @@ def load_settings() -> Settings:
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,
+        whisper_device=whisper_device,
         whisper_compute_type=whisper_compute_type,
         whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,

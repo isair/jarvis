@@ -427,11 +427,15 @@ class VoiceListener(threading.Thread):
         # Initialize Whisper model
         try:
             model_name = getattr(self.cfg, "whisper_model", "small")
+            device = getattr(self.cfg, "whisper_device", "auto")
             compute = getattr(self.cfg, "whisper_compute_type", "int8")
-            self.model = WhisperModel(model_name, device="cpu", compute_type=compute)
-            debug_log(f"whisper model initialized: name={model_name}, compute={compute}", "voice")
-        except Exception:
-            debug_log("failed to initialize whisper model", "voice")
+            print(f"  🔄 Loading Whisper model '{model_name}' (device={device}, compute={compute})...", flush=True)
+            self.model = WhisperModel(model_name, device=device, compute_type=compute)
+            debug_log(f"whisper model initialized: name={model_name}, device={device}, compute={compute}", "voice")
+            print(f"  ✅ Whisper model '{model_name}' loaded on {device}", flush=True)
+        except Exception as e:
+            debug_log(f"failed to initialize whisper model: {e}", "voice")
+            print(f"  ✗ Failed to load Whisper model: {e}", flush=True)
             return
         
         # Audio parameters
