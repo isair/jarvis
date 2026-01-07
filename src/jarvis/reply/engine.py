@@ -434,9 +434,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,  # Use proper tool_call_id from LLM
+                    "tool_name": tool_name,  # Include tool_name for duplicate detection
                     "content": result.reply_text
                 })
                 debug_log(f"    ✅ tool result appended ({len(result.reply_text)} chars)", "planning")
+
+                # Remind the LLM it has data available - but let it decide next steps
+                # It might answer, chain another tool call, or ask for clarification
+                messages.append({
+                    "role": "system",
+                    "content": "Tool result received. Decide: answer the user, call another tool if needed, or ask for clarification.",
+                    "_is_tool_guidance": True  # Mark for potential cleanup
+                })
                 # Record signature after a successful tool response
                 try:
                     recent_tool_signatures.append(signature)
