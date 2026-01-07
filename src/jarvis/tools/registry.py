@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, Tuple, List
 import sys
 import re
 import requests
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import os
@@ -16,6 +17,7 @@ from .builtin.recall_conversation import RecallConversationTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
 from .builtin.nutrition.delete_meal import DeleteMealTool
+from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -33,7 +35,74 @@ BUILTIN_TOOLS = {
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
     "deleteMeal": DeleteMealTool(),
+    "refreshMCPTools": RefreshMCPToolsTool(),
 }
+
+# Global MCP tools cache
+_mcp_tools_cache: Dict[str, "ToolSpec"] = {}
+_mcp_tools_cache_lock = threading.Lock()
+_mcp_config_cache: Dict[str, Any] = {}
+
+
+def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> Dict[str, "ToolSpec"]:
+    """
+    Initialize MCP tools cache at startup.
+
+    Args:
+        mcps_config: MCP server configuration
+        verbose: Whether to print status messages
+
+    Returns:
+        Dictionary of discovered MCP tools
+    """
+    global _mcp_tools_cache, _mcp_config_cache
+
+    with _mcp_tools_cache_lock:
+        _mcp_config_cache = mcps_config or {}
+        _mcp_tools_cache = discover_mcp_tools(mcps_config)
+
+        if verbose and _mcp_tools_cache:
+            debug_log(f"MCP tools cache initialized with {len(_mcp_tools_cache)} tools", "mcp")
+
+        return _mcp_tools_cache.copy()
+
+
+def get_cached_mcp_tools() -> Dict[str, "ToolSpec"]:
+    """Get cached MCP tools without rediscovering."""
+    with _mcp_tools_cache_lock:
+        return _mcp_tools_cache.copy()
+
+
+def refresh_mcp_tools(verbose: bool = True) -> Dict[str, "ToolSpec"]:
+    """
+    Refresh MCP tools cache by rediscovering all tools.
+
+    Returns:
+        Dictionary of discovered MCP tools
+    """
+    global _mcp_tools_cache
+
+    with _mcp_tools_cache_lock:
+        if not _mcp_config_cache:
+            debug_log("No MCP config cached, skipping refresh", "mcp")
+            return {}
+
+        if verbose:
+            print("🔄 Refreshing MCP tools...", flush=True)
+
+        _mcp_tools_cache = discover_mcp_tools(_mcp_config_cache)
+
+        if verbose:
+            print(f"  ✅ Found {len(_mcp_tools_cache)} MCP tools", flush=True)
+
+        debug_log(f"MCP tools cache refreshed with {len(_mcp_tools_cache)} tools", "mcp")
+        return _mcp_tools_cache.copy()
+
+
+def is_mcp_cache_initialized() -> bool:
+    """Check if MCP tools cache has been initialized."""
+    with _mcp_tools_cache_lock:
+        return len(_mcp_config_cache) > 0 or len(_mcp_tools_cache) > 0
 
 
 

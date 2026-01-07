@@ -116,8 +116,9 @@ class TextToSpeech:
             if self._completion_callback is not None and not interrupted:
                 try:
                     self._completion_callback()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Don't silently swallow callback errors
+                    print(f"  ⚠️ TTS completion callback error: {e}", flush=True)
                 self._completion_callback = None
 
     def _mac_say(self, text: str) -> bool:

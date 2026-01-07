@@ -176,13 +176,17 @@ class VoiceListener(threading.Thread):
 
     def activate_hot_window(self) -> None:
         """Activate hot window after TTS completion."""
+        debug_log("TTS completed, checking hot window activation", "voice")
+
         if not self.cfg.hot_window_enabled:
+            debug_log("hot window disabled in config, skipping", "voice")
             return
 
         # Track TTS finish time for echo detection
         self.echo_detector.track_tts_finish()
 
         # Schedule delayed hot window activation
+        debug_log("scheduling hot window activation", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
     def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0) -> None:
@@ -380,13 +384,16 @@ class VoiceListener(threading.Thread):
 
             # TTS completion callback for hot window
             def _on_tts_complete():
+                debug_log("TTS completion callback triggered", "voice")
                 self.activate_hot_window()
 
             # Track TTS start for echo detection with actual text
             self.track_tts_start(reply)
+            debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
 
             self.tts.speak(reply, completion_callback=_on_tts_complete)
         else:
+            debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response
             self._stop_thinking_tune()
 
@@ -499,9 +506,18 @@ class VoiceListener(threading.Thread):
             try:
                 self._mlx_model_repo = _get_mlx_model_repo(model_name)
                 print(f"  🔄 Loading MLX Whisper model '{model_name}' (Apple Silicon GPU)...", flush=True)
-                # MLX Whisper doesn't need pre-loading, it loads on first transcribe
-                # But we can trigger a download by doing a dummy transcribe or just log
-                debug_log(f"MLX Whisper initialized: repo={self._mlx_model_repo}", "voice")
+
+                # Pre-load the model by doing a warmup transcription with silent audio
+                # This triggers the model download before we need it for real transcription
+                if np is not None:
+                    warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
+                    _ = mlx_whisper.transcribe(
+                        warmup_audio,
+                        path_or_hf_repo=self._mlx_model_repo,
+                        language="en",
+                    )
+                    debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
+
                 print(f"  ✅ MLX Whisper '{model_name}' ready (Apple Silicon GPU acceleration)", flush=True)
             except Exception as e:
                 debug_log(f"failed to initialize MLX Whisper: {e}", "voice")

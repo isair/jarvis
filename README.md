@@ -211,11 +211,13 @@ Done! Say "Jarvis" and start talking.
 
 ### 🛠️ **Built-in Tools**
 - Screenshot OCR and analysis
-- Web search (privacy-friendly)
+- Web search (privacy-friendly via DuckDuckGo)
+- Web page content extraction
 - Local file access (read, write, list, delete)
-- Nutrition tracking
+- Conversation memory search
+- Nutrition tracking (log, view, delete meals)
 - Location awareness (optional)
-- MCP tool integration
+- MCP tool integration (+ rediscover tools on demand)
 
 ### 🎙️ **Natural Voice Interface**
 - Wake word activation ("Jarvis")
@@ -287,6 +289,8 @@ Connect Jarvis to any tool using MCP (Model Context Protocol) servers:
 ```
 
 Find more MCP servers at [github.com/topics/mcp-server](https://github.com/topics/mcp-server)
+
+**Note:** MCP tools are discovered at startup and cached for performance. They're automatically refreshed when starting a new conversation (after memory timeout). To manually refresh, just say "Jarvis, refresh MCP tools" or similar.
 
 ### Popular MCP Integrations
 

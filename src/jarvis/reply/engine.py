@@ -56,8 +56,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
 
     # Step 3: Recent dialogue context
     recent_messages = []
+    is_new_conversation = True
     if dialogue_memory and dialogue_memory.has_recent_messages():
         recent_messages = dialogue_memory.get_recent_messages()
+        is_new_conversation = False
+
+    # Refresh MCP tools on new conversation (memory expired)
+    if is_new_conversation and getattr(cfg, "mcps", {}):
+        try:
+            from ..tools.registry import refresh_mcp_tools, is_mcp_cache_initialized
+            if is_mcp_cache_initialized():
+                debug_log("New conversation detected, refreshing MCP tools", "mcp")
+                refresh_mcp_tools(verbose=False)
+        except Exception as e:
+            debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
     # Step 4: Conversation memory enrichment
     conversation_context = ""
@@ -101,19 +113,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     # Step 6: Tool allowlist and description
     allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(BUILTIN_TOOLS.keys())
 
-    # Discover and add MCP tools if configured
+    # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
     mcp_tools = {}
     if getattr(cfg, "mcps", {}):
-        from ..tools.registry import discover_mcp_tools
-        mcp_tools = discover_mcp_tools(cfg.mcps)
-        # Add all discovered MCP tools to allowed tools
-        for mcp_tool_name in mcp_tools.keys():
-            if mcp_tool_name not in allowed_tools:
-                allowed_tools.append(mcp_tool_name)
+        try:
+            from ..tools.registry import get_cached_mcp_tools
+            mcp_tools = get_cached_mcp_tools()
+
+            # Add all discovered MCP tools to allowed tools
+            for mcp_tool_name in mcp_tools.keys():
+                if mcp_tool_name not in allowed_tools:
+                    allowed_tools.append(mcp_tool_name)
+        except Exception as e:
+            debug_log(f"⚠️ Failed to get cached MCP tools: {e}", "mcp")
+            mcp_tools = {}
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
 
-    debug_log(f"🤖 starting with {len(allowed_tools)} tools available", "planning")
+    # Log tool availability (helps diagnose hangs)
+    mcp_count = len(mcp_tools)
+    if mcp_count > 0:
+        debug_log(f"🤖 starting with {len(allowed_tools)} tools available ({mcp_count} from MCP)", "planning")
+    else:
+        debug_log(f"🤖 starting with {len(allowed_tools)} tools available", "planning")
 
     # Step 7: Messages-based loop with tool handling
     def _build_initial_system_message() -> str:
@@ -249,6 +271,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
     turn = 0
+
+    # Visible progress indicator before LLM loop (helps diagnose hangs)
+    debug_log(f"  💬 Starting LLM conversation loop (max {max_turns} turns)...", "planning")
+
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")

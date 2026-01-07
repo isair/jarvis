@@ -96,8 +96,13 @@ def chat_with_messages(
         if isinstance(data, dict):
             return data
     except requests.exceptions.Timeout:
+        print("  ⏱️ LLM request timed out", flush=True)
         return None
-    except Exception:
+    except requests.exceptions.ConnectionError as e:
+        print(f"  ❌ LLM connection error: {e}", flush=True)
+        return None
+    except Exception as e:
+        print(f"  ❌ LLM error: {e}", flush=True)
         return None
 
     return None
