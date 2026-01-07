@@ -34,6 +34,9 @@ Examples:
 "what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}}
 "what did I eat yesterday?" → {{"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 "remember that password I mentioned today?" → {{"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
+"what news might interest me?" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"]}}
+"recommend a restaurant I'd enjoy" → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"]}}
+"suggest a movie for me" → {{"keywords": ["movies", "films", "entertainment", "preferences", "genres"]}}
 """
         
         now = datetime.now(timezone.utc)

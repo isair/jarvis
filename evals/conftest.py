@@ -45,6 +45,7 @@ CLASS_DESCRIPTIONS = {
     "TestContextUtilization": "Tests that agent uses location/time/memory context",
     "TestToolUsage": "Validates tool selection and argument quality",
     "TestMultiStepReasoning": "Complex scenarios requiring tool chaining and synthesis",
+    "TestMemoryEnrichment": "Tests automatic memory enrichment keyword extraction",
     "TestLiveEndToEnd": "Live tests with real LLM inference",
 }
 
@@ -55,7 +56,12 @@ TEST_DESCRIPTIONS = {
     "test_simple_search_flow": "Agent calls webSearch for info queries",
     "test_tool_chaining_search_then_fetch": "Agent chains search → fetch for details",
     "test_nutrition_advice_uses_memory_and_data": "Agent uses memory + nutrition data",
+    "test_personalized_news_uses_memory_for_interests": "Agent recalls interests before personalized search (mocked)",
+    "test_enrichment_extracts_correct_keywords": "Enrichment extracts personalization keywords",
+    "test_enrichment_provides_context_to_llm": "Enrichment results appear in system message",
+    "test_llm_uses_enrichment_without_redundant_tool_call": "LLM uses enrichment, skips redundant recallConversation",
     "test_weather_query_live": "Live weather query with real LLM",
+    "test_personalized_query_recalls_memory_live": "Live: LLM checks memory before asking about interests",
 }
 
 

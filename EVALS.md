@@ -1,19 +1,19 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-01-07 19:05:33
+**Generated:** 2026-01-07 23:33:03
 **Judge Model:** `gpt-oss:20b`
-**Duration:** 63.13s
+**Duration:** 168.36s
 
 ## 📊 Summary
 
 | Metric | Count |
 |--------|-------|
-| ✅ Passed | 10 |
+| ✅ Passed | 18 |
 | ❌ Failed | 0 |
 | ⏭️ Skipped | 0 |
 | 🔸 Expected Fail | 0 |
 | 🎉 Unexpectedly Passed | 0 |
-| **Total** | **10** |
+| **Total** | **18** |
 
 **Pass Rate:** 🟢 `████████████████████` **100.0%**
 
@@ -26,18 +26,18 @@
 
 | Test Case | Status | Duration |
 |-----------|--------|----------|
-| Good: complete weekly forecast | ✅ PASSED | 5.75s |
-| Good: brief but informative | ✅ PASSED | 6.21s |
-| Bad: generic greeting ignores query | ✅ PASSED | 4.11s |
-| Bad: deflection without attempting answer | ✅ PASSED | 5.05s |
-| Bad: empty acknowledgment | ✅ PASSED | 4.10s |
+| Good: complete weekly forecast | ✅ PASSED | 8.70s |
+| Good: brief but informative | ✅ PASSED | 9.70s |
+| Bad: generic greeting ignores query | ✅ PASSED | 5.30s |
+| Bad: deflection without attempting answer | ✅ PASSED | 4.62s |
+| Bad: empty acknowledgment | ✅ PASSED | 8.08s |
 
 ### ✅ TestContextUtilization
 > Tests that agent uses location/time/memory context
 
 | Test Case | Status | Duration |
 |-----------|--------|----------|
-| Location context flows to search queries | ✅ PASSED | 0.41s |
+| Location context flows to search queries | ✅ PASSED | 0.36s |
 
 ### ✅ TestToolUsage
 > Validates tool selection and argument quality
@@ -52,14 +52,28 @@
 
 | Test Case | Status | Duration |
 |-----------|--------|----------|
-| Agent uses memory + nutrition data | ✅ PASSED | 0.20s |
+| Agent uses memory + nutrition data | ✅ PASSED | 0.16s |
+| Agent recalls interests before personalized search (mocked) | ✅ PASSED | 0.02s |
+
+### ✅ TestMemoryEnrichment
+> Tests automatic memory enrichment keyword extraction
+
+| Test Case | Status | Duration |
+|-----------|--------|----------|
+| personalized news | ✅ PASSED | 5.12s |
+| personalized restaurant | ✅ PASSED | 3.08s |
+| specific topic recall | ✅ PASSED | 4.63s |
+| time-based recall | ✅ PASSED | 7.00s |
+| Enrichment results appear in system message | ✅ PASSED | 0.00s |
+| LLM uses enrichment, skips redundant recallConversation | ✅ PASSED | 0.01s |
 
 ### ✅ TestLiveEndToEnd
 > Live tests with real LLM inference
 
 | Test Case | Status | Duration |
 |-----------|--------|----------|
-| Live weather query with real LLM | ✅ PASSED | 37.30s |
+| Live weather query with real LLM | ✅ PASSED | 49.84s |
+| Live: LLM checks memory before asking about interests | ✅ PASSED | 61.76s |
 
 ---
 

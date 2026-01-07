@@ -17,14 +17,27 @@ class RecallConversationTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Search through past conversations to find relevant context or information."
+        return (
+            "Search through past conversations to find relevant context or information. "
+            "ALWAYS USE THIS TOOL FIRST (before asking the user) when they request personalized "
+            "recommendations based on their interests, preferences, or tastes (e.g., 'news that might "
+            "interest me', 'restaurants I would like', 'movies I'd enjoy'). Search for 'interests hobbies "
+            "preferences' or topic-specific terms. Only ask the user about their preferences if this "
+            "search returns no useful results."
+        )
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "search_query": {"type": "string", "description": "What to search for in conversation history"},
+                "search_query": {
+                    "type": "string",
+                    "description": (
+                        "What to search for in conversation history. For personalization queries, "
+                        "search for 'interests hobbies preferences' or specific topic areas."
+                    )
+                },
                 "from": {"type": "string", "description": "Start date for search (YYYY-MM-DD format)"},
                 "to": {"type": "string", "description": "End date for search (YYYY-MM-DD format)"}
             },

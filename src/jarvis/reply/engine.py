@@ -159,13 +159,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         tool_incentives = (
             "Proactively use available tools to provide better, more accurate responses. "
             "Prefer tools over guessing when you can get definitive, current, or personalized information. "
-            "Tools enhance your capabilities - use them confidently to deliver superior assistance."
+            "Tools enhance your capabilities - use them confidently to deliver superior assistance. "
+            "Always try tools before asking the user for information you might already be able to get via them."
         )
         guidance.append(tool_incentives)
 
         # Voice assistant communication style
         voice_style = (
             "Keep responses concise and conversational since this is a voice assistant. "
+            "Two to three sentences maximum. If there is more important information to convey, ask user if they want to hear."
             "Prioritize clarity and brevity - users are listening, not reading. "
             "Avoid unnecessary elaboration unless specifically requested."
         )

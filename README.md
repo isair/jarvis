@@ -48,27 +48,30 @@ We regularly test Jarvis to make sure it actually helps as capably as possible. 
 ## See It In Action
 
 <details>
-<summary>Personalized news search with memory & multi-step planning</summary>
+<summary>Personalized news search</summary>
 
 ```bash
-[  voice   ] heard: Jarvis, what are some news from today that might interest me?
+🎙️  Listening for 'jarvis' - say hello!
+
 ✨ Working on it: what are some news from today that might interest me?
-[  voice   ] dispatching query: 'what are some news from today that might interest me?'
-[ profile  ] selected profile: business
-[  memory  ] 🧠 searching with keywords=['news', 'interest', 'technology'], time: 2025-01-15T00:00:00Z to 2025-01-15T23:59:59Z
-[  memory  ]   ✅ found 3 results for memory enrichment
-🧠 Thinking…
-📝 Plan created (2 steps)
-  • Step 1: tool — Search for current news in user's areas of interest
-  • Step 2: finalResponse — Synthesize relevant stories conversationally
-[ planning ] ⚙️  [step 1] executing: tool - Search for current news in user's areas of interest...
-🧰 Tool: webSearch…
-    🌐 webSearch: searching for 'January 15 2025 AI startups climate tech fintech news'
-[ planning ] ⚙️  [step 2] executing: finalResponse - Synthesize relevant stories conversationally...
-💬 Preparing your answer…
+  🎭 Profile selected: business
+Sequential Thinking MCP Server running on stdio
+GitHub MCP Server running on stdio
+  🧠 Looking back at our past conversations…
+  🌐 Searching the web…
+  ✅ Found 5 results.
+  🌐 Fetching page content…
+  ✅ Page content fetched.
 
 🤖 Jarvis (business)
-Perfect timing! Found several stories that match your interests. OpenAI just announced a major partnership with Google for enterprise AI infrastructure - interesting given your previous questions about AI consolidation. Also, that carbon credit startup we discussed last month, Patch, just closed a $55M Series B. And there's breaking news about the EU's new AI regulation enforcement starting today, which could impact the fintech regulatory landscape you've been tracking. The renewable energy markets you asked about last week are also moving - solar futures hit record highs after Germany's new subsidy announcement. Want me to dive deeper into any of these?
+Here’s a quick snapshot of today’s headlines that caught a lot of attention:
+
+1. **Swiss ski‑resort tragedy** – An explosion at a bar in Crans‑Montana killed several people and injured others. Police say it was a deliberate act; investigations are underway.
+2. **World‑wide New Year celebrations** – From the Burj Khalifa in Dubai to the RRS Sir David Attenborough in the Antarctic, cities and remote islands marked 1 January 2026 with fireworks, ball‑drops, and the rare case of a pharmacist celebrating the New Year twice in different time zones.
+
+If you’d like more detail on a specific region or topic, just let me know!
+
+👂 Listening for follow-up (6s)...
 ```
 
 </details>
