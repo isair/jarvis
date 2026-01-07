@@ -497,26 +497,45 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         reply = content
         break
 
-    # No plain retry path using legacy coach; if no reply, leave as None
+    # Step 9: Handle error case - return error message if no reply
+    if not reply or not reply.strip():
+        reply = "Sorry, I ran into an issue processing your request. Could you try again?"
+        debug_log("no reply generated, returning error message", "planning")
 
-    # Step 9: Output and memory update
-    if reply:
-        safe_reply = reply.strip()
-        if safe_reply:
-            # Print reply with appropriate header
+        # Print error message
+        try:
+            print(f"\n⚠️ Jarvis\n{reply}\n", flush=True)
+        except Exception:
+            pass
+
+        # Still add to dialogue memory so context is preserved
+        if dialogue_memory is not None:
             try:
-                if not getattr(cfg, "voice_debug", False):
-                    print(f"\n🤖 Jarvis ({profile_name})\n" + safe_reply + "\n", flush=True)
-                else:
-                    print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
-            except Exception:
+                dialogue_memory.add_message("user", redacted)
+                dialogue_memory.add_message("assistant", reply)
+                debug_log("error interaction added to dialogue memory", "memory")
+            except Exception as e:
+                debug_log(f"dialogue memory error: {e}", "memory")
+
+        return reply
+
+    # Step 10: Output and memory update
+    safe_reply = reply.strip()
+    if safe_reply:
+        # Print reply with appropriate header
+        try:
+            if not getattr(cfg, "voice_debug", False):
+                print(f"\n🤖 Jarvis ({profile_name})\n" + safe_reply + "\n", flush=True)
+            else:
                 print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
+        except Exception:
+            print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
 
-            # TTS output - callbacks handled by calling code
-            if tts is not None and tts.enabled:
-                tts.speak(safe_reply)
+        # TTS output - callbacks handled by calling code
+        if tts is not None and tts.enabled:
+            tts.speak(safe_reply)
 
-    # Step 10: Add to dialogue memory
+    # Step 11: Add to dialogue memory
     if dialogue_memory is not None:
         try:
             # Add user message
