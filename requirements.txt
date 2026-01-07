@@ -18,3 +18,7 @@ mcp==1.13.1
 chatterbox-tts==0.1.2
 pygame>=2.1.0
 faiss-cpu==1.7.4
+
+# MLX Whisper for Apple Silicon Macs (much faster than CPU-based faster-whisper)
+mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"
+
