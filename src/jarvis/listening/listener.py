@@ -252,8 +252,10 @@ class VoiceListener(threading.Thread):
                             self.state_manager.expire_hot_window(self.cfg.voice_debug)
                             self.state_manager.clear_hot_window_voice_state()
                             return
-                elif not is_during_tts and self.echo_detector._matches_tts_segment(text_lower, getattr(self.cfg, 'tts_rate', 200), utterance_start_time):
-                    debug_log(f"rejected as delayed echo during hot window (segment match): '{text_lower}'", "echo")
+                elif not is_during_tts and self.echo_detector._check_text_similarity(text_lower, self.echo_detector._last_tts_text):
+                    # For delayed echoes (after TTS), check against full TTS text since the echo
+                    # is most likely from the end of TTS and segment timing can be inaccurate
+                    debug_log(f"rejected as delayed echo during hot window (full text match): '{text_lower}'", "echo")
                     if not self.cfg.voice_debug:
                         try:
                             print("🔇 Ignoring echo from previous response")
