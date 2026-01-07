@@ -8,7 +8,7 @@ import os
 
 
 # LLM-as-judge configuration
-JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "qwen3")
+JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gpt-oss:20b")
 JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
 
 

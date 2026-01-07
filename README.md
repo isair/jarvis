@@ -31,6 +31,9 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 - Can see your screen when needed
 - Searches the web while staying private
 
+### 📊 **Tested & transparent**
+We regularly test Jarvis to make sure it actually helps as capably as possible. [See how well it's doing →](EVALS.md)
+
 ## See It In Action
 
 <details>
