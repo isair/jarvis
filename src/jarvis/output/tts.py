@@ -7,8 +7,84 @@ import shutil
 import signal
 import tempfile
 import os
+import re
 import warnings
 from typing import Optional, Callable
+from urllib.parse import urlparse
+
+
+def _extract_domain_description(url: str) -> tuple[str, bool]:
+    """
+    Extract a readable domain description from a URL.
+
+    Returns:
+        Tuple of (domain_description, is_homepage)
+        - domain_description: e.g., "google.com"
+        - is_homepage: True if URL points to homepage (no meaningful path)
+    """
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc or parsed.path.split('/')[0]
+
+        # Remove common prefixes
+        if domain.startswith('www.'):
+            domain = domain[4:]
+
+        # Check if it's a homepage (no path or just /)
+        path = parsed.path.rstrip('/')
+        is_homepage = not path or path == ''
+
+        return domain, is_homepage
+    except Exception:
+        return url, True
+
+
+def _preprocess_for_speech(text: str) -> str:
+    """
+    Preprocess text for TTS by converting links to readable descriptions.
+
+    Handles:
+    - Markdown links: [text](url) → "Link to domain.com with the text 'text'" or
+      "Link to a page under domain.com with the text 'text'"
+    - Raw URLs: https://domain.com → "domain.com homepage" or
+      https://domain.com/path → "a page under domain.com"
+    """
+    # Pattern for markdown links: [text](url)
+    markdown_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+
+    def replace_markdown_link(match: re.Match) -> str:
+        link_text = match.group(1)
+        url = match.group(2)
+        domain, is_homepage = _extract_domain_description(url)
+
+        if is_homepage:
+            return f"Link to {domain} homepage with the text '{link_text}'"
+        else:
+            return f"Link to a page under {domain} with the text '{link_text}'"
+
+    # Replace markdown links first
+    result = re.sub(markdown_link_pattern, replace_markdown_link, text)
+
+    # Pattern for raw URLs (not already processed as markdown)
+    # Matches http://, https://, and www. prefixed URLs
+    raw_url_pattern = r'(?<!\()(https?://[^\s<>\[\]()]+|www\.[^\s<>\[\]()]+)(?!\))'
+
+    def replace_raw_url(match: re.Match) -> str:
+        url = match.group(1)
+        # Ensure URL has protocol for parsing
+        if url.startswith('www.'):
+            url = 'https://' + url
+        domain, is_homepage = _extract_domain_description(url)
+
+        if is_homepage:
+            return f"{domain} homepage"
+        else:
+            return f"a page under {domain}"
+
+    # Replace raw URLs
+    result = re.sub(raw_url_pattern, replace_raw_url, result)
+
+    return result
 
 
 class TextToSpeech:
@@ -56,8 +132,10 @@ class TextToSpeech:
         if self._thread is None:
             self.start()
         self._completion_callback = completion_callback
+        # Preprocess text for speech (convert links to readable descriptions)
+        processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait(text)
+            self._q.put_nowait(processed_text)
         except Exception:
             pass
 
@@ -133,11 +211,11 @@ class TextToSpeech:
             # mac 'say' rate via -r words per minute
             cmd += ["-r", str(int(self.rate))]
         cmd += [text]
-        
+
         try:
             with self._process_lock:
                 self._current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+
             # Wait for process to complete or be interrupted
             while self._current_process.poll() is None:
                 if self._should_interrupt.is_set():
@@ -261,7 +339,7 @@ class TextToSpeech:
         try:
             with self._process_lock:
                 self._current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+
             # Wait for process to complete or be interrupted
             while self._current_process.poll() is None:
                 if self._should_interrupt.is_set():
@@ -284,9 +362,9 @@ class TextToSpeech:
 
 class ChatterboxTTS:
     """Experimental TTS implementation using Resemble AI's Chatterbox model."""
-    
-    def __init__(self, enabled: bool = True, voice: Optional[str] = None, rate: Optional[int] = None, 
-                 device: str = "cuda", audio_prompt_path: Optional[str] = None, 
+
+    def __init__(self, enabled: bool = True, voice: Optional[str] = None, rate: Optional[int] = None,
+                 device: str = "cuda", audio_prompt_path: Optional[str] = None,
                  exaggeration: float = 0.5, cfg_weight: float = 0.5) -> None:
         self.enabled = enabled
         self.voice = voice  # Not used in Chatterbox, kept for interface compatibility
@@ -295,7 +373,7 @@ class ChatterboxTTS:
         self.audio_prompt_path = audio_prompt_path
         self.exaggeration = exaggeration
         self.cfg_weight = cfg_weight
-        
+
         # Threading and queue setup (same as TextToSpeech)
         self._q: queue.Queue[str] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -304,50 +382,50 @@ class ChatterboxTTS:
         self._last_spoken_text: str = ""
         self._completion_callback: Optional[Callable[[], None]] = None
         self._should_interrupt = threading.Event()
-        
+
         # Chatterbox model (eagerly loaded during initialization)
         self._model = None
         self._model_error = None
         self._system_tts = None  # For setup announcements
-        
+
         # Lazy initialization flags
         self._initialized = False
         self._init_lock = threading.Lock()
-        
+
     def _initialize_with_logging(self) -> None:
         """Initialize Chatterbox with proper logging and system announcements."""
         import sys
-        
+
         print("🔧 [TTS] Initializing Chatterbox neural voice synthesis...", file=sys.stderr)
-        
+
         # Create system TTS for announcements during setup
         self._system_tts = TextToSpeech(enabled=True)
         self._system_tts.start()
         self._system_tts.speak("Setting up advanced voice synthesis")
-        
+
         try:
             print("📦 [TTS] Loading Chatterbox dependencies...", file=sys.stderr)
-            
+
             # Import dependencies
             import torch
             import torchaudio as ta
             from chatterbox.tts import ChatterboxTTS as ChatterboxModel
-            
+
             # Check device availability
             if self.device == "cuda" and not torch.cuda.is_available():
                 print("⚠️  [TTS] CUDA requested but not available, falling back to CPU", file=sys.stderr)
                 actual_device = "cpu"
             else:
                 actual_device = self.device
-            
+
             print(f"🚀 [TTS] Loading Chatterbox model on {actual_device.upper()}...", file=sys.stderr)
-            
+
             # Load model with proper device specification
             self._model = ChatterboxModel.from_pretrained(device=actual_device)
-            
+
             print("✅ [TTS] Chatterbox neural voice synthesis ready!", file=sys.stderr)
             self._system_tts.speak("Advanced voice synthesis ready")
-            
+
         except ImportError as e:
             self._model_error = f"Chatterbox dependencies not available: {e}"
             print(f"❌ [TTS] Missing dependencies: {self._model_error}", file=sys.stderr)
@@ -366,7 +444,7 @@ class ChatterboxTTS:
                 time.sleep(1.0)
                 self._system_tts.stop()
                 self._system_tts = None
-                
+
     def _ensure_initialized(self) -> None:
         """Initialize heavy dependencies only once, when actually needed."""
         if self._initialized or not self.enabled:
@@ -386,7 +464,7 @@ class ChatterboxTTS:
         if self._model_error is not None:
             return False
         return False
-    
+
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
@@ -419,8 +497,10 @@ class ChatterboxTTS:
         if self._thread is None:
             self.start()
         self._completion_callback = completion_callback
+        # Preprocess text for speech (convert links to readable descriptions)
+        processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait(text)
+            self._q.put_nowait(processed_text)
         except Exception:
             pass
 
@@ -446,41 +526,41 @@ class ChatterboxTTS:
         self._last_spoken_text = text
         self._should_interrupt.clear()
         interrupted = False
-        
+
         try:
             # Check if model is available
             if not self._ensure_model():
                 # Fall back to system TTS if Chatterbox fails
                 warnings.warn("Chatterbox TTS not available, skipping speech synthesis")
                 return
-                
+
             # Generate audio using Chatterbox
             import tempfile
             import pygame
             import os
-            
+
             # Generate speech
             wav = self._model.generate(
-                text, 
+                text,
                 audio_prompt_path=self.audio_prompt_path,
                 exaggeration=self.exaggeration,
                 cfg_weight=self.cfg_weight
             )
-            
+
             # Save to temporary file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                 tmp_path = tmp_file.name
-                
+
             try:
                 # Save audio
                 import torchaudio as ta
                 ta.save(tmp_path, wav, self._model.sr)
-                
+
                 # Play audio using pygame (cross-platform)
                 pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
                 pygame.mixer.music.load(tmp_path)
                 pygame.mixer.music.play()
-                
+
                 # Wait for playback to complete or interruption
                 while pygame.mixer.music.get_busy():
                     if self._should_interrupt.is_set():
@@ -488,7 +568,7 @@ class ChatterboxTTS:
                         interrupted = True
                         break
                     pygame.time.wait(100)  # Check every 100ms
-                    
+
             finally:
                 # Cleanup
                 pygame.mixer.quit()
@@ -496,7 +576,7 @@ class ChatterboxTTS:
                     os.unlink(tmp_path)
                 except Exception:
                     pass
-                    
+
         except Exception as e:
             warnings.warn(f"Chatterbox TTS error: {e}")
         finally:
@@ -517,7 +597,7 @@ class ChatterboxTTS:
         return self._last_spoken_text
 
 
-def create_tts_engine(engine: str = "system", enabled: bool = True, voice: Optional[str] = None, 
+def create_tts_engine(engine: str = "system", enabled: bool = True, voice: Optional[str] = None,
                       rate: Optional[int] = None, device: str = "cuda", audio_prompt_path: Optional[str] = None,
                       exaggeration: float = 0.5, cfg_weight: float = 0.5):
     """Factory function to create the appropriate TTS engine."""
