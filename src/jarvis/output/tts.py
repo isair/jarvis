@@ -179,6 +179,10 @@ class TextToSpeech:
         self._should_interrupt.clear()
         system = platform.system().lower()
         interrupted = False
+        
+        # Signal speaking state to face widget
+        self._notify_speaking_state(True)
+        
         try:
             if system == "darwin":
                 interrupted = self._mac_say(text)
@@ -190,6 +194,10 @@ class TextToSpeech:
             with self._process_lock:
                 self._current_process = None
             self._is_speaking.clear()
+            
+            # Signal speaking stopped to face widget
+            self._notify_speaking_state(False)
+            
             # Call completion callback if set and not interrupted
             if self._completion_callback is not None and not interrupted:
                 try:
@@ -198,6 +206,27 @@ class TextToSpeech:
                     # Don't silently swallow callback errors
                     print(f"  ⚠️ TTS completion callback error: {e}", flush=True)
                 self._completion_callback = None
+    
+    def _notify_speaking_state(self, is_speaking: bool) -> None:
+        """Notify the face widget of speaking state changes.
+
+        Uses file-based approach to work across processes:
+        - Dev mode runs daemon as subprocess (different process)
+        - File-based state works across process boundaries
+        """
+        # Import here to avoid circular dependencies
+        try:
+            from ..face_widget import get_jarvis_state, JarvisState
+            state_manager = get_jarvis_state()
+            if is_speaking:
+                state_manager.set_state(JarvisState.SPEAKING)
+            # Note: When speaking ends, we don't change state here - let daemon manage transitions
+        except ImportError:
+            # Face widget not available (headless mode or import order)
+            pass
+        except Exception:
+            # Don't let face widget errors affect TTS
+            pass
 
     def _mac_say(self, text: str) -> bool:
         """Returns True if interrupted, False if completed normally"""
@@ -526,6 +555,9 @@ class ChatterboxTTS:
         self._last_spoken_text = text
         self._should_interrupt.clear()
         interrupted = False
+        
+        # Signal speaking state to face widget
+        self._notify_speaking_state(True)
 
         try:
             # Check if model is available
@@ -581,6 +613,10 @@ class ChatterboxTTS:
             warnings.warn(f"Chatterbox TTS error: {e}")
         finally:
             self._is_speaking.clear()
+            
+            # Signal speaking stopped to face widget
+            self._notify_speaking_state(False)
+            
             # Call completion callback if set and not interrupted
             if self._completion_callback is not None and not interrupted:
                 try:
@@ -588,6 +624,27 @@ class ChatterboxTTS:
                 except Exception:
                     pass
                 self._completion_callback = None
+    
+    def _notify_speaking_state(self, is_speaking: bool) -> None:
+        """Notify the face widget of speaking state changes.
+
+        Uses file-based approach to work across processes:
+        - Dev mode runs daemon as subprocess (different process)
+        - File-based state works across process boundaries
+        """
+        # Import here to avoid circular dependencies
+        try:
+            from ..face_widget import get_jarvis_state, JarvisState
+            state_manager = get_jarvis_state()
+            if is_speaking:
+                state_manager.set_state(JarvisState.SPEAKING)
+            # Note: When speaking ends, we don't change state here - let daemon manage transitions
+        except ImportError:
+            # Face widget not available (headless mode or import order)
+            pass
+        except Exception:
+            # Don't let face widget errors affect TTS
+            pass
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:

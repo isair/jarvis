@@ -40,6 +40,7 @@ except ImportError:
 from jarvis.debug import debug_log
 from jarvis.config import _default_config_path, _default_db_path
 from jarvis.themes import JARVIS_THEME_STYLESHEET
+from jarvis.face_widget import FaceWindow
 
 
 def setup_crash_logging():
@@ -411,6 +412,11 @@ class JarvisSystemTray:
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
+        # Create face window (hidden by default)
+        # Note: Creating the face window also initializes the SpeakingState singleton
+        # in the main thread, which is important for cross-thread signal delivery
+        self.face_window = FaceWindow()
+
         # Log reader threads
         self.log_reader_threads = []
 
@@ -495,6 +501,11 @@ class JarvisSystemTray:
         self.memory_action.triggered.connect(self.toggle_memory_viewer)
         self.menu.addAction(self.memory_action)
 
+        # Face window action
+        self.face_action = QAction("👤 Show Face")
+        self.face_action.triggered.connect(self.toggle_face_window)
+        self.menu.addAction(self.face_action)
+
         # Setup wizard action
         self.setup_wizard_action = QAction("🔧 Setup Wizard")
         self.setup_wizard_action.triggered.connect(self.show_setup_wizard)
@@ -550,6 +561,15 @@ class JarvisSystemTray:
             self.memory_viewer.show()
             self.memory_viewer.raise_()
             self.memory_viewer.activateWindow()
+
+    def toggle_face_window(self) -> None:
+        """Toggle the face window visibility."""
+        if self.face_window.isVisible():
+            self.face_window.hide()
+        else:
+            self.face_window.show()
+            self.face_window.raise_()
+            self.face_window.activateWindow()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""
@@ -772,6 +792,10 @@ class JarvisSystemTray:
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
             )
+
+            # Show face window when starting
+            self.face_window.show()
+            self.face_window.raise_()
 
             debug_log("daemon started from desktop app", "desktop")
 

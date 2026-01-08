@@ -32,6 +32,7 @@ from .utils.location import get_location_context, is_location_available
 # Global instances for coordination between modules
 _global_dialogue_memory: Optional[DialogueMemory] = None
 _global_stop_requested: bool = False
+_global_tts_engine = None  # TTS engine reference for face animation polling
 
 
 def request_stop() -> None:
@@ -43,6 +44,11 @@ def request_stop() -> None:
 def is_stop_requested() -> bool:
     """Check if a stop has been requested."""
     return _global_stop_requested
+
+
+def get_tts_engine():
+    """Get the global TTS engine for speaking state polling (used by face widget)."""
+    return _global_tts_engine
 
 
 def _install_signal_handlers() -> None:
@@ -118,7 +124,7 @@ def _check_and_update_diary(db: Database, cfg, verbose: bool = False, force: boo
 
 def main() -> None:
     """Main daemon entry point."""
-    global _global_dialogue_memory, _global_stop_requested
+    global _global_dialogue_memory, _global_stop_requested, _global_tts_engine
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -202,6 +208,7 @@ def main() -> None:
         exaggeration=cfg.tts_chatterbox_exaggeration,
         cfg_weight=cfg.tts_chatterbox_cfg_weight
     )
+    _global_tts_engine = tts  # Expose for face widget speaking animation
     if tts.enabled:
         tts.start()
         print("✓ TTS engine started", flush=True)

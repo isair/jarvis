@@ -373,6 +373,14 @@ class VoiceListener(threading.Thread):
         """
         debug_log(f"dispatching query: '{query}'", "voice")
 
+        # Set face state to THINKING
+        try:
+            from ..face_widget import get_jarvis_state, JarvisState
+            state_manager = get_jarvis_state()
+            state_manager.set_state(JarvisState.THINKING)
+        except Exception:
+            pass
+
         # Import reply engine
         from ..reply.engine import run_reply_engine
 
@@ -650,6 +658,14 @@ class VoiceListener(threading.Thread):
             # Show ready message only after stream is confirmed active
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
             print(f"🎙️  Listening for '{wake_word}' - say hello!", flush=True)
+
+            # Set face state to IDLE (awake and ready, waiting for wake word)
+            try:
+                from ..face_widget import get_jarvis_state, JarvisState
+                state_manager = get_jarvis_state()
+                state_manager.set_state(JarvisState.IDLE)
+            except Exception:
+                pass
 
             while not self._should_stop:
                 try:

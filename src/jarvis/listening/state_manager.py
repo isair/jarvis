@@ -80,6 +80,14 @@ class StateManager:
         start_time_str = datetime.fromtimestamp(self._collect_start_time).strftime('%H:%M:%S.%f')[:-3]
         debug_log(f"collection started at {start_time_str}: '{initial_text}'", "state")
 
+        # Set face state to LISTENING
+        try:
+            from ..face_widget import get_jarvis_state, JarvisState
+            state_manager = get_jarvis_state()
+            state_manager.set_state(JarvisState.LISTENING)
+        except Exception:
+            pass
+
     def add_to_collection(self, text: str) -> None:
         """
         Add text to current collection.
@@ -123,6 +131,8 @@ class StateManager:
             debug_log(f"collection cleared: '{query}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
         else:
             debug_log(f"collection cleared: '{query}'", "state")
+
+        # Note: Don't set face state here - it will be set to THINKING or ASLEEP by caller
 
         return query
 
@@ -191,6 +201,14 @@ class StateManager:
 
             debug_log(f"hot window activated for {self.hot_window_seconds}s (after {self.echo_tolerance}s echo delay)", "state")
 
+            # Set face state to LISTENING
+            try:
+                from ..face_widget import get_jarvis_state, JarvisState
+                state_manager = get_jarvis_state()
+                state_manager.set_state(JarvisState.LISTENING)
+            except Exception:
+                pass
+
             # Pretty output for non-debug mode
             if not voice_debug:
                 try:
@@ -226,6 +244,14 @@ class StateManager:
 
             debug_log("hot window expired", "state")
 
+            # Set face state to IDLE (awake and ready, waiting for wake word)
+            try:
+                from ..face_widget import get_jarvis_state, JarvisState
+                state_manager = get_jarvis_state()
+                state_manager.set_state(JarvisState.IDLE)
+            except Exception:
+                pass
+
             # Pretty output for non-debug mode
             if not voice_debug:
                 try:
@@ -248,6 +274,14 @@ class StateManager:
                 self._state = ListeningState.WAKE_WORD
 
             debug_log("hot window manually expired", "state")
+
+            # Set face state to IDLE (awake and ready, waiting for wake word)
+            try:
+                from ..face_widget import get_jarvis_state, JarvisState
+                state_manager = get_jarvis_state()
+                state_manager.set_state(JarvisState.IDLE)
+            except Exception:
+                pass
 
             # Pretty output for non-debug mode
             if not voice_debug:
