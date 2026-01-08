@@ -53,20 +53,21 @@ def setup_crash_logging():
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
 
-            # Redirect stdout and stderr to log file
-            log_handle = open(log_file, 'w', encoding='utf-8')
+            # Redirect stdout and stderr to log file with line buffering for immediate writes
+            # buffering=1 means line-buffered mode (flush on newline)
+            log_handle = open(log_file, 'w', encoding='utf-8', buffering=1)
             sys.stdout = log_handle
             sys.stderr = log_handle
 
-            print(f"=== Jarvis Desktop App Crash Log ===")
-            print(f"Timestamp: {__import__('datetime').datetime.now()}")
-            print(f"Platform: {sys.platform}")
-            print(f"Python: {sys.version}")
-            print(f"Executable: {sys.executable}")
-            print(f"Frozen: {getattr(sys, 'frozen', False)}")
-            print(f"Bundle dir: {getattr(sys, '_MEIPASS', 'N/A')}")
-            print("=" * 50)
-            print()
+            print(f"=== Jarvis Desktop App Crash Log ===", flush=True)
+            print(f"Timestamp: {__import__('datetime').datetime.now()}", flush=True)
+            print(f"Platform: {sys.platform}", flush=True)
+            print(f"Python: {sys.version}", flush=True)
+            print(f"Executable: {sys.executable}", flush=True)
+            print(f"Frozen: {getattr(sys, 'frozen', False)}", flush=True)
+            print(f"Bundle dir: {getattr(sys, '_MEIPASS', 'N/A')}", flush=True)
+            print("=" * 50, flush=True)
+            print(flush=True)
 
             return log_file
         except Exception as e:
@@ -692,6 +693,9 @@ class JarvisSystemTray:
 
                                 def write(self, text):
                                     if text:
+                                        # Handle both bytes and str (Flask can send bytes)
+                                        if isinstance(text, bytes):
+                                            text = text.decode('utf-8', errors='replace')
                                         self.buffer += text
                                         if '\n' in self.buffer:
                                             lines = self.buffer.split('\n')
@@ -951,11 +955,11 @@ def main() -> int:
     # Set up crash logging for bundled apps
     crash_log_file = setup_crash_logging()
 
-    print("Starting Jarvis Desktop App...")
-    print(f"Python executable: {sys.executable}")
-    print(f"Working directory: {os.getcwd()}")
-    print(f"__file__: {__file__}")
-    print()
+    print("Starting Jarvis Desktop App...", flush=True)
+    print(f"Python executable: {sys.executable}", flush=True)
+    print(f"Working directory: {os.getcwd()}", flush=True)
+    print(f"__file__: {__file__}", flush=True)
+    print(flush=True)
 
     # Set up signal handlers for clean shutdown
     import signal
@@ -963,7 +967,7 @@ def main() -> int:
 
     def signal_handler(signum, frame):
         """Handle termination signals."""
-        print(f"Received signal {signum}, shutting down...")
+        print(f"Received signal {signum}, shutting down...", flush=True)
         if tray_instance:
             tray_instance.cleanup_on_exit()
         sys.exit(0)
@@ -972,9 +976,9 @@ def main() -> int:
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        print("Creating QApplication...")
+        print("Creating QApplication...", flush=True)
         from PyQt6.QtWidgets import QApplication
-        print("QApplication imported successfully")
+        print("QApplication imported successfully", flush=True)
 
         # Create QApplication first (needed for wizard)
         app = QApplication.instance()
@@ -983,11 +987,11 @@ def main() -> int:
         app.setQuitOnLastWindowClosed(False)
 
         # Check if setup wizard is needed
-        print("Checking Ollama setup status...")
+        print("Checking Ollama setup status...", flush=True)
         from jarvis.setup_wizard import should_show_setup_wizard, SetupWizard
 
         if should_show_setup_wizard():
-            print("🔧 Setup required - launching setup wizard...")
+            print("🔧 Setup required - launching setup wizard...", flush=True)
             wizard = SetupWizard()
             # Ensure wizard is visible and has focus (prevents window manager issues)
             wizard.show()
@@ -996,19 +1000,19 @@ def main() -> int:
             result = wizard.exec()
 
             if result != wizard.DialogCode.Accepted:
-                print("Setup wizard cancelled - exiting")
+                print("Setup wizard cancelled - exiting", flush=True)
                 return 0
 
-            print("✅ Setup wizard completed successfully")
+            print("✅ Setup wizard completed successfully", flush=True)
         else:
-            print("✅ Ollama setup looks good")
+            print("✅ Ollama setup looks good", flush=True)
 
-        print("Initializing JarvisSystemTray...")
+        print("Initializing JarvisSystemTray...", flush=True)
         tray_instance = JarvisSystemTray()
-        print("JarvisSystemTray initialized successfully")
+        print("JarvisSystemTray initialized successfully", flush=True)
 
         # Always auto-start listening (logs will be shown via start_daemon)
-        print("🚀 Auto-starting Jarvis listener...")
+        print("🚀 Auto-starting Jarvis listener...", flush=True)
         tray_instance.start_daemon()
 
         if crash_log_file:
@@ -1021,11 +1025,11 @@ def main() -> int:
                 3000
             )
 
-        print("Starting event loop...")
+        print("Starting event loop...", flush=True)
         return tray_instance.run()
     except Exception as e:
         error_msg = f"desktop app fatal error: {e}\n{traceback.format_exc()}"
-        print(error_msg)
+        print(error_msg, flush=True)
         debug_log(error_msg, "desktop")
 
         # Try to show an error dialog if possible
