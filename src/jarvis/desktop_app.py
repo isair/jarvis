@@ -965,6 +965,10 @@ def main() -> int:
         if should_show_setup_wizard():
             print("🔧 Setup required - launching setup wizard...")
             wizard = SetupWizard()
+            # Ensure wizard is visible and has focus (prevents window manager issues)
+            wizard.show()
+            wizard.raise_()
+            wizard.activateWindow()
             result = wizard.exec()
 
             if result != wizard.DialogCode.Accepted:
