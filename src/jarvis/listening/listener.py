@@ -617,15 +617,40 @@ class VoiceListener(threading.Thread):
                 **stream_kwargs,
             )
         except Exception as e:
+            error_msg = str(e).lower()
             debug_log(f"failed to open input stream: {e}", "voice")
-            return
 
-        # Show ready message to user
-        wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
-        print(f"🎙️  Listening for '{wake_word}' - say hello!", flush=True)
+            # Provide helpful error messages for common Windows issues
+            if "access" in error_msg or "permission" in error_msg:
+                print("  ❌ Microphone access denied. Please check Windows Settings > Privacy > Microphone", flush=True)
+            elif "device" in error_msg and ("use" in error_msg or "busy" in error_msg):
+                print("  ❌ Microphone is being used by another application", flush=True)
+            elif "device" in error_msg:
+                print(f"  ❌ Failed to open microphone: {e}", flush=True)
+                print("     Try selecting a different audio device in settings", flush=True)
+            else:
+                print(f"  ❌ Failed to start audio recording: {e}", flush=True)
+            return
 
         # Main audio processing loop
         with stream:
+            # Verify stream is actually recording (helps catch Windows permission issues)
+            if not stream.active:
+                try:
+                    stream.start()
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    debug_log(f"failed to start audio stream: {e}", "voice")
+                    if "access" in error_msg or "permission" in error_msg:
+                        print("  ❌ Microphone access denied. Please check Windows Settings > Privacy > Microphone", flush=True)
+                    else:
+                        print(f"  ❌ Failed to start recording: {e}", flush=True)
+                    return
+
+            # Show ready message only after stream is confirmed active
+            wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
+            print(f"🎙️  Listening for '{wake_word}' - say hello!", flush=True)
+
             while not self._should_stop:
                 try:
                     item = self._audio_q.get(timeout=0.2)
