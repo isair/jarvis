@@ -12,6 +12,10 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 ## Screenshots
 
 <p align="center">
+  <img src="docs/img/face.png" alt="Jarvis Face" width="400">
+</p>
+
+<p align="center">
   <img src="docs/img/setup-wizard-initial-check.png" alt="Setup Wizard" width="400">
   <img src="docs/img/logs.png" alt="Real-time Logs" width="400">
 </p>
