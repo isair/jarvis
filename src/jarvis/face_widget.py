@@ -4,7 +4,7 @@ Low-poly grid face widget for Jarvis with intelligent state management and organ
 Features:
 - Low-poly wireframe aesthetic with glowing effects
 - State-specific visual indicators:
-  * LISTENING: Animated expanding arc rings on sides (like sound waves entering ears)
+  * LISTENING: Expanding ring echoes of face outline (bell chime effect)
   * THINKING: Animated spinner pupils (3 rotating arcs)
   * SPEAKING: Smooth continuous waveform mouth
 - Smooth continuous waveform mouth visualization:
@@ -213,9 +213,9 @@ class LowPolyFaceWidget(QWidget):
         # Thinking spinner animation
         self._spinner_angle = 0.0  # Rotation angle for thinking spinner
 
-        # Listening animation
-        self._listening_pulse_time = 0.0  # Time for pulsing glow
-        self._listening_indicator_phase = 0.0  # Phase for side indicators
+        # Listening animation - bell ring echoes
+        self._listening_pulse_time = 0.0  # Time for spawning rings
+        self._listening_rings: List[float] = []  # Active ring expansions (0.0 to 1.0)
 
         # Connect to global Jarvis state
         self._state_manager = get_jarvis_state()
@@ -440,10 +440,29 @@ class LowPolyFaceWidget(QWidget):
             self._gaze_x *= 0.95
             self._gaze_y *= 0.95
 
-        # Listening animation (when actively listening)
+        # Listening animation - bell ring echoes
         if self._jarvis_state == JarvisState.LISTENING:
-            self._listening_pulse_time += 0.05  # Slow pulse
-            self._listening_indicator_phase += 0.08  # Indicator animation speed
+            self._listening_pulse_time += 1
+            # Spawn a new ring every ~40 frames (~1.3 seconds)
+            if self._listening_pulse_time >= 40:
+                self._listening_pulse_time = 0
+                self._listening_rings.append(0.0)  # Add new ring at expansion 0
+
+            # Update existing rings (expand them)
+            new_rings = []
+            for ring in self._listening_rings:
+                ring += 0.025  # Expansion speed
+                if ring < 1.0:  # Keep if not fully expanded
+                    new_rings.append(ring)
+            self._listening_rings = new_rings
+        else:
+            # Fade out any remaining rings when not listening
+            new_rings = []
+            for ring in self._listening_rings:
+                ring += 0.04  # Faster fadeout
+                if ring < 1.0:
+                    new_rings.append(ring)
+            self._listening_rings = new_rings
 
         # Spinner animation (when thinking)
         if self._jarvis_state == JarvisState.THINKING:
@@ -524,6 +543,9 @@ class LowPolyFaceWidget(QWidget):
         face_width = min(w, h) * 0.7
         face_height = face_width * 1.3
 
+        # Draw listening ring echoes (behind the face)
+        self._draw_listening_rings(painter, cx, cy, face_width, face_height)
+
         # Draw the face mesh
         self._draw_face_mesh(painter, cx, cy, face_width, face_height)
 
@@ -535,10 +557,6 @@ class LowPolyFaceWidget(QWidget):
 
         # Draw accent lines
         self._draw_accent_lines(painter, cx, cy, face_width, face_height)
-
-        # Draw listening indicators (when in LISTENING state)
-        if self._jarvis_state == JarvisState.LISTENING:
-            self._draw_listening_indicators(painter, cx, cy, face_width, face_height)
 
         # Restore painter state
         painter.restore()
@@ -874,51 +892,47 @@ class LowPolyFaceWidget(QWidget):
 
         painter.setOpacity(1.0)
 
-    def _draw_listening_indicators(self, painter: QPainter, cx: float, cy: float,
-                                    face_width: float, face_height: float):
-        """Draw animated indicators on the sides when listening."""
-        # Position indicators near the "ears" (sides of the face)
-        indicator_y = cy  # Center vertically
-        indicator_distance = face_width * 0.55  # Distance from center
+    def _draw_listening_rings(self, painter: QPainter, cx: float, cy: float,
+                                face_width: float, face_height: float):
+        """Draw expanding ring echoes of the face outline (bell chime effect)."""
+        if not self._listening_rings:
+            return
 
-        # Pulsing glow intensity
-        pulse_intensity = (math.sin(self._listening_pulse_time) + 1) / 2  # 0 to 1
-        pulse_opacity = 0.3 + (pulse_intensity * 0.4)  # 0.3 to 0.7
+        # Get base vertices
+        base_vertices = self._get_face_vertices(cx, cy, face_width, face_height)
 
-        # Draw 3 concentric arc rings on each side that expand outward
-        for i in range(3):
-            # Calculate phase offset for each ring (creates wave effect)
-            phase_offset = i * 0.4
-            ring_phase = self._listening_indicator_phase + phase_offset
+        for ring_progress in self._listening_rings:
+            # Scale factor - rings expand outward from 1.0 to ~1.3
+            scale = 1.0 + (ring_progress * 0.35)
 
-            # Ring expands from 0 to 1
-            expansion = (math.sin(ring_phase) + 1) / 2  # 0 to 1
+            # Opacity fades as ring expands (starts at ~0.6, fades to 0)
+            opacity = (1.0 - ring_progress) * 0.5 * self._activation_level
 
-            # Calculate ring properties
-            ring_radius = 8 + (expansion * 12)  # 8 to 20 pixels
-            ring_opacity = pulse_opacity * (1.0 - expansion * 0.6)  # Fade as it expands
+            if opacity < 0.02:
+                continue
 
-            # Draw left indicator (arcs facing inward)
-            left_x = cx - indicator_distance
-            painter.setOpacity(ring_opacity * self._activation_level)
-            painter.setPen(QPen(self.PRIMARY_COLOR, 2))
+            # Scale vertices outward from center
+            scaled_vertices = []
+            for vx, vy in base_vertices:
+                # Vector from center to vertex
+                dx, dy = vx - cx, vy - cy
+                # Scale outward
+                new_x = cx + dx * scale
+                new_y = cy + dy * scale
+                scaled_vertices.append((new_x, new_y))
+
+            # Draw the ring outline
+            painter.setOpacity(opacity)
+            ring_pen = QPen(self.PRIMARY_COLOR, 1.5)
+            ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(ring_pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
-            # Left arc (180 to 360 degrees - opening to the right)
-            painter.drawArc(
-                int(left_x - ring_radius), int(indicator_y - ring_radius),
-                int(ring_radius * 2), int(ring_radius * 2),
-                int(0 * 16), int(180 * 16)  # Right half of circle
-            )
-
-            # Draw right indicator (arcs facing inward)
-            right_x = cx + indicator_distance
-            # Right arc (180 to 0 degrees - opening to the left)
-            painter.drawArc(
-                int(right_x - ring_radius), int(indicator_y - ring_radius),
-                int(ring_radius * 2), int(ring_radius * 2),
-                int(180 * 16), int(180 * 16)  # Left half of circle
-            )
+            # Draw edges
+            for i in range(len(scaled_vertices)):
+                p1 = scaled_vertices[i]
+                p2 = scaled_vertices[(i + 1) % len(scaled_vertices)]
+                painter.drawLine(QPointF(*p1), QPointF(*p2))
 
         painter.setOpacity(1.0)
 
