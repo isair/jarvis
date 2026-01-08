@@ -8,6 +8,7 @@ Supports Windows, Ubuntu (Linux), and macOS.
 from __future__ import annotations
 import sys
 import os
+import time
 
 # Fix OpenBLAS threading crash in bundled apps
 # Must be set before numpy is imported (via faster-whisper, etc.)
@@ -38,6 +39,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
+from jarvis.diary_dialog import DiaryUpdateDialog
 from jarvis.config import _default_config_path, _default_db_path
 from jarvis.themes import JARVIS_THEME_STYLESHEET
 from jarvis.face_widget import FaceWindow
@@ -470,11 +472,14 @@ class JarvisSystemTray:
         # Stop memory viewer server
         if hasattr(self, 'memory_viewer'):
             self.memory_viewer.stop_server()
+        # Safety net: if daemon process exists but is_listening was False, still clean up
+        # (This shouldn't happen in normal operation, but handles edge cases)
         if self.daemon_process:
             try:
                 self.daemon_process.terminate()
                 try:
-                    self.daemon_process.wait(timeout=3)
+                    # Use longer timeout to allow diary update to complete
+                    self.daemon_process.wait(timeout=60)
                 except subprocess.TimeoutExpired:
                     self.daemon_process.kill()
                     self.daemon_process.wait()
@@ -834,39 +839,139 @@ class JarvisSystemTray:
         except Exception as e:
             debug_log(f"log reader error: {e}", "desktop")
 
-    def stop_daemon(self) -> None:
-        """Stop the Jarvis daemon."""
+    def stop_daemon(self, show_diary_dialog: bool = True) -> None:
+        """Stop the Jarvis daemon.
+
+        Args:
+            show_diary_dialog: If True (and bundled), shows a dialog with live diary update progress.
+        """
+        # Timeout must be longer than SHUTDOWN_DIARY_TIMEOUT_SEC (45s) in daemon.py
+        # to allow the diary update LLM call to complete before force-killing
+        shutdown_wait_timeout_sec = 60
+        diary_dialog = None
+
+        debug_log(f"stop_daemon called: is_bundled={self.is_bundled}, daemon_thread={self.daemon_thread}, show_diary_dialog={show_diary_dialog}", "desktop")
+
         try:
             if self.is_bundled and self.daemon_thread:
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
                 self.log_signals.new_log.emit("⏸️ Stopping Jarvis daemon...\n")
 
-                # Request graceful stop via the daemon's stop flag
-                from jarvis.daemon import request_stop
-                request_stop()
+                # Show diary update dialog for bundled app
+                if show_diary_dialog:
+                    diary_dialog = DiaryUpdateDialog()
 
-                # Wait for thread to finish (with longer timeout to allow diary update)
-                if not self.daemon_thread.wait(10000):  # 10 second timeout for diary update
-                    # Thread didn't finish, force terminate (shouldn't happen normally)
-                    self.log_signals.new_log.emit("⚠️ Daemon taking too long, forcing termination...\n")
-                    self.daemon_thread.terminate()
-                    self.daemon_thread.wait(1000)
+                    # Set up thread-safe callbacks that emit Qt signals
+                    # These callbacks run in the daemon thread, so we use signals
+                    def on_token(token: str):
+                        diary_dialog.signals.token_received.emit(token)
+
+                    def on_status(status: str):
+                        diary_dialog.signals.status_changed.emit(status)
+
+                    def on_chunks(chunks: list):
+                        # Schedule on main thread
+                        QTimer.singleShot(0, lambda: diary_dialog.set_conversations(chunks))
+
+                    def on_complete(success: bool):
+                        diary_dialog.signals.completed.emit(success)
+
+                    # Set callbacks in daemon before requesting stop
+                    from jarvis.daemon import set_diary_update_callbacks, request_stop
+                    set_diary_update_callbacks(
+                        on_token=on_token,
+                        on_status=on_status,
+                        on_chunks=on_chunks,
+                        on_complete=on_complete,
+                    )
+
+                    # Hide other windows while showing diary dialog
+                    if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
+                        self.face_window.hide()
+                    if hasattr(self, 'log_window') and self.log_window.isVisible():
+                        self.log_window.hide()
+
+                    # Show dialog (non-modal so we can process events)
+                    diary_dialog.show()
+                    diary_dialog.raise_()
+                    diary_dialog.activateWindow()
+                    self.app.processEvents()
+
+                    # Request graceful stop
+                    request_stop()
+
+                    # Process events while waiting for thread to finish
+                    start_time = time.time()
+                    while not self.daemon_thread.isFinished():
+                        self.app.processEvents()
+                        elapsed = time.time() - start_time
+                        if elapsed > shutdown_wait_timeout_sec:
+                            self.log_signals.new_log.emit("⚠️ Daemon taking too long, forcing termination...\n")
+                            self.daemon_thread.terminate()
+                            self.daemon_thread.wait(1000)
+                            break
+                        time.sleep(0.05)
+
+                    # Brief delay to show completion state
+                    self.app.processEvents()
+                    time.sleep(0.5)
+
+                    # Close dialog
+                    diary_dialog.close()
+
+                    # Clear callbacks
+                    set_diary_update_callbacks()
+                else:
+                    # No dialog - simple wait
+                    from jarvis.daemon import request_stop
+                    request_stop()
+
+                    if not self.daemon_thread.wait(shutdown_wait_timeout_sec * 1000):
+                        self.log_signals.new_log.emit("⚠️ Daemon taking too long, forcing termination...\n")
+                        self.daemon_thread.terminate()
+                        self.daemon_thread.wait(1000)
+
                 self.daemon_thread = None
             elif self.daemon_process:
+                # For subprocess mode, show diary dialog too
+                if show_diary_dialog:
+                    diary_dialog = DiaryUpdateDialog()
+                    diary_dialog.set_status("Saving diary (this may take a moment)...")
+                    diary_dialog.show()
+                    diary_dialog.raise_()
+                    diary_dialog.activateWindow()
+                    self.app.processEvents()
+
+                    # Hide other windows
+                    if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
+                        self.face_window.hide()
+                    if hasattr(self, 'log_window') and self.log_window.isVisible():
+                        self.log_window.hide()
+
                 # Send SIGINT for graceful shutdown
                 if sys.platform == "win32":
                     self.daemon_process.send_signal(signal.CTRL_C_EVENT)
                 else:
                     self.daemon_process.send_signal(signal.SIGINT)
 
-                # Wait for process to terminate (with timeout)
-                try:
-                    self.daemon_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    # Force kill if it doesn't stop gracefully
-                    self.daemon_process.kill()
-                    self.daemon_process.wait()
+                # Wait for process to terminate while keeping UI responsive
+                start_time = time.time()
+                while self.daemon_process.poll() is None:
+                    self.app.processEvents()
+                    elapsed = time.time() - start_time
+                    if elapsed > shutdown_wait_timeout_sec:
+                        self.daemon_process.kill()
+                        self.daemon_process.wait()
+                        break
+                    time.sleep(0.05)
+
+                # Close diary dialog
+                if diary_dialog:
+                    diary_dialog.mark_completed(True)
+                    self.app.processEvents()
+                    time.sleep(0.5)
+                    diary_dialog.close()
 
                 self.daemon_process = None
 
@@ -888,6 +993,10 @@ class JarvisSystemTray:
         except Exception as e:
             debug_log(f"failed to stop daemon: {e}", "desktop")
             self.log_signals.new_log.emit(f"❌ Failed to stop: {str(e)}\n")
+        finally:
+            # Ensure dialog is closed
+            if diary_dialog:
+                diary_dialog.close()
 
     def check_daemon_status(self) -> None:
         """Check if the daemon process/thread is still running."""

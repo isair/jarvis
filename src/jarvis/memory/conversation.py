@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Tuple, Union, Callable
 from .db import Database
 from ..llm import call_llm_direct
 from .embeddings import get_embedding
@@ -136,13 +136,24 @@ def generate_conversation_summary(
     ollama_base_url: str,
     ollama_chat_model: str,
     timeout_sec: float = 30.0,
+    on_token: Optional[Callable[[str], None]] = None,
 ) -> Tuple[str, str]:
     """
     Generate a concise conversation summary from recent chunks and previous summary.
 
+    Args:
+        recent_chunks: List of conversation chunks to summarize
+        previous_summary: Previous summary for today (if any)
+        ollama_base_url: Ollama API base URL
+        ollama_chat_model: Model to use
+        timeout_sec: Request timeout
+        on_token: Optional callback for streaming tokens (for live UI updates)
+
     Returns:
         Tuple of (summary, topics) where topics is comma-separated
     """
+    from ..llm import call_llm_direct, call_llm_streaming
+
     chunks_text = "\n".join(recent_chunks[-10:])  # Last 10 chunks to keep context manageable
 
     system_prompt = """You are a conversation summarizer for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
@@ -182,7 +193,18 @@ SUMMARY: [your summary here]
 TOPICS: [topic1, topic2, topic3]"""
 
     try:
-        response = call_llm_direct(ollama_base_url, ollama_chat_model, system_prompt, user_prompt, timeout_sec=timeout_sec)
+        # Use streaming if callback provided, otherwise use direct call
+        if on_token:
+            response = call_llm_streaming(
+                ollama_base_url, ollama_chat_model, system_prompt, user_prompt,
+                on_token=on_token, timeout_sec=timeout_sec
+            )
+        else:
+            response = call_llm_direct(
+                ollama_base_url, ollama_chat_model, system_prompt, user_prompt,
+                timeout_sec=timeout_sec
+            )
+
         if not response:
             # No fallback - if LLM fails to respond, skip summarization
             return None, None
@@ -218,9 +240,13 @@ def update_daily_conversation_summary(
     source_app: str = "jarvis",
     voice_debug: bool = False,
     timeout_sec: float = 30.0,
+    on_token: Optional[Callable[[str], None]] = None,
 ) -> Optional[int]:
     """
     Update the conversation summary for today with new chunks.
+
+    Args:
+        on_token: Optional callback for streaming tokens (for live UI updates)
 
     Returns the summary ID if successful, None otherwise.
     """
@@ -246,7 +272,8 @@ def update_daily_conversation_summary(
 
         # Generate updated summary using redacted chunks
         summary, topics = generate_conversation_summary(
-            redacted_chunks, previous_summary, ollama_base_url, ollama_chat_model, timeout_sec=timeout_sec
+            redacted_chunks, previous_summary, ollama_base_url, ollama_chat_model,
+            timeout_sec=timeout_sec, on_token=on_token
         )
 
         # Skip summarization if LLM failed
@@ -558,9 +585,13 @@ def update_diary_from_dialogue_memory(
     voice_debug: bool = False,
     timeout_sec: float = 30.0,
     force: bool = False,
+    on_token: Optional[Callable[[str], None]] = None,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
+
+    Args:
+        on_token: Optional callback for streaming tokens (for live UI updates)
 
     Returns the summary ID if successful, None otherwise.
     """
@@ -590,6 +621,7 @@ def update_diary_from_dialogue_memory(
             source_app=source_app,
             voice_debug=voice_debug,
             timeout_sec=timeout_sec,
+            on_token=on_token,
         )
 
         debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")

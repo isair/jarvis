@@ -1,8 +1,9 @@
 """Direct LLM interaction utilities without extra features like temporal context."""
 
 from __future__ import annotations
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Generator, Callable
 import requests
+import json
 
 
 def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0) -> Optional[str]:
@@ -34,6 +35,72 @@ def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_con
         return None
     
     return None
+
+
+def call_llm_streaming(
+    base_url: str,
+    chat_model: str,
+    system_prompt: str,
+    user_content: str,
+    on_token: Optional[Callable[[str], None]] = None,
+    timeout_sec: float = 30.0,
+) -> Optional[str]:
+    """
+    Streaming LLM call that invokes on_token callback for each token received.
+
+    Args:
+        base_url: Ollama base URL
+        chat_model: Model name
+        system_prompt: System prompt
+        user_content: User message
+        on_token: Callback invoked with each token as it arrives
+        timeout_sec: Request timeout
+
+    Returns:
+        Complete response text, or None on error
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
+    payload = {
+        "model": chat_model,
+        "messages": messages,
+        "stream": True,
+        "options": {"num_ctx": 4096},
+    }
+
+    try:
+        resp = requests.post(
+            f"{base_url.rstrip('/')}/api/chat",
+            json=payload,
+            timeout=timeout_sec,
+            stream=True
+        )
+        resp.raise_for_status()
+
+        full_response = []
+        for line in resp.iter_lines():
+            if line:
+                try:
+                    data = json.loads(line)
+                    if "message" in data and isinstance(data["message"], dict):
+                        content = data["message"].get("content", "")
+                        if content:
+                            full_response.append(content)
+                            if on_token:
+                                on_token(content)
+                except json.JSONDecodeError:
+                    continue
+
+        result = "".join(full_response)
+        return result if result.strip() else None
+
+    except requests.exceptions.Timeout:
+        return None
+    except Exception:
+        return None
 
 
 def extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
