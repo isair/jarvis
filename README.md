@@ -177,7 +177,7 @@ Get the latest desktop app from [GitHub Releases](https://github.com/isair/jarvi
 3. Click the system tray icon → Start Listening
 
 **macOS:**
-1. Download `Jarvis-macOS-arm64.zip` (Apple Silicon) or `Jarvis-macOS-x64.zip` (Intel)
+1. Download `Jarvis-macOS-arm64.zip` (Apple Silicon)
 2. Extract and move `Jarvis.app` to Applications
 3. Right-click → Open (first time only, bypasses Gatekeeper)
 4. Click the menu bar icon → Start Listening

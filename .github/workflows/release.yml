@@ -271,7 +271,7 @@ jobs:
 
             ### 📦 Downloads:
             - **Windows**: Jarvis-Windows-x64.zip
-            - **macOS**: Jarvis-macOS-x64.zip
+            - **macOS**: Jarvis-macOS-arm64.zip
             - **Linux**: Jarvis-Linux-x64.tar.gz
 
             **Branch**: develop
