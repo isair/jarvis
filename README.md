@@ -16,10 +16,6 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 </p>
 
 <p align="center">
-  <img src="docs/img/setup-wizard-initial-check.png" alt="Setup Wizard" width="400">
-  <img src="docs/img/logs.png" alt="Real-time Logs" width="400">
-</p>
-<p align="center">
   <img src="docs/img/memory-viewer-memories.png" alt="Memory Viewer - Conversations" width="400">
   <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Nutrition" width="400">
 </p>
@@ -206,7 +202,12 @@ The desktop app includes a full graphical interface:
 - **Gray icon** = stopped, **Green icon** = listening
 
 <p align="center">
-  <img src="docs/img/setup-wizard-complete.png" alt="Setup Complete" width="500">
+  <img src="docs/img/setup-wizard-initial-check.png" alt="Setup Wizard" width="400">
+  <img src="docs/img/setup-wizard-complete.png" alt="Setup Complete" width="400">
+</p>
+
+<p align="center">
+  <img src="docs/img/logs.png" alt="Real-time Logs" width="500">
 </p>
 
 ## System Requirements
