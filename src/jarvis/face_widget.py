@@ -3,6 +3,10 @@ Low-poly grid face widget for Jarvis with intelligent state management and organ
 
 Features:
 - Low-poly wireframe aesthetic with glowing effects
+- State-specific visual indicators:
+  * LISTENING: Animated expanding arc rings on sides (like sound waves entering ears)
+  * THINKING: Animated spinner pupils (3 rotating arcs)
+  * SPEAKING: Smooth continuous waveform mouth
 - Smooth continuous waveform mouth visualization:
   * Uses multiple layered sine waves for natural audio-like appearance
   * Amplitude and frequency vary to simulate speech patterns
@@ -10,7 +14,6 @@ Features:
   * 60-point smooth curve with glow effect
 - Comprehensive state system (ASLEEP, IDLE, LISTENING, THINKING, SPEAKING)
 - Smooth wake/sleep transitions with opacity-based activation
-- Animated spinner pupils when thinking
 - Intelligent idle activity system (only active in IDLE state) that alternates between behaviors:
   * looking_around (35%) - Frequent eye movement scanning the environment
   * hovering (25%) - Gentle vertical floating motion
@@ -209,6 +212,10 @@ class LowPolyFaceWidget(QWidget):
 
         # Thinking spinner animation
         self._spinner_angle = 0.0  # Rotation angle for thinking spinner
+
+        # Listening animation
+        self._listening_pulse_time = 0.0  # Time for pulsing glow
+        self._listening_indicator_phase = 0.0  # Phase for side indicators
 
         # Connect to global Jarvis state
         self._state_manager = get_jarvis_state()
@@ -433,6 +440,11 @@ class LowPolyFaceWidget(QWidget):
             self._gaze_x *= 0.95
             self._gaze_y *= 0.95
 
+        # Listening animation (when actively listening)
+        if self._jarvis_state == JarvisState.LISTENING:
+            self._listening_pulse_time += 0.05  # Slow pulse
+            self._listening_indicator_phase += 0.08  # Indicator animation speed
+
         # Spinner animation (when thinking)
         if self._jarvis_state == JarvisState.THINKING:
             self._spinner_angle += 8.0  # Rotate 8 degrees per frame (~240 deg/sec)
@@ -523,6 +535,10 @@ class LowPolyFaceWidget(QWidget):
 
         # Draw accent lines
         self._draw_accent_lines(painter, cx, cy, face_width, face_height)
+
+        # Draw listening indicators (when in LISTENING state)
+        if self._jarvis_state == JarvisState.LISTENING:
+            self._draw_listening_indicators(painter, cx, cy, face_width, face_height)
 
         # Restore painter state
         painter.restore()
@@ -854,6 +870,54 @@ class LowPolyFaceWidget(QWidget):
             painter.drawLine(
                 QPointF(cx - line_width, forehead_y),
                 QPointF(cx + line_width, forehead_y)
+            )
+
+        painter.setOpacity(1.0)
+
+    def _draw_listening_indicators(self, painter: QPainter, cx: float, cy: float,
+                                    face_width: float, face_height: float):
+        """Draw animated indicators on the sides when listening."""
+        # Position indicators near the "ears" (sides of the face)
+        indicator_y = cy  # Center vertically
+        indicator_distance = face_width * 0.55  # Distance from center
+
+        # Pulsing glow intensity
+        pulse_intensity = (math.sin(self._listening_pulse_time) + 1) / 2  # 0 to 1
+        pulse_opacity = 0.3 + (pulse_intensity * 0.4)  # 0.3 to 0.7
+
+        # Draw 3 concentric arc rings on each side that expand outward
+        for i in range(3):
+            # Calculate phase offset for each ring (creates wave effect)
+            phase_offset = i * 0.4
+            ring_phase = self._listening_indicator_phase + phase_offset
+
+            # Ring expands from 0 to 1
+            expansion = (math.sin(ring_phase) + 1) / 2  # 0 to 1
+
+            # Calculate ring properties
+            ring_radius = 8 + (expansion * 12)  # 8 to 20 pixels
+            ring_opacity = pulse_opacity * (1.0 - expansion * 0.6)  # Fade as it expands
+
+            # Draw left indicator (arcs facing inward)
+            left_x = cx - indicator_distance
+            painter.setOpacity(ring_opacity * self._activation_level)
+            painter.setPen(QPen(self.PRIMARY_COLOR, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            # Left arc (180 to 360 degrees - opening to the right)
+            painter.drawArc(
+                int(left_x - ring_radius), int(indicator_y - ring_radius),
+                int(ring_radius * 2), int(ring_radius * 2),
+                int(0 * 16), int(180 * 16)  # Right half of circle
+            )
+
+            # Draw right indicator (arcs facing inward)
+            right_x = cx + indicator_distance
+            # Right arc (180 to 0 degrees - opening to the left)
+            painter.drawArc(
+                int(right_x - ring_radius), int(indicator_y - ring_radius),
+                int(ring_radius * 2), int(ring_radius * 2),
+                int(180 * 16), int(180 * 16)  # Left half of circle
             )
 
         painter.setOpacity(1.0)
