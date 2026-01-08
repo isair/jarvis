@@ -78,23 +78,9 @@ def check_mlx_whisper_status() -> MLXWhisperStatus:
 
     return status
 
-from PyQt6.QtWidgets import (
-    QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
-    QSizePolicy, QScrollArea, QLineEdit
-)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
-from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
+# Import config early (no PyQt6 dependency) - needed for detection functions
 from jarvis.config import load_settings, get_default_config
-from jarvis.themes import JARVIS_THEME_STYLESHEET, COLORS
-from jarvis.utils.location import (
-    get_location_info,
-    get_location_context,
-    is_location_available,
-    _get_database_path,
-    GEOIP2_AVAILABLE,
-)
 
 
 class SetupStatus(Enum):
@@ -279,6 +265,64 @@ def check_ollama_status() -> OllamaStatus:
         status.missing_models = get_required_models()
 
     return status
+
+
+def should_show_setup_wizard() -> bool:
+    """
+    Check if the setup wizard should be shown.
+    Returns True if any setup step is incomplete.
+    """
+    status = check_ollama_status()
+    return not status.is_fully_setup
+
+
+# --- PyQt6 UI components below ---
+# These imports are wrapped to avoid import errors when only detection functions are needed
+# (e.g., on headless CI systems where system Qt libraries may be missing)
+
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
+        QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
+        QSizePolicy, QScrollArea, QLineEdit
+    )
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
+    from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
+
+    from jarvis.themes import JARVIS_THEME_STYLESHEET, COLORS
+    from jarvis.utils.location import (
+        get_location_info,
+        get_location_context,
+        is_location_available,
+        _get_database_path,
+        GEOIP2_AVAILABLE,
+    )
+    _PYQT6_AVAILABLE = True
+except ImportError:
+    _PYQT6_AVAILABLE = False
+    # Define stubs so module can be imported for detection functions only
+    # These stubs allow the class definitions to parse without errors
+    QThread = object
+    QWizard = object
+    QWizardPage = object
+    QWidget = object
+    QFrame = object
+    Qt = None
+    QTimer = None
+    QObject = None
+
+    def pyqtSignal(*args, **kwargs):
+        """Stub for pyqtSignal when PyQt6 is not available."""
+        return None
+
+    # Stub location utilities that depend on themes
+    JARVIS_THEME_STYLESHEET = ""
+    COLORS = {}
+    get_location_info = lambda *a, **k: {}
+    get_location_context = lambda *a, **k: "Location: Unknown"
+    is_location_available = lambda: False
+    _get_database_path = lambda: None
+    GEOIP2_AVAILABLE = False
 
 
 class StatusCheckWorker(QThread):
@@ -1788,20 +1832,17 @@ class CompletePage(QWizardPage):
         return -1
 
 
-def should_show_setup_wizard() -> bool:
-    """
-    Check if the setup wizard should be shown.
-    Returns True if any setup step is incomplete.
-    """
-    status = check_ollama_status()
-    return not status.is_fully_setup
-
-
 def run_setup_wizard() -> bool:
     """
     Run the setup wizard.
     Returns True if setup completed successfully, False if cancelled.
     """
+    if not _PYQT6_AVAILABLE:
+        raise ImportError(
+            "PyQt6 is not available. Install it with: pip install PyQt6\n"
+            "On Linux, you may also need: apt-get install libegl1"
+        )
+
     # Create app if not exists
     app = QApplication.instance()
     if app is None:
