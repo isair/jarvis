@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import time
+import threading
 from datetime import datetime, timezone
 from typing import Optional, List, Tuple, Union, Callable
 from .db import Database
@@ -62,21 +63,33 @@ class DialogueMemory:
     """
     In-memory storage for recent dialogue interactions.
     Provides short-term context for the last 5 minutes of conversation.
+
+    Thread-safe: uses a lock to protect against concurrent diary updates.
+    Tracks saved messages by timestamp to prevent data loss when new messages
+    arrive during diary update.
     """
+
+    # How long messages are kept in memory for context (5 minutes)
+    RECENT_WINDOW_SEC = 300.0
+    # How old messages can get before forcing a diary update even during active conversation
+    MAX_UNSAVED_AGE_SEC = 600.0  # 10 minutes
 
     def __init__(self, inactivity_timeout: float = 300.0, max_interactions: int = 20):
         """Initialize dialogue memory."""
         self._messages: List[Tuple[float, str, str]] = []  # (timestamp, role, content)
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
-        self._is_pending_diary_update = False
+        # Track the timestamp up to which messages have been saved to diary
+        # Messages with timestamp <= this value have been processed
+        self._last_saved_timestamp: float = 0.0
+        self._lock = threading.RLock()  # Reentrant lock for thread safety
 
     def add_message(self, role: str, content: str) -> None:
-        """Add a message to recent memory."""
-        timestamp = time.time()
-        self._messages.append((timestamp, role.strip(), content.strip()))
-        self._last_activity_time = timestamp
-        self._is_pending_diary_update = True
+        """Add a message to recent memory. Thread-safe."""
+        with self._lock:
+            timestamp = time.time()
+            self._messages.append((timestamp, role.strip(), content.strip()))
+            self._last_activity_time = timestamp
 
     def get_recent_context(self) -> List[str]:
         """Get recent messages formatted as context strings."""
@@ -90,19 +103,21 @@ class DialogueMemory:
         Returns:
             List of message dictionaries with 'role' and 'content' keys
         """
-        if not self._messages:
-            return []
+        with self._lock:
+            if not self._messages:
+                return []
 
-        # Filter to last 5 minutes
-        cutoff = time.time() - 300.0
-        recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
+            # Filter to last 5 minutes
+            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
 
-        return [{"role": role, "content": content} for _, role, content in recent_messages]
+            return [{"role": role, "content": content} for _, role, content in recent_messages]
 
     def has_recent_messages(self) -> bool:
         """Check if there are any messages in the last 5 minutes."""
-        cutoff = time.time() - 300.0
-        return any(ts >= cutoff for ts, _, _ in self._messages)
+        with self._lock:
+            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            return any(ts >= cutoff for ts, _, _ in self._messages)
 
     # Compatibility and diary functionality
     def add_interaction(self, user_text: str, assistant_text: str) -> None:
@@ -113,21 +128,93 @@ class DialogueMemory:
             self.add_message("assistant", assistant_text.strip())
 
     def get_pending_chunks(self) -> List[str]:
-        """Get recent messages as formatted chunks for diary update."""
-        messages = self.get_recent_messages()
-        return [f"{msg['role'].title()}: {msg['content']}" for msg in messages]
+        """Get unsaved messages as formatted chunks for diary update.
+
+        Returns messages that haven't been saved to diary yet (timestamp > _last_saved_timestamp).
+        Thread-safe.
+        """
+        with self._lock:
+            # Get messages that haven't been saved yet
+            unsaved_messages = [
+                (ts, role, content) for ts, role, content in self._messages
+                if ts > self._last_saved_timestamp
+            ]
+            return [f"{role.title()}: {content}" for _, role, content in unsaved_messages]
+
+    def has_pending_chunks(self) -> bool:
+        """Check if there are unsaved messages. Thread-safe."""
+        with self._lock:
+            return any(ts > self._last_saved_timestamp for ts, _, _ in self._messages)
 
     def should_update_diary(self) -> bool:
-        """Check if diary should be updated based on inactivity timeout."""
-        if not self._is_pending_diary_update:
+        """Check if diary should be updated based on inactivity timeout.
+
+        Returns True if:
+        1. There are unsaved messages AND user has been inactive for inactivity_timeout, OR
+        2. There are unsaved messages older than MAX_UNSAVED_AGE_SEC (prevents data loss
+           in very long conversations)
+        """
+        with self._lock:
+            if not self.has_pending_chunks():
+                return False
+
+            current_time = time.time()
+
+            # Standard inactivity check
+            if (current_time - self._last_activity_time) >= self._inactivity_timeout:
+                return True
+
+            # Edge case: very long conversation - force update if old messages exist
+            # This prevents context loss when a conversation exceeds the recent window
+            oldest_unsaved = None
+            for ts, _, _ in self._messages:
+                if ts > self._last_saved_timestamp:
+                    oldest_unsaved = ts
+                    break  # First unsaved message is the oldest
+
+            if oldest_unsaved is not None:
+                unsaved_age = current_time - oldest_unsaved
+                if unsaved_age >= self.MAX_UNSAVED_AGE_SEC:
+                    return True
+
             return False
 
+    def mark_saved_up_to(self, timestamp: float) -> None:
+        """Mark all messages up to the given timestamp as saved.
+
+        Thread-safe. Also cleans up old messages that have been saved.
+        """
+        with self._lock:
+            self._last_saved_timestamp = max(self._last_saved_timestamp, timestamp)
+            self._cleanup_old_messages()
+
+    def _cleanup_old_messages(self) -> None:
+        """Remove messages that are both saved and older than the recent window.
+
+        Must be called while holding the lock.
+        """
         current_time = time.time()
-        return (current_time - self._last_activity_time) >= self._inactivity_timeout
+        # Keep messages that are either:
+        # 1. Recent (within RECENT_WINDOW_SEC) - needed for LLM context
+        # 2. Not yet saved (timestamp > _last_saved_timestamp) - needed for diary
+        cutoff = current_time - self.RECENT_WINDOW_SEC
+        self._messages = [
+            (ts, role, content) for ts, role, content in self._messages
+            if ts >= cutoff or ts > self._last_saved_timestamp
+        ]
 
     def clear_pending_updates(self) -> None:
-        """Clear the pending diary update flag."""
-        self._is_pending_diary_update = False
+        """Mark all current messages as saved. Thread-safe.
+
+        DEPRECATED: Use mark_saved_up_to() instead for proper timestamp tracking.
+        Kept for backward compatibility.
+        """
+        with self._lock:
+            if self._messages:
+                # Mark all current messages as saved
+                max_ts = max(ts for ts, _, _ in self._messages)
+                self._last_saved_timestamp = max_ts
+            self._cleanup_old_messages()
 
 
 def generate_conversation_summary(
@@ -590,6 +677,10 @@ def update_diary_from_dialogue_memory(
     """
     Update the diary with pending interactions from dialogue memory.
 
+    Thread-safe: captures the timestamp of messages being processed before
+    LLM summarization starts, so new messages arriving during summarization
+    won't be incorrectly marked as saved.
+
     Args:
         on_token: Optional callback for streaming tokens (for live UI updates)
 
@@ -602,6 +693,11 @@ def update_diary_from_dialogue_memory(
         return None
 
     try:
+        # CRITICAL: Capture the current timestamp BEFORE getting chunks
+        # This ensures that any new messages arriving during LLM summarization
+        # (which can take 30-45 seconds) won't be incorrectly marked as saved.
+        snapshot_timestamp = time.time()
+
         # Get pending chunks from dialogue memory
         pending_chunks = dialogue_memory.get_pending_chunks()
         debug_log(f"diary update: got {len(pending_chunks)} pending chunks from dialogue_memory", "memory")
@@ -611,6 +707,7 @@ def update_diary_from_dialogue_memory(
             return None
 
         # Update the daily conversation summary
+        # This is the slow operation (LLM call) during which new messages might arrive
         debug_log("calling update_daily_conversation_summary...", "memory")
         summary_id = update_daily_conversation_summary(
             db=db,
@@ -626,9 +723,11 @@ def update_diary_from_dialogue_memory(
 
         debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")
 
-        # Clear the pending updates flag
+        # Mark only the messages that existed at snapshot time as saved
+        # New messages that arrived during summarization remain pending
         if summary_id is not None:
-            dialogue_memory.clear_pending_updates()
+            dialogue_memory.mark_saved_up_to(snapshot_timestamp)
+            debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
 
         return summary_id
 
