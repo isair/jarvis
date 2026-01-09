@@ -102,8 +102,14 @@ Get the latest from [GitHub Releases](https://github.com/isair/jarvis/releases):
 Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 
 <p align="center">
-  <img src="docs/img/setup-wizard-initial-check.png" alt="Setup Wizard" width="350">
-  <img src="docs/img/logs.png" alt="Real-time Logs" width="350">
+  <img src="docs/img/setup-wizard-initial-check.png" alt="Setup - Initial Check" width="200">
+  <img src="docs/img/setup-wizard-model.png" alt="Setup - Model Selection" width="200">
+  <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Whisper" width="200">
+  <img src="docs/img/setup-wizard-complete.png" alt="Setup - Complete" width="200">
+</p>
+
+<p align="center">
+  <img src="docs/img/logs.png" alt="Real-time Logs" width="500">
 </p>
 
 ## Features
