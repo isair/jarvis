@@ -208,10 +208,88 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     # Current user message
     messages.append({"role": "user", "content": redacted})
 
+    def _extract_tool_call_from_text(content: str):
+        """Fallback parser for tool calls embedded in text content.
+
+        Handles formats like:
+        - toolName(arg1="value1", arg2=123)
+        - tool_calls: [{"id": "...", "function": {"name": "...", "arguments": {...}}}]
+        """
+        import re
+
+        if not content or not isinstance(content, str):
+            return None, None, None
+
+        content = content.strip()
+
+        # Pattern 1: tool_calls JSON in content
+        # Matches: tool_calls: [...] or "tool_calls": [...]
+        tc_match = re.search(r'(?:^|\s)tool_calls\s*:\s*(\[.+\])', content, re.DOTALL)
+        if tc_match:
+            try:
+                tc_json = tc_match.group(1)
+                tc_list = json.loads(tc_json)
+                if isinstance(tc_list, list) and len(tc_list) > 0:
+                    first = tc_list[0]
+                    if isinstance(first, dict):
+                        func = first.get("function", {})
+                        name = func.get("name", "")
+                        args = func.get("arguments", {})
+                        tool_call_id = first.get("id", f"call_{uuid.uuid4().hex[:8]}")
+                        # Handle string arguments (some models JSON-encode the args)
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                args = {}
+                        if name:
+                            return name, (args if isinstance(args, dict) else {}), tool_call_id
+            except Exception:
+                pass
+
+        # Pattern 2: Python-style function call
+        # Matches: toolName(arg1="value1", arg2=123)
+        # Only match known tool patterns to avoid false positives
+        func_match = re.match(r'^(\w+)\s*\(\s*(.+?)\s*\)$', content, re.DOTALL)
+        if func_match:
+            func_name = func_match.group(1)
+            args_str = func_match.group(2)
+
+            # Parse arguments - handle key="value" and key=value patterns
+            args = {}
+            # Match: key="value" or key='value' or key=number or key=true/false
+            arg_pattern = r'(\w+)\s*=\s*(?:"([^"]*?)"|\'([^\']*?)\'|(\d+(?:\.\d+)?)|(\w+))'
+            for match in re.finditer(arg_pattern, args_str):
+                key = match.group(1)
+                # Get the value from whichever group matched
+                value = match.group(2) or match.group(3) or match.group(4) or match.group(5)
+                if value is not None:
+                    # Try to convert to appropriate type
+                    if match.group(4):  # Number
+                        try:
+                            value = float(value) if '.' in value else int(value)
+                        except ValueError:
+                            pass
+                    elif match.group(5):  # Bare word (true/false/null)
+                        if value.lower() == 'true':
+                            value = True
+                        elif value.lower() == 'false':
+                            value = False
+                        elif value.lower() == 'null' or value.lower() == 'none':
+                            value = None
+                    args[key] = value
+
+            if func_name:
+                return func_name, args, f"call_{uuid.uuid4().hex[:8]}"
+
+        return None, None, None
+
     def _extract_structured_tool_call(resp: dict):
         try:
             if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
                 msg = resp["message"]
+
+                # First try: native tool_calls array from Ollama
                 tc = msg.get("tool_calls")
                 if isinstance(tc, list) and len(tc) > 0:
                     first = tc[0]
@@ -236,6 +314,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
 
                         if name:
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
+
+                # Fallback: try to extract tool call from content text
+                content = msg.get("content", "")
+                if content:
+                    return _extract_tool_call_from_text(content)
+
         except Exception:
             pass
         return None, None, None
