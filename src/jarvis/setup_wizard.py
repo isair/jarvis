@@ -12,7 +12,9 @@ import sys
 import os
 import platform
 import webbrowser
-from typing import Optional, List, Tuple
+import json
+from pathlib import Path
+from typing import Optional, List, Tuple, Dict
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -1010,6 +1012,22 @@ class OllamaServerPage(QWizardPage):
 class ModelsPage(QWizardPage):
     """Page for installing required AI models."""
 
+    # Model options with their details
+    MODEL_OPTIONS = {
+        "gpt-oss:20b": {
+            "name": "GPT-OSS 20B (Recommended)",
+            "description": "Best performance, ~12GB download",
+            "size": "~12GB",
+            "ram": "16GB+",
+        },
+        "qwen2.5:3b": {
+            "name": "Qwen 2.5 3B (Lightweight)",
+            "description": "Faster, smaller, ~2GB download",
+            "size": "~2GB",
+            "ram": "8GB+",
+        },
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
@@ -1023,12 +1041,62 @@ class ModelsPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("Jarvis needs specific AI models to work. Let's install them now.")
+        subtitle = QLabel("Jarvis needs specific AI models to work. Choose your model and install.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
         layout.addSpacing(20)
+
+        # Model selection card
+        selection_card = QFrame()
+        selection_card.setObjectName("card")
+        # Override card padding to prevent layout issues
+        selection_card.setStyleSheet(selection_card.styleSheet() + "QFrame#card { padding: 0px; }")
+        selection_layout = QVBoxLayout(selection_card)
+        selection_layout.setContentsMargins(24, 24, 24, 24)
+        selection_layout.setSpacing(16)
+
+        selection_title = QLabel("🎯 Choose Chat Model")
+        selection_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        selection_layout.addWidget(selection_title)
+        selection_layout.addSpacing(8)
+
+        # Model option buttons
+        self._model_buttons: Dict[str, QPushButton] = {}
+        self._selected_model: str = "gpt-oss:20b"
+
+        for model_id, info in self.MODEL_OPTIONS.items():
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setMinimumHeight(56)
+            btn.setMaximumHeight(56)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setText(f"{info['name']}  —  {info['description']} • RAM: {info['ram']}")
+            btn.setStyleSheet("""
+                QPushButton {
+                    text-align: left;
+                    padding: 12px 16px;
+                    border: 2px solid #27272a;
+                    border-radius: 8px;
+                    background: #1a1d26;
+                    color: #e4e4e7;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    border-color: #f59e0b;
+                    background: #1e222c;
+                }
+                QPushButton:checked {
+                    border-color: #f59e0b;
+                    background: rgba(245, 158, 11, 0.1);
+                }
+            """)
+            btn.clicked.connect(lambda checked, m=model_id: self._on_model_selected(m))
+            self._model_buttons[model_id] = btn
+            selection_layout.addWidget(btn)
+
+        layout.addWidget(selection_card)
 
         # Model list card
         card = QFrame()
@@ -1091,37 +1159,126 @@ class ModelsPage(QWizardPage):
         self._current_model_index = 0
         self._worker: Optional[CommandWorker] = None
 
-    def initializePage(self):
-        """Initialize page with current model status."""
+    def _on_model_selected(self, model_id: str):
+        """Handle model selection."""
+        self._selected_model = model_id
+
+        # Update button checked states
+        for m_id, btn in self._model_buttons.items():
+            btn.setChecked(m_id == model_id)
+
+        # Update the models list display
+        self._update_models_display()
+
+    def _update_models_display(self):
+        """Update the models display based on selected model."""
         wizard = self.wizard()
 
+        # Get the embed model from config
+        embed_model = "nomic-embed-text"
+        try:
+            cfg = load_settings()
+            embed_model = cfg.ollama_embed_model
+        except Exception:
+            pass
+
+        # Get installed models
+        installed: List[str] = []
         if isinstance(wizard, SetupWizard) and wizard.ollama_status:
-            self._missing_models = wizard.ollama_status.missing_models.copy()
             installed = wizard.ollama_status.installed_models
 
-            if self._missing_models:
-                missing_text = ", ".join(f"❌ {m}" for m in self._missing_models)
-                installed_text = ", ".join(f"✅ {m}" for m in installed) if installed else "None"
-                self.models_label.setText(
-                    f"Installed: {installed_text}\n\n"
-                    f"Missing: {missing_text}\n\n"
-                    f"⚠️ The missing models need to be downloaded (may take several minutes depending on size)."
-                )
-                self._is_complete = False
-            else:
-                self.models_label.setText(f"✅ All required models are installed: {', '.join(installed)}")
-                self._is_complete = True
-                self.install_btn.setVisible(False)
-                self.skip_btn.setVisible(False)
-        else:
-            self._missing_models = get_required_models()
-            self.models_label.setText(f"Required models: {', '.join(self._missing_models)}")
+        # Required models: selected chat model + embed model
+        required = [self._selected_model, embed_model]
+
+        # Check which are missing
+        def normalize_model(name: str) -> str:
+            return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
+
+        installed_normalized = {normalize_model(m) for m in installed}
+        self._missing_models = [
+            m for m in required
+            if normalize_model(m) not in installed_normalized and m not in installed
+        ]
+
+        # Update display
+        if self._missing_models:
+            missing_text = ", ".join(f"❌ {m}" for m in self._missing_models)
+            installed_text = ", ".join(f"✅ {m}" for m in installed) if installed else "None"
+            model_info = self.MODEL_OPTIONS.get(self._selected_model, {})
+            size_info = model_info.get("size", "unknown size")
+            self.models_label.setText(
+                f"Installed: {installed_text}\n\n"
+                f"Missing: {missing_text}\n\n"
+                f"⚠️ Download size: {size_info}. Installation may take several minutes."
+            )
             self._is_complete = False
+            self.install_btn.setVisible(True)
+            self.install_btn.setEnabled(True)
+            self.skip_btn.setVisible(True)
+        else:
+            self.models_label.setText(f"✅ All required models are installed: {', '.join(installed)}")
+            self._is_complete = True
+            self.install_btn.setVisible(False)
+            self.skip_btn.setVisible(False)
 
         self.completeChanged.emit()
 
+    def _save_model_to_config(self):
+        """Save the selected chat model to config file."""
+        try:
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            if xdg:
+                config_path = Path(xdg) / "jarvis" / "config.json"
+            else:
+                config_path = Path.home() / ".config" / "jarvis" / "config.json"
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if config_path.exists():
+                with config_path.open("r", encoding="utf-8") as f:
+                    config = json.load(f)
+            else:
+                config = {}
+
+            config["ollama_chat_model"] = self._selected_model
+
+            with config_path.open("w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+
+            return True
+        except Exception:
+            return False
+
+    def initializePage(self):
+        """Initialize page with current model status."""
+        # Load the currently configured chat model
+        current_chat_model = "gpt-oss:20b"
+        try:
+            cfg = load_settings()
+            current_chat_model = cfg.ollama_chat_model
+        except Exception:
+            pass
+
+        # Pre-select the model if it's one of our options, otherwise default to gpt-oss:20b
+        if current_chat_model in self.MODEL_OPTIONS:
+            self._selected_model = current_chat_model
+        else:
+            self._selected_model = "gpt-oss:20b"
+
+        # Update button states
+        for m_id, btn in self._model_buttons.items():
+            btn.setChecked(m_id == self._selected_model)
+
+        # Update the models display
+        self._update_models_display()
+
     def _install_models(self):
         """Start installing missing models."""
+        # Save the selected model to config first
+        if not self._save_model_to_config():
+            self.status_label.setText("⚠️ Could not save model selection to config. Continuing with installation...")
+            self.status_label.setStyleSheet("color: #fbbf24;")
+
         if not self._missing_models:
             self._is_complete = True
             self.completeChanged.emit()

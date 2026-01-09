@@ -162,10 +162,27 @@ Want me to help you run a database query to check for null emails, or would you 
 Download from [ollama.com/download](https://ollama.com/download)
 
 ### 2. Get the AI models
+
+**Recommended (best quality):**
 ```bash
 ollama pull gpt-oss:20b
 ollama pull nomic-embed-text
 ```
+
+**Lightweight alternative (8GB RAM / older hardware):**
+```bash
+ollama pull qwen2.5:3b
+ollama pull nomic-embed-text
+```
+
+Then add to your config (`~/.config/jarvis/config.json`):
+```json
+{
+  "ollama_chat_model": "qwen2.5:3b"
+}
+```
+
+> **Why Qwen2.5:3b?** Excellent instruction following, ~3GB RAM usage, ~75 tokens/sec on Apple Silicon. Great for laptops and resource-constrained setups.
 
 ### 3. Download Jarvis
 
@@ -213,9 +230,20 @@ The desktop app includes a full graphical interface:
 ## System Requirements
 
 - **Computer**: Mac, Windows, or Linux from the last 5 years
-- **Memory**: 16GB RAM minimum
+- **Memory**: 16GB RAM recommended (8GB works with lightweight models)
 - **Storage**: 20GB free space
 - **GPU**: Recommended for speed (works without, just slower)
+
+### Model Options by Hardware
+
+| Hardware | RAM | Recommended Model | Config Setting |
+|----------|-----|-------------------|----------------|
+| **High-end** | 32GB+ | `gpt-oss:20b` (default) | - |
+| **Standard** | 16GB | `gpt-oss:20b` | - |
+| **Lightweight** | 8GB | `qwen2.5:3b` | `"ollama_chat_model": "qwen2.5:3b"` |
+| **Minimal** | 8GB | `qwen2.5:1.5b` | `"ollama_chat_model": "qwen2.5:1.5b"` |
+
+Qwen2.5 models offer excellent instruction following with lower resource usage.
 
 ## Features at a Glance
 
@@ -616,8 +644,9 @@ Unlike ChatGPT or Gemini, Jarvis with these integrations can:
 - Speak clearly after saying "Jarvis"
 
 **Responses are slow**
-- Switch to smaller model: `ollama pull llama3:8b`
-- Add to config: `{"ollama_chat_model": "llama3:8b"}`
+- Switch to a lighter model: `ollama pull qwen2.5:3b`
+- Add to config: `{"ollama_chat_model": "qwen2.5:3b"}`
+- Even lighter: `ollama pull qwen2.5:1.5b` (for 8GB RAM systems)
 
 **Windows: App won't start**
 - Extract the full zip file before running

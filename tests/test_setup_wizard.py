@@ -361,3 +361,24 @@ class TestLocationDetectionForWizard:
             assert "California" in context
             assert "United States" in context
 
+
+class TestModelOptions:
+    """Tests for model selection options in setup wizard."""
+
+    def test_model_options_available(self):
+        """Model options include both recommended and lightweight options."""
+        from jarvis.setup_wizard import ModelsPage
+
+        assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
+        assert "qwen2.5:3b" in ModelsPage.MODEL_OPTIONS
+
+    def test_model_options_have_required_fields(self):
+        """Each model option has required info fields."""
+        from jarvis.setup_wizard import ModelsPage
+
+        for model_id, info in ModelsPage.MODEL_OPTIONS.items():
+            assert "name" in info, f"Model {model_id} missing 'name'"
+            assert "description" in info, f"Model {model_id} missing 'description'"
+            assert "size" in info, f"Model {model_id} missing 'size'"
+            assert "ram" in info, f"Model {model_id} missing 'ram'"
+
