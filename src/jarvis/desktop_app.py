@@ -23,7 +23,7 @@ import traceback
 import atexit
 from pathlib import Path
 from typing import Optional
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QWidget, QLabel
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QWidget, QLabel, QDialog
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 
@@ -441,6 +441,9 @@ class JarvisSystemTray:
         # Register cleanup on app exit
         self.app.aboutToQuit.connect(self.cleanup_on_exit)
 
+        # Check for updates on startup (delayed by 5 seconds to not block app startup)
+        QTimer.singleShot(5000, self.check_for_updates)
+
         debug_log("desktop app initialized", "desktop")
 
     def cleanup_orphaned_processes(self) -> None:
@@ -517,6 +520,11 @@ class JarvisSystemTray:
         self.setup_wizard_action.triggered.connect(self.show_setup_wizard)
         self.menu.addAction(self.setup_wizard_action)
 
+        # Check for updates action
+        self.check_updates_action = QAction("🔄 Check for Updates")
+        self.check_updates_action.triggered.connect(lambda: self.check_for_updates(show_no_update_dialog=True))
+        self.menu.addAction(self.check_updates_action)
+
         self.menu.addSeparator()
 
         # Open directories actions
@@ -565,6 +573,63 @@ class JarvisSystemTray:
         # For existing users: restart to apply changes
         if result == QWizard.DialogCode.Accepted or was_listening:
             self.start_daemon()
+
+    def check_for_updates(self, show_no_update_dialog: bool = False) -> None:
+        """Check for available updates.
+
+        Args:
+            show_no_update_dialog: If True, shows a dialog even when no update is available.
+        """
+        from jarvis.updater import check_for_updates, is_frozen
+        from jarvis.update_dialog import (
+            UpdateAvailableDialog,
+            UpdateProgressDialog,
+            show_no_update_dialog as show_no_update,
+            show_update_error_dialog,
+        )
+
+        # Only check for updates if running as bundled app
+        if not is_frozen():
+            if show_no_update_dialog:
+                from PyQt6.QtWidgets import QMessageBox
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("Updates")
+                msg.setText("Auto-update is only available in the bundled desktop app.")
+                msg.setInformativeText("You're running from source. Use git pull to update.")
+                msg.setStyleSheet(JARVIS_THEME_STYLESHEET)
+                msg.exec()
+            return
+
+        try:
+            status = check_for_updates()
+
+            if status.error:
+                debug_log(f"Update check failed: {status.error}", "desktop")
+                if show_no_update_dialog:
+                    show_update_error_dialog(status.error)
+                return
+
+            if status.update_available and status.latest_release:
+                # Show update available dialog
+                dialog = UpdateAvailableDialog(status)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    # User chose to update
+                    progress_dialog = UpdateProgressDialog(status.latest_release)
+                    progress_dialog.show()
+                    progress_dialog.start_download()
+
+                    result = progress_dialog.exec()
+                    if result == QDialog.DialogCode.Accepted:
+                        # Update successful, exit app
+                        self.quit_app()
+            elif show_no_update_dialog:
+                show_no_update(status.current_version)
+
+        except Exception as e:
+            debug_log(f"Update check error: {e}", "desktop")
+            if show_no_update_dialog:
+                show_update_error_dialog(str(e))
 
     def toggle_log_viewer(self) -> None:
         """Toggle the log viewer window visibility."""

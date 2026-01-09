@@ -55,12 +55,15 @@ except Exception as e:
 hiddenimports = [
     # Jarvis core modules
     'jarvis',
+    'jarvis._version',
     'jarvis.daemon',
     'jarvis.config',
     'jarvis.debug',
     'jarvis.llm',
     'jarvis.main',
     'jarvis.setup_wizard',
+    'jarvis.updater',
+    'jarvis.update_dialog',
     # Listening modules
     'jarvis.listening',
     'jarvis.listening.echo_detection',
