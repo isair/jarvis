@@ -547,8 +547,24 @@ class JarvisSystemTray:
     def show_setup_wizard(self) -> None:
         """Show the setup wizard window."""
         from jarvis.setup_wizard import SetupWizard
+        from PyQt6.QtWidgets import QWizard
+
+        # Remember if daemon was running before wizard
+        was_listening = self.is_listening
+
+        # Stop daemon while setup wizard is open (to allow changes to take effect)
+        if was_listening:
+            self.stop_daemon()
+
         wizard = SetupWizard()
-        wizard.exec()
+        result = wizard.exec()
+
+        # Restart daemon after wizard completes (finished or cancelled)
+        # This ensures any config changes (model selection, etc.) are applied
+        # For first-time users: daemon wasn't running, so we start it
+        # For existing users: restart to apply changes
+        if result == QWizard.DialogCode.Accepted or was_listening:
+            self.start_daemon()
 
     def toggle_log_viewer(self) -> None:
         """Toggle the log viewer window visibility."""
