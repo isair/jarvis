@@ -29,10 +29,26 @@ try:
     import sounddevice as sd
     import webrtcvad
     import numpy as np
-except ImportError:
+except ImportError as e:
     sd = None
     webrtcvad = None
     np = None
+    # Log import error for debugging (especially important for Windows PortAudio issues)
+    import sys as _sys
+    if _sys.platform == 'win32':
+        print(f"  ⚠️  Audio import error: {e}", flush=True)
+        print("     This may indicate PortAudio DLL is not found", flush=True)
+    del _sys
+except OSError as e:
+    # PortAudio DLL loading errors appear as OSError on Windows
+    sd = None
+    webrtcvad = None
+    np = None
+    import sys as _sys
+    if _sys.platform == 'win32':
+        print(f"  ❌ PortAudio initialization failed: {e}", flush=True)
+        print("     Please reinstall the application or check audio drivers", flush=True)
+    del _sys
 
 # Whisper backend imports - try MLX first on Apple Silicon, fall back to faster-whisper
 MLX_WHISPER_AVAILABLE = False
@@ -546,6 +562,22 @@ class VoiceListener(threading.Thread):
         """Main voice listening loop."""
         if sd is None:
             debug_log("sounddevice not available", "voice")
+            print("  ❌ Audio system not available - sounddevice failed to load", flush=True)
+            return
+
+        # Verify PortAudio is working by querying devices (catches Windows DLL issues)
+        try:
+            devices = sd.query_devices()
+            input_devices = [d for d in devices if d.get('max_input_channels', 0) > 0]
+            debug_log(f"PortAudio initialized: {len(input_devices)} input device(s) found", "voice")
+            if not input_devices:
+                print("  ❌ No microphone found. Please connect a microphone.", flush=True)
+                return
+        except Exception as e:
+            debug_log(f"PortAudio device query failed: {e}", "voice")
+            print(f"  ❌ Audio system error: {e}", flush=True)
+            if sys.platform == 'win32':
+                print("     PortAudio may not be properly installed", flush=True)
             return
 
         # Determine and initialize Whisper backend
