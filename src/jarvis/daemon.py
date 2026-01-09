@@ -218,6 +218,7 @@ def main() -> None:
     debug_log("daemon started", "jarvis")
     print("✓ Daemon started", flush=True)
     print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
+    print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}

@@ -286,7 +286,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
-        QSizePolicy, QScrollArea, QLineEdit
+        QSizePolicy, QScrollArea, QLineEdit, QSlider
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
@@ -386,7 +386,7 @@ class SetupWizard(QWizard):
         self.ollama_install_page = OllamaInstallPage(self)
         self.ollama_server_page = OllamaServerPage(self)
         self.models_page = ModelsPage(self)
-        self.mlx_whisper_page = MLXWhisperPage(self)
+        self.mlx_whisper_page = WhisperSetupPage(self)
         self.location_page = LocationPage(self)
         self.complete_page = CompletePage(self)
 
@@ -1361,128 +1361,443 @@ class ModelsPage(QWizardPage):
         return True
 
     def nextId(self) -> int:
-        """Go to next incomplete step, or complete page if all done."""
+        """Go to Whisper setup page next."""
         wizard = self.wizard()
         if isinstance(wizard, SetupWizard):
-            # Check if MLX Whisper needs setup (Apple Silicon only)
-            if is_apple_silicon():
-                mlx_status = wizard.mlx_whisper_status
-                if mlx_status is None or not mlx_status.is_fully_setup:
-                    return wizard.mlx_whisper_page_id
-            # Check if location needs setup
-            if not wizard.is_location_working():
-                return wizard.location_page_id
-            # All done
-            return wizard.complete_page_id
+            # Always show whisper setup page (for model selection on all platforms)
+            return wizard.mlx_whisper_page_id
         return super().nextId()
 
 
-class MLXWhisperPage(QWizardPage):
-    """Page for setting up MLX Whisper on Apple Silicon Macs."""
+class WhisperSetupPage(QWizardPage):
+    """Page for setting up Whisper speech recognition (all platforms)."""
+
+    # Multilingual models - support ~99 languages
+    # Sizes from OpenAI: https://github.com/openai/whisper
+    # (id, name, file_size, vram_required, description)
+    WHISPER_MODEL_OPTIONS = [
+        ("tiny", "Tiny", "~75MB", "~1GB VRAM", "Fastest, lower accuracy"),
+        ("base", "Base", "~150MB", "~1GB VRAM", "Fast, decent accuracy"),
+        ("small", "Small", "~500MB", "~2GB VRAM", "Good balance (Recommended)"),
+        ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Better accuracy, slower"),
+        ("large-v3-turbo", "Large V3 Turbo", "~1.6GB", "~6GB VRAM", "Best accuracy, 8x faster than large"),
+    ]
+
+    # English-only models - optimized for English, slightly better accuracy
+    # Note: large/turbo models don't have .en variants
+    WHISPER_MODEL_OPTIONS_EN = [
+        ("tiny.en", "Tiny", "~75MB", "~1GB VRAM", "Fastest, English optimized"),
+        ("base.en", "Base", "~150MB", "~1GB VRAM", "Fast, English optimized"),
+        ("small.en", "Small", "~500MB", "~2GB VRAM", "Good balance (Recommended)"),
+        ("medium.en", "Medium", "~1.5GB", "~5GB VRAM", "Better accuracy, English optimized"),
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
+        self._is_apple_silicon = is_apple_silicon()
+        self._is_english_only = True  # Default to English-only for better accuracy
 
-        layout = QVBoxLayout()
-        layout.setSpacing(20)
-        layout.setContentsMargins(40, 40, 40, 40)
+        # Main layout with scroll area for overflow
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header
-        title = QLabel("🎤 MLX Whisper Setup")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(content)
+        layout.setSpacing(10)
+        layout.setContentsMargins(30, 20, 30, 20)
+
+        # Header - different text based on platform
+        if self._is_apple_silicon:
+            title = QLabel("🎤 MLX Whisper Setup")
+            subtitle_text = (
+                "GPU-accelerated speech recognition. Choose language and model size."
+            )
+        else:
+            title = QLabel("🎤 Whisper Model Selection")
+            subtitle_text = "Choose language mode and model size for speech recognition."
+
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel(
-            "MLX Whisper provides fast speech recognition on Apple Silicon Macs "
-            "using GPU acceleration. This is optional but highly recommended."
-        )
+        subtitle = QLabel(subtitle_text)
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
-        layout.addSpacing(20)
+        # Language selection card
+        lang_card = QFrame()
+        lang_card.setObjectName("card")
+        lang_layout = QVBoxLayout(lang_card)
+        lang_layout.setContentsMargins(16, 12, 16, 12)
+        lang_layout.setSpacing(8)
 
-        # Status card
-        card = QFrame()
-        card.setObjectName("card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 24, 24, 24)
-        card_layout.setSpacing(12)
+        lang_title = QLabel("🌍 Language Support")
+        lang_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        lang_layout.addWidget(lang_title)
+
+        # Language toggle buttons
+        lang_btn_layout = QHBoxLayout()
+        lang_btn_layout.setSpacing(8)
+
+        self._english_btn = QPushButton("🇬🇧 English Only")
+        self._english_btn.setCheckable(True)
+        self._english_btn.setChecked(True)
+        self._english_btn.setFixedHeight(36)
+        self._english_btn.clicked.connect(lambda: self._on_language_changed(True))
+
+        self._multilingual_btn = QPushButton("🌐 Multilingual (99 langs)")
+        self._multilingual_btn.setCheckable(True)
+        self._multilingual_btn.setFixedHeight(36)
+        self._multilingual_btn.clicked.connect(lambda: self._on_language_changed(False))
+
+        lang_btn_style = """
+            QPushButton {
+                text-align: center;
+                padding: 6px 12px;
+                border: 2px solid #27272a;
+                border-radius: 6px;
+                background: #1a1d26;
+                color: #e4e4e7;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                border-color: #f59e0b;
+                background: #1e222c;
+            }
+            QPushButton:checked {
+                border-color: #f59e0b;
+                background: rgba(245, 158, 11, 0.15);
+                color: #fbbf24;
+            }
+        """
+        self._english_btn.setStyleSheet(lang_btn_style)
+        self._multilingual_btn.setStyleSheet(lang_btn_style)
+
+        lang_btn_layout.addWidget(self._english_btn)
+        lang_btn_layout.addWidget(self._multilingual_btn)
+        lang_layout.addLayout(lang_btn_layout)
+
+        # Language info label
+        self._lang_info_label = QLabel()
+        self._lang_info_label.setWordWrap(True)
+        self._lang_info_label.setStyleSheet("font-size: 10px; color: #71717a; background: transparent;")
+        lang_layout.addWidget(self._lang_info_label)
+
+        layout.addWidget(lang_card)
+
+        # Model selection card with slider
+        selection_card = QFrame()
+        selection_card.setObjectName("card")
+        selection_layout = QVBoxLayout(selection_card)
+        selection_layout.setContentsMargins(16, 12, 16, 12)
+        selection_layout.setSpacing(4)
+
+        selection_title = QLabel("🎯 Choose Model Size")
+        selection_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        selection_layout.addWidget(selection_title)
+
+        # Container for slider labels (will be rebuilt on language change)
+        self._labels_container = QWidget()
+        self._labels_container.setStyleSheet("background: transparent;")
+        self._labels_layout = QHBoxLayout(self._labels_container)
+        self._labels_layout.setContentsMargins(0, 4, 0, 0)
+        self._labels_layout.setSpacing(0)
+        selection_layout.addWidget(self._labels_container)
+
+        # Slider with proper padding for handle visibility
+        slider_container = QWidget()
+        slider_container.setStyleSheet("background: transparent;")
+        slider_container.setFixedHeight(36)
+        slider_inner = QHBoxLayout(slider_container)
+        slider_inner.setContentsMargins(0, 0, 0, 0)
+
+        self._model_slider = QSlider(Qt.Orientation.Horizontal)
+        self._model_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._model_slider.setTickInterval(1)
+        self._model_slider.setStyleSheet("""
+            QSlider {
+                background: transparent;
+                height: 32px;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #27272a;
+                height: 4px;
+                background: #1a1d26;
+                border-radius: 2px;
+                margin: 0;
+            }
+            QSlider::handle:horizontal {
+                background: #f59e0b;
+                border: none;
+                width: 16px;
+                height: 16px;
+                margin: -6px 0;
+                border-radius: 8px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #fbbf24;
+            }
+            QSlider::sub-page:horizontal {
+                background: rgba(245, 158, 11, 0.4);
+                border-radius: 2px;
+            }
+            QSlider::tick-mark {
+                background: #71717a;
+            }
+        """)
+        self._model_slider.valueChanged.connect(self._on_slider_changed)
+        slider_inner.addWidget(self._model_slider)
+        selection_layout.addWidget(slider_container)
+
+        # Container for size labels (will be rebuilt on language change)
+        self._size_container = QWidget()
+        self._size_container.setStyleSheet("background: transparent;")
+        self._size_layout = QHBoxLayout(self._size_container)
+        self._size_layout.setContentsMargins(0, 0, 0, 4)
+        self._size_layout.setSpacing(0)
+        selection_layout.addWidget(self._size_container)
+
+        # Selected model info
+        self._model_info_label = QLabel()
+        self._model_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._model_info_label.setWordWrap(True)
+        self._model_info_label.setFixedHeight(32)
+        self._model_info_label.setStyleSheet("""
+            font-size: 11px;
+            color: #e4e4e7;
+            padding: 6px 10px;
+            background: #1a1d26;
+            border-radius: 6px;
+        """)
+        selection_layout.addWidget(self._model_info_label)
+
+        layout.addWidget(selection_card)
+
+        # Store selected model (default to tiny for fast first-time experience)
+        self._selected_whisper_model: str = "tiny.en"
+
+        # Build initial slider UI
+        self._rebuild_slider_ui()
+        self._update_language_info()
+
+        # MLX-specific installation section (only for Apple Silicon)
+        self._mlx_section = QFrame()
+        self._mlx_section.setObjectName("card")
+        mlx_layout = QVBoxLayout(self._mlx_section)
+        mlx_layout.setContentsMargins(16, 12, 16, 12)
+        mlx_layout.setSpacing(6)
 
         status_title = QLabel("📋 Requirements")
-        status_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
-        card_layout.addWidget(status_title)
-        card_layout.addSpacing(8)
+        status_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        mlx_layout.addWidget(status_title)
 
         self.ffmpeg_status = self._create_status_row("🎬 FFmpeg", "Checking...")
         self.mlx_status = self._create_status_row("🧠 MLX Whisper", "Checking...")
 
-        card_layout.addWidget(self.ffmpeg_status)
-        card_layout.addWidget(self.mlx_status)
+        mlx_layout.addWidget(self.ffmpeg_status)
+        mlx_layout.addWidget(self.mlx_status)
 
-        layout.addWidget(card)
-
-        # Progress
+        # Progress bar for installations
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        layout.addWidget(self.progress)
+        self.progress.setFixedHeight(16)
+        mlx_layout.addWidget(self.progress)
 
-        # Log output
+        # Log output for installations
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setVisible(False)
-        self.log_output.setMaximumHeight(120)
-        layout.addWidget(self.log_output)
+        self.log_output.setMaximumHeight(60)
+        self.log_output.setStyleSheet("font-size: 10px;")
+        mlx_layout.addWidget(self.log_output)
 
-        # Buttons
+        # Installation buttons
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(12)
+        btn_layout.setSpacing(8)
 
-        self.install_ffmpeg_btn = QPushButton("🎬 Install FFmpeg")
+        self.install_ffmpeg_btn = QPushButton("🎬 FFmpeg")
+        self.install_ffmpeg_btn.setFixedHeight(32)
         self.install_ffmpeg_btn.clicked.connect(self._install_ffmpeg)
         btn_layout.addWidget(self.install_ffmpeg_btn)
 
-        self.install_mlx_btn = QPushButton("🧠 Install MLX Whisper")
+        self.install_mlx_btn = QPushButton("🧠 MLX Whisper")
+        self.install_mlx_btn.setFixedHeight(32)
         self.install_mlx_btn.clicked.connect(self._install_mlx_whisper)
         btn_layout.addWidget(self.install_mlx_btn)
 
-        self.skip_btn = QPushButton("⏭️ Skip")
-        self.skip_btn.setObjectName("secondary")
-        self.skip_btn.clicked.connect(self._skip)
-        btn_layout.addWidget(self.skip_btn)
-
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        mlx_layout.addLayout(btn_layout)
+
+        layout.addWidget(self._mlx_section)
+
+        # Hide MLX section on non-Apple Silicon
+        if not self._is_apple_silicon:
+            self._mlx_section.setVisible(False)
 
         # Status label
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("font-size: 11px; background: transparent;")
         layout.addWidget(self.status_label)
 
         layout.addStretch()
 
-        self.setLayout(layout)
-        self._is_complete = False
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
+        self.setLayout(main_layout)
+
+        self._is_complete = True  # Always complete - model selection can always proceed
         self._worker: Optional[CommandWorker] = None
+
+    def _get_current_model_options(self) -> list:
+        """Get the model options list based on current language mode."""
+        return self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+
+    def _on_language_changed(self, is_english: bool):
+        """Handle language mode change."""
+        self._is_english_only = is_english
+        self._english_btn.setChecked(is_english)
+        self._multilingual_btn.setChecked(not is_english)
+
+        # Update the language info text
+        self._update_language_info()
+
+        # Rebuild slider with new model options
+        self._rebuild_slider_ui()
+
+    def _update_language_info(self):
+        """Update the language info label based on current selection."""
+        if self._is_english_only:
+            self._lang_info_label.setText(
+                "English-only models are optimized for English and may have slightly better accuracy."
+            )
+        else:
+            self._lang_info_label.setText(
+                "Multilingual models support 99 languages including: Spanish, French, German, Chinese, "
+                "Japanese, Korean, Arabic, Hindi, Portuguese, Russian, and many more."
+            )
+
+    def _rebuild_slider_ui(self):
+        """Rebuild the slider labels based on current language mode."""
+        options = self._get_current_model_options()
+        n = len(options)
+
+        # Clear existing labels
+        while self._labels_layout.count():
+            item = self._labels_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.spacerItem():
+                pass  # Spacers are automatically cleaned up
+
+        while self._size_layout.count():
+            item = self._size_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Add labels aligned with slider tick positions
+        # Slider ticks are at 0, 1/(n-1), 2/(n-1), ..., 1 of the groove width
+        # We achieve this by: label[0], stretch, label[1], stretch, ..., label[n-1]
+        # First label left-aligned, last label right-aligned, middle labels centered
+        for i, (model_id, name, file_size, vram, desc) in enumerate(options):
+            # Model name label
+            label = QLabel(name)
+            if i == 0:
+                label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            elif i == n - 1:
+                label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            else:
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("font-size: 11px; color: #e4e4e7; background: transparent;")
+            label.setFixedHeight(18)
+            self._labels_layout.addWidget(label)
+
+            # Size/VRAM label - single line to save space
+            size_label = QLabel(f"{file_size} / {vram}")
+            if i == 0:
+                size_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            elif i == n - 1:
+                size_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            else:
+                size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            size_label.setStyleSheet("font-size: 9px; color: #71717a; background: transparent;")
+            size_label.setFixedHeight(16)
+            self._size_layout.addWidget(size_label)
+
+            # Add stretch after each label except the last
+            if i < n - 1:
+                self._labels_layout.addStretch(1)
+                self._size_layout.addStretch(1)
+
+        # Update slider range
+        self._model_slider.setMinimum(0)
+        self._model_slider.setMaximum(len(options) - 1)
+
+        # Find best matching position for current selection or default to "tiny"
+        model_ids = [m[0] for m in options]
+        current_base = self._selected_whisper_model.replace(".en", "")
+
+        # Try to find matching model
+        if self._is_english_only:
+            target = f"{current_base}.en" if not current_base.endswith(".en") else current_base
+        else:
+            target = current_base.replace(".en", "")
+
+        if target in model_ids:
+            slider_pos = model_ids.index(target)
+        elif "tiny.en" in model_ids:
+            slider_pos = model_ids.index("tiny.en")
+        elif "tiny" in model_ids:
+            slider_pos = model_ids.index("tiny")
+        else:
+            slider_pos = 0  # Default to first (smallest) model
+
+        self._model_slider.setValue(slider_pos)
+        self._selected_whisper_model = options[slider_pos][0]
+        self._update_model_info()
+
+    def _on_slider_changed(self, value: int):
+        """Handle slider value change."""
+        options = self._get_current_model_options()
+        if 0 <= value < len(options):
+            model_id, name, file_size, ram, desc = options[value]
+            self._selected_whisper_model = model_id
+            self._update_model_info()
+
+    def _update_model_info(self):
+        """Update the model info label based on current selection."""
+        options = self._get_current_model_options()
+        for model_id, name, file_size, ram, desc in options:
+            if model_id == self._selected_whisper_model:
+                lang_note = "English only" if self._is_english_only else "99 languages"
+                self._model_info_label.setText(f"Selected: {name} ({file_size}, {ram}) — {desc} [{lang_note}]")
+                break
 
     def _create_status_row(self, label_text: str, status_text: str) -> QWidget:
         """Create a status row widget."""
         row = QWidget()
         row.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 8, 0, 8)
+        row.setFixedHeight(28)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 4, 0, 4)
 
         label = QLabel(label_text)
-        label.setStyleSheet("font-size: 14px; background: transparent;")
-        layout.addWidget(label)
+        label.setStyleSheet("font-size: 12px; background: transparent;")
+        row_layout.addWidget(label)
 
-        layout.addStretch()
+        row_layout.addStretch()
 
         status = QLabel(status_text)
-        status.setStyleSheet("font-size: 14px; color: #a1a1aa; background: transparent;")
+        status.setStyleSheet("font-size: 12px; color: #a1a1aa; background: transparent;")
         status.setObjectName("status_label")
-        layout.addWidget(status)
+        row_layout.addWidget(status)
 
         return row
 
@@ -1492,16 +1807,62 @@ class MLXWhisperPage(QWizardPage):
         if status_label:
             status_label.setText(status_text)
             if is_success:
-                status_label.setStyleSheet("font-size: 14px; color: #4ade80; background: transparent;")
+                status_label.setStyleSheet("font-size: 12px; color: #4ade80; background: transparent;")
             else:
-                status_label.setStyleSheet("font-size: 14px; color: #fbbf24; background: transparent;")
+                status_label.setStyleSheet("font-size: 12px; color: #fbbf24; background: transparent;")
+
+    def _save_whisper_model_to_config(self):
+        """Save the selected whisper model to config file."""
+        try:
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            if xdg:
+                config_path = Path(xdg) / "jarvis" / "config.json"
+            else:
+                config_path = Path.home() / ".config" / "jarvis" / "config.json"
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if config_path.exists():
+                with config_path.open("r", encoding="utf-8") as f:
+                    config = json.load(f)
+            else:
+                config = {}
+
+            config["whisper_model"] = self._selected_whisper_model
+
+            with config_path.open("w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+
+            return True
+        except Exception:
+            return False
 
     def initializePage(self):
         """Check status when page is shown."""
-        self._refresh_status()
+        # Load the currently configured whisper model
+        current_whisper_model = "tiny.en"  # Default to tiny for fast first-time experience
+        try:
+            cfg = load_settings()
+            current_whisper_model = cfg.whisper_model
+        except Exception:
+            pass
 
-    def _refresh_status(self):
-        """Refresh MLX Whisper status."""
+        # Detect language mode from the model name
+        self._is_english_only = current_whisper_model.endswith(".en")
+        self._english_btn.setChecked(self._is_english_only)
+        self._multilingual_btn.setChecked(not self._is_english_only)
+        self._update_language_info()
+
+        # Set the selected model and rebuild slider
+        self._selected_whisper_model = current_whisper_model
+        self._rebuild_slider_ui()
+
+        # Refresh MLX status only on Apple Silicon
+        if self._is_apple_silicon:
+            self._refresh_mlx_status()
+
+    def _refresh_mlx_status(self):
+        """Refresh MLX Whisper installation status (Apple Silicon only)."""
         status = check_mlx_whisper_status()
 
         # Update wizard status
@@ -1517,6 +1878,7 @@ class MLXWhisperPage(QWizardPage):
         else:
             self._update_status_row(self.ffmpeg_status, "❌ Not installed", False)
             self.install_ffmpeg_btn.setEnabled(True)
+            self.install_ffmpeg_btn.setText("🎬 Install FFmpeg")
 
         # Update MLX Whisper status
         if status.is_mlx_whisper_installed:
@@ -1526,23 +1888,20 @@ class MLXWhisperPage(QWizardPage):
         else:
             self._update_status_row(self.mlx_status, "❌ Not installed", False)
             self.install_mlx_btn.setEnabled(True)
+            self.install_mlx_btn.setText("🧠 Install MLX Whisper")
 
-        # Check if fully set up
+        # Update status message based on setup state
         if status.is_fully_setup:
-            self._is_complete = True
-            self.status_label.setText("✅ MLX Whisper is ready! You'll get fast GPU-accelerated speech recognition.")
+            self.status_label.setText("✅ MLX Whisper is ready! GPU-accelerated speech recognition enabled.")
             self.status_label.setStyleSheet("color: #4ade80;")
-            self.skip_btn.setVisible(False)
         else:
-            self._is_complete = False
             if not status.is_ffmpeg_installed:
                 self.status_label.setText(
-                    "💡 FFmpeg is required for audio processing. "
-                    "Click 'Install FFmpeg' to install it via Homebrew."
+                    "💡 Install FFmpeg for audio processing, or continue to save your model selection."
                 )
             elif not status.is_mlx_whisper_installed:
                 self.status_label.setText(
-                    "💡 Click 'Install MLX Whisper' to enable GPU-accelerated speech recognition."
+                    "💡 Install MLX Whisper for GPU acceleration, or continue to save your model selection."
                 )
             self.status_label.setStyleSheet("color: #a1a1aa;")
 
@@ -1601,7 +1960,7 @@ class MLXWhisperPage(QWizardPage):
         self.install_ffmpeg_btn.setText("🎬 Install FFmpeg")
 
         if success:
-            self._refresh_status()
+            self._refresh_mlx_status()
         else:
             self.status_label.setText(f"❌ Failed to install FFmpeg: {message}")
             self.status_label.setStyleSheet("color: #f87171;")
@@ -1613,24 +1972,19 @@ class MLXWhisperPage(QWizardPage):
         self.install_mlx_btn.setText("🧠 Install MLX Whisper")
 
         if success:
-            self._refresh_status()
+            self._refresh_mlx_status()
         else:
             self.status_label.setText(f"❌ Failed to install MLX Whisper: {message}")
             self.status_label.setStyleSheet("color: #f87171;")
 
-    def _skip(self):
-        """Skip MLX Whisper setup."""
-        self._is_complete = True
-        self.status_label.setText(
-            "⚠️ Skipped MLX Whisper. Speech recognition will use CPU (slower). "
-            "You can install it later via: pip install mlx-whisper"
-        )
-        self.status_label.setStyleSheet("color: #fbbf24;")
-        self.completeChanged.emit()
-
     def isComplete(self) -> bool:
         """Page is complete when setup is done or skipped."""
         return self._is_complete
+
+    def validatePage(self) -> bool:
+        """Save whisper model selection when leaving the page."""
+        self._save_whisper_model_to_config()
+        return True
 
     def nextId(self) -> int:
         """Go to next incomplete step, or complete page if all done."""

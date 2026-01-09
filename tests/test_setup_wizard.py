@@ -382,3 +382,57 @@ class TestModelOptions:
             assert "size" in info, f"Model {model_id} missing 'size'"
             assert "ram" in info, f"Model {model_id} missing 'ram'"
 
+
+class TestWhisperModelOptions:
+    """Tests for whisper model selection options in setup wizard."""
+
+    def test_whisper_multilingual_model_options_available(self):
+        """Multilingual whisper model options include recommended and lightweight options."""
+        from jarvis.setup_wizard import WhisperSetupPage
+
+        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS]
+        assert "small" in model_ids
+        assert "tiny" in model_ids
+        assert "large-v3-turbo" in model_ids
+
+    def test_whisper_english_model_options_available(self):
+        """English-only whisper model options include recommended and lightweight options."""
+        from jarvis.setup_wizard import WhisperSetupPage
+
+        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN]
+        assert "small.en" in model_ids
+        assert "tiny.en" in model_ids
+        assert "medium.en" in model_ids
+        # Note: large models don't have .en variants
+        assert not any("large" in m for m in model_ids)
+
+    def test_whisper_multilingual_model_options_have_required_fields(self):
+        """Each multilingual whisper model option has required info fields."""
+        from jarvis.setup_wizard import WhisperSetupPage
+
+        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS:
+            assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
+            model_id, name, file_size, ram, desc = model_tuple
+            assert model_id, "Model ID should not be empty"
+            assert name, "Model name should not be empty"
+            assert file_size, "Model file size should not be empty"
+            assert ram, "Model RAM requirement should not be empty"
+            assert desc, "Model description should not be empty"
+            # Multilingual models should NOT have .en suffix
+            assert not model_id.endswith(".en"), f"Multilingual model should not end with .en: {model_id}"
+
+    def test_whisper_english_model_options_have_required_fields(self):
+        """Each English-only whisper model option has required info fields."""
+        from jarvis.setup_wizard import WhisperSetupPage
+
+        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN:
+            assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
+            model_id, name, file_size, ram, desc = model_tuple
+            assert model_id, "Model ID should not be empty"
+            assert name, "Model name should not be empty"
+            assert file_size, "Model file size should not be empty"
+            assert ram, "Model RAM requirement should not be empty"
+            assert desc, "Model description should not be empty"
+            # English-only models should have .en suffix
+            assert model_id.endswith(".en"), f"English model should end with .en: {model_id}"
+
