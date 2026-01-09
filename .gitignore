@@ -15,3 +15,13 @@ build/
 dist/
 *.spec.backup
 qt.conf
+
+# TRM-Chat (local training artifacts)
+trm-chat/models/
+trm-chat/venv/
+trm-chat/data/
+trm-chat/checkpoints/
+trm-chat/reference/
+
+# Reference repos
+nano-trm/

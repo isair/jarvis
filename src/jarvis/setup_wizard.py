@@ -124,7 +124,19 @@ def check_ollama_cli() -> Tuple[bool, Optional[str]]:
     """
     Check if Ollama CLI is installed.
     Returns (is_installed, path_to_ollama).
+
+    If using an alternative backend (non-default ollama_base_url),
+    this check is skipped and returns (True, None).
     """
+    # Skip CLI check if using alternative backend
+    try:
+        cfg = load_settings()
+        if cfg.ollama_base_url != "http://127.0.0.1:11434":
+            # Using alternative backend, skip CLI check
+            return True, None
+    except Exception:
+        pass
+
     # Check common installation paths
     ollama_path = shutil.which("ollama")
     if ollama_path:
@@ -201,7 +213,27 @@ def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
     """
     Get list of installed Ollama models.
     Returns list of model names.
+
+    Tries API first (/api/tags), falls back to CLI for standard Ollama.
     """
+    # Try API first (works with alternative backends like TRM-Chat)
+    try:
+        cfg = load_settings()
+        base_url = cfg.ollama_base_url
+        response = requests.get(f"{base_url}/api/tags", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            models = []
+            for model in data.get("models", []):
+                name = model.get("name", "")
+                if name:
+                    models.append(name)
+            if models:
+                return models
+    except Exception:
+        pass
+
+    # Fall back to CLI
     if ollama_path is None:
         ollama_path = shutil.which("ollama") or "ollama"
 
