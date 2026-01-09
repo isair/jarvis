@@ -15,11 +15,12 @@ Features:
 - Comprehensive state system (ASLEEP, IDLE, LISTENING, THINKING, SPEAKING)
 - Smooth wake/sleep transitions with opacity-based activation
 - Intelligent idle activity system (only active in IDLE state) that alternates between behaviors:
-  * looking_around (35%) - Frequent eye movement scanning the environment
-  * hovering (25%) - Gentle vertical floating motion
-  * head_tilt (20%) - Subtle head rotation
+  * looking_around (33%) - Frequent eye movement scanning the environment
+  * hovering (24%) - Gentle vertical floating motion
+  * head_tilt (19%) - Subtle head rotation
   * deep_gaze (10%) - Focused staring at one point
   * stretch (7%) - Bigger movement with enhanced breathing
+  * wink (4%) - Playful one-eye wink with slight head tilt
   * yawn (3%) - Rare tired behavior with eye closing
 - Base breathing animation always active when awake
 - All activities smoothly transition and respect current state
@@ -209,6 +210,8 @@ class LowPolyFaceWidget(QWidget):
         self._target_gaze_y = 0.0
         self._stretch_intensity = 0.0  # For stretching activity
         self._yawn_progress = 0.0  # For yawning activity
+        self._wink_progress = 0.0  # For winking activity
+        self._wink_eye = "left"  # Which eye is winking
 
         # Thinking spinner animation
         self._spinner_angle = 0.0  # Rotation angle for thinking spinner
@@ -257,12 +260,13 @@ class LowPolyFaceWidget(QWidget):
     def _select_idle_activity(self) -> str:
         """Select a random idle activity based on weighted probabilities."""
         activities = [
-            ("looking_around", 35),  # Most common - natural eye movement
-            ("hovering", 25),        # Common - gentle floating
-            ("head_tilt", 20),       # Common - subtle head rotation
+            ("looking_around", 33),  # Most common - natural eye movement
+            ("hovering", 24),        # Common - gentle floating
+            ("head_tilt", 19),       # Common - subtle head rotation
             ("deep_gaze", 10),       # Occasional - stare at one spot
             ("stretch", 7),          # Occasional - bigger movement
-            ("yawn", 3),            # Rare - eyes close briefly
+            ("wink", 4),             # Rare - playful one-eye wink
+            ("yawn", 3),             # Rare - eyes close briefly
         ]
 
         # Weighted random selection
@@ -285,6 +289,7 @@ class LowPolyFaceWidget(QWidget):
             "head_tilt": random.randint(90, 210),        # 3-7 seconds
             "deep_gaze": random.randint(150, 360),       # 5-12 seconds (longer stare)
             "stretch": random.randint(60, 120),          # 2-4 seconds (quick stretch)
+            "wink": random.randint(30, 50),              # 1-1.7 seconds (quick wink)
             "yawn": random.randint(90, 150),             # 3-5 seconds
         }
         return durations.get(activity, 120)
@@ -354,6 +359,30 @@ class LowPolyFaceWidget(QWidget):
             self._hover_offset = math.sin(self._hover_time) * 12.0 * self._stretch_intensity
             self._head_tilt = math.sin(self._activity_timer * 0.1) * 4.0 * self._stretch_intensity
 
+        elif self._current_activity == "wink":
+            # Playful one-eye wink
+            if self._activity_timer == 0:  # Pick which eye at start
+                self._wink_eye = random.choice(["left", "right"])
+
+            progress = self._activity_timer / self._activity_duration
+            if progress < 0.25:  # Close winking eye
+                self._wink_progress += (1.0 - self._wink_progress) * 0.25
+            elif progress > 0.6:  # Open winking eye
+                self._wink_progress *= 0.8
+            else:  # Hold the wink
+                self._wink_progress += (1.0 - self._wink_progress) * 0.1
+
+            # Slight head tilt toward winking eye for extra charm
+            tilt_dir = -1 if self._wink_eye == "left" else 1
+            self._head_tilt += (tilt_dir * 2.0 - self._head_tilt) * 0.08
+
+            # Minimal other movements
+            self._gaze_x *= 0.95
+            self._gaze_y *= 0.95
+            self._hover_offset *= 0.95
+            self._stretch_intensity *= 0.9
+            self._yawn_progress *= 0.9
+
         elif self._current_activity == "yawn":
             # Eyes close and open, subtle mouth movement
             progress = self._activity_timer / self._activity_duration
@@ -370,6 +399,7 @@ class LowPolyFaceWidget(QWidget):
             self._hover_offset *= 0.95
             self._head_tilt *= 0.95
             self._stretch_intensity *= 0.9
+            self._wink_progress *= 0.9
 
     def _decay_activity_animations(self):
         """Smoothly decay all activity animations when not idle."""
@@ -379,6 +409,7 @@ class LowPolyFaceWidget(QWidget):
         self._head_tilt *= 0.92
         self._stretch_intensity *= 0.85
         self._yawn_progress *= 0.85
+        self._wink_progress *= 0.85
         self._target_gaze_x *= 0.92
         self._target_gaze_y *= 0.92
     
@@ -682,11 +713,22 @@ class LowPolyFaceWidget(QWidget):
             yawn_factor = self._yawn_progress * 0.7  # Partial close, not full
             blink_factor = max(blink_factor, yawn_factor)
 
+        # Calculate wink factors for each eye
+        left_blink = blink_factor
+        right_blink = blink_factor
+
+        # Apply wink to just one eye
+        if self._wink_progress > 0.05:
+            if self._wink_eye == "left":
+                left_blink = max(blink_factor, self._wink_progress)
+            else:
+                right_blink = max(blink_factor, self._wink_progress)
+
         # Draw left eye
-        self._draw_eye(painter, cx - eye_spacing, eye_y, eye_size, blink_factor, is_left=True)
+        self._draw_eye(painter, cx - eye_spacing, eye_y, eye_size, left_blink, is_left=True)
 
         # Draw right eye
-        self._draw_eye(painter, cx + eye_spacing, eye_y, eye_size, blink_factor, is_left=False)
+        self._draw_eye(painter, cx + eye_spacing, eye_y, eye_size, right_blink, is_left=False)
     
     def _draw_eye(self, painter: QPainter, ex: float, ey: float,
                   size: float, blink_factor: float, is_left: bool):
