@@ -233,11 +233,18 @@ class MemoryViewerWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        web_view_created = False
         if HAS_WEBENGINE:
             # Use embedded web view - URL will be set in showEvent when window is shown
-            self.web_view = QWebEngineView()
-            layout.addWidget(self.web_view)
-        else:
+            try:
+                self.web_view = QWebEngineView()
+                layout.addWidget(self.web_view)
+                web_view_created = True
+            except Exception as e:
+                debug_log(f"failed to create QWebEngineView: {e}", "desktop")
+                self.web_view = None
+
+        if not web_view_created:
             # Fallback: show message with button to open in browser
             self.web_view = None
 
@@ -299,17 +306,24 @@ class MemoryViewerWindow(QMainWindow):
 
             if is_frozen:
                 # Bundled app: run Flask server in a thread
-                from jarvis.memory_viewer import app as flask_app
+                try:
+                    from jarvis.memory_viewer import app as flask_app
+                except Exception as import_err:
+                    debug_log(f"failed to import memory_viewer: {import_err}", "desktop")
+                    return False
 
                 def run_flask_server():
-                    # Disable Flask's reloader and debug mode
-                    flask_app.run(
-                        host="127.0.0.1",
-                        port=self.MEMORY_VIEWER_PORT,
-                        debug=False,
-                        use_reloader=False,
-                        threaded=True
-                    )
+                    try:
+                        # Disable Flask's reloader and debug mode
+                        flask_app.run(
+                            host="127.0.0.1",
+                            port=self.MEMORY_VIEWER_PORT,
+                            debug=False,
+                            use_reloader=False,
+                            threaded=True
+                        )
+                    except Exception as server_err:
+                        debug_log(f"memory viewer server error: {server_err}", "desktop")
 
                 self.server_thread = threading.Thread(target=run_flask_server, daemon=True)
                 self.server_thread.start()
@@ -371,15 +385,26 @@ class MemoryViewerWindow(QMainWindow):
         """Called when window is shown."""
         super().showEvent(event)
 
-        # Start server when window opens
-        if self.start_server():
-            if self.web_view:
-                # Set URL and load (URL is set here, not in __init__, to avoid WebEngine crash)
-                self.web_view.setUrl(QUrl(f"http://localhost:{self.MEMORY_VIEWER_PORT}"))
+        try:
+            # Start server when window opens
+            if self.start_server():
+                if self.web_view:
+                    # Set URL and load (URL is set here, not in __init__, to avoid WebEngine crash)
+                    self.web_view.setUrl(QUrl(f"http://localhost:{self.MEMORY_VIEWER_PORT}"))
+                else:
+                    # Open in system browser as fallback
+                    import webbrowser
+                    webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
             else:
-                # Open in system browser as fallback
+                # Server failed to start, open in browser as fallback
+                debug_log("memory viewer server failed to start, opening in browser", "desktop")
                 import webbrowser
                 webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
+        except Exception as e:
+            debug_log(f"error in memory viewer showEvent: {e}", "desktop")
+            # Fallback to browser
+            import webbrowser
+            webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
 
     def closeEvent(self, event) -> None:
         """Called when window is closed."""
@@ -970,8 +995,8 @@ class JarvisSystemTray:
                     # Hide other windows while showing diary dialog
                     if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
                         self.face_window.hide()
-                    if hasattr(self, 'log_window') and self.log_window.isVisible():
-                        self.log_window.hide()
+                    if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
+                        self.log_viewer.hide()
 
                     # Show dialog (non-modal so we can process events)
                     diary_dialog.show()
@@ -1027,8 +1052,8 @@ class JarvisSystemTray:
                     # Hide other windows
                     if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
                         self.face_window.hide()
-                    if hasattr(self, 'log_window') and self.log_window.isVisible():
-                        self.log_window.hide()
+                    if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
+                        self.log_viewer.hide()
 
                 # Send SIGINT for graceful shutdown
                 if sys.platform == "win32":
