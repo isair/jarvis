@@ -239,11 +239,26 @@ class TextToSpeech:
         if self.rate:
             # mac 'say' rate via -r words per minute
             cmd += ["-r", str(int(self.rate))]
-        cmd += [text]
+        # Use stdin for text to avoid command-line argument length limits
+        # This is more robust for long responses
+        cmd += ["-f", "-"]  # Read from stdin
 
         try:
             with self._process_lock:
-                self._current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._current_process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+            # Write text to stdin and close to signal end of input
+            try:
+                if self._current_process.stdin is not None:
+                    self._current_process.stdin.write(text.encode("utf-8", errors="replace"))
+                    self._current_process.stdin.close()
+            except Exception:
+                pass
 
             # Wait for process to complete or be interrupted
             while self._current_process.poll() is None:
@@ -253,8 +268,14 @@ class TextToSpeech:
                     self._current_process.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
+
+            # Check if process exited with error (non-zero return code)
+            if self._current_process.returncode != 0:
+                print(f"  ⚠️ TTS process exited with code {self._current_process.returncode}", flush=True)
+
             return False  # Completed normally
-        except Exception:
+        except Exception as e:
+            print(f"  ⚠️ TTS error: {e}", flush=True)
             return False
 
     def _win_sapi(self, text: str) -> bool:
@@ -349,22 +370,60 @@ class TextToSpeech:
         """Returns True if interrupted, False if completed normally"""
         spd = shutil.which("spd-say")
         if spd:
-            cmd = [spd, text]
-            return self._run_speech_process(cmd)
+            # spd-say needs -e/--pipe-mode to read from stdin
+            cmd = [spd, "-e", "-w"]  # -w waits for speech to complete
+            return self._run_speech_process_with_stdin(cmd, text)
         espeak = shutil.which("espeak")
         if espeak:
-            cmd = [espeak]
+            # espeak uses --stdin flag to read from stdin
+            cmd = [espeak, "--stdin"]
             if self.rate:
                 cmd += ["-s", str(int(self.rate))]
             if self.voice:
                 cmd += ["-v", self.voice]
-            cmd += [text]
-            return self._run_speech_process(cmd)
+            return self._run_speech_process_with_stdin(cmd, text)
         # If no TTS command found, silently skip
         return False
 
+    def _run_speech_process_with_stdin(self, cmd: list[str], text: str) -> bool:
+        """Run speech process with text provided via stdin to avoid argument length limits."""
+        try:
+            with self._process_lock:
+                self._current_process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+            # Write text to stdin
+            try:
+                if self._current_process.stdin is not None:
+                    self._current_process.stdin.write(text.encode("utf-8", errors="replace"))
+                    self._current_process.stdin.close()
+            except Exception:
+                pass
+
+            # Wait for process to complete or be interrupted
+            while self._current_process.poll() is None:
+                if self._should_interrupt.is_set():
+                    return True  # Interrupted
+                try:
+                    self._current_process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    continue
+
+            # Log if process exited with error
+            if self._current_process.returncode != 0:
+                print(f"  ⚠️ TTS process exited with code {self._current_process.returncode}", flush=True)
+
+            return False  # Completed normally
+        except Exception as e:
+            print(f"  ⚠️ TTS error: {e}", flush=True)
+            return False
+
     def _run_speech_process(self, cmd: list[str]) -> bool:
-        """Helper method to run speech process with interruption support"""
+        """Helper method to run speech process with interruption support (legacy, uses args)"""
         try:
             with self._process_lock:
                 self._current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
