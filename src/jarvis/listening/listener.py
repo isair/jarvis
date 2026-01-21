@@ -540,16 +540,50 @@ class VoiceListener(threading.Thread):
                 print("  ❌ faster-whisper not available. Install with: pip install faster-whisper", flush=True)
                 return
 
-            try:
-                device = getattr(self.cfg, "whisper_device", "auto")
-                compute = getattr(self.cfg, "whisper_compute_type", "int8")
-                print(f"  🔄 Loading Whisper model '{model_name}' (device={device}, compute={compute})...", flush=True)
-                self.model = WhisperModel(model_name, device=device, compute_type=compute)
-                debug_log(f"faster-whisper initialized: name={model_name}, device={device}, compute={compute}", "voice")
-                print(f"  ✅ Whisper model '{model_name}' loaded on {device}", flush=True)
-            except Exception as e:
-                debug_log(f"failed to initialize faster-whisper: {e}", "voice")
-                print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
+            device = getattr(self.cfg, "whisper_device", "auto")
+            compute = getattr(self.cfg, "whisper_compute_type", "int8")
+
+            # Try loading with fallback compute types if the preferred type isn't supported
+            # Fallback order goes from less compatible to more compatible:
+            # int8 -> float16 -> float32 (most compatible, always works)
+            compute_types_to_try = [compute]
+            if compute == "int8":
+                # int8 might fail on some devices, fall back to float16 then float32
+                compute_types_to_try.extend(["float16", "float32"])
+            elif compute == "float16":
+                # float16 might fail on some devices, fall back to float32
+                compute_types_to_try.append("float32")
+            # If compute is already float32, no fallback needed (most compatible)
+
+            last_error = None
+            for try_compute in compute_types_to_try:
+                try:
+                    print(f"  🔄 Loading Whisper model '{model_name}' (device={device}, compute={try_compute})...", flush=True)
+                    self.model = WhisperModel(model_name, device=device, compute_type=try_compute)
+                    debug_log(f"faster-whisper initialized: name={model_name}, device={device}, compute={try_compute}", "voice")
+
+                    # Show success message, noting if we fell back to a different compute type
+                    if try_compute != compute:
+                        print(f"  ⚠️  Note: Using '{try_compute}' compute type ('{compute}' not supported on this device)", flush=True)
+                    print(f"  ✅ Whisper model '{model_name}' loaded on {device}", flush=True)
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e).lower()
+                    # Only try fallback for compute type incompatibility errors
+                    if "compute type" in error_str or "int8" in error_str or "float16" in error_str:
+                        debug_log(f"compute type '{try_compute}' not supported, trying fallback: {e}", "voice")
+                        continue
+                    else:
+                        # For other errors (model not found, network issues, etc.), don't try fallbacks
+                        debug_log(f"failed to initialize faster-whisper: {e}", "voice")
+                        print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
+                        return
+
+            if last_error is not None:
+                debug_log(f"failed to initialize faster-whisper with any compute type: {last_error}", "voice")
+                print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
                 return
 
         # Audio parameters
