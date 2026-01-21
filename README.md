@@ -80,12 +80,12 @@ ollama pull nomic-embed-text
 <summary>Using 8GB RAM or older hardware?</summary>
 
 ```bash
-ollama pull qwen2.5:3b         # Lightweight alternative
+ollama pull llama3.2:3b         # Lightweight alternative
 ollama pull nomic-embed-text
 ```
 Then set in `~/.config/jarvis/config.json`:
 ```json
-{ "ollama_chat_model": "qwen2.5:3b" }
+{ "ollama_chat_model": "llama3.2:3b" }
 ```
 </details>
 
@@ -126,7 +126,7 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 |----------|-----|-------|
 | High-end | 32GB+ | `gpt-oss:20b` (default) |
 | Standard | 16GB | `gpt-oss:20b` |
-| Lightweight | 8GB | `qwen2.5:3b` |
+| Lightweight | 8GB | `llama3.2:3b` |
 
 ## Configuration
 
@@ -315,7 +315,7 @@ Get API key at [composio.dev](https://composio.dev)
 
 **Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
 
-**Responses are slow** - Use lighter model: `"ollama_chat_model": "qwen2.5:3b"`
+**Responses are slow** - Use lighter model: `"ollama_chat_model": "llama3.2:3b"`
 
 **Windows: App won't start** - Extract full zip first, check Windows Defender
 

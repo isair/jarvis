@@ -1023,9 +1023,9 @@ class ModelsPage(QWizardPage):
             "size": "~12GB",
             "ram": "16GB+",
         },
-        "qwen2.5:3b": {
-            "name": "Qwen 2.5 3B (Lightweight)",
-            "description": "Faster, smaller, ~2GB download",
+        "llama3.2:3b": {
+            "name": "Llama 3.2 3B (Lightweight)",
+            "description": "Faster, smaller, native tool calling, ~2GB download",
             "size": "~2GB",
             "ram": "8GB+",
         },

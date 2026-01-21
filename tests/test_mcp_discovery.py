@@ -9,7 +9,7 @@ This test suite ensures that:
 """
 
 import pytest
-from jarvis.tools.registry import discover_mcp_tools, generate_tools_description, run_tool_with_retries, ToolExecutionResult
+from jarvis.tools.registry import discover_mcp_tools, generate_tools_description, generate_tools_json_schema, run_tool_with_retries, ToolExecutionResult
 
 
 class DummyCfg:
@@ -254,3 +254,67 @@ def test_mcp_tool_exception_handling(monkeypatch):
 
     assert result.success is False
     assert "Connection failed" in result.error_message
+
+
+@pytest.mark.unit
+def test_generate_tools_json_schema_returns_openai_format():
+    """Test that generate_tools_json_schema returns OpenAI-compatible format for native tool calling."""
+    from jarvis.tools.registry import ToolSpec
+
+    mcp_tools = {
+        "server__read": ToolSpec(
+            name="server__read",
+            description="Read a file from the server",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path to read"
+                    }
+                },
+                "required": ["path"]
+            }
+        )
+    }
+
+    allowed_tools = ["server__read", "screenshot"]
+    tools_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
+
+    # Should return a list
+    assert isinstance(tools_schema, list)
+    assert len(tools_schema) >= 2  # At least screenshot and server__read
+
+    # Each tool should have the OpenAI format
+    for tool in tools_schema:
+        assert "type" in tool
+        assert tool["type"] == "function"
+        assert "function" in tool
+        assert "name" in tool["function"]
+        assert "description" in tool["function"]
+        assert "parameters" in tool["function"]
+
+    # Check that MCP tool is included
+    tool_names = [t["function"]["name"] for t in tools_schema]
+    assert "server__read" in tool_names
+    assert "screenshot" in tool_names
+
+    # Check MCP tool has correct schema
+    server_read_tool = next(t for t in tools_schema if t["function"]["name"] == "server__read")
+    assert server_read_tool["function"]["description"] == "Read a file from the server"
+    assert "properties" in server_read_tool["function"]["parameters"]
+    assert "path" in server_read_tool["function"]["parameters"]["properties"]
+
+
+@pytest.mark.unit
+def test_generate_tools_json_schema_handles_empty_input():
+    """Test that generate_tools_json_schema handles empty or missing inputs gracefully."""
+    # With no MCP tools
+    tools_schema = generate_tools_json_schema(["screenshot"], None)
+    assert isinstance(tools_schema, list)
+    assert len(tools_schema) >= 1
+
+    # With empty MCP tools dict
+    tools_schema = generate_tools_json_schema(["screenshot"], {})
+    assert isinstance(tools_schema, list)
+    assert len(tools_schema) >= 1

@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
 from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
-from ..tools.registry import run_tool_with_retries, generate_tools_description, BUILTIN_TOOLS
+from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response
 from .enrichment import extract_search_params_for_memory
@@ -129,6 +129,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             mcp_tools = {}
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
+    tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
 
     # Log tool availability (helps diagnose hangs)
     mcp_count = len(mcp_tools)
@@ -173,29 +174,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         )
         guidance.append(voice_style)
 
-        # Describe the standard message format and capabilities
-        formats = [
-            "Tool-first approach - leverage your capabilities:",
-            "1) PREFER tool calls when you need current/specific information or can perform helpful actions",
-            "2) Use the thinking field for internal reasoning (not shown to user)",
-            "3) Provide natural language responses based on tool results or when no tools are needed",
-            "",
-            "Tool calling format:",
-            "- Use the standard tool_calls field with function name and arguments",
-            "- All tools follow the same OpenAI-compatible format regardless of source",
-            "",
-            "After receiving tool results:",
-            "- Continue the conversation naturally based on the information gathered",
-            "- Chain additional tool calls if more information or actions are needed to fully address the request",
-            "- Use thinking to plan your approach for complex multi-step tasks",
-            "",
-            "Your thinking field is for internal reasoning and won't be shown to the user."
-        ]
-        guidance.append("\n" + "\n".join(formats))
+        # Brief tool guidance - detailed tool info is passed via the tools API parameter
+        tool_guidance = (
+            "You have access to tools - use them proactively when you need current information or to perform actions. "
+            "After receiving tool results, respond naturally based on the information gathered."
+        )
+        guidance.append(tool_guidance)
+
         if conversation_context:
             guidance.append("\nRelevant conversation history:\n" + conversation_context)
-        if tools_desc:
-            guidance.append("\nTools:\n" + tools_desc)
+
+        # Note: tools_desc is NOT included here because tools are passed via the native tools API parameter
+        # Including tools in both places confuses the model and causes it to not use tools properly
+
         return "\n".join(guidance)
 
     messages = []  # type: ignore[var-annotated]
@@ -207,82 +198,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         messages.extend(recent_messages)
     # Current user message
     messages.append({"role": "user", "content": redacted})
-
-    def _extract_tool_call_from_text(content: str):
-        """Fallback parser for tool calls embedded in text content.
-
-        Handles formats like:
-        - toolName(arg1="value1", arg2=123)
-        - tool_calls: [{"id": "...", "function": {"name": "...", "arguments": {...}}}]
-        """
-        import re
-
-        if not content or not isinstance(content, str):
-            return None, None, None
-
-        content = content.strip()
-
-        # Pattern 1: tool_calls JSON in content
-        # Matches: tool_calls: [...] or "tool_calls": [...]
-        tc_match = re.search(r'(?:^|\s)tool_calls\s*:\s*(\[.+\])', content, re.DOTALL)
-        if tc_match:
-            try:
-                tc_json = tc_match.group(1)
-                tc_list = json.loads(tc_json)
-                if isinstance(tc_list, list) and len(tc_list) > 0:
-                    first = tc_list[0]
-                    if isinstance(first, dict):
-                        func = first.get("function", {})
-                        name = func.get("name", "")
-                        args = func.get("arguments", {})
-                        tool_call_id = first.get("id", f"call_{uuid.uuid4().hex[:8]}")
-                        # Handle string arguments (some models JSON-encode the args)
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except Exception:
-                                args = {}
-                        if name:
-                            return name, (args if isinstance(args, dict) else {}), tool_call_id
-            except Exception:
-                pass
-
-        # Pattern 2: Python-style function call
-        # Matches: toolName(arg1="value1", arg2=123)
-        # Only match known tool patterns to avoid false positives
-        func_match = re.match(r'^(\w+)\s*\(\s*(.+?)\s*\)$', content, re.DOTALL)
-        if func_match:
-            func_name = func_match.group(1)
-            args_str = func_match.group(2)
-
-            # Parse arguments - handle key="value" and key=value patterns
-            args = {}
-            # Match: key="value" or key='value' or key=number or key=true/false
-            arg_pattern = r'(\w+)\s*=\s*(?:"([^"]*?)"|\'([^\']*?)\'|(\d+(?:\.\d+)?)|(\w+))'
-            for match in re.finditer(arg_pattern, args_str):
-                key = match.group(1)
-                # Get the value from whichever group matched
-                value = match.group(2) or match.group(3) or match.group(4) or match.group(5)
-                if value is not None:
-                    # Try to convert to appropriate type
-                    if match.group(4):  # Number
-                        try:
-                            value = float(value) if '.' in value else int(value)
-                        except ValueError:
-                            pass
-                    elif match.group(5):  # Bare word (true/false/null)
-                        if value.lower() == 'true':
-                            value = True
-                        elif value.lower() == 'false':
-                            value = False
-                        elif value.lower() == 'null' or value.lower() == 'none':
-                            value = None
-                    args[key] = value
-
-            if func_name:
-                return func_name, args, f"call_{uuid.uuid4().hex[:8]}"
-
-        return None, None, None
 
     def _extract_structured_tool_call(resp: dict):
         try:
@@ -315,17 +230,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                         if name:
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
-                # Fallback: try to extract tool call from content text
-                content = msg.get("content", "")
-                if content:
-                    return _extract_tool_call_from_text(content)
+                # Note: Text-based fallback parsing was removed since all supported models
+                # (gpt-oss:20b, llama3.2:3b) use native tool calling via the tools API parameter
 
         except Exception:
             pass
         return None, None, None
 
-    def _add_fresh_context_message(messages_list):
-        """Add a fresh system message with current time and location context."""
+    def _get_context_string() -> str:
+        """Get current time and location context as a string."""
         try:
             now = datetime.now(timezone.utc)
             current_time = now.strftime("%A, %B %d, %Y at %H:%M UTC")
@@ -338,21 +251,37 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                     auto_detect=getattr(cfg, 'location_auto_detect', True),
                     resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
                 )
-
-            context_message = {
-                "role": "system",
-                "content": f"Current context:\n• Time: {current_time}\n• {location_context}",
-                "_is_context_message": True  # Mark for cleanup
-            }
-            messages_list.append(context_message)
+            return f"{current_time}, {location_context}"
         except Exception:
-            # Don't fail if context gathering fails
-            pass
+            return ""
 
-    def _cleanup_context_messages(messages_list):
-        """Remove context messages from previous turns."""
-        # Remove messages marked as context messages
-        messages_list[:] = [msg for msg in messages_list if not msg.get("_is_context_message")]
+    def _update_system_message_with_context(messages_list):
+        """Update the first system message with fresh context.
+
+        Note: Adding a separate system message AFTER the user message breaks
+        native tool calling in models like Llama 3.2. Instead, we prepend
+        context to the first system message.
+        """
+        context_str = _get_context_string()
+        if not context_str:
+            return
+
+        # Find and update the first system message (skip tool guidance messages)
+        for msg in messages_list:
+            if (msg.get("role") == "system" and
+                not msg.get("_is_context_injected") and
+                not msg.get("_is_tool_guidance")):
+                # Remove old context if present (marked by prefix)
+                content = msg.get("content", "")
+                if content.startswith("[Context:"):
+                    # Remove the old context line
+                    lines = content.split("\n", 1)
+                    content = lines[1] if len(lines) > 1 else ""
+
+                # Prepend fresh context
+                msg["content"] = f"[Context: {context_str}]\n\n{content}"
+                msg["_is_context_injected"] = True
+                break
 
     reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
@@ -365,12 +294,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
 
-        # Clean up context messages from previous turns
-        if turn > 1:
-            _cleanup_context_messages(messages)
-
-        # Add fresh context (time/location) before each LLM call
-        _add_fresh_context_message(messages)
+        # Update the system message with fresh context (time/location) before each LLM call
+        # Note: We update the first system message rather than appending a new one because
+        # adding a system message AFTER the user message breaks native tool calling
+        _update_system_message_with_context(messages)
 
         # Debug: log current messages array structure (original)
         if getattr(cfg, 'voice_debug', False):
@@ -382,12 +309,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
 
         # Send messages to Ollama
+        # Send messages to Ollama with native tool calling support
         llm_resp = chat_with_messages(
             base_url=cfg.ollama_base_url,
             chat_model=cfg.ollama_chat_model,
             messages=messages,
             timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
             extra_options=None,
+            tools=tools_json_schema,
         )
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
@@ -441,17 +370,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             # Empty response with no tool calls - this is problematic
             debug_log("  ⚠️ Empty assistant response with no tool calls", "planning")
 
-            # Check if we're stuck
-            has_tool_results = any(msg.get("role") == "tool" for msg in messages[-8:])
-            if turn > 3 and has_tool_results:
-                messages.append({
-                    "role": "system",
-                    "content": "Please provide a natural language response based on the tool results above."
-                })
-                continue
-            elif turn > 6:
+            # With native tool calling, if we get empty response with no tool calls, the model is stuck
+            # Note: We don't add system messages here because they break native tool calling
+            if turn > 3:
                 debug_log("  🚨 Force exit - too many empty responses", "planning")
-                break
             break
 
         # Parse for tool calls using OpenAI standard format
@@ -467,46 +389,25 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         if not content and not tool_name and thinking:
             debug_log(f"  🧠 Thinking step (no action needed)", "planning")
 
-            # Check if we have tool results but LLM is just thinking without taking action
-            has_tool_results = any(msg.get("role") == "tool" for msg in messages[-6:])
-            if turn > 2 and has_tool_results:
-                messages.append({
-                    "role": "system",
-                    "content": "You have tool results above. Please provide a natural language response to the user based on that information. Do not make more tool calls - just answer the user's question directly."
-                })
-                continue
+            # With native tool calling, the model should naturally proceed to respond or call tools
+            # Note: We don't add system messages here because they break native tool calling
+            # If stuck thinking for too many turns, the loop will naturally exit at max_turns
             continue
         if tool_name:
-            # Check if we already have results for this type of tool
-            has_this_tool_result = any(
-                msg.get("role") == "tool" and
-                msg.get("tool_name") == tool_name
-                for msg in messages[-10:]
-            )
+            debug_log(f"🛠️ tool requested: {tool_name}", "planning")
 
-            if has_this_tool_result:
-                debug_log(f"  ⚠️ Blocking repeated {tool_name} call", "planning")
-
-                # Count how many times we've told the LLM to stop
-                stop_messages = sum(1 for msg in messages[-8:]
-                                  if msg.get("role") == "system" and "STOP:" in msg.get("content", ""))
-
-                if stop_messages >= 3:
-                    # The LLM is completely stuck - force it to give a text response
-                    debug_log("  🛑 LLM stuck in tool loop - forcing text-only response", "planning")
-                    messages.append({
-                        "role": "system",
-                        "content": "You MUST provide a natural language answer NOW. No more tool calls."
-                    })
-                    continue
-
+            # Check if tool is not allowed - respond with tool error
+            if tool_name not in allowed_tools:
+                debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
+                # Use tool response instead of system message to maintain native tool calling compatibility
                 messages.append({
-                    "role": "system",
-                    "content": f"STOP: You already have {tool_name} results in the messages above. Read those results and provide a natural language response to the user. Do not make another {tool_name} call."
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"Error: Tool '{tool_name}' is not available. Available tools: {', '.join(allowed_tools[:5])}{'...' if len(allowed_tools) > 5 else ''}"
                 })
                 continue
 
-            # Also check exact signature for duplicate suppression
+            # Check exact signature for duplicate suppression
             try:
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
                 signature = (tool_name, stable_args)
@@ -514,19 +415,26 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 signature = (tool_name, "__unserializable_args__")
 
             if signature in recent_tool_signatures:
+                debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
+                # Use tool response to guide the model without breaking native tool calling
                 messages.append({
-                    "role": "system",
-                    "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages above. Please use those results."
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."
                 })
                 continue
 
-            debug_log(f"🛠️ tool requested: {tool_name}", "planning")
-            if tool_name not in allowed_tools:
-                debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
-                # Inform the agent via system note and continue
+            # Check if we already have results for this type of tool (prevents tool call loops)
+            duplicate_tool_count = sum(
+                1 for msg in messages[-10:]
+                if msg.get("role") == "tool" and msg.get("tool_name") == tool_name
+            )
+            if duplicate_tool_count >= 2:
+                debug_log(f"  ⚠️ Too many {tool_name} calls ({duplicate_tool_count}) - returning guidance", "planning")
                 messages.append({
-                    "role": "system",
-                    "content": f"Tool '{tool_name}' is not allowed. Allowed tools: {', '.join(allowed_tools)}"
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."
                 })
                 continue
 
@@ -551,13 +459,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 })
                 debug_log(f"    ✅ tool result appended ({len(result.reply_text)} chars)", "planning")
 
-                # Remind the LLM it has data available - but let it decide next steps
-                # It might answer, chain another tool call, or ask for clarification
-                messages.append({
-                    "role": "system",
-                    "content": "Tool result received. Decide: answer the user, call another tool if needed, or ask for clarification.",
-                    "_is_tool_guidance": True  # Mark for potential cleanup
-                })
+                # Note: We don't add a guidance system message here because adding system messages
+                # after the conversation starts breaks native tool calling in models like Llama 3.2.
+                # The model should naturally decide to answer, chain tools, or ask for clarification.
                 # Record signature after a successful tool response
                 try:
                     recent_tool_signatures.append(signature)

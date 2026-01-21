@@ -139,14 +139,23 @@ def chat_with_messages(
     messages: List[Dict[str, str]],
     timeout_sec: float = 30.0,
     extra_options: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Send an arbitrary messages array to the LLM and return the raw response JSON.
     Caller is responsible for interpreting assistant content (including JSON/tool calls).
 
+    Args:
+        base_url: Ollama base URL
+        chat_model: Model name
+        messages: Conversation messages
+        timeout_sec: Request timeout
+        extra_options: Additional model options
+        tools: Optional list of tools in OpenAI-compatible JSON schema format for native tool calling
+
     Returns the parsed JSON response dict on success, or None on error/timeout.
     """
-    payload = {
+    payload: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
         "stream": False,
@@ -154,7 +163,11 @@ def chat_with_messages(
     }
     if extra_options and isinstance(extra_options, dict):
         # Merge shallowly into options
-        payload["options"].update(extra_options)  # type: ignore
+        payload["options"].update(extra_options)
+
+    # Add tools for native tool calling support (Ollama 0.4+)
+    if tools and isinstance(tools, list) and len(tools) > 0:
+        payload["tools"] = tools
 
     try:
         resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)

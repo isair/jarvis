@@ -370,7 +370,7 @@ class TestModelOptions:
         from jarvis.setup_wizard import ModelsPage
 
         assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
-        assert "qwen2.5:3b" in ModelsPage.MODEL_OPTIONS
+        assert "llama3.2:3b" in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):
         """Each model option has required info fields."""

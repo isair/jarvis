@@ -154,6 +154,65 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
         return {}
 
 
+def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> List[Dict[str, Any]]:
+    """
+    Generate tools in OpenAI-compatible JSON schema format for native tool calling.
+
+    This format is supported by Ollama for models with native tool calling support
+    (Llama 3.1+, Llama 3.2, Qwen 3, Mistral, etc.).
+
+    Returns a list of tool definitions in this format:
+    [
+        {
+            "type": "function",
+            "function": {
+                "name": "toolName",
+                "description": "Tool description",
+                "parameters": {
+                    "type": "object",
+                    "properties": {...},
+                    "required": [...]
+                }
+            }
+        }
+    ]
+    """
+    names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
+    tools: List[Dict[str, Any]] = []
+
+    # Add built-in tools
+    for tool_name in names:
+        tool = BUILTIN_TOOLS.get(tool_name)
+        if not tool:
+            continue
+
+        tool_def = {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema or {"type": "object", "properties": {}, "required": []},
+            }
+        }
+        tools.append(tool_def)
+
+    # Add discovered MCP tools
+    if mcp_tools:
+        for tool_name, spec in mcp_tools.items():
+            if tool_name in names:  # Only include if allowed
+                tool_def = {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.inputSchema or {"type": "object", "properties": {}, "required": []},
+                    }
+                }
+                tools.append(tool_def)
+
+    return tools
+
+
 def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
     """Produce a compact tool help string for the system prompt using OpenAI standard format."""
     names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))

@@ -56,13 +56,13 @@ Design principles enforced by the engine:
 
 6. Agentic Messages Loop with Dynamic Context
    - For each turn of the loop (max `agentic_max_turns` turns, default 8):
-     - Clean up stale context messages from previous turns (if turn > 1)
-     - Inject fresh context message with current time and location
-     - Send messages to LLM and read assistant response
+     - Update first system message with fresh time/location context
+     - Send messages to LLM with native tool calling via Ollama's tools API parameter
      - Parse response using standard OpenAI-compatible message format:
        - `tool_calls` field: Execute tools and continue loop
        - `thinking` field: Internal reasoning (not shown to user), continue loop
        - `content` field: Natural language response to user
+   - Note: System messages are NOT added after the conversation starts, as this breaks native tool calling in models like Llama 3.2
 
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
@@ -76,13 +76,13 @@ Design principles enforced by the engine:
      - LLM returns empty response with no tool calls for multiple turns
 
    Tool protocol details:
-   - The LLM requests tools via the standard `tool_calls` field in its message
-   - Tool calls are extracted from the `tool_calls` field (OpenAI format)
+   - Native tool calling: Tools are passed to Ollama via the `tools` API parameter in OpenAI-compatible JSON schema format
+   - The LLM requests tools via the standard `tool_calls` field in its response message
    - Internal reasoning uses the `thinking` field (not shown to user)
    - Allowed tools: profile allowlist plus MCP (if configured)
-   - Duplicate suppression: the engine drops repeated tool calls with identical args from the last few turns and instructs the model to reuse prior results
+   - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
    - Tool results are appended to messages as `{role: "tool", tool_call_id: "<id>", content: "<text>"}`; errors as `{role: "tool", tool_call_id: "<id>", content: "Error: <message>"}`
-   - Fallback prompting: If stuck after multiple turns with tool results, system prompts for final response
+   - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
 
 8. Output and Memory Update
    - Remove any tool protocol markers (e.g., lines beginning with a reserved prefix) from the final response.
@@ -176,17 +176,16 @@ sequenceDiagram
 #### Dynamic Context Injection
 The system injects fresh contextual information before each LLM call in the agentic loop to ensure the model has current, relevant information:
 
-**Context Message Format:**
+**Context Format:**
 ```
-Current context:
-• Time: Monday, September 15, 2025 at 17:53 UTC
-• Location: San Francisco, CA, United States (America/Los_Angeles)
+[Context: Monday, September 15, 2025 at 17:53 UTC, Location: San Francisco, CA, United States (America/Los_Angeles)]
+
+{original system prompt content}
 ```
 
 **Implementation Details:**
-- Context messages are injected before every turn of the 8-turn agentic loop
-- Stale context messages from previous turns are automatically cleaned up
-- Context messages are marked with `_is_context_message: True` for identification
+- Context is prepended to the FIRST system message before every turn of the 8-turn agentic loop
+- Note: Separate context messages are NOT used because adding system messages after the conversation starts breaks native tool calling in models like Llama 3.2
 - Time is provided in UTC format with day name for clarity
 - Location is derived from configured IP address or auto-detection (if enabled)
 - Falls back gracefully to "Location: Unknown" if location services unavailable
