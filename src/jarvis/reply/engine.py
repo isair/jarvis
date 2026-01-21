@@ -197,7 +197,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         # Brief tool guidance - detailed tool info is passed via the tools API parameter
         tool_guidance = (
             "You have access to tools - use them proactively when you need current information or to perform actions. "
-            "After receiving tool results, respond naturally based on the information gathered."
+            "After receiving tool results, use the data to FULFILL THE USER'S ORIGINAL REQUEST. "
+            "Do NOT describe the structure of tool responses - extract the relevant information and present it conversationally. "
+            "Tool results are raw data for you to interpret and use, not content to describe or explain."
         )
         guidance.append(tool_guidance)
 

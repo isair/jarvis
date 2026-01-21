@@ -12,7 +12,7 @@ This specification documents only the reply flow that begins when a valid user q
 
 Design principles enforced by the engine:
 - Tool-Profile Separation: Tools define data retrieval; profiles define style/instructions.
-- Tool Response Flow: Tools return raw data; formatting/personality is handled by the LLM through the engine's loop.
+- Tool Response Flow: Tools return raw data; formatting/personality is handled by the LLM through the engine's loop. The system prompt explicitly instructs the model to use tool results to fulfill the user's original request, not to describe the structure or format of the tool response.
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
 
