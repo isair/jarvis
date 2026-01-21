@@ -303,6 +303,55 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 msg["_is_context_injected"] = True
                 break
 
+    def _is_malformed_json_response(content: str) -> bool:
+        """
+        Detect malformed or inappropriate JSON-like responses.
+
+        Catches cases where the model outputs truncated JSON, API specs,
+        or other non-conversational structured data (hallucinated JSON).
+
+        Returns:
+            True if the content looks like malformed/inappropriate JSON
+        """
+        if not content or not content.strip():
+            return False
+
+        trimmed = content.strip()
+
+        # Detect JSON that starts with { but doesn't end with }
+        if trimmed.startswith("{") and not trimmed.endswith("}"):
+            debug_log("  ⚠️ Detected truncated JSON response", "planning")
+            return True
+
+        # Detect obvious hallucinated JSON patterns - model outputting data structure
+        # instead of natural language response
+        json_hallucination_indicators = [
+            # API specs
+            '"specVersion":', '"openapi":', '"swagger":',
+            '"apis":', '"endpoints":', '"paths":',
+            '"api.github.com"', '"host":', '"basePath":',
+            # Data structures that aren't conversational
+            '"site":', '"location":', '"forecast":',
+            '"current_date":', '"high":', '"low":',
+            '"lang": "json"', '"section":',
+        ]
+        for indicator in json_hallucination_indicators:
+            if indicator in trimmed:
+                debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
+                return True
+
+        # If it looks like JSON (starts with {) but extraction failed,
+        # check if it's just a data dump without conversational fields
+        if trimmed.startswith("{"):
+            # Count how many common conversational JSON fields are present
+            conversational_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
+            has_conversational_field = any(f'"{f}"' in trimmed.lower() for f in conversational_fields)
+            if not has_conversational_field:
+                debug_log("  ⚠️ JSON response lacks conversational fields", "planning")
+                return True
+
+        return False
+
     def _extract_text_from_json_response(content: str) -> Optional[str]:
         """
         Handle responses where the model outputs JSON instead of natural language.
@@ -549,12 +598,35 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
 
         # Handle final response - extract text if model output JSON
         extracted = _extract_text_from_json_response(content)
-        reply = extracted if extracted else content
+        if extracted:
+            reply = extracted
+        elif _is_malformed_json_response(content):
+            # Model output malformed JSON or API specs - provide helpful message
+            debug_log(f"  ⚠️ Rejecting malformed JSON response: '{content[:100]}...'", "planning")
+
+            # Check if using a small model and suggest upgrading
+            model_name = cfg.ollama_chat_model.lower() if cfg.ollama_chat_model else ""
+            is_small_model = any(size in model_name for size in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+
+            if is_small_model:
+                reply = (
+                    "I had trouble understanding that request. "
+                    "This can happen with smaller AI models. "
+                    "You can switch to a more capable model through the Setup Wizard "
+                    "in the menu bar."
+                )
+            else:
+                reply = (
+                    "I had trouble understanding that request. "
+                    "Could you try rephrasing it?"
+                )
+        else:
+            reply = content
         break
 
     # Step 9: Handle error case - return error message if no reply
     if not reply or not reply.strip():
-        reply = "Sorry, I ran into an issue processing your request. Could you try again?"
+        reply = "Sorry, I had trouble processing that. Could you try again?"
         debug_log("no reply generated, returning error message", "planning")
 
         # Print error message
