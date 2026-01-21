@@ -29,10 +29,26 @@ try:
     import sounddevice as sd
     import webrtcvad
     import numpy as np
-except ImportError:
+except ImportError as e:
     sd = None
     webrtcvad = None
     np = None
+    # Log import error for debugging (especially important for Windows PortAudio issues)
+    import sys as _sys
+    if _sys.platform == 'win32':
+        print(f"  ⚠️  Audio import error: {e}", flush=True)
+        print("     This may indicate PortAudio DLL is not found", flush=True)
+    del _sys
+except OSError as e:
+    # PortAudio DLL loading errors appear as OSError on Windows
+    sd = None
+    webrtcvad = None
+    np = None
+    import sys as _sys
+    if _sys.platform == 'win32':
+        print(f"  ❌ PortAudio initialization failed: {e}", flush=True)
+        print("     Please reinstall the application or check audio drivers", flush=True)
+    del _sys
 
 # Whisper backend imports - try MLX first on Apple Silicon, fall back to faster-whisper
 MLX_WHISPER_AVAILABLE = False
@@ -104,6 +120,10 @@ class VoiceListener(threading.Thread):
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._pre_roll: deque = deque()
+
+        # Audio callback monitoring (for debugging)
+        self._callback_count = 0
+        self._last_callback_log_time = 0
 
         # Voice activity detection
         self.is_speech_active = False
@@ -297,13 +317,16 @@ class VoiceListener(threading.Thread):
                 is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
 
             # Check if this should be rejected as echo; during TTS try salvaging suffix
-            if self.echo_detector.should_reject_as_echo(
+            should_reject = self.echo_detector.should_reject_as_echo(
                 text_lower,
                 utterance_energy,
                 is_during_tts,
                 getattr(self.cfg, 'tts_rate', 200),
                 utterance_start_time
-            ):
+            )
+            if should_reject:
+                if sys.platform == 'win32':
+                    print(f"  🔇 Echo rejected: '{text_lower[:50]}...' (during_tts={is_during_tts})", flush=True)
                 if is_during_tts:
                     # Attempt to remove leading echo and accept the remainder
                     salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
@@ -344,7 +367,11 @@ class VoiceListener(threading.Thread):
         aliases = set(getattr(self.cfg, "wake_aliases", [])) | {wake_word}
         fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
 
-        if is_wake_word_detected(text_lower, wake_word, list(aliases), fuzzy_ratio):
+        wake_detected = is_wake_word_detected(text_lower, wake_word, list(aliases), fuzzy_ratio)
+        if sys.platform == 'win32':
+            print(f"  🔍 Wake word check: '{wake_word}' in '{text_lower}' → {wake_detected}", flush=True)
+
+        if wake_detected:
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
             self.state_manager.start_collection(query_fragment)
 
@@ -515,6 +542,7 @@ class VoiceListener(threading.Thread):
         try:
             if self._should_stop:
                 return
+            self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
                 self._audio_q.put_nowait(chunk)
@@ -546,7 +574,54 @@ class VoiceListener(threading.Thread):
         """Main voice listening loop."""
         if sd is None:
             debug_log("sounddevice not available", "voice")
+            print("  ❌ Audio system not available - sounddevice failed to load", flush=True)
             return
+
+        # Verify PortAudio is working by querying devices (catches Windows DLL issues)
+        try:
+            devices = sd.query_devices()
+            input_devices = [d for d in devices if d.get('max_input_channels', 0) > 0]
+            debug_log(f"PortAudio initialized: {len(input_devices)} input device(s) found", "voice")
+            if not input_devices:
+                print("  ❌ No microphone found. Please connect a microphone.", flush=True)
+                return
+        except Exception as e:
+            debug_log(f"PortAudio device query failed: {e}", "voice")
+            print(f"  ❌ Audio system error: {e}", flush=True)
+            if sys.platform == 'win32':
+                print("     PortAudio may not be properly installed", flush=True)
+            return
+
+        # Windows 11: Test microphone permission by attempting a brief recording
+        # This catches privacy settings that silently block audio access
+        if sys.platform == 'win32':
+            try:
+                print("  🔐 Checking microphone permission...", flush=True)
+                # Try to record 0.1 seconds - will fail immediately if permission denied
+                test_recording = sd.rec(int(0.1 * self._samplerate), samplerate=self._samplerate, channels=1, blocking=True)
+                if test_recording is not None and len(test_recording) > 0:
+                    print("  ✅ Microphone permission OK", flush=True)
+                else:
+                    print("  ⚠️  Microphone returned empty audio", flush=True)
+            except Exception as e:
+                error_str = str(e).lower()
+                print(f"  ❌ Microphone permission check failed: {e}", flush=True)
+                if "unapproved" in error_str or "denied" in error_str or "access" in error_str or "-9999" in str(e):
+                    print("", flush=True)
+                    print("  ┌─────────────────────────────────────────────────────────┐", flush=True)
+                    print("  │  🔒 MICROPHONE ACCESS BLOCKED BY WINDOWS               │", flush=True)
+                    print("  │                                                         │", flush=True)
+                    print("  │  To fix this:                                          │", flush=True)
+                    print("  │  1. Open Windows Settings                              │", flush=True)
+                    print("  │  2. Go to Privacy & security → Microphone              │", flush=True)
+                    print("  │  3. Turn ON 'Microphone access'                        │", flush=True)
+                    print("  │  4. Turn ON 'Let apps access your microphone'          │", flush=True)
+                    print("  │  5. Turn ON 'Let desktop apps access your microphone'  │", flush=True)
+                    print("  │                                                         │", flush=True)
+                    print("  │  Then restart Jarvis.                                  │", flush=True)
+                    print("  └─────────────────────────────────────────────────────────┘", flush=True)
+                    print("", flush=True)
+                return
 
         # Determine and initialize Whisper backend
         self._whisper_backend = self._determine_whisper_backend()
@@ -588,37 +663,77 @@ class VoiceListener(threading.Thread):
             device = getattr(self.cfg, "whisper_device", "auto")
             compute = getattr(self.cfg, "whisper_compute_type", "int8")
 
-            # Try loading with fallback compute types if the preferred type isn't supported
-            # Fallback order goes from less compatible to more compatible:
-            # int8 -> float16 -> float32 (most compatible, always works)
-            compute_types_to_try = [compute]
+            # On Windows, check if CUDA is actually available before trying to use it
+            # faster-whisper lazily loads CUDA libraries during transcription, causing
+            # runtime errors even if model loading succeeded
+            if sys.platform == 'win32' and device in ("auto", "cuda"):
+                try:
+                    import ctypes
+                    ctypes.CDLL("cublas64_12.dll")
+                    debug_log("CUDA libraries found, GPU acceleration available", "voice")
+                except OSError:
+                    debug_log("CUDA libraries not found, forcing CPU mode", "voice")
+                    print("  ℹ️  CUDA not available, using CPU mode", flush=True)
+                    print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+                    device = "cpu"
+
+            # Build list of (device, compute_type) combinations to try
+            # This handles both compute type fallbacks and CUDA -> CPU fallbacks
+            configs_to_try = []
+
+            # Start with preferred config
+            compute_types = [compute]
             if compute == "int8":
-                # int8 might fail on some devices, fall back to float16 then float32
-                compute_types_to_try.extend(["float16", "float32"])
+                compute_types.extend(["float16", "float32"])
             elif compute == "float16":
-                # float16 might fail on some devices, fall back to float32
-                compute_types_to_try.append("float32")
-            # If compute is already float32, no fallback needed (most compatible)
+                compute_types.append("float32")
+
+            # Add preferred device with all compute types
+            for ct in compute_types:
+                configs_to_try.append((device, ct))
+
+            # If device is "auto" or "cuda", add CPU fallback configs
+            # This handles Windows without CUDA libraries
+            if device in ("auto", "cuda"):
+                for ct in compute_types:
+                    configs_to_try.append(("cpu", ct))
 
             last_error = None
-            for try_compute in compute_types_to_try:
+            used_device = device
+            used_compute = compute
+            for try_device, try_compute in configs_to_try:
                 try:
-                    print(f"  🔄 Loading Whisper model '{model_name}' (device={device}, compute={try_compute})...", flush=True)
-                    self.model = WhisperModel(model_name, device=device, compute_type=try_compute)
-                    debug_log(f"faster-whisper initialized: name={model_name}, device={device}, compute={try_compute}", "voice")
+                    print(f"  🔄 Loading Whisper model '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
+                    self.model = WhisperModel(model_name, device=try_device, compute_type=try_compute)
+                    debug_log(f"faster-whisper initialized: name={model_name}, device={try_device}, compute={try_compute}", "voice")
 
-                    # Show success message, noting if we fell back to a different compute type
+                    used_device = try_device
+                    used_compute = try_compute
+
+                    # Show warnings if we fell back to different settings
+                    if try_device != device and device in ("auto", "cuda"):
+                        print(f"  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
+                        print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
                     if try_compute != compute:
-                        print(f"  ⚠️  Note: Using '{try_compute}' compute type ('{compute}' not supported on this device)", flush=True)
-                    print(f"  ✅ Whisper model '{model_name}' loaded on {device}", flush=True)
+                        print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+                    print(f"  ✅ Whisper model '{model_name}' loaded on {try_device}", flush=True)
                     last_error = None
                     break
                 except Exception as e:
                     last_error = e
                     error_str = str(e).lower()
-                    # Only try fallback for compute type incompatibility errors
-                    if "compute type" in error_str or "int8" in error_str or "float16" in error_str:
-                        debug_log(f"compute type '{try_compute}' not supported, trying fallback: {e}", "voice")
+
+                    # Check if this is a CUDA/GPU-related error that we should fall back from
+                    is_cuda_error = any(x in error_str for x in [
+                        "cuda", "cublas", "cudnn", "gpu", "nvidia",
+                        ".dll is not found", "library", "ctypes"
+                    ])
+                    is_compute_error = any(x in error_str for x in [
+                        "compute type", "int8", "float16"
+                    ])
+
+                    if is_cuda_error or is_compute_error:
+                        debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
                         continue
                     else:
                         # For other errors (model not found, network issues, etc.), don't try fallbacks
@@ -627,7 +742,7 @@ class VoiceListener(threading.Thread):
                         return
 
             if last_error is not None:
-                debug_log(f"failed to initialize faster-whisper with any compute type: {last_error}", "voice")
+                debug_log(f"failed to initialize faster-whisper with any config: {last_error}", "voice")
                 print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
                 return
 
@@ -683,15 +798,24 @@ class VoiceListener(threading.Thread):
             if device_index is not None:
                 stream_kwargs["device"] = device_index
 
-        if self.cfg.voice_debug:
-            try:
-                if "device" in stream_kwargs:
-                    dev = sd.query_devices(stream_kwargs["device"])
-                    debug_log(f"using input device: {dev.get('name')} (index {stream_kwargs['device']})", "voice")
-                else:
-                    debug_log("using system default input device", "voice")
-            except Exception:
-                pass
+        # Log which device will be used (always on Windows for debugging)
+        try:
+            if "device" in stream_kwargs:
+                dev = sd.query_devices(stream_kwargs["device"])
+                device_name = dev.get('name', 'Unknown')
+                debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
+                if sys.platform == 'win32':
+                    print(f"  🎤 Using audio device: {device_name}", flush=True)
+            else:
+                debug_log("using system default input device", "voice")
+                if sys.platform == 'win32':
+                    try:
+                        default_dev = sd.query_devices(sd.default.device[0])
+                        print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
+                    except Exception:
+                        print("  🎤 Using system default input device", flush=True)
+        except Exception:
+            pass
 
         # Open audio stream
         try:
@@ -746,7 +870,28 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
+            # Track start time for audio health monitoring
+            _audio_start_time = time.time()
+            _audio_health_logged = False
+            _vad_speech_count = 0
+            _vad_total_frames = 0
+            _max_rms_seen = 0.0
+
             while not self._should_stop:
+                # Periodic audio health check (only once, after 5 seconds)
+                if not _audio_health_logged and time.time() - _audio_start_time > 5:
+                    _audio_health_logged = True
+                    if self._callback_count == 0:
+                        print("  ⚠️  No audio received after 5 seconds!", flush=True)
+                        print("     Check: Windows Settings > Privacy > Microphone > Allow apps to access", flush=True)
+                        print("     Also check that your microphone is not muted", flush=True)
+                    else:
+                        # Log audio stats to help diagnose VAD issues
+                        print(f"  📊 Audio stats (5s): callbacks={self._callback_count}, frames={_vad_total_frames}, speech_frames={_vad_speech_count}, max_rms={_max_rms_seen:.4f}", flush=True)
+                        if _vad_speech_count == 0 and _vad_total_frames > 0:
+                            print("  ⚠️  No speech detected! VAD may be too aggressive or audio too quiet", flush=True)
+                            print(f"     Max audio level seen: {_max_rms_seen:.4f} (need ~0.01+ for speech)", flush=True)
+
                 try:
                     item = self._audio_q.get(timeout=0.2)
                 except queue.Empty:
@@ -777,8 +922,16 @@ class VoiceListener(threading.Thread):
                     frame = mono[offset: offset + self._frame_samples]
                     offset += self._frame_samples
 
+                    # Track audio level for diagnostics
+                    if np is not None:
+                        frame_rms = float(np.sqrt(np.mean(np.square(frame))))
+                        _max_rms_seen = max(_max_rms_seen, frame_rms)
+                    _vad_total_frames += 1
+
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
+                    if is_voice:
+                        _vad_speech_count += 1
 
                     if not self.is_speech_active:
                         if is_voice:
@@ -872,6 +1025,10 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
+        # Log utterance for debugging
+        if sys.platform == 'win32':
+            print(f"  🎤 Captured utterance: {audio_duration:.2f}s (samples={len(audio)}, dtype={audio.dtype}, min={audio.min():.4f}, max={audio.max():.4f})", flush=True)
+
         # Speech recognition with appropriate backend
         try:
             if self._whisper_backend == "mlx":
@@ -888,15 +1045,29 @@ class VoiceListener(threading.Thread):
                     segments, _info = self.model.transcribe(audio, language="en", vad_filter=False)
                 except TypeError:
                     segments, _info = self.model.transcribe(audio, language="en")
-                filtered_segments = self._filter_noisy_segments(segments)
+                # Convert generator to list to allow counting
+                segments_list = list(segments)
+                if sys.platform == 'win32':
+                    print(f"  🔊 Whisper raw segments: {len(segments_list)}", flush=True)
+                filtered_segments = self._filter_noisy_segments(segments_list)
+                if sys.platform == 'win32' and len(segments_list) != len(filtered_segments):
+                    print(f"  🔊 After filtering: {len(filtered_segments)} segments", flush=True)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:
             debug_log(f"transcription error: {e}", "voice")
+            if sys.platform == 'win32':
+                print(f"  ❌ Whisper error: {e}", flush=True)
             text = ""
 
         if not text or not text.strip():
+            if sys.platform == 'win32':
+                print(f"  🔇 Whisper returned empty transcript", flush=True)
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
+
+        # Log transcription for debugging
+        if sys.platform == 'win32':
+            print(f"  📝 Whisper heard: \"{text}\"", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):

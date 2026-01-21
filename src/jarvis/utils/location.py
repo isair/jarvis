@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import json
 import threading
+import sys
 from ..debug import debug_log
 
 try:
@@ -14,12 +15,22 @@ try:
     GEOIP2_AVAILABLE = True
 except ImportError:
     GEOIP2_AVAILABLE = False
+except Exception as e:
+    # Catch any native/DLL loading errors
+    GEOIP2_AVAILABLE = False
+    if sys.platform == 'win32':
+        print(f"  ⚠️  geoip2 import failed: {e}", flush=True)
 
 try:
     import miniupnpc
     MINIUPNPC_AVAILABLE = True
 except ImportError:
     MINIUPNPC_AVAILABLE = False
+except Exception as e:
+    # Catch any native/DLL loading errors (common on Windows)
+    MINIUPNPC_AVAILABLE = False
+    if sys.platform == 'win32':
+        print(f"  ⚠️  miniupnpc import failed: {e}", flush=True)
 
 # Session flag to show location warning only once per session
 _location_warning_shown = False

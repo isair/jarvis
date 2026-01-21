@@ -1203,7 +1203,15 @@ def main() -> int:
 
         # Check if setup wizard is needed
         print("Checking Ollama setup status...", flush=True)
-        from jarvis.setup_wizard import should_show_setup_wizard, SetupWizard
+        print("  Loading setup wizard module...", flush=True)
+        try:
+            from jarvis.setup_wizard import should_show_setup_wizard, SetupWizard
+            print("  Setup wizard module loaded successfully", flush=True)
+        except Exception as e:
+            print(f"  ❌ Failed to load setup wizard: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
 
         if should_show_setup_wizard():
             print("🔧 Setup required - launching setup wizard...", flush=True)

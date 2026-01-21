@@ -282,6 +282,8 @@ def should_show_setup_wizard() -> bool:
 # These imports are wrapped to avoid import errors when only detection functions are needed
 # (e.g., on headless CI systems where system Qt libraries may be missing)
 
+import sys as _sys
+
 try:
     from PyQt6.QtWidgets import (
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
@@ -292,13 +294,26 @@ try:
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
     from jarvis.themes import JARVIS_THEME_STYLESHEET, COLORS
-    from jarvis.utils.location import (
-        get_location_info,
-        get_location_context,
-        is_location_available,
-        _get_database_path,
-        GEOIP2_AVAILABLE,
-    )
+
+    # Import location utilities with crash protection for Windows native modules
+    try:
+        from jarvis.utils.location import (
+            get_location_info,
+            get_location_context,
+            is_location_available,
+            _get_database_path,
+            GEOIP2_AVAILABLE,
+        )
+    except Exception as e:
+        if _sys.platform == 'win32':
+            print(f"  ⚠️  Location utilities import failed: {e}", flush=True)
+        # Provide stubs so the wizard can still run without location features
+        get_location_info = lambda *a, **k: {}
+        get_location_context = lambda *a, **k: "Location: Unknown"
+        is_location_available = lambda: False
+        _get_database_path = lambda: None
+        GEOIP2_AVAILABLE = False
+
     _PYQT6_AVAILABLE = True
 except ImportError:
     _PYQT6_AVAILABLE = False

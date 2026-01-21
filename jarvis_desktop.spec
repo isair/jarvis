@@ -28,6 +28,46 @@ datas = [
     (str(src_path / 'jarvis' / 'desktop_assets' / '*.png'), 'jarvis/desktop_assets'),
 ]
 
+# Collect sounddevice data files (contains PortAudio DLLs required for Windows)
+try:
+    sounddevice_datas = collect_data_files('sounddevice')
+    datas.extend(sounddevice_datas)
+    print(f"Collected sounddevice data files: {len(sounddevice_datas)} items")
+except Exception as e:
+    print(f"Warning: Could not collect sounddevice data files: {e}")
+
+# Also try to collect _sounddevice_data directly (fallback for older versions)
+try:
+    import sounddevice
+    sd_path = Path(sounddevice.__file__).parent
+    sd_data_path = sd_path / '_sounddevice_data'
+    if sd_data_path.exists():
+        datas.append((str(sd_data_path), '_sounddevice_data'))
+        print(f"Collected _sounddevice_data from {sd_data_path}")
+except Exception as e:
+    print(f"Info: _sounddevice_data collection skipped: {e}")
+
+# Windows: Also add PortAudio DLL directly to the root directory for ctypes.find_library
+# This is a belt-and-suspenders approach alongside the PATH fix in __init__.py
+# See: https://github.com/pyinstaller/pyinstaller/issues/7065
+binaries = []
+if sys.platform == 'win32':
+    try:
+        import sounddevice
+        sd_path = Path(sounddevice.__file__).parent
+        portaudio_binaries = sd_path / '_sounddevice_data' / 'portaudio-binaries'
+        if portaudio_binaries.exists():
+            # Try 64-bit DLL first, then 32-bit
+            for dll_name in ['libportaudio64bit.dll', 'libportaudio32bit.dll']:
+                dll_path = portaudio_binaries / dll_name
+                if dll_path.exists():
+                    # Copy to root of bundle so it's in the same directory as the exe
+                    binaries.append((str(dll_path), '.'))
+                    print(f"Added PortAudio DLL to binaries: {dll_path}")
+                    break
+    except Exception as e:
+        print(f"Warning: Could not add PortAudio DLL: {e}")
+
 # Add qt.conf for macOS
 if sys.platform == 'darwin':
     datas.append((str(project_root / 'qt.conf'), '.'))
@@ -116,6 +156,11 @@ hiddenimports = [
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
     'PyQt6.sip',
+    # Audio dependencies (critical for voice input)
+    'sounddevice',
+    '_sounddevice_data',
+    '_sounddevice_data.portaudio-binaries',
+    'webrtcvad',
     # Third-party dependencies
     'dotenv',
     'psutil',
@@ -157,7 +202,7 @@ hiddenimports = [
 a = Analysis(
     ['src/jarvis/desktop_app.py'],
     pathex=[str(src_path)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
