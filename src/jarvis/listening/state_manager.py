@@ -164,10 +164,16 @@ class StateManager:
         return False
 
     def capture_hot_window_state_at_voice_start(self) -> None:
-        """Capture whether hot window was active when voice input started."""
-        self._was_hot_window_active_at_voice_start = (
-            self.is_hot_window_active() and not self._should_expire_hot_window()
-        )
+        """Capture whether hot window was active when voice input started.
+
+        Note: We only check if the state is HOT_WINDOW, not whether the time
+        has elapsed. This prevents a race condition where the user starts
+        speaking near the end of the hot window - the state might not have
+        been updated to WAKE_WORD yet even if the time limit just passed.
+        The important thing is that the system was in hot window mode when
+        the user started speaking.
+        """
+        self._was_hot_window_active_at_voice_start = self.is_hot_window_active()
         if self._was_hot_window_active_at_voice_start:
             debug_log("voice input started during active hot window", "state")
 
@@ -190,12 +196,16 @@ class StateManager:
 
         def _delayed_activation():
             time.sleep(self.echo_tolerance)
-            # Check if we should still activate (e.g., not interrupted)
+            # Check if we should still activate (e.g., not interrupted or already collecting)
             if self._should_stop:
                 debug_log("hot window activation cancelled (should_stop=True)", "state")
                 return
 
             with self._state_lock:
+                # Don't overwrite COLLECTING state - user may have already started a new query
+                if self._state == ListeningState.COLLECTING:
+                    debug_log("hot window activation cancelled (already collecting)", "state")
+                    return
                 self._state = ListeningState.HOT_WINDOW
                 self._hot_window_start_time = time.time()
 
