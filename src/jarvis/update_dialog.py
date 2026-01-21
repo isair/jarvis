@@ -29,6 +29,7 @@ from .updater import (
     ReleaseInfo,
     UpdateStatus,
     install_update,
+    save_installed_asset_id,
 )
 
 
@@ -212,6 +213,9 @@ class UpdateProgressDialog(QDialog):
 
     def _install(self, download_path: Path):
         if install_update(download_path):
+            # Save the asset ID so we don't prompt again for this version
+            save_installed_asset_id(self.release.asset_id)
+
             self.title_label.setText("Update Complete")
             self.status_label.setText("Update installed! Restarting...")
             self.status_label.setStyleSheet(f"color: {COLORS['success']};")

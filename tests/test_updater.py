@@ -7,6 +7,8 @@ from jarvis.updater import (
     check_for_updates,
     parse_version,
     get_platform_asset_name,
+    get_last_installed_asset_id,
+    save_installed_asset_id,
     UpdateChannel,
     UpdateStatus,
     ReleaseInfo,
@@ -79,6 +81,7 @@ class TestCheckForUpdates:
         mock_response = MagicMock()
         mock_response.json.return_value = [
             {
+                "id": 12345,
                 "tag_name": "v1.0.0",
                 "name": "v1.0.0",
                 "draft": False,
@@ -87,6 +90,7 @@ class TestCheckForUpdates:
                 "body": "Release notes",
                 "assets": [
                     {
+                        "id": 100001,
                         "name": "Jarvis-macOS-arm64.zip",
                         "browser_download_url": "https://example.com/download",
                         "size": 1000,
@@ -109,6 +113,7 @@ class TestCheckForUpdates:
         mock_response = MagicMock()
         mock_response.json.return_value = [
             {
+                "id": 12345,
                 "tag_name": "v1.1.0",
                 "name": "v1.1.0",
                 "draft": False,
@@ -117,6 +122,7 @@ class TestCheckForUpdates:
                 "body": "Release notes",
                 "assets": [
                     {
+                        "id": 100002,
                         "name": "Jarvis-macOS-arm64.zip",
                         "browser_download_url": "https://example.com/download",
                         "size": 1000,
@@ -140,6 +146,7 @@ class TestCheckForUpdates:
         mock_response = MagicMock()
         mock_response.json.return_value = [
             {
+                "id": 12345,
                 "tag_name": "latest",
                 "name": "Latest Development Build",
                 "draft": False,
@@ -148,6 +155,7 @@ class TestCheckForUpdates:
                 "body": "Dev release notes",
                 "assets": [
                     {
+                        "id": 100003,
                         "name": "Jarvis-macOS-arm64.zip",
                         "browser_download_url": "https://example.com/download",
                         "size": 1000,
@@ -171,6 +179,7 @@ class TestCheckForUpdates:
         mock_response = MagicMock()
         mock_response.json.return_value = [
             {
+                "id": 12345,
                 "tag_name": "v2.0.0",
                 "name": "v2.0.0",
                 "draft": True,  # Draft release
@@ -179,6 +188,7 @@ class TestCheckForUpdates:
                 "body": "Release notes",
                 "assets": [
                     {
+                        "id": 100004,
                         "name": "Jarvis-macOS-arm64.zip",
                         "browser_download_url": "https://example.com/download",
                         "size": 1000,
@@ -214,6 +224,7 @@ class TestCheckForUpdates:
         mock_response = MagicMock()
         mock_response.json.return_value = [
             {
+                "id": 12345,
                 "tag_name": "v1.1.0",
                 "name": "v1.1.0",
                 "draft": False,
@@ -222,6 +233,7 @@ class TestCheckForUpdates:
                 "body": "Release notes",
                 "assets": [
                     {
+                        "id": 100005,
                         "name": "Jarvis-Windows-x64.zip",  # Only Windows asset
                         "browser_download_url": "https://example.com/download",
                         "size": 1000,
@@ -239,6 +251,106 @@ class TestCheckForUpdates:
                         # No macOS asset available
                         assert status.update_available is False
 
+    @pytest.mark.unit
+    def test_develop_channel_shows_update_when_no_previous_install(self):
+        """Develop channel should show update when no previous install is recorded."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = [
+            {
+                "id": 12345,
+                "tag_name": "latest",
+                "name": "Latest Development Build",
+                "draft": False,
+                "prerelease": True,
+                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "body": "Dev release notes",
+                "assets": [
+                    {
+                        "id": 200001,
+                        "name": "Jarvis-macOS-arm64.zip",
+                        "browser_download_url": "https://example.com/download",
+                        "size": 1000,
+                    }
+                ],
+            }
+        ]
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("jarvis.updater.get_version", return_value=("dev-abc1234", "develop")):
+            with patch("jarvis.updater.get_last_installed_asset_id", return_value=None):
+                with patch("requests.get", return_value=mock_response):
+                    with patch("sys.platform", "darwin"):
+                        with patch("platform.machine", return_value="arm64"):
+                            status = check_for_updates()
+                            assert status.update_available is True
+                            assert status.latest_release.asset_id == 200001
+
+    @pytest.mark.unit
+    def test_develop_channel_shows_update_when_asset_id_differs(self):
+        """Develop channel should show update when asset ID differs from last install."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = [
+            {
+                "id": 12345,
+                "tag_name": "latest",
+                "name": "Latest Development Build",
+                "draft": False,
+                "prerelease": True,
+                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "body": "Dev release notes",
+                "assets": [
+                    {
+                        "id": 200002,  # New asset ID
+                        "name": "Jarvis-macOS-arm64.zip",
+                        "browser_download_url": "https://example.com/download",
+                        "size": 1000,
+                    }
+                ],
+            }
+        ]
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("jarvis.updater.get_version", return_value=("dev-abc1234", "develop")):
+            with patch("jarvis.updater.get_last_installed_asset_id", return_value=200001):  # Old ID
+                with patch("requests.get", return_value=mock_response):
+                    with patch("sys.platform", "darwin"):
+                        with patch("platform.machine", return_value="arm64"):
+                            status = check_for_updates()
+                            assert status.update_available is True
+
+    @pytest.mark.unit
+    def test_develop_channel_no_update_when_asset_id_matches(self):
+        """Develop channel should NOT show update when asset ID matches last install."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = [
+            {
+                "id": 12345,
+                "tag_name": "latest",
+                "name": "Latest Development Build",
+                "draft": False,
+                "prerelease": True,
+                "html_url": "https://github.com/isair/jarvis/releases/tag/latest",
+                "body": "Dev release notes",
+                "assets": [
+                    {
+                        "id": 200001,  # Same asset ID as last install
+                        "name": "Jarvis-macOS-arm64.zip",
+                        "browser_download_url": "https://example.com/download",
+                        "size": 1000,
+                    }
+                ],
+            }
+        ]
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("jarvis.updater.get_version", return_value=("dev-abc1234", "develop")):
+            with patch("jarvis.updater.get_last_installed_asset_id", return_value=200001):  # Same ID
+                with patch("requests.get", return_value=mock_response):
+                    with patch("sys.platform", "darwin"):
+                        with patch("platform.machine", return_value="arm64"):
+                            status = check_for_updates()
+                            assert status.update_available is False
+
 
 class TestUpdateStatus:
     """Tests for UpdateStatus dataclass."""
@@ -246,6 +358,7 @@ class TestUpdateStatus:
     @pytest.mark.unit
     def test_update_status_fields(self):
         release = ReleaseInfo(
+            asset_id=100001,
             tag_name="v1.0.0",
             version="1.0.0",
             name="Version 1.0.0",
@@ -273,6 +386,7 @@ class TestReleaseInfo:
     @pytest.mark.unit
     def test_release_info_fields(self):
         release = ReleaseInfo(
+            asset_id=100002,
             tag_name="v1.2.3",
             version="1.2.3",
             name="Version 1.2.3",
@@ -287,3 +401,4 @@ class TestReleaseInfo:
         assert release.version == "1.2.3"
         assert release.prerelease is False
         assert release.asset_size == 52428800
+        assert release.asset_id == 100002

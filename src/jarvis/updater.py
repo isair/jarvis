@@ -6,6 +6,7 @@ Checks GitHub Releases for new versions and handles the update process.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -27,6 +28,51 @@ GITHUB_REPO = "isair/jarvis"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
 
+def _get_update_state_path() -> Path:
+    """Get path to update state file."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        config_dir = Path(xdg) / "jarvis"
+    else:
+        config_dir = Path.home() / ".config" / "jarvis"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / "update_state.json"
+
+
+def get_last_installed_asset_id() -> Optional[int]:
+    """Get the asset ID of the last installed update.
+
+    We track the asset ID rather than release ID because for the "latest"
+    prerelease tag, the release ID stays the same when updated, but each
+    uploaded asset gets a new unique ID.
+    """
+    try:
+        state_path = _get_update_state_path()
+        if state_path.exists():
+            with state_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("last_installed_asset_id")
+    except Exception as e:
+        debug_log(f"Failed to read update state: {e}", "updater")
+    return None
+
+
+def save_installed_asset_id(asset_id: int) -> None:
+    """Save the asset ID after a successful update."""
+    try:
+        state_path = _get_update_state_path()
+        data = {}
+        if state_path.exists():
+            with state_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        data["last_installed_asset_id"] = asset_id
+        with state_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f)
+        debug_log(f"Saved installed asset ID: {asset_id}", "updater")
+    except Exception as e:
+        debug_log(f"Failed to save update state: {e}", "updater")
+
+
 class UpdateChannel(Enum):
     """Update channel for the application."""
 
@@ -38,6 +84,7 @@ class UpdateChannel(Enum):
 class ReleaseInfo:
     """Information about a GitHub release."""
 
+    asset_id: int  # Unique GitHub asset ID for tracking updates (changes on each upload)
     tag_name: str
     version: str
     name: str
@@ -135,6 +182,7 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
             for asset in assets:
                 if asset["name"] == platform_asset_name:
                     target_release = ReleaseInfo(
+                        asset_id=asset["id"],
                         tag_name=release["tag_name"],
                         version=release["tag_name"].lstrip("v"),
                         name=release.get("name", release["tag_name"]),
@@ -159,9 +207,13 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
             )
 
         if channel == UpdateChannel.DEVELOP:
-            # For develop channel, always show update if a release is available
-            # since we can't reliably compare commit SHAs
-            update_available = True
+            # For develop channel, compare asset IDs to detect new builds
+            # (release ID stays the same when "latest" is updated, but asset IDs change)
+            last_installed_id = get_last_installed_asset_id()
+            update_available = (
+                last_installed_id is None
+                or target_release.asset_id != last_installed_id
+            )
         else:
             current_tuple = parse_version(current_version)
             latest_tuple = parse_version(target_release.tag_name)
