@@ -129,11 +129,12 @@ jobs:
     needs: [semantic-release]
     if: always() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped')
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest  # Apple Silicon (arm64)
             arch: arm64
-          - os: macos-15-intel      # Intel (x64)
+          - os: macos-15-intel  # Intel (x64)
             arch: x64
 
     steps:
@@ -275,7 +276,8 @@ jobs:
   release-main:
     needs: [semantic-release, build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && needs.semantic-release.outputs.new_release_published == 'true'
+    # Run even if some builds failed - upload whatever succeeded
+    if: always() && needs.semantic-release.result == 'success' && needs.semantic-release.outputs.new_release_published == 'true'
 
     permissions:
       contents: write
@@ -286,15 +288,20 @@ jobs:
         with:
           path: artifacts
 
+      - name: 📋 List available artifacts
+        run: |
+          echo "Available artifacts:"
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort
+
       - name: 📎 Attach binaries to release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.semantic-release.outputs.new_release_git_tag }}
+          # Use glob to upload only artifacts that exist
           files: |
-            artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
-            artifacts/Jarvis-macOS-arm64/Jarvis-macOS-arm64.zip
-            artifacts/Jarvis-macOS-x64/Jarvis-macOS-x64.zip
-            artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -302,7 +309,8 @@ jobs:
   release-develop:
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
+    # Run even if some builds failed - upload whatever succeeded
+    if: always() && github.ref == 'refs/heads/develop'
 
     permissions:
       contents: write
@@ -313,16 +321,21 @@ jobs:
         with:
           path: artifacts
 
+      - name: 📋 List available artifacts
+        run: |
+          echo "Available artifacts:"
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort
+
       - name: 📝 Create/Update Latest Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: latest
           name: Latest Development Build
+          # Use glob to upload only artifacts that exist
           files: |
-            artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
-            artifacts/Jarvis-macOS-arm64/Jarvis-macOS-arm64.zip
-            artifacts/Jarvis-macOS-x64/Jarvis-macOS-x64.zip
-            artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+          fail_on_unmatched_files: false
           draft: false
           prerelease: true
           body: |
