@@ -168,9 +168,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         # Voice assistant communication style
         voice_style = (
             "Keep responses concise and conversational since this is a voice assistant. "
-            "Two to three sentences maximum. If there is more important information to convey, ask user if they want to hear."
+            "Two to three sentences maximum. If there is more important information to convey, ask user if they want to hear. "
             "Prioritize clarity and brevity - users are listening, not reading. "
-            "Avoid unnecessary elaboration unless specifically requested."
+            "Avoid unnecessary elaboration unless specifically requested. "
+            "IMPORTANT: Always respond in natural language - never output JSON, code, or structured data as your response."
         )
         guidance.append(voice_style)
 
@@ -282,6 +283,52 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 msg["content"] = f"[Context: {context_str}]\n\n{content}"
                 msg["_is_context_injected"] = True
                 break
+
+    def _extract_text_from_json_response(content: str) -> Optional[str]:
+        """
+        Handle responses where the model outputs JSON instead of natural language.
+
+        Some smaller models (e.g., llama3.2:3b) occasionally output JSON-structured
+        responses instead of plain text. This function extracts readable text from
+        common JSON patterns.
+
+        Returns:
+            Extracted text if JSON was detected and parsed, None otherwise
+        """
+        if not content or not content.strip():
+            return None
+
+        trimmed = content.strip()
+
+        # Quick check: does it look like JSON?
+        if not (trimmed.startswith("{") and trimmed.endswith("}")):
+            return None
+
+        try:
+            data = json.loads(trimmed)
+            if not isinstance(data, dict):
+                return None
+
+            # Common fields that contain human-readable responses
+            text_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
+            for field in text_fields:
+                if field in data and isinstance(data[field], str) and data[field].strip():
+                    debug_log(f"  🔧 Extracted text from JSON '{field}' field", "planning")
+                    return data[field].strip()
+
+            # If no standard field found, try to construct from available string values
+            string_values = [v for v in data.values() if isinstance(v, str) and v.strip()]
+            if string_values:
+                # Use the longest string value as the response
+                best = max(string_values, key=len)
+                debug_log(f"  🔧 Extracted longest text from JSON response", "planning")
+                return best
+
+        except json.JSONDecodeError:
+            # Not valid JSON, return None to use content as-is
+            pass
+
+        return None
 
     reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
@@ -481,8 +528,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             # Loop continues to let the agent produce the next step/final reply
             continue
 
-        # Not JSON → treat as final
-        reply = content
+        # Handle final response - extract text if model output JSON
+        extracted = _extract_text_from_json_response(content)
+        reply = extracted if extracted else content
         break
 
     # Step 9: Handle error case - return error message if no reply
