@@ -125,9 +125,16 @@ jobs:
           path: dist/Jarvis-Windows-x64.zip
 
   build-macos:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     needs: [semantic-release]
     if: always() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped')
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest  # Apple Silicon (arm64)
+            arch: arm64
+          - os: macos-13      # Intel (x64)
+            arch: x64
 
     steps:
       - name: 📥 Checkout code
@@ -158,8 +165,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Install requirements but skip heavy optional packages (PyTorch/Chatterbox)
-          # MLX Whisper is included - it's lightweight and provides fast speech recognition on Apple Silicon
-          grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
+          # MLX Whisper is only included on arm64 - it requires Apple Silicon
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
+          else
+            grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          fi
           pip install -r requirements-desktop.txt
           pip install pyinstaller
 
@@ -179,19 +190,13 @@ jobs:
       - name: 📦 Package macOS build
         run: |
           cd dist
-          # Detect architecture and name zip accordingly
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "arm64" ]; then
-            zip -r Jarvis-macOS-arm64.zip Jarvis.app
-          else
-            zip -r Jarvis-macOS-x64.zip Jarvis.app
-          fi
+          zip -r Jarvis-macOS-${{ matrix.arch }}.zip Jarvis.app
 
       - name: 📤 Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Jarvis-macOS
-          path: dist/Jarvis-macOS-*.zip
+          name: Jarvis-macOS-${{ matrix.arch }}
+          path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
 
   build-linux:
     runs-on: ubuntu-latest
@@ -287,7 +292,8 @@ jobs:
           tag_name: ${{ needs.semantic-release.outputs.new_release_git_tag }}
           files: |
             artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
-            artifacts/Jarvis-macOS/Jarvis-macOS-*.zip
+            artifacts/Jarvis-macOS-arm64/Jarvis-macOS-arm64.zip
+            artifacts/Jarvis-macOS-x64/Jarvis-macOS-x64.zip
             artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -314,7 +320,8 @@ jobs:
           name: Latest Development Build
           files: |
             artifacts/Jarvis-Windows/Jarvis-Windows-x64.zip
-            artifacts/Jarvis-macOS/Jarvis-macOS-*.zip
+            artifacts/Jarvis-macOS-arm64/Jarvis-macOS-arm64.zip
+            artifacts/Jarvis-macOS-x64/Jarvis-macOS-x64.zip
             artifacts/Jarvis-Linux/Jarvis-Linux-x64.tar.gz
           draft: false
           prerelease: true
@@ -326,7 +333,8 @@ jobs:
 
             ### 📦 Downloads:
             - **Windows**: Jarvis-Windows-x64.zip
-            - **macOS**: Jarvis-macOS-arm64.zip
+            - **macOS (Apple Silicon)**: Jarvis-macOS-arm64.zip
+            - **macOS (Intel)**: Jarvis-macOS-x64.zip
             - **Linux**: Jarvis-Linux-x64.tar.gz
 
             **Branch**: develop
