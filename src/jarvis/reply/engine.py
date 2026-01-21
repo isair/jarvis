@@ -42,24 +42,43 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
-    # Step 2: Profile selection
+    # Step 2: Check for recent dialogue context first (needed for profile selection)
+    recent_messages = []
+    is_new_conversation = True
+    previous_profile = None
+    recent_context_summary = None
+
+    if dialogue_memory and dialogue_memory.has_recent_messages():
+        recent_messages = dialogue_memory.get_recent_messages()
+        is_new_conversation = False
+
+        # Get the previous profile used (tracked by DialogueMemory)
+        previous_profile = dialogue_memory.get_last_profile()
+
+        # Build a brief context summary (last user message + assistant response)
+        if len(recent_messages) >= 2:
+            context_parts = []
+            for msg in recent_messages[-4:]:  # Last 2 exchanges max
+                role = msg.get("role", "")
+                content = msg.get("content", "")[:150]
+                if role in ("user", "assistant") and content:
+                    context_parts.append(f"{role}: {content}")
+            if context_parts:
+                recent_context_summary = " | ".join(context_parts)
+
+    # Step 3: Profile selection (with follow-up awareness)
     profile_name = select_profile_llm(
         cfg.ollama_base_url,
         cfg.ollama_chat_model,
         cfg.active_profiles,
         redacted,
-        timeout_sec=float(getattr(cfg, 'llm_profile_select_timeout_sec', 30.0))
+        timeout_sec=float(getattr(cfg, 'llm_profile_select_timeout_sec', 30.0)),
+        previous_profile=previous_profile,
+        recent_context=recent_context_summary,
     )
     print(f"  🎭 Profile selected: {profile_name}", flush=True)
 
     system_prompt = PROFILES.get(profile_name, PROFILES["developer"]).system_prompt
-
-    # Step 3: Recent dialogue context
-    recent_messages = []
-    is_new_conversation = True
-    if dialogue_memory and dialogue_memory.has_recent_messages():
-        recent_messages = dialogue_memory.get_recent_messages()
-        is_new_conversation = False
 
     # Refresh MCP tools on new conversation (memory expired)
     if is_new_conversation and getattr(cfg, "mcps", {}):
@@ -580,6 +599,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             # Add assistant reply if we have one
             if reply and reply.strip():
                 dialogue_memory.add_message("assistant", reply.strip())
+
+            # Track the profile used for follow-up detection
+            dialogue_memory.set_last_profile(profile_name)
 
             debug_log("interaction added to dialogue memory", "memory")
         except Exception as e:

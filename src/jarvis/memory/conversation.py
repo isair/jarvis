@@ -83,6 +83,8 @@ class DialogueMemory:
         # Messages with timestamp <= this value have been processed
         self._last_saved_timestamp: float = 0.0
         self._lock = threading.RLock()  # Reentrant lock for thread safety
+        # Track the last profile used for follow-up detection
+        self._last_profile: Optional[str] = None
 
     def add_message(self, role: str, content: str) -> None:
         """Add a message to recent memory. Thread-safe."""
@@ -118,6 +120,20 @@ class DialogueMemory:
         with self._lock:
             cutoff = time.time() - self.RECENT_WINDOW_SEC
             return any(ts >= cutoff for ts, _, _ in self._messages)
+
+    def set_last_profile(self, profile: str) -> None:
+        """Track the last profile used for follow-up detection."""
+        with self._lock:
+            self._last_profile = profile
+
+    def get_last_profile(self) -> Optional[str]:
+        """Get the last profile used, if within the recent window."""
+        with self._lock:
+            # Only return profile if we have recent messages
+            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            if any(ts >= cutoff for ts, _, _ in self._messages):
+                return self._last_profile
+            return None
 
     # Compatibility and diary functionality
     def add_interaction(self, user_text: str, assistant_text: str) -> None:

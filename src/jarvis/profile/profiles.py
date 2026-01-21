@@ -83,7 +83,27 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
 
 
 
-def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str], text: str, timeout_sec: float = 10.0) -> str:
+def select_profile_llm(
+    base_url: str,
+    chat_model: str,
+    active_profiles: List[str],
+    text: str,
+    timeout_sec: float = 10.0,
+    previous_profile: str = None,
+    recent_context: str = None,
+) -> str:
+    """
+    Select the best profile for the user's query.
+
+    Args:
+        base_url: Ollama base URL
+        chat_model: Model to use for routing
+        active_profiles: List of available profiles
+        text: User's query text
+        timeout_sec: Timeout for LLM call
+        previous_profile: Profile used in recent conversation (for follow-up continuity)
+        recent_context: Brief summary of recent conversation for context
+    """
     candidates = [p for p in active_profiles if p in PROFILES]
     if not candidates:
         return "developer"
@@ -94,17 +114,36 @@ def select_profile_llm(base_url: str, chat_model: str, active_profiles: List[str
         , "life": "Lifestyle/habits/wellbeing-focused assistant."
     }
     allowed = ", ".join(candidates)
+
+    # Build system prompt with follow-up awareness
     sys_prompt = (
         "You are a strict router. Read the user's text and choose the best profile.\n"
         "Return EXACTLY one profile name from this allowed list, with no extra words: "
         f"{allowed}.\n"
+    )
+
+    # Add follow-up guidance if there's recent conversation context
+    if previous_profile and previous_profile in candidates:
+        sys_prompt += (
+            f"\nIMPORTANT: The user was just talking to the '{previous_profile}' profile. "
+            "If this looks like a follow-up, correction, or continuation (e.g., 'no', 'yes', "
+            "'actually', 'what about', referring to previous answer), keep the SAME profile.\n"
+        )
+
+    sys_prompt += (
         "If uncertain, pick the most reasonable.\n"
         "Profiles: " + "; ".join([f"{k}: {descriptions.get(k, k)}" for k in candidates])
     )
-    user_content = (
+
+    # Build user content with optional context
+    user_content = ""
+    if recent_context:
+        user_content += f"Recent conversation context:\n{recent_context}\n\n"
+    user_content += (
         "User text (may be partial transcript):\n" + text[:2000] + "\n\n"
         "Answer with only one of: " + allowed
     )
+
     resp = call_llm_direct(base_url, chat_model, sys_prompt, user_content, timeout_sec=timeout_sec)
     if isinstance(resp, str) and resp.strip():
         ans = resp.strip().lower()

@@ -577,3 +577,54 @@ class TestDialogueMemoryConstants:
     def test_max_unsaved_age_exceeds_recent_window(self):
         """Verify MAX_UNSAVED_AGE_SEC > RECENT_WINDOW_SEC (otherwise data loss possible)."""
         assert DialogueMemory.MAX_UNSAVED_AGE_SEC > DialogueMemory.RECENT_WINDOW_SEC
+
+
+@pytest.mark.unit
+class TestDialogueMemoryProfileTracking:
+    """Test profile tracking for follow-up detection."""
+
+    def test_set_and_get_last_profile(self):
+        """Test setting and getting last profile."""
+        dm = DialogueMemory()
+        dm.add_message("user", "test message")
+        dm.set_last_profile("life")
+
+        assert dm.get_last_profile() == "life"
+
+    def test_profile_requires_recent_messages(self):
+        """Profile should only return if there are recent messages."""
+        dm = DialogueMemory()
+        dm.set_last_profile("developer")
+
+        # No messages, so profile should be None
+        assert dm.get_last_profile() is None
+
+    def test_profile_cleared_after_window(self):
+        """Profile should be None if messages are too old."""
+        dm = DialogueMemory()
+        dm.add_message("user", "old message")
+        dm.set_last_profile("business")
+
+        # Manually expire the message
+        with dm._lock:
+            dm._messages = [(time.time() - 400, "user", "old message")]  # 400s ago > 300s window
+
+        assert dm.get_last_profile() is None
+
+    def test_profile_preserved_with_recent_messages(self):
+        """Profile should be preserved if messages are recent."""
+        dm = DialogueMemory()
+        dm.add_message("user", "recent message")
+        dm.set_last_profile("life")
+
+        # Still within window
+        assert dm.get_last_profile() == "life"
+
+    def test_profile_overwrite(self):
+        """Setting profile should overwrite previous value."""
+        dm = DialogueMemory()
+        dm.add_message("user", "test")
+        dm.set_last_profile("developer")
+        dm.set_last_profile("life")
+
+        assert dm.get_last_profile() == "life"
