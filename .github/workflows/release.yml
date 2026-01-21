@@ -133,7 +133,7 @@ jobs:
         include:
           - os: macos-latest  # Apple Silicon (arm64)
             arch: arm64
-          - os: macos-13      # Intel (x64)
+          - os: macos-15-intel      # Intel (x64)
             arch: x64
 
     steps:
