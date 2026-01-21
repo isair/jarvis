@@ -222,3 +222,90 @@ class TestWhisperComputeTypeFallback:
                         # Should have only tried float32 (no other fallbacks)
                         mock_class.assert_called_once_with("small", device="auto", compute_type="float32")
                         assert listener.model is None
+
+
+class TestRepetitiveHallucinationDetection:
+    """Tests for Whisper hallucination detection."""
+
+    def _create_mock_listener(self):
+        """Create a VoiceListener instance for testing."""
+        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                with patch("jarvis.listening.listener.WhisperModel"):
+                    with patch("jarvis.listening.listener.webrtcvad", None):
+                        from jarvis.listening.listener import VoiceListener
+
+                        mock_db = MagicMock()
+                        mock_cfg = MagicMock()
+                        mock_cfg.sample_rate = 16000
+                        mock_cfg.vad_enabled = False
+                        mock_cfg.echo_tolerance = 0.3
+                        mock_cfg.echo_energy_threshold = 2.0
+                        mock_cfg.hot_window_seconds = 6.0
+                        mock_cfg.voice_collect_seconds = 2.0
+                        mock_cfg.voice_max_collect_seconds = 60.0
+                        mock_cfg.tune_enabled = False
+                        mock_tts = MagicMock()
+                        mock_dialogue_memory = MagicMock()
+
+                        return VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+
+    def test_detects_repeated_single_word_dont(self):
+        """Detects 'don't don't don't...' repetition pattern."""
+        listener = self._create_mock_listener()
+        text = "don't don't don't don't don't don't don't don't"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_repeated_single_word_don(self):
+        """Detects 'don don don...' repetition pattern."""
+        listener = self._create_mock_listener()
+        text = "don don don don don don don don don don"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_repeated_stop(self):
+        """Detects 'stop stop stop...' repetition pattern."""
+        listener = self._create_mock_listener()
+        text = "stop stop stop stop stop stop"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_consecutive_repetition(self):
+        """Detects any word repeated 3+ times consecutively."""
+        listener = self._create_mock_listener()
+        text = "hello hello hello hello there"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_accepts_normal_speech(self):
+        """Accepts normal speech with natural repetition."""
+        listener = self._create_mock_listener()
+        text = "what is the weather today"
+        assert listener._is_repetitive_hallucination(text) is False
+
+    def test_accepts_short_text(self):
+        """Doesn't flag short text even with repetition."""
+        listener = self._create_mock_listener()
+        text = "stop stop"
+        assert listener._is_repetitive_hallucination(text) is False
+
+    def test_accepts_natural_repetition(self):
+        """Accepts text with natural word repetition below threshold."""
+        listener = self._create_mock_listener()
+        text = "I really really want to go home now"
+        assert listener._is_repetitive_hallucination(text) is False
+
+    def test_accepts_empty_text(self):
+        """Returns False for empty text."""
+        listener = self._create_mock_listener()
+        assert listener._is_repetitive_hallucination("") is False
+        assert listener._is_repetitive_hallucination("   ") is False
+
+    def test_detects_majority_same_word(self):
+        """Detects when a word appears more than 50% of the time."""
+        listener = self._create_mock_listener()
+        text = "the the the the the hello world"  # 'the' is 5/7 = 71%
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_accepts_mixed_content(self):
+        """Accepts text with varied words even if some repeat."""
+        listener = self._create_mock_listener()
+        text = "the quick brown fox jumps over the lazy dog"  # 'the' is 2/9 = 22%
+        assert listener._is_repetitive_hallucination(text) is False

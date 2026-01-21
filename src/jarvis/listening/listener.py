@@ -458,6 +458,51 @@ class VoiceListener(threading.Thread):
 
         return filtered
 
+    def _is_repetitive_hallucination(self, text: str) -> bool:
+        """
+        Detect repetitive hallucinations that Whisper produces on quiet/ambiguous audio.
+
+        Common patterns include repeated single words like "don't don't don't..."
+        or repeated short phrases. These are classic Whisper failure modes.
+
+        Args:
+            text: Transcribed text to check
+
+        Returns:
+            True if the text appears to be a hallucination
+        """
+        if not text:
+            return False
+
+        words = text.lower().strip().split()
+        if len(words) < 4:
+            return False
+
+        # Check for excessive repetition of any single word
+        # If any word appears more than 50% of the time, it's likely a hallucination
+        from collections import Counter
+        word_counts = Counter(words)
+        most_common_word, most_common_count = word_counts.most_common(1)[0]
+
+        # If a single word makes up more than 50% of all words and appears 4+ times
+        if most_common_count >= 4 and most_common_count / len(words) > 0.5:
+            debug_log(f"repetitive hallucination detected: '{most_common_word}' repeated {most_common_count}x in '{text[:50]}...'", "voice")
+            return True
+
+        # Check for repeated consecutive sequences (e.g., "don don don" or "stop stop stop")
+        # Look for any word repeated 3+ times consecutively
+        consecutive_count = 1
+        for i in range(1, len(words)):
+            if words[i] == words[i-1]:
+                consecutive_count += 1
+                if consecutive_count >= 3:
+                    debug_log(f"consecutive repetition detected: '{words[i]}' repeated {consecutive_count}+ times", "voice")
+                    return True
+            else:
+                consecutive_count = 1
+
+        return False
+
     def _check_query_timeout(self) -> None:
         """Check if there's a pending query that has timed out."""
         if self.state_manager.check_collection_timeout():
@@ -850,6 +895,12 @@ class VoiceListener(threading.Thread):
             text = ""
 
         if not text or not text.strip():
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return
+
+        # Filter out repetitive hallucinations (e.g., "don't don't don't...")
+        if self._is_repetitive_hallucination(text):
+            debug_log(f"rejected repetitive hallucination: '{text[:80]}...'", "voice")
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
