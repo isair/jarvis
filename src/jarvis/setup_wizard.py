@@ -955,8 +955,16 @@ class OllamaServerPage(QWizardPage):
                         stderr=subprocess.DEVNULL,
                         start_new_session=True
                     )
+            elif sys.platform == "win32":
+                # On Windows, hide the console window
+                subprocess.Popen(
+                    [ollama_path, "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
             else:
-                # On other platforms, run serve command
+                # On Linux and other platforms, run serve command
                 subprocess.Popen(
                     [ollama_path, "serve"],
                     stdout=subprocess.DEVNULL,
