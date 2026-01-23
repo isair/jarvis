@@ -285,7 +285,10 @@ class MemoryViewerWindow(QMainWindow):
 
     def start_server(self) -> bool:
         """Start the memory viewer Flask server."""
+        print("🧠 Starting memory viewer server...", flush=True)
+
         if self.is_server_running:
+            print("   ✓ Server already marked as running", flush=True)
             return True
 
         try:
@@ -298,11 +301,13 @@ class MemoryViewerWindow(QMainWindow):
             if result == 0:
                 # Port is already in use, assume server is running
                 self.is_server_running = True
+                print(f"   ✓ Server already running on port {self.MEMORY_VIEWER_PORT}", flush=True)
                 debug_log(f"memory viewer server already running on port {self.MEMORY_VIEWER_PORT}", "desktop")
                 return True
 
             # Check if we're running as a frozen/bundled app
             is_frozen = getattr(sys, 'frozen', False)
+            print(f"   → Frozen app: {is_frozen}", flush=True)
 
             if is_frozen:
                 # Bundled app: run Flask server in a thread
@@ -336,9 +341,20 @@ class MemoryViewerWindow(QMainWindow):
                 env = os.environ.copy()
                 src_path = Path(__file__).parent.parent  # Go up to src/
                 if "PYTHONPATH" in env:
-                    env["PYTHONPATH"] = f"{src_path}:{env['PYTHONPATH']}"
+                    env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
                 else:
                     env["PYTHONPATH"] = str(src_path)
+
+                # Ensure UTF-8 encoding for subprocess (Windows cp1252 can't handle emojis)
+                env["PYTHONIOENCODING"] = "utf-8"
+
+                # Use creationflags to prevent console window popup on Windows
+                creationflags = 0
+                if sys.platform == 'win32':
+                    creationflags = subprocess.CREATE_NO_WINDOW
+
+                print(f"   -> Python: {python_exe}", flush=True)
+                print(f"   -> PYTHONPATH: {env.get('PYTHONPATH', 'not set')}", flush=True)
 
                 self.server_process = subprocess.Popen(
                     [python_exe, "-m", "jarvis.memory_viewer"],
@@ -346,18 +362,72 @@ class MemoryViewerWindow(QMainWindow):
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.PIPE,
                     text=True,
+                    encoding='utf-8',
+                    errors='replace',
                     env=env,
+                    creationflags=creationflags,
                 )
+                print(f"   → Subprocess PID: {self.server_process.pid}", flush=True)
                 debug_log("memory viewer server started in subprocess (development mode)", "desktop")
 
-            # Wait a moment for server to start
+            # Wait for server to actually start (with verification)
             import time
-            time.sleep(1)
+            import socket
+            max_wait = 5  # seconds
+            start_time = time.time()
 
-            self.is_server_running = True
-            return True
+            print(f"   → Waiting for server (max {max_wait}s)...", flush=True)
+
+            while time.time() - start_time < max_wait:
+                # Check if subprocess died
+                if self.server_process and self.server_process.poll() is not None:
+                    # Process exited - read any error output
+                    print(f"   ✗ Subprocess exited with code {self.server_process.returncode}", flush=True)
+                    try:
+                        stdout, _ = self.server_process.communicate(timeout=1)
+                        if stdout:
+                            print(f"   → Output:\n{stdout}", flush=True)
+                        debug_log(f"memory viewer subprocess exited: {stdout}", "desktop")
+                    except Exception as e:
+                        print(f"   → Error reading output: {e}", flush=True)
+                    self.server_process = None
+                    return False
+
+                # Check if server is listening
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                result = sock.connect_ex(('127.0.0.1', self.MEMORY_VIEWER_PORT))
+                sock.close()
+
+                if result == 0:
+                    self.is_server_running = True
+                    print(f"   ✓ Server running on port {self.MEMORY_VIEWER_PORT}", flush=True)
+                    debug_log(f"memory viewer server confirmed running on port {self.MEMORY_VIEWER_PORT}", "desktop")
+                    return True
+
+                time.sleep(0.2)
+
+            # Timeout - server didn't start
+            print(f"   ✗ Server failed to start within {max_wait}s", flush=True)
+            debug_log(f"memory viewer server failed to start within {max_wait}s", "desktop")
+            if self.server_process:
+                # Try to get any output
+                try:
+                    poll_result = self.server_process.poll()
+                    print(f"   → Process poll result: {poll_result}", flush=True)
+                    self.server_process.terminate()
+                    stdout, _ = self.server_process.communicate(timeout=2)
+                    if stdout:
+                        print(f"   → Server output:\n{stdout}", flush=True)
+                        debug_log(f"memory viewer subprocess output: {stdout}", "desktop")
+                    else:
+                        print("   → No output from server process", flush=True)
+                except Exception as e:
+                    print(f"   → Error getting output: {e}", flush=True)
+                self.server_process = None
+            return False
 
         except Exception as e:
+            print(f"   ✗ Exception starting server: {e}", flush=True)
             debug_log(f"failed to start memory viewer server: {e}", "desktop")
             return False
 
@@ -381,6 +451,29 @@ class MemoryViewerWindow(QMainWindow):
             self.server_thread = None
             self.is_server_running = False
 
+    def _show_error_page(self, message: str) -> None:
+        """Show an error page in the web view."""
+        if self.web_view:
+            error_html = f"""
+            <html>
+            <head><style>
+                body {{ background: #18181b; color: #e4e4e7; font-family: system-ui;
+                       display: flex; justify-content: center; align-items: center;
+                       height: 100vh; margin: 0; }}
+                .error {{ text-align: center; padding: 40px; }}
+                .icon {{ font-size: 64px; margin-bottom: 20px; }}
+                h1 {{ color: #fbbf24; margin-bottom: 16px; }}
+                p {{ color: #71717a; max-width: 400px; line-height: 1.6; }}
+            </style></head>
+            <body><div class="error">
+                <div class="icon">⚠️</div>
+                <h1>Connection Failed</h1>
+                <p>{message}</p>
+            </div></body>
+            </html>
+            """
+            self.web_view.setHtml(error_html)
+
     def showEvent(self, event) -> None:
         """Called when window is shown."""
         super().showEvent(event)
@@ -396,15 +489,15 @@ class MemoryViewerWindow(QMainWindow):
                     import webbrowser
                     webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
             else:
-                # Server failed to start, open in browser as fallback
-                debug_log("memory viewer server failed to start, opening in browser", "desktop")
-                import webbrowser
-                webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
+                # Server failed to start - show error message
+                debug_log("memory viewer server failed to start", "desktop")
+                self._show_error_page(
+                    "The memory viewer server failed to start. "
+                    "Check the console output for details."
+                )
         except Exception as e:
             debug_log(f"error in memory viewer showEvent: {e}", "desktop")
-            # Fallback to browser
-            import webbrowser
-            webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
+            self._show_error_page(f"Error: {e}")
 
     def closeEvent(self, event) -> None:
         """Called when window is closed."""
