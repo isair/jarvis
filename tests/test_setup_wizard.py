@@ -114,7 +114,7 @@ class TestGetRequiredModels:
             models = get_required_models()
 
             assert len(models) == 2
-            assert "gpt-oss:20b" in models
+            assert "llama3.2:3b" in models
             assert "nomic-embed-text" in models
 
 

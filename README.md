@@ -73,26 +73,7 @@ Your User type has `email: String!` but the resolver is returning null...
 ### 1. Install Ollama
 Download from [ollama.com/download](https://ollama.com/download)
 
-### 2. Get the AI models
-```bash
-ollama pull gpt-oss:20b        # Recommended (16GB+ RAM)
-ollama pull nomic-embed-text
-```
-
-<details>
-<summary>Using 8GB RAM or older hardware?</summary>
-
-```bash
-ollama pull llama3.2:3b         # Lightweight alternative
-ollama pull nomic-embed-text
-```
-Then set in `~/.config/jarvis/config.json`:
-```json
-{ "ollama_chat_model": "llama3.2:3b" }
-```
-</details>
-
-### 3. Download Jarvis
+### 2. Download Jarvis
 
 Get the latest from [GitHub Releases](https://github.com/isair/jarvis/releases):
 
@@ -127,9 +108,10 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 
 | Hardware | RAM | Model |
 |----------|-----|-------|
-| High-end | 32GB+ | `gpt-oss:20b` (default) |
-| Standard | 16GB | `gpt-oss:20b` |
-| Lightweight | 8GB | `llama3.2:3b` |
+| Most users | 8GB+ | `llama3.2:3b` (default) |
+| High-end | 16GB+ | `gpt-oss:20b` |
+
+The setup wizard will guide you through model selection and installation on first launch.
 
 ## Configuration
 
@@ -318,7 +300,7 @@ Get API key at [composio.dev](https://composio.dev)
 
 **Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
 
-**Responses are slow** - Use lighter model: `"ollama_chat_model": "llama3.2:3b"`
+**Responses are slow** - Ensure you have enough RAM (8GB+ for default model)
 
 **Windows: App won't start** - Extract full zip first, check Windows Defender
 

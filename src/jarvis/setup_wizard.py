@@ -194,7 +194,7 @@ def get_required_models() -> List[str]:
         return models
     except Exception:
         # Default models if config can't be loaded
-        return ["gpt-oss:20b", "nomic-embed-text"]
+        return ["llama3.2:3b", "nomic-embed-text"]
 
 
 def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
@@ -1040,17 +1040,17 @@ class ModelsPage(QWizardPage):
 
     # Model options with their details
     MODEL_OPTIONS = {
+        "llama3.2:3b": {
+            "name": "Llama 3.2 3B (Recommended)",
+            "description": "Fast, native tool calling, ~2GB download",
+            "size": "~2GB",
+            "ram": "8GB+",
+        },
         "gpt-oss:20b": {
-            "name": "GPT-OSS 20B (Recommended)",
+            "name": "GPT-OSS 20B (High-end)",
             "description": "Best performance, ~12GB download",
             "size": "~12GB",
             "ram": "16GB+",
-        },
-        "llama3.2:3b": {
-            "name": "Llama 3.2 3B (Lightweight)",
-            "description": "Faster, smaller, native tool calling, ~2GB download",
-            "size": "~2GB",
-            "ram": "8GB+",
         },
     }
 
@@ -1090,7 +1090,7 @@ class ModelsPage(QWizardPage):
 
         # Model option buttons
         self._model_buttons: Dict[str, QPushButton] = {}
-        self._selected_model: str = "gpt-oss:20b"
+        self._selected_model: str = "llama3.2:3b"
 
         for model_id, info in self.MODEL_OPTIONS.items():
             btn = QPushButton()
