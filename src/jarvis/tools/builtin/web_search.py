@@ -1,10 +1,58 @@
 """Web search tool implementation using DuckDuckGo."""
 
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
+
+
+def _fetch_page_content(url: str, max_chars: int = 3000) -> Optional[str]:
+    """Fetch and extract text content from a URL.
+
+    Returns extracted text content, or None if fetch fails.
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        response = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
+        response.raise_for_status()
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Remove non-content elements
+        for element in soup(["script", "style", "meta", "link", "noscript", "nav", "footer", "header", "aside"]):
+            element.decompose()
+
+        # Get text content
+        text = soup.get_text(separator='\n', strip=True)
+
+        # Clean up whitespace
+        lines = [line.strip() for line in text.split('\n') if line.strip() and len(line.strip()) > 3]
+
+        # Deduplicate consecutive identical lines
+        deduped = []
+        prev_line = None
+        for line in lines:
+            if line != prev_line:
+                deduped.append(line)
+                prev_line = line
+
+        content = '\n'.join(deduped)
+
+        # Truncate to max_chars
+        if len(content) > max_chars:
+            content = content[:max_chars] + "..."
+
+        return content if content else None
+
+    except Exception as e:
+        debug_log(f"Failed to fetch page content from {url}: {e}", "web")
+        return None
 
 
 class WebSearchTool(Tool):
@@ -73,6 +121,7 @@ class WebSearchTool(Tool):
 
             # Web search parsing
             search_results: list[str] = []
+            result_urls: List[Tuple[str, str]] = []  # (title, url) pairs for auto-fetch
             try:
                 import urllib.parse
                 from bs4 import BeautifulSoup
@@ -109,6 +158,7 @@ class WebSearchTool(Tool):
                             search_results.append(f"{result_count}. **{title}**")
                             search_results.append(f"   Link: {actual_url}")
                             search_results.append("")
+                            result_urls.append((title, actual_url))
                             debug_log(f"Accepted result {result_count}: '{title[:50]}...'", "web")
                     debug_log(f"DuckDuckGo found {result_count} results", "web")
                 else:
@@ -117,6 +167,17 @@ class WebSearchTool(Tool):
                 debug_log("BeautifulSoup not available", "web")
             except Exception as ddg_error:
                 debug_log(f"DuckDuckGo search failed: {ddg_error}", "web")
+
+            # Auto-fetch content from first result to provide actual data
+            fetched_content: Optional[str] = None
+            if result_urls and not instant_results:
+                # Only fetch if we don't already have instant answers
+                first_title, first_url = result_urls[0]
+                debug_log(f"Auto-fetching content from top result: {first_url}", "web")
+                context.user_print("📄 Reading top result...")
+                fetched_content = _fetch_page_content(first_url)
+                if fetched_content:
+                    debug_log(f"Fetched {len(fetched_content)} chars from top result", "web")
 
             if not search_results:
                 search_results.extend([
@@ -137,9 +198,16 @@ class WebSearchTool(Tool):
             if instant_results:
                 all_results.extend(instant_results)
                 all_results.append("")
+
+            # Include fetched content from top result if available
+            if fetched_content:
+                all_results.append("**Content from top result:**")
+                all_results.append(fetched_content)
+                all_results.append("")
+
             if search_results:
-                if instant_results:
-                    all_results.append("Web Search Results:")
+                if instant_results or fetched_content:
+                    all_results.append("**Other search results:**")
                 all_results.extend(search_results)
 
             # Format results with explicit instruction for the LLM to use this data

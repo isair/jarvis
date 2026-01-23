@@ -14,12 +14,34 @@ Tools return raw data without LLM processing. Profiles handle all response forma
 
 Always use the shared theme for UI under `src/jarvis/themes.py`.
 
+## README Maintenance
+
+Keep README.md up-to-date when making changes that affect user-facing functionality. Update the README when:
+- Adding or removing built-in tools (update Features → Built-in Tools list)
+- Changing configuration options (update Configuration section)
+- Adding new MCP integration examples
+- Changing system requirements or installation steps
+- Fixing or introducing known limitations
+
+README priorities (in order of importance):
+1. **Privacy-first messaging** - The local/offline nature is a core selling point
+2. **Quick install** - Users should get running in minutes
+3. **Features list** - High-level capabilities at a glance
+4. **Known limitations** - Be transparent about what doesn't work yet
+5. **Configuration** - Only document options users actually need
+6. **MCP integrations** - Examples for popular tools
+7. **Troubleshooting** - Common issues with solutions
+
+Keep sections concise. Use collapsible `<details>` for lengthy content. Avoid documenting internal implementation details - the README is for end users, not developers.
+
 ---
 
-Run your changes and test them manually, iterate until everything is good
+When the user says "remember" something, add it to CLAUDE.md in the appropriate section (project-specific above the ---, or portable below).
+
+Run your changes and test them manually, iterate until everything is good.
 
 Ensure all your changes are covered by all appropriate form of automated tests - unit, integration, visual regression, evals, etc.
 
-Run evals after finalising a change that can affect agent accuracy
+Run evals after finalising a change that can affect agent accuracy.
 
-Commit your changes when you finish a fix or feature before moving on to the next task
+Commit your changes when you finish a fix or feature before moving on to the next task.

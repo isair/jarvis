@@ -61,6 +61,7 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
         "localFiles",
         "webSearch",
         "fetchWebPage",
+        "getWeather",
     ],
     "business": [
         "screenshot",
@@ -68,6 +69,7 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
         "localFiles",
         "webSearch",
         "fetchWebPage",
+        "getWeather",
     ],
     "life": [
         "screenshot",
@@ -78,6 +80,7 @@ PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
         "localFiles",
         "webSearch",
         "fetchWebPage",
+        "getWeather",
     ],
 }
 

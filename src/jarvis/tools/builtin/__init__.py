@@ -13,6 +13,7 @@ from .recall_conversation import RecallConversationTool
 from .nutrition.log_meal import LogMealTool
 from .nutrition.fetch_meals import FetchMealsTool
 from .nutrition.delete_meal import DeleteMealTool
+from .weather import WeatherTool
 
 # Import supporting functions that may still be used elsewhere
 
@@ -26,4 +27,5 @@ __all__ = [
     'LogMealTool',
     'FetchMealsTool',
     'DeleteMealTool',
+    'WeatherTool',
 ]

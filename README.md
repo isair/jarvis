@@ -100,7 +100,7 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 
 - **Unlimited Memory** - Never forgets. Search across all history. Memory Viewer GUI included.
 - **Smart Personalities** - Developer (debugging), Business (planning), Life Coach (health tracking)
-- **Built-in Tools** - Screenshot OCR, web search, file access, nutrition tracking, location awareness
+- **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
 - **Voice Interface** - Wake word ("Jarvis"), interruptible ("stop"), natural follow-ups
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
