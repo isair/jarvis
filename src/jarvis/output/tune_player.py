@@ -112,12 +112,12 @@ class TunePlayer:
         if beep:
             while not self._stop_event.is_set():
                 try:
-                    # Gentle ascending/descending tone pattern
-                    frequencies = [440, 523, 440, 349]  # A4, C5, A4, F4
+                    # Soft, low tone pattern (E4, G4, E4, D4 - mellower than A4, C5)
+                    frequencies = [330, 392, 330, 294]
                     for freq in frequencies:
                         if self._stop_event.is_set():
                             break
-                        subprocess.run([beep, "-f", str(freq), "-l", "200"], 
+                        subprocess.run([beep, "-f", str(freq), "-l", "150"], 
                                      stdout=subprocess.DEVNULL, 
                                      stderr=subprocess.DEVNULL,
                                      timeout=0.5)
@@ -134,12 +134,12 @@ class TunePlayer:
             import winsound
             while not self._stop_event.is_set():
                 try:
-                    # Gentle beep pattern
-                    frequencies = [440, 523, 440, 349]
+                    # Soft, low tone pattern (E4, G4, E4, D4 - mellower than A4, C5)
+                    frequencies = [330, 392, 330, 294]
                     for freq in frequencies:
                         if self._stop_event.is_set():
                             break
-                        winsound.Beep(freq, 200)
+                        winsound.Beep(freq, 150)
                         time.sleep(0.3)
                 except Exception:
                     break
@@ -151,11 +151,12 @@ class TunePlayer:
                 creationflags = subprocess.CREATE_NO_WINDOW
                 while not self._stop_event.is_set():
                     try:
-                        frequencies = [440, 523, 440, 349]
+                        # Soft, low tone pattern (E4, G4, E4, D4)
+                        frequencies = [330, 392, 330, 294]
                         for freq in frequencies:
                             if self._stop_event.is_set():
                                 break
-                            script = f"[Console]::Beep({freq}, 200)"
+                            script = f"[Console]::Beep({freq}, 150)"
                             subprocess.run([pwsh, "-NoProfile", "-Command", script],
                                          stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL,
