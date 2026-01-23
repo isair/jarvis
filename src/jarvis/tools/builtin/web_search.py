@@ -142,11 +142,20 @@ class WebSearchTool(Tool):
                     all_results.append("Web Search Results:")
                 all_results.extend(search_results)
 
-            reply_text = (
-                f"Web search results for '{search_query}':\n\n" + "\n".join(all_results)
-                if all_results else
-                f"I searched for '{search_query}' but didn't find any results. This could be due to network issues or search service limitations. Please try different search terms or check manually."
-            )
+            # Format results with explicit instruction for the LLM to use this data
+            # Small LLMs like llama3.2:3b often need explicit guidance to use tool results
+            if all_results:
+                reply_text = (
+                    f"Here are the web search results for '{search_query}'. "
+                    f"Use this information to answer the user's question:\n\n"
+                    + "\n".join(all_results)
+                )
+            else:
+                reply_text = (
+                    f"The web search for '{search_query}' returned no results. "
+                    f"This could be due to network issues or search service limitations. "
+                    f"Let the user know you couldn't find results and suggest they try different search terms or check manually."
+                )
 
             if getattr(cfg, "voice_debug", False):
                 try:
