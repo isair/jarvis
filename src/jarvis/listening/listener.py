@@ -326,6 +326,7 @@ class VoiceListener(threading.Thread):
             )
             if should_reject:
                 debug_log(f"echo rejected: '{text_lower[:50]}' (during_tts={is_during_tts})", "echo")
+                print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
                 if is_during_tts:
                     # Attempt to remove leading echo and accept the remainder
                     salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
@@ -1040,8 +1041,7 @@ class VoiceListener(threading.Thread):
             return
 
         # Log successful transcription
-        if sys.platform == 'win32':
-            print(f"  📝 Heard: \"{text}\"", flush=True)
+        print(f"  📝 Heard: \"{text}\"", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
