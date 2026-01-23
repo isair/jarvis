@@ -45,7 +45,6 @@ class DiaryUpdateDialog(QDialog):
         self.setMinimumSize(550, 450)
         self.setWindowFlags(
             Qt.WindowType.Dialog |
-            Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.CustomizeWindowHint |
             Qt.WindowType.WindowTitleHint
         )
