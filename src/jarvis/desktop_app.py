@@ -872,14 +872,22 @@ class JarvisSystemTray:
                 else:
                     env["PYTHONPATH"] = str(src_path)
 
+                # Use creationflags to prevent console window popup on Windows
+                creationflags = 0
+                if sys.platform == 'win32':
+                    creationflags = subprocess.CREATE_NO_WINDOW
+
                 self.daemon_process = subprocess.Popen(
                     [python_exe, "-m", "jarvis.main"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.PIPE,
                     text=True,
+                    encoding='utf-8',
+                    errors='replace',
                     bufsize=1,
                     env=env,
+                    creationflags=creationflags,
                 )
 
                 # Start log reader thread
@@ -939,11 +947,15 @@ class JarvisSystemTray:
             return
 
         try:
-            for line in self.daemon_process.stdout:
-                if line:
-                    self.log_signals.new_log.emit(line)
+            while True:
+                line = self.daemon_process.stdout.readline()
+                if not line:
+                    # EOF - process has ended
+                    break
+                self.log_signals.new_log.emit(line)
         except Exception as e:
             debug_log(f"log reader error: {e}", "desktop")
+            self.log_signals.new_log.emit(f"⚠️ Log reader error: {e}\n")
 
     def stop_daemon(self, show_diary_dialog: bool = True) -> None:
         """Stop the Jarvis daemon.
