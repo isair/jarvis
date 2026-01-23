@@ -866,9 +866,9 @@ class JarvisSystemTray:
 
                 # Set up environment with PYTHONPATH for source runs
                 env = os.environ.copy()
-                src_path = Path(__file__).parent.parent.parent  # Go up to src/
+                src_path = Path(__file__).parent.parent  # Go up to src/
                 if "PYTHONPATH" in env:
-                    env["PYTHONPATH"] = f"{src_path}:{env['PYTHONPATH']}"
+                    env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
                 else:
                     env["PYTHONPATH"] = str(src_path)
 
