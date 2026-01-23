@@ -17,6 +17,8 @@ class DiarySignals(QObject):
     token_received = pyqtSignal(str)
     # Emitted when status changes (e.g., "Analyzing conversations...")
     status_changed = pyqtSignal(str)
+    # Emitted when conversation chunks are available
+    chunks_received = pyqtSignal(list)
     # Emitted when the diary update completes
     completed = pyqtSignal(bool)  # True = success, False = failed/skipped
 
@@ -105,7 +107,12 @@ class DiaryUpdateDialog(QDialog):
         """Connect internal signals."""
         self.signals.token_received.connect(self._on_token)
         self.signals.status_changed.connect(self._on_status_changed)
+        self.signals.chunks_received.connect(self._on_chunks_received)
         self.signals.completed.connect(self._on_completed)
+
+    def _on_chunks_received(self, chunks: list):
+        """Handle receiving conversation chunks."""
+        self.set_conversations(chunks)
 
     def _on_token(self, token: str):
         """Handle receiving a token from the LLM."""
@@ -132,6 +139,11 @@ class DiaryUpdateDialog(QDialog):
         else:
             self.status_label.setText("No new entries to save")
             self.status_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+            # Clear placeholders if nothing was populated
+            if not self.conversations_text.toPlainText():
+                self.conversations_text.setPlainText("(No conversations to save)")
+            if not self.diary_text.toPlainText():
+                self.diary_text.setPlainText("(Nothing to write)")
 
     def set_conversations(self, chunks: List[str]):
         """Set the conversation chunks being processed."""
@@ -165,3 +177,18 @@ class DiaryUpdateDialog(QDialog):
     def mark_completed(self, success: bool = True):
         """Mark the update as completed."""
         self.signals.completed.emit(success)
+
+    def set_subprocess_mode(self):
+        """
+        Configure dialog for subprocess mode where streaming isn't available.
+
+        In subprocess mode, the daemon runs as a separate process without IPC,
+        so we can't receive streaming tokens or chunk data.
+        """
+        self.conversations_text.setPlainText(
+            "(Running in subprocess mode - detailed progress not available)"
+        )
+        self.diary_text.setPlainText(
+            "Your diary is being updated in the background.\n\n"
+            "This may take a moment while the AI summarizes today's conversations..."
+        )

@@ -989,8 +989,8 @@ class JarvisSystemTray:
                         diary_dialog.signals.status_changed.emit(status)
 
                     def on_chunks(chunks: list):
-                        # Schedule on main thread
-                        QTimer.singleShot(0, lambda: diary_dialog.set_conversations(chunks))
+                        # Use signal for thread-safe cross-thread communication
+                        diary_dialog.signals.chunks_received.emit(chunks)
 
                     def on_complete(success: bool):
                         diary_dialog.signals.completed.emit(success)
@@ -1055,6 +1055,7 @@ class JarvisSystemTray:
                 # For subprocess mode, show diary dialog too
                 if show_diary_dialog:
                     diary_dialog = DiaryUpdateDialog()
+                    diary_dialog.set_subprocess_mode()
                     diary_dialog.set_status("Saving diary (this may take a moment)...")
                     diary_dialog.show()
                     diary_dialog.raise_()
