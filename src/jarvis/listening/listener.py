@@ -870,27 +870,18 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-            # Track start time for audio health monitoring
+            # Track start time for audio health monitoring (Windows only)
             _audio_start_time = time.time()
             _audio_health_logged = False
-            _vad_speech_count = 0
-            _vad_total_frames = 0
-            _max_rms_seen = 0.0
 
             while not self._should_stop:
-                # Periodic audio health check (only once, after 5 seconds)
-                if not _audio_health_logged and time.time() - _audio_start_time > 5:
+                # One-time audio health check after 5 seconds (Windows only)
+                if sys.platform == 'win32' and not _audio_health_logged and time.time() - _audio_start_time > 5:
                     _audio_health_logged = True
                     if self._callback_count == 0:
                         print("  ⚠️  No audio received after 5 seconds!", flush=True)
                         print("     Check: Windows Settings > Privacy > Microphone > Allow apps to access", flush=True)
                         print("     Also check that your microphone is not muted", flush=True)
-                    else:
-                        # Log audio stats to help diagnose VAD issues
-                        print(f"  📊 Audio stats (5s): callbacks={self._callback_count}, frames={_vad_total_frames}, speech_frames={_vad_speech_count}, max_rms={_max_rms_seen:.4f}", flush=True)
-                        if _vad_speech_count == 0 and _vad_total_frames > 0:
-                            print("  ⚠️  No speech detected! VAD may be too aggressive or audio too quiet", flush=True)
-                            print(f"     Max audio level seen: {_max_rms_seen:.4f} (need ~0.01+ for speech)", flush=True)
 
                 try:
                     item = self._audio_q.get(timeout=0.2)
@@ -922,16 +913,8 @@ class VoiceListener(threading.Thread):
                     frame = mono[offset: offset + self._frame_samples]
                     offset += self._frame_samples
 
-                    # Track audio level for diagnostics
-                    if np is not None:
-                        frame_rms = float(np.sqrt(np.mean(np.square(frame))))
-                        _max_rms_seen = max(_max_rms_seen, frame_rms)
-                    _vad_total_frames += 1
-
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
-                    if is_voice:
-                        _vad_speech_count += 1
 
                     if not self.is_speech_active:
                         if is_voice:
@@ -1025,10 +1008,6 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        # Log utterance for debugging
-        if sys.platform == 'win32':
-            print(f"  🎤 Captured utterance: {audio_duration:.2f}s (samples={len(audio)}, dtype={audio.dtype}, min={audio.min():.4f}, max={audio.max():.4f})", flush=True)
-
         # Speech recognition with appropriate backend
         try:
             if self._whisper_backend == "mlx":
@@ -1045,13 +1024,8 @@ class VoiceListener(threading.Thread):
                     segments, _info = self.model.transcribe(audio, language="en", vad_filter=False)
                 except TypeError:
                     segments, _info = self.model.transcribe(audio, language="en")
-                # Convert generator to list to allow counting
                 segments_list = list(segments)
-                if sys.platform == 'win32':
-                    print(f"  🔊 Whisper raw segments: {len(segments_list)}", flush=True)
                 filtered_segments = self._filter_noisy_segments(segments_list)
-                if sys.platform == 'win32' and len(segments_list) != len(filtered_segments):
-                    print(f"  🔊 After filtering: {len(filtered_segments)} segments", flush=True)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:
             debug_log(f"transcription error: {e}", "voice")
@@ -1060,14 +1034,12 @@ class VoiceListener(threading.Thread):
             text = ""
 
         if not text or not text.strip():
-            if sys.platform == 'win32':
-                print(f"  🔇 Whisper returned empty transcript", flush=True)
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        # Log transcription for debugging
+        # Log successful transcription
         if sys.platform == 'win32':
-            print(f"  📝 Whisper heard: \"{text}\"", flush=True)
+            print(f"  📝 Heard: \"{text}\"", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
