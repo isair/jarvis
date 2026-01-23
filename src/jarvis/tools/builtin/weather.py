@@ -3,6 +3,7 @@
 import requests
 from typing import Dict, Any, Optional
 from ...debug import debug_log
+from ...utils.location import get_location_info
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
@@ -50,7 +51,7 @@ class WeatherTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Get current weather conditions for a location. Use this for weather queries instead of web search."
+        return "Get current weather conditions. If no location specified, uses the user's current location automatically."
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
@@ -59,29 +60,60 @@ class WeatherTool(Tool):
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "City name or location (e.g., 'London', 'New York', 'Tokyo')"
+                    "description": "City name or location (e.g., 'London', 'New York', 'Tokyo'). If omitted, uses the user's current detected location."
                 }
             },
-            "required": ["location"]
+            "required": []
         }
+
+    def _get_user_location(self, context: ToolContext) -> Optional[str]:
+        """Get user's current location from config/auto-detection."""
+        try:
+            location_info = get_location_info(
+                config_ip=getattr(context.cfg, 'location_ip_address', None),
+                auto_detect=getattr(context.cfg, 'location_auto_detect', True),
+                resolve_cgnat_public_ip=getattr(context.cfg, 'location_cgnat_resolve_public_ip', True),
+            )
+
+            if "error" in location_info:
+                debug_log(f"    ⚠️ location detection failed: {location_info.get('error')}", "tools")
+                return None
+
+            # Build a location string suitable for geocoding
+            city = location_info.get("city")
+            country = location_info.get("country")
+
+            if city and country:
+                return f"{city}, {country}"
+            elif city:
+                return city
+            elif country:
+                return country
+
+            return None
+        except Exception as e:
+            debug_log(f"    ⚠️ location detection error: {e}", "tools")
+            return None
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Get current weather for a location."""
         context.user_print("🌤️ Checking weather...")
 
         try:
-            if not args or not isinstance(args, dict):
-                return ToolExecutionResult(
-                    success=False,
-                    reply_text="Please provide a location to check weather for."
-                )
+            # Get location from args, or fall back to user's detected location
+            location = ""
+            if args and isinstance(args, dict):
+                location = str(args.get("location", "")).strip()
 
-            location = str(args.get("location", "")).strip()
+            # If no location provided, use user's detected location
             if not location:
-                return ToolExecutionResult(
-                    success=False,
-                    reply_text="Please provide a location to check weather for."
-                )
+                debug_log("    📍 No location provided, using user's detected location", "tools")
+                location = self._get_user_location(context)
+                if not location:
+                    return ToolExecutionResult(
+                        success=False,
+                        reply_text="I couldn't determine your location. Please specify a city name."
+                    )
 
             debug_log(f"    🌤️ getting weather for '{location}'", "tools")
 

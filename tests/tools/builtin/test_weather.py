@@ -24,7 +24,9 @@ class TestWeatherTool:
         assert self.tool.name == "getWeather"
         assert "weather" in self.tool.description.lower()
         assert self.tool.inputSchema["type"] == "object"
-        assert "location" in self.tool.inputSchema["required"]
+        # Location is optional - uses user's detected location as fallback
+        assert "location" in self.tool.inputSchema["properties"]
+        assert self.tool.inputSchema["required"] == []
 
     @patch('requests.get')
     def test_run_success(self, mock_get):
@@ -88,22 +90,80 @@ class TestWeatherTool:
         assert result.success is False
         assert "could not find" in result.reply_text.lower()
 
-    def test_run_empty_location(self):
-        """Test weather with empty location."""
+    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    def test_run_empty_location_uses_fallback(self, mock_location):
+        """Test weather with empty location uses user's detected location as fallback."""
+        # When location detection fails, should return error
+        mock_location.return_value = {"error": "Location not available"}
+
         args = {"location": ""}
         result = self.tool.run(args, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "provide a location" in result.reply_text.lower()
+        assert "couldn't determine" in result.reply_text.lower() or "specify a city" in result.reply_text.lower()
 
-    def test_run_no_args(self):
-        """Test weather with no arguments."""
+    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    def test_run_no_args_uses_fallback(self, mock_location):
+        """Test weather with no arguments uses user's detected location as fallback."""
+        # When location detection fails, should return error
+        mock_location.return_value = {"error": "Location not available"}
+
         result = self.tool.run(None, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "provide a location" in result.reply_text.lower()
+        assert "couldn't determine" in result.reply_text.lower() or "specify a city" in result.reply_text.lower()
+
+    @patch('requests.get')
+    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    def test_run_no_location_with_successful_fallback(self, mock_location, mock_get):
+        """Test weather with no location but successful user location detection."""
+        # Mock successful location detection
+        mock_location.return_value = {
+            "city": "London",
+            "country": "United Kingdom"
+        }
+
+        # Mock geocoding response
+        geo_response = Mock()
+        geo_response.status_code = 200
+        geo_response.json.return_value = {
+            "results": [{
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "name": "London",
+                "country": "United Kingdom",
+                "admin1": "England"
+            }]
+        }
+        geo_response.raise_for_status = Mock()
+
+        # Mock weather response
+        weather_response = Mock()
+        weather_response.status_code = 200
+        weather_response.json.return_value = {
+            "current": {
+                "temperature_2m": 15.5,
+                "apparent_temperature": 14.0,
+                "relative_humidity_2m": 65,
+                "weather_code": 2,
+                "wind_speed_10m": 12.0,
+                "wind_gusts_10m": 20.0
+            }
+        }
+        weather_response.raise_for_status = Mock()
+
+        mock_get.side_effect = [geo_response, weather_response]
+
+        # Call with no location - should use fallback
+        result = self.tool.run({}, self.context)
+
+        assert isinstance(result, ToolExecutionResult)
+        assert result.success is True
+        assert "London" in result.reply_text
+        # Verify location detection was called
+        mock_location.assert_called_once()
 
     @patch('requests.get')
     def test_run_network_timeout(self, mock_get):
