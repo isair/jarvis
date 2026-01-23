@@ -531,11 +531,15 @@ class VoiceListener(threading.Thread):
         return False
 
     def _check_query_timeout(self) -> None:
-        """Check if there's a pending query that has timed out."""
+        """Check if there's a pending query that has timed out, and check hot window expiry."""
         if self.state_manager.check_collection_timeout():
             query = self.state_manager.clear_collection()
             if query.strip():
                 self._dispatch_query(query)
+
+        # Also check hot window expiry - this ensures the 6s timeout is enforced
+        # even when there's no audio being processed
+        self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
     def _on_audio(self, indata, frames, time_info, status):
         """Audio callback from sounddevice."""
