@@ -35,29 +35,32 @@ class TestWhisperComputeTypeFallback:
         """When int8 is supported, loads successfully without fallback."""
         mock_whisper_model = MagicMock()
 
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        # Mock query_devices to return a fake input device
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        mock_sd.InputStream.side_effect = Exception("Stop test here")
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            # Mock query_devices to return a fake input device
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
 
-                        from jarvis.listening.listener import VoiceListener
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        mock_cfg = self._create_mock_config(whisper_compute_type="int8")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
 
-                        # Run will attempt to load model then open audio stream
-                        listener.run()
+                            # Run will attempt to load model then open audio stream
+                            listener.run()
 
-                        # Should have been called only once with int8
-                        mock_class.assert_called_once_with("small", device="auto", compute_type="int8")
-                        assert listener.model == mock_whisper_model
+                            # Should have been called only once with int8
+                            mock_class.assert_called_once_with("small", device="auto", compute_type="int8")
+                            assert listener.model == mock_whisper_model
 
     def test_fallback_from_int8_to_float16(self):
         """When int8 fails with compute type error, falls back to float16."""
@@ -68,29 +71,32 @@ class TestWhisperComputeTypeFallback:
                 raise RuntimeError("Requested int8 compute type, but the target device or backend do not support efficient int8 computation.")
             return mock_whisper_model
 
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        mock_sd.InputStream.side_effect = Exception("Stop test here")
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
 
-                        from jarvis.listening.listener import VoiceListener
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        mock_cfg = self._create_mock_config(whisper_compute_type="int8")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
-                        listener.run()
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
 
-                        # Should have tried int8 first, then float16
-                        assert mock_class.call_count == 2
-                        calls = mock_class.call_args_list
-                        assert calls[0] == call("small", device="auto", compute_type="int8")
-                        assert calls[1] == call("small", device="auto", compute_type="float16")
-                        assert listener.model == mock_whisper_model
+                            # Should have tried int8 first, then float16
+                            assert mock_class.call_count == 2
+                            calls = mock_class.call_args_list
+                            assert calls[0] == call("small", device="auto", compute_type="int8")
+                            assert calls[1] == call("small", device="auto", compute_type="float16")
+                            assert listener.model == mock_whisper_model
 
     def test_fallback_from_int8_to_float32(self):
         """When int8 and float16 both fail, falls back to float32."""
@@ -101,77 +107,86 @@ class TestWhisperComputeTypeFallback:
                 raise RuntimeError(f"Requested {compute_type} compute type, but not supported.")
             return mock_whisper_model
 
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        mock_sd.InputStream.side_effect = Exception("Stop test here")
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
 
-                        from jarvis.listening.listener import VoiceListener
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        mock_cfg = self._create_mock_config(whisper_compute_type="int8")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
-                        listener.run()
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
 
-                        # Should have tried int8, float16, then float32
-                        assert mock_class.call_count == 3
-                        calls = mock_class.call_args_list
-                        assert calls[0] == call("small", device="auto", compute_type="int8")
-                        assert calls[1] == call("small", device="auto", compute_type="float16")
-                        assert calls[2] == call("small", device="auto", compute_type="float32")
-                        assert listener.model == mock_whisper_model
+                            # Should have tried int8, float16, then float32
+                            assert mock_class.call_count == 3
+                            calls = mock_class.call_args_list
+                            assert calls[0] == call("small", device="auto", compute_type="int8")
+                            assert calls[1] == call("small", device="auto", compute_type="float16")
+                            assert calls[2] == call("small", device="auto", compute_type="float32")
+                            assert listener.model == mock_whisper_model
 
     def test_no_fallback_for_non_compute_type_errors(self):
         """When error is not about compute type, doesn't try fallback."""
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel") as mock_class:
-                    mock_class.side_effect = RuntimeError("Model not found: invalid_model")
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError("Model not found: invalid_model")
 
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        from jarvis.listening.listener import VoiceListener
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        mock_cfg = self._create_mock_config(whisper_compute_type="int8")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
-                        listener.run()
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
 
-                        # Should have only tried once - no fallback for model not found errors
-                        mock_class.assert_called_once_with("small", device="auto", compute_type="int8")
-                        assert listener.model is None
+                            # Should have only tried once - no fallback for model not found errors
+                            mock_class.assert_called_once_with("small", device="auto", compute_type="int8")
+                            assert listener.model is None
 
     def test_all_fallbacks_fail(self):
         """When all compute types fail, model remains None."""
         def whisper_model_side_effect(model_name, device, compute_type):
             raise RuntimeError(f"Requested {compute_type} compute type, but not supported.")
 
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        from jarvis.listening.listener import VoiceListener
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        mock_cfg = self._create_mock_config(whisper_compute_type="int8")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
-                        listener.run()
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
 
-                        # Should have tried all configs: 3 compute types x 2 devices (auto + cpu fallback)
-                        assert mock_class.call_count == 6
-                        assert listener.model is None
+                            # Should have tried all configs: 3 compute types x 2 devices (auto + cpu fallback)
+                            assert mock_class.call_count == 6
+                            assert listener.model is None
 
     def test_float16_config_skips_float16_in_fallback_list(self):
         """When config is float16, fallback list is [float16, float32]."""
@@ -182,57 +197,63 @@ class TestWhisperComputeTypeFallback:
                 raise RuntimeError("Requested float16 compute type, but not supported.")
             return mock_whisper_model
 
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        mock_sd.InputStream.side_effect = Exception("Stop test here")
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
 
-                        from jarvis.listening.listener import VoiceListener
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        # Config specifies float16 instead of int8
-                        mock_cfg = self._create_mock_config(whisper_compute_type="float16")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            # Config specifies float16 instead of int8
+                            mock_cfg = self._create_mock_config(whisper_compute_type="float16")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
-                        listener.run()
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
 
-                        # Should have tried float16, then float32 (no duplicate float16)
-                        assert mock_class.call_count == 2
-                        calls = mock_class.call_args_list
-                        assert calls[0] == call("small", device="auto", compute_type="float16")
-                        assert calls[1] == call("small", device="auto", compute_type="float32")
-                        assert listener.model == mock_whisper_model
+                            # Should have tried float16, then float32 (no duplicate float16)
+                            assert mock_class.call_count == 2
+                            calls = mock_class.call_args_list
+                            assert calls[0] == call("small", device="auto", compute_type="float16")
+                            assert calls[1] == call("small", device="auto", compute_type="float32")
+                            assert listener.model == mock_whisper_model
 
     def test_float32_config_no_fallback_needed(self):
         """When config is float32, tries float32 on auto then cpu."""
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel") as mock_class:
-                    mock_class.side_effect = RuntimeError("Requested float32 compute type, but not supported.")
+        # Mock sys.platform to skip Windows CUDA check
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError("Requested float32 compute type, but not supported.")
 
-                    with patch("jarvis.listening.listener.sd") as mock_sd:
-                        mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                        from jarvis.listening.listener import VoiceListener
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            from jarvis.listening.listener import VoiceListener
 
-                        mock_db = MagicMock()
-                        # Config specifies float32
-                        mock_cfg = self._create_mock_config(whisper_compute_type="float32")
-                        mock_tts = MagicMock()
-                        mock_dialogue_memory = MagicMock()
+                            mock_db = MagicMock()
+                            # Config specifies float32
+                            mock_cfg = self._create_mock_config(whisper_compute_type="float32")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
 
-                        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
-                        listener.run()
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
 
-                        # Should have tried float32 on auto, then cpu fallback
-                        assert mock_class.call_count == 2
-                        calls = mock_class.call_args_list
-                        assert calls[0] == call("small", device="auto", compute_type="float32")
-                        assert calls[1] == call("small", device="cpu", compute_type="float32")
-                        assert listener.model is None
+                            # Should have tried float32 on auto, then cpu fallback
+                            assert mock_class.call_count == 2
+                            calls = mock_class.call_args_list
+                            assert calls[0] == call("small", device="auto", compute_type="float32")
+                            assert calls[1] == call("small", device="cpu", compute_type="float32")
+                            assert listener.model is None
 
 
 class TestRepetitiveHallucinationDetection:

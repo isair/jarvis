@@ -1,5 +1,5 @@
 @echo off
-REM Test script for the Jarvis Desktop App on Windows
+REM Run script for the Jarvis Desktop App on Windows
 REM Uses the project's mamba environment
 
 echo Testing Jarvis Desktop App locally...
@@ -24,6 +24,14 @@ if not exist "%MAMBA_ENV%\python.exe" (
 REM Check Python version in mamba env
 echo Checking Python version...
 "%MAMBA_ENV%\python.exe" --version
+echo.
+
+REM Install/update dependencies from requirements.txt
+echo Installing dependencies...
+"%MAMBA_ENV%\python.exe" -m pip install -q -r requirements.txt
+if errorlevel 1 (
+    echo WARNING: Some dependencies may have failed to install
+)
 echo.
 
 REM Generate icons
