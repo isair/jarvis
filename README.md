@@ -19,13 +19,17 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 
 ## Why Jarvis?
 
-**Movie-like AI experience** - Always listening, never interrupting. Responds to "stop" or "shush". Unlimited memory across days, weeks, months. Switches personalities automatically (developer/business/life coach).
+**🔒 Your data stays yours** - 100% local AI processing. No cloud, no subscriptions, no data harvesting. Automatic redaction of sensitive info. This is non-negotiable.
 
-**Your data never leaves your machine** - 100% offline AI, automatic redaction of sensitive info, free forever.
+**🎯 The vision** - A voice assistant that actually remembers you. Unlimited memory across conversations. Context-aware personalities (developer/business/life coach). MCP integration for smart home and 500+ tools.
 
-**Just works** - Install once, run forever. Can see your screen, searches the web privately.
+**📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
 
-**Tested & transparent** - We regularly test Jarvis. [See how well it's doing →](EVALS.md)
+**🚧 Known limitations:** Jarvis is under active development. Primary development happens on macOS—Windows/Linux support may lag behind. We're building in the open—[issues](https://github.com/isair/jarvis/issues) and [contributions](https://github.com/isair/jarvis/pulls) welcome!
+- **Windows:** Voice recognition currently requires NVIDIA GPU with CUDA ([#37](https://github.com/isair/jarvis/issues/37), [#49](https://github.com/isair/jarvis/issues/49))—CPU fallback coming soon
+- Voice-only for now—no text chat interface yet ([#35](https://github.com/isair/jarvis/issues/35))
+- No mobile apps ([#17](https://github.com/isair/jarvis/issues/17))
+- "Stop" commands during speech sometimes get filtered as echo ([#24](https://github.com/isair/jarvis/issues/24))
 
 <details>
 <summary><strong>See it in action</strong> (example conversations)</summary>
