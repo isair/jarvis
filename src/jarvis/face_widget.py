@@ -76,27 +76,17 @@ class JarvisStateManager(QObject):
     - In dev mode, daemon runs as subprocess (different process)
     - In bundled mode, daemon runs as QThread (same process)
     - File-based state works in both cases
+
+    Note: Singleton pattern uses module-level instance instead of __new__
+    because PyQt6 QObject doesn't support __new__ override properly.
     """
     state_changed = pyqtSignal(str)
 
-    _instance: Optional["JarvisStateManager"] = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-                cls._instance._initialized = False
-            return cls._instance
-
     def __init__(self):
-        if self._initialized:
-            return
         super().__init__()
         self._state = JarvisState.ASLEEP  # Start asleep
         self._state_lock = threading.Lock()
         self._state_file = _get_jarvis_state_file()
-        self._initialized = True
         # Clean up any stale state file on init
         self._write_state(JarvisState.ASLEEP)
 
@@ -139,9 +129,18 @@ class JarvisStateManager(QObject):
             pass
 
 
+# Module-level singleton instance
+_jarvis_state_instance: Optional[JarvisStateManager] = None
+_jarvis_state_lock = threading.Lock()
+
+
 def get_jarvis_state() -> JarvisStateManager:
     """Get the global Jarvis state singleton."""
-    return JarvisStateManager()
+    global _jarvis_state_instance
+    with _jarvis_state_lock:
+        if _jarvis_state_instance is None:
+            _jarvis_state_instance = JarvisStateManager()
+        return _jarvis_state_instance
 
 
 class LowPolyFaceWidget(QWidget):
