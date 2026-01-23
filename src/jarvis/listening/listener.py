@@ -325,8 +325,7 @@ class VoiceListener(threading.Thread):
                 utterance_start_time
             )
             if should_reject:
-                if sys.platform == 'win32':
-                    print(f"  🔇 Echo rejected: '{text_lower[:50]}...' (during_tts={is_during_tts})", flush=True)
+                debug_log(f"echo rejected: '{text_lower[:50]}' (during_tts={is_during_tts})", "echo")
                 if is_during_tts:
                     # Attempt to remove leading echo and accept the remainder
                     salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
@@ -368,8 +367,7 @@ class VoiceListener(threading.Thread):
         fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
 
         wake_detected = is_wake_word_detected(text_lower, wake_word, list(aliases), fuzzy_ratio)
-        if sys.platform == 'win32':
-            print(f"  🔍 Wake word check: '{wake_word}' in '{text_lower}' → {wake_detected}", flush=True)
+        debug_log(f"wake word check: '{wake_word}' in '{text_lower}' → {wake_detected}", "voice")
 
         if wake_detected:
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
@@ -802,7 +800,7 @@ class VoiceListener(threading.Thread):
             if device_index is not None:
                 stream_kwargs["device"] = device_index
 
-        # Log which device will be used (always on Windows for debugging)
+        # Log which device will be used
         try:
             if "device" in stream_kwargs:
                 dev = sd.query_devices(stream_kwargs["device"])
