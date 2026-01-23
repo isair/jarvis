@@ -1156,6 +1156,15 @@ class JarvisSystemTray:
 
 def main() -> int:
     """Main entry point for the desktop app."""
+    # Fix Windows console encoding for Unicode/emoji characters
+    if sys.platform == 'win32':
+        try:
+            import io
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
     # Required for PyInstaller: must be called before any multiprocessing
     # Without this, bundled apps can spawn infinite copies of themselves
     import multiprocessing
