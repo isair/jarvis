@@ -311,6 +311,7 @@ class TextToSpeech:
                         stdin=subprocess.PIPE,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                 try:
                     if self._current_process.stdin is not None:
@@ -348,7 +349,12 @@ class TextToSpeech:
                 tf.write(vbs_code)
                 tmp_path = tf.name
             with self._process_lock:
-                self._current_process = subprocess.Popen([cscript, "//nologo", tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._current_process = subprocess.Popen(
+                    [cscript, "//nologo", tmp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
             while self._current_process.poll() is None:
                 if self._should_interrupt.is_set():
                     return True
