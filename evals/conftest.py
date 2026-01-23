@@ -47,6 +47,9 @@ CLASS_DESCRIPTIONS = {
     "TestMultiStepReasoning": "Complex scenarios requiring tool chaining and synthesis",
     "TestMemoryEnrichment": "Tests automatic memory enrichment keyword extraction",
     "TestLiveEndToEnd": "Live tests with real LLM inference",
+    "TestNutritionExtraction": "Tests LLM nutrition extraction accuracy for meal logging",
+    "TestNutritionToolIntegration": "Tests full meal logging tool with macro extraction",
+    "TestNutritionModelComparison": "Baseline tests for comparing nutrition extraction across models",
 }
 
 # Descriptions for non-parametrized tests
@@ -62,6 +65,14 @@ TEST_DESCRIPTIONS = {
     "test_llm_uses_enrichment_without_redundant_tool_call": "LLM uses enrichment, skips redundant recallConversation",
     "test_weather_query_live": "Live weather query with real LLM",
     "test_personalized_query_recalls_memory_live": "Live: LLM checks memory before asking about interests",
+    # Nutrition extraction tests
+    "test_meal_extraction_accuracy": "Extracts accurate macros for common meals",
+    "test_extraction_returns_valid_json_structure": "Returns valid JSON with all required fields",
+    "test_extraction_handles_ambiguous_portions": "Handles ambiguous portion descriptions",
+    "test_extraction_rejects_non_food": "Returns NONE for non-food inputs",
+    "test_log_meal_tool_extracts_macros": "LogMealTool stores meals with macros",
+    "test_simple_meal_extraction": "Simple meal baseline (2 boiled eggs)",
+    "test_extraction_with_quantities": "Extraction with explicit quantities",
 }
 
 

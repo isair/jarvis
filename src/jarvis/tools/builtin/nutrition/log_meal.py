@@ -18,6 +18,8 @@ NUTRITION_SYS = (
     "produce a compact JSON object with fields: description (string), calories_kcal (number), protein_g (number), "
     "carbs_g (number), fat_g (number), fiber_g (number), sugar_g (number), sodium_mg (number), potassium_mg (number), "
     "micros (object with a few notable micronutrients), and confidence (0-1). If no meal is described, return the string NONE. "
+    "IMPORTANT: Include ALL food items mentioned and sum their nutritional values into the total. "
+    "The description field must list ALL items (e.g., 'scrambled eggs with toast' not just 'eggs'). "
     "Estimate realistically based on typical portions; prefer conservative estimates when uncertain."
 )
 
