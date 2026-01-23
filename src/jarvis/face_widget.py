@@ -33,7 +33,7 @@ import random
 import threading
 from typing import Optional, List, Tuple
 from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
@@ -981,30 +981,50 @@ class LowPolyFaceWidget(QWidget):
 
 class FaceWindow(QWidget):
     """A standalone window containing the Jarvis face."""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🤖 Jarvis")
         self.setMinimumSize(320, 420)
         self.resize(350, 450)
-        
+
         # Set window flags for floating window
         self.setWindowFlags(
             Qt.WindowType.Window |
             Qt.WindowType.WindowStaysOnTopHint
         )
-        
+
         # Dark background
         self.setStyleSheet("background-color: #0a0a0a;")
-        
+
         # Layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        
+
         # Face widget
         self.face = LowPolyFaceWidget()
         layout.addWidget(self.face)
-    
+
+        # Position on the right side of the screen
+        self._position_on_right()
+
+    def _position_on_right(self):
+        """Position the window on the right side of the screen, vertically centered."""
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+
+        screen_geometry = screen.availableGeometry()
+        window_width = self.width()
+        window_height = self.height()
+
+        # Position on right side with margin, vertically centered
+        margin = 20
+        x = screen_geometry.right() - window_width - margin
+        y = screen_geometry.top() + (screen_geometry.height() - window_height) // 2
+
+        self.move(x, y)
+
     def set_expression(self, expression: Expression):
         """Set the face expression."""
         self.face.set_expression(expression)
