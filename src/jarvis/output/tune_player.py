@@ -129,9 +129,9 @@ class TunePlayer:
             self._play_fallback_tune()
             
     def _play_windows_tune(self) -> None:
-        """Play tune on Windows using PowerShell beeps."""
-        pwsh = shutil.which("powershell") or shutil.which("pwsh")
-        if pwsh:
+        """Play tune on Windows using winsound module (no console window)."""
+        try:
+            import winsound
             while not self._stop_event.is_set():
                 try:
                     # Gentle beep pattern
@@ -139,16 +139,33 @@ class TunePlayer:
                     for freq in frequencies:
                         if self._stop_event.is_set():
                             break
-                        script = f"[Console]::Beep({freq}, 200)"
-                        subprocess.run([pwsh, "-NoProfile", "-Command", script],
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL,
-                                     timeout=0.5)
+                        winsound.Beep(freq, 200)
                         time.sleep(0.3)
                 except Exception:
                     break
-        else:
-            self._play_fallback_tune()
+        except ImportError:
+            # winsound not available, try PowerShell with hidden window
+            pwsh = shutil.which("powershell") or shutil.which("pwsh")
+            if pwsh:
+                # CREATE_NO_WINDOW flag to prevent console window popup
+                creationflags = subprocess.CREATE_NO_WINDOW
+                while not self._stop_event.is_set():
+                    try:
+                        frequencies = [440, 523, 440, 349]
+                        for freq in frequencies:
+                            if self._stop_event.is_set():
+                                break
+                            script = f"[Console]::Beep({freq}, 200)"
+                            subprocess.run([pwsh, "-NoProfile", "-Command", script],
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL,
+                                         creationflags=creationflags,
+                                         timeout=0.5)
+                            time.sleep(0.3)
+                    except Exception:
+                        break
+            else:
+                self._play_fallback_tune()
             
     def _play_fallback_tune(self) -> None:
         """Fallback tune using print statements (silent but indicates activity)."""
