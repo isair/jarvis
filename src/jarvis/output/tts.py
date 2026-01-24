@@ -263,17 +263,20 @@ class TextToSpeech:
                 pass
 
             # Wait for process to complete or be interrupted
-            while self._current_process.poll() is None:
+            proc = self._current_process
+            while proc is not None and proc.poll() is None:
                 if self._should_interrupt.is_set():
                     return True  # Interrupted
                 try:
-                    self._current_process.wait(timeout=0.1)
+                    proc.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
+                # Re-check in case interrupt() set it to None
+                proc = self._current_process
 
             # Check if process exited with error (non-zero return code)
-            if self._current_process.returncode != 0:
-                print(f"  ⚠️ TTS process exited with code {self._current_process.returncode}", flush=True)
+            if proc is not None and proc.returncode != 0:
+                print(f"  ⚠️ TTS process exited with code {proc.returncode}", flush=True)
 
             return False  # Completed normally
         except Exception as e:
@@ -322,23 +325,25 @@ class TextToSpeech:
                         self._current_process.stdin.close()
                 except Exception as e:
                     debug_log(f"Windows TTS: stdin write error: {e}", "tts")
-                while self._current_process.poll() is None:
+                proc = self._current_process
+                while proc is not None and proc.poll() is None:
                     if self._should_interrupt.is_set():
                         return True
                     try:
-                        self._current_process.wait(timeout=0.1)
+                        proc.wait(timeout=0.1)
                     except subprocess.TimeoutExpired:
                         continue
+                    proc = self._current_process
                 # Check return code like macOS version does
-                if self._current_process.returncode != 0:
+                if proc is not None and proc.returncode != 0:
                     # Capture stderr for debugging
                     stderr_output = ""
                     try:
-                        if self._current_process.stderr:
-                            stderr_output = self._current_process.stderr.read().decode("utf-8", errors="replace")
+                        if proc.stderr:
+                            stderr_output = proc.stderr.read().decode("utf-8", errors="replace")
                     except Exception:
                         pass
-                    print(f"  ⚠️ TTS PowerShell exited with code {self._current_process.returncode}", flush=True)
+                    print(f"  ⚠️ TTS PowerShell exited with code {proc.returncode}", flush=True)
                     if stderr_output:
                         debug_log(f"Windows TTS PowerShell stderr: {stderr_output[:500]}", "tts")
                 return False
@@ -373,22 +378,24 @@ class TextToSpeech:
                     stderr=subprocess.PIPE,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
-            while self._current_process.poll() is None:
+            proc = self._current_process
+            while proc is not None and proc.poll() is None:
                 if self._should_interrupt.is_set():
                     return True
                 try:
-                    self._current_process.wait(timeout=0.1)
+                    proc.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
+                proc = self._current_process
             # Check return code
-            if self._current_process.returncode != 0:
+            if proc is not None and proc.returncode != 0:
                 stderr_output = ""
                 try:
-                    if self._current_process.stderr:
-                        stderr_output = self._current_process.stderr.read().decode("utf-8", errors="replace")
+                    if proc.stderr:
+                        stderr_output = proc.stderr.read().decode("utf-8", errors="replace")
                 except Exception:
                     pass
-                print(f"  ⚠️ TTS cscript exited with code {self._current_process.returncode}", flush=True)
+                print(f"  ⚠️ TTS cscript exited with code {proc.returncode}", flush=True)
                 if stderr_output:
                     debug_log(f"Windows TTS cscript stderr: {stderr_output[:500]}", "tts")
             return False
@@ -441,17 +448,19 @@ class TextToSpeech:
                 pass
 
             # Wait for process to complete or be interrupted
-            while self._current_process.poll() is None:
+            proc = self._current_process
+            while proc is not None and proc.poll() is None:
                 if self._should_interrupt.is_set():
                     return True  # Interrupted
                 try:
-                    self._current_process.wait(timeout=0.1)
+                    proc.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
+                proc = self._current_process
 
             # Log if process exited with error
-            if self._current_process.returncode != 0:
-                print(f"  ⚠️ TTS process exited with code {self._current_process.returncode}", flush=True)
+            if proc is not None and proc.returncode != 0:
+                print(f"  ⚠️ TTS process exited with code {proc.returncode}", flush=True)
 
             return False  # Completed normally
         except Exception as e:
@@ -465,13 +474,15 @@ class TextToSpeech:
                 self._current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             # Wait for process to complete or be interrupted
-            while self._current_process.poll() is None:
+            proc = self._current_process
+            while proc is not None and proc.poll() is None:
                 if self._should_interrupt.is_set():
                     return True  # Interrupted
                 try:
-                    self._current_process.wait(timeout=0.1)
+                    proc.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
+                proc = self._current_process
             return False  # Completed normally
         except Exception:
             return False
