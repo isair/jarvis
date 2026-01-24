@@ -17,11 +17,15 @@ os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
 # Fix Windows console encoding for Unicode/emoji characters
-if sys.platform == 'win32':
+# Skip in bundled mode (frozen) - encoding is handled by desktop_app.py
+if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
     try:
         import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        # Only wrap if stdout has a proper binary buffer (not a custom writer)
+        if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     except Exception:
         pass
 

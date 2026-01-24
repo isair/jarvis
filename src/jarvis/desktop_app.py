@@ -333,6 +333,13 @@ class MemoryViewerWindow(QMainWindow):
                 self.server_thread = threading.Thread(target=run_flask_server, daemon=True)
                 self.server_thread.start()
                 debug_log("memory viewer server started in thread (bundled mode)", "desktop")
+
+                # For bundled mode, use simple wait - Flask thread starts quickly
+                # The complex socket polling below is for subprocess mode reliability
+                import time
+                time.sleep(1)
+                self.is_server_running = True
+                return True
             else:
                 # Development: start server in subprocess
                 python_exe = sys.executable
@@ -1263,11 +1270,15 @@ class JarvisSystemTray:
 def main() -> int:
     """Main entry point for the desktop app."""
     # Fix Windows console encoding for Unicode/emoji characters
-    if sys.platform == 'win32':
+    # Only for non-frozen apps - frozen apps redirect stdout to crash log
+    if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         try:
             import io
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+            # Only wrap if stdout has a proper binary buffer
+            if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
+                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
         except Exception:
             pass
 

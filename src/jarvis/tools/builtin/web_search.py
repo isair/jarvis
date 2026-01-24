@@ -215,7 +215,7 @@ class WebSearchTool(Tool):
             if all_results:
                 reply_text = (
                     f"Here are the web search results for '{search_query}'. "
-                    f"Use this information to answer the user's question:\n\n"
+                    f"Use this information to reply to the user's query:\n\n"
                     + "\n".join(all_results)
                 )
             else:
