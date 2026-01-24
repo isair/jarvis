@@ -192,9 +192,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         # Voice assistant communication style
         voice_style = (
             "Keep responses concise and conversational since this is a voice assistant. "
-            "Two to three sentences maximum. If there is more important information to convey, ask user if they want to hear. "
-            "Prioritize clarity and brevity - users are listening, not reading. "
+            "Two to three sentences maximum. Prioritize clarity and brevity - users are listening, not reading. "
             "Avoid unnecessary elaboration unless specifically requested. "
+            "Do NOT offer follow-up suggestions or ask if the user wants more info - just respond directly. "
             "IMPORTANT: Always respond in natural language - never output JSON, code, or structured data as your response."
         )
         guidance.append(voice_style)

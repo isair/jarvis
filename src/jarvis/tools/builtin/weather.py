@@ -88,10 +88,10 @@ class WeatherTool(Tool):
             if lat is None or lon is None:
                 return None
 
-            # Build display name from available fields
-            city = location_info.get("city", "")
-            region = location_info.get("region", "")
-            country = location_info.get("country", "")
+            # Build display name from available fields (handle None values)
+            city = location_info.get("city") or ""
+            region = location_info.get("region") or ""
+            country = location_info.get("country") or ""
 
             # Prefer city, but fall back to region if city is a district
             display_parts = []
