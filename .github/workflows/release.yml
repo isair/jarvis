@@ -333,6 +333,89 @@ jobs:
       contents: write
 
     steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+          fetch-tags: true  # Ensure all tags are fetched
+
+      - name: 📝 Generate changelog from main
+        id: changelog
+        run: |
+          # Get the latest tag on main (most recent stable release)
+          LATEST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "")
+
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No tags found, using full develop history"
+            COMPARE_REF="origin/main"
+            SINCE_TEXT="main branch"
+          else
+            COMPARE_REF="$LATEST_TAG"
+            SINCE_TEXT="$LATEST_TAG"
+          fi
+
+          echo "Generating changelog comparing to: $COMPARE_REF"
+
+          # Generate changelog grouped by type
+          {
+            echo "CHANGELOG<<CHANGELOG_EOF"
+            echo ""
+            echo "## 📋 Changelog (since $SINCE_TEXT)"
+            echo ""
+
+            # Features
+            FEATURES=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^feat" --regexp-ignore-case 2>/dev/null || true)
+            if [ -n "$FEATURES" ]; then
+              echo "### ✨ Features"
+              echo ""
+              echo "$FEATURES"
+              echo ""
+            fi
+
+            # Bug fixes
+            FIXES=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^fix" --regexp-ignore-case 2>/dev/null || true)
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo ""
+              echo "$FIXES"
+              echo ""
+            fi
+
+            # Refactoring
+            REFACTOR=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^refactor" --regexp-ignore-case 2>/dev/null || true)
+            if [ -n "$REFACTOR" ]; then
+              echo "### ♻️ Code Refactoring"
+              echo ""
+              echo "$REFACTOR"
+              echo ""
+            fi
+
+            # Documentation
+            DOCS=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^docs" --regexp-ignore-case 2>/dev/null || true)
+            if [ -n "$DOCS" ]; then
+              echo "### 📝 Documentation"
+              echo ""
+              echo "$DOCS"
+              echo ""
+            fi
+
+            # Other changes (chore, style, test, etc.)
+            # Get all commits, then exclude the ones we already captured
+            OTHER=$(git log "$COMPARE_REF"..HEAD --pretty=format:"%s|%h|%H" 2>/dev/null | grep -v -i -E "^(feat|fix|refactor|docs)" | while IFS='|' read -r subject short full; do
+              if [ -n "$subject" ]; then
+                echo "* $subject ([$short](https://github.com/${{ github.repository }}/commit/$full))"
+              fi
+            done || true)
+            if [ -n "$OTHER" ]; then
+              echo "### 🔧 Other Changes"
+              echo ""
+              echo "$OTHER"
+              echo ""
+            fi
+
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: 📥 Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -360,6 +443,10 @@ jobs:
 
             This is an automated build from the latest commit on develop.
             These builds may be unstable. For stable releases, use versioned releases.
+
+            ---
+            ${{ steps.changelog.outputs.CHANGELOG }}
+            ---
 
             ### ⚡ Prerequisites
             - [Ollama](https://ollama.com/download) (all platforms)
