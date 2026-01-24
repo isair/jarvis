@@ -70,8 +70,12 @@ Your User type has `email: String!` but the resolver is returning null...
 
 ## Quick Install
 
-### 1. Install Ollama
-Download from [ollama.com/download](https://ollama.com/download)
+### 1. Install Prerequisites
+
+| Platform | Requirement |
+|----------|-------------|
+| **All** | [Ollama](https://ollama.com/download) |
+| **Windows** | [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (most PCs already have this) |
 
 ### 2. Download Jarvis
 

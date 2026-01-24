@@ -303,6 +303,22 @@ jobs:
             artifacts/**/*.zip
             artifacts/**/*.tar.gz
           fail_on_unmatched_files: false
+          append_body: true
+          body: |
+
+            ---
+
+            ### ⚡ Prerequisites
+            - [Ollama](https://ollama.com/download) (all platforms)
+            - [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (Windows only, most PCs already have this)
+
+            ### 📦 Downloads
+            | Platform | File | Notes |
+            |----------|------|-------|
+            | **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
+            | **macOS (Apple Silicon)** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
+            | **macOS (Intel)** | `Jarvis-macOS-x64.zip` | Extract → Move to Applications → Right-click → Open |
+            | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -345,11 +361,17 @@ jobs:
             This is an automated build from the latest commit on develop.
             These builds may be unstable. For stable releases, use versioned releases.
 
-            ### 📦 Downloads:
-            - **Windows**: Jarvis-Windows-x64.zip
-            - **macOS (Apple Silicon)**: Jarvis-macOS-arm64.zip
-            - **macOS (Intel)**: Jarvis-macOS-x64.zip
-            - **Linux**: Jarvis-Linux-x64.tar.gz
+            ### ⚡ Prerequisites
+            - [Ollama](https://ollama.com/download) (all platforms)
+            - [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (Windows only, most PCs already have this)
+
+            ### 📦 Downloads
+            | Platform | File | Notes |
+            |----------|------|-------|
+            | **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
+            | **macOS (Apple Silicon)** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
+            | **macOS (Intel)** | `Jarvis-macOS-x64.zip` | Extract → Move to Applications → Right-click → Open |
+            | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
 
             **Branch**: develop
             **Commit**: ${{ github.sha }}
