@@ -108,7 +108,7 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 
 | Hardware | RAM | Model |
 |----------|-----|-------|
-| Most users | 8GB+ | `llama3.2:3b` (default) |
+| Most users | 8GB+ | `qwen3:4b` (default) |
 | High-end | 16GB+ | `gpt-oss:20b` |
 
 The setup wizard will guide you through model selection and installation on first launch.

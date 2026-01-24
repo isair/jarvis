@@ -211,7 +211,7 @@ class WebSearchTool(Tool):
                 all_results.extend(search_results)
 
             # Format results with explicit instruction for the LLM to use this data
-            # Small LLMs like llama3.2:3b often need explicit guidance to use tool results
+            # Small LLMs often need explicit guidance to use tool results
             if all_results:
                 reply_text = (
                     f"Here are the web search results for '{search_query}'. "

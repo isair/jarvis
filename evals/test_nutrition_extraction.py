@@ -2,10 +2,10 @@
 Nutrition Extraction Evaluations
 
 Tests the LLM's ability to extract accurate nutritional information from meal descriptions.
-This is critical for smaller models like llama3.2:3b which may struggle with nutrition estimation.
+This is critical for smaller models like qwen3:4b which may struggle with nutrition estimation.
 
 Run with specific model:
-    EVAL_JUDGE_MODEL=llama3.2:3b ./scripts/run_evals.sh nutrition
+    EVAL_JUDGE_MODEL=qwen3:4b ./scripts/run_evals.sh nutrition
     EVAL_JUDGE_MODEL=gpt-oss:20b ./scripts/run_evals.sh nutrition
 
 For EVALS.md generation (always use gpt-oss:20b):

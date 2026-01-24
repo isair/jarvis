@@ -209,6 +209,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         # Note: tools_desc is NOT included here because tools are passed via the native tools API parameter
         # Including tools in both places confuses the model and causes it to not use tools properly
 
+        # Disable Qwen3's "thinking mode" which causes very slow responses
+        # See: https://github.com/ollama/ollama/issues/10456
+        if cfg.ollama_chat_model.startswith("qwen3"):
+            guidance.append("/no_think")
+
         return "\n".join(guidance)
 
     messages = []  # type: ignore[var-annotated]
@@ -253,7 +258,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
                 # Note: Text-based fallback parsing was removed since all supported models
-                # (gpt-oss:20b, llama3.2:3b) use native tool calling via the tools API parameter
+                # (gpt-oss:20b, qwen3:4b) use native tool calling via the tools API parameter
 
         except Exception:
             pass
@@ -358,7 +363,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         """
         Handle responses where the model outputs JSON instead of natural language.
 
-        Some smaller models (e.g., llama3.2:3b) occasionally output JSON-structured
+        Some smaller models (e.g., qwen3:4b) occasionally output JSON-structured
         responses instead of plain text. This function extracts readable text from
         common JSON patterns.
 

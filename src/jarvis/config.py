@@ -169,7 +169,7 @@ def get_default_config() -> Dict[str, Any]:
         # LLM & AI Models
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
-        "ollama_chat_model": "llama3.2:3b",
+        "ollama_chat_model": "qwen3:4b",
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
         "llm_embedding_timeout_sec": 60.0,

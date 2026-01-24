@@ -194,7 +194,7 @@ def get_required_models() -> List[str]:
         return models
     except Exception:
         # Default models if config can't be loaded
-        return ["llama3.2:3b", "nomic-embed-text"]
+        return ["qwen3:4b", "nomic-embed-text"]
 
 
 def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
@@ -1040,10 +1040,10 @@ class ModelsPage(QWizardPage):
 
     # Model options with their details
     MODEL_OPTIONS = {
-        "llama3.2:3b": {
-            "name": "Llama 3.2 3B (Recommended)",
-            "description": "Fast, native tool calling, ~2GB download",
-            "size": "~2GB",
+        "qwen3:4b": {
+            "name": "Qwen3 4B (Recommended)",
+            "description": "Smart, 256K context, ~2.5GB download",
+            "size": "~2.5GB",
             "ram": "8GB+",
         },
         "gpt-oss:20b": {
@@ -1090,7 +1090,7 @@ class ModelsPage(QWizardPage):
 
         # Model option buttons
         self._model_buttons: Dict[str, QPushButton] = {}
-        self._selected_model: str = "llama3.2:3b"
+        self._selected_model: str = "qwen3:4b"
 
         for model_id, info in self.MODEL_OPTIONS.items():
             btn = QPushButton()
@@ -1278,18 +1278,18 @@ class ModelsPage(QWizardPage):
     def initializePage(self):
         """Initialize page with current model status."""
         # Load the currently configured chat model
-        current_chat_model = "gpt-oss:20b"
+        current_chat_model = "qwen3:4b"
         try:
             cfg = load_settings()
             current_chat_model = cfg.ollama_chat_model
         except Exception:
             pass
 
-        # Pre-select the model if it's one of our options, otherwise default to gpt-oss:20b
+        # Pre-select the model if it's one of our options, otherwise default to qwen3:4b
         if current_chat_model in self.MODEL_OPTIONS:
             self._selected_model = current_chat_model
         else:
-            self._selected_model = "gpt-oss:20b"
+            self._selected_model = "qwen3:4b"
 
         # Update button states
         for m_id, btn in self._model_buttons.items():
