@@ -244,6 +244,23 @@ for binary in a.binaries:
 
 a.binaries = filtered_binaries
 
+# On Windows, exclude PyQt6's bundled VC++ runtime DLLs to avoid conflicts
+# These should come from the system's Visual C++ Redistributable instead
+if sys.platform == 'win32':
+    vcruntime_dlls = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll']
+    filtered_binaries = []
+    for binary in a.binaries:
+        name = binary[0].lower()
+        binary_path = str(binary[1]).lower() if len(binary) > 1 else ''
+
+        # Exclude VC++ runtime DLLs that come from PyQt6's Qt6\bin directory
+        if name in vcruntime_dlls and 'pyqt6' in binary_path:
+            print(f"Excluding PyQt6 bundled VC++ runtime: {binary[0]} from {binary[1]}")
+            continue
+        filtered_binaries.append(binary)
+
+    a.binaries = filtered_binaries
+
 # On macOS, ensure OpenSSL libraries are bundled properly
 if sys.platform == 'darwin':
     # Remove any psycopg2 binaries and OpenCV's bundled OpenSSL (should be excluded already, but be safe)
