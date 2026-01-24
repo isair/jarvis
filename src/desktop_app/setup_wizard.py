@@ -255,8 +255,9 @@ def check_ollama_status() -> OllamaStatus:
     status.is_server_running = is_running
     status.server_version = version
 
-    # Check models (only if CLI is installed)
-    if is_installed:
+    # Check models (only if CLI is installed AND server is running)
+    # Running 'ollama list' when server isn't running causes it to hang
+    if is_installed and is_running:
         required = get_required_models()
         installed = check_installed_models(cli_path)
 

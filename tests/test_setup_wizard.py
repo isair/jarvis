@@ -9,7 +9,7 @@ import subprocess
 from unittest.mock import patch, MagicMock
 import pytest
 
-from jarvis.setup_wizard import (
+from desktop_app.setup_wizard import (
     check_ollama_cli,
     check_ollama_server,
     get_required_models,
@@ -102,7 +102,7 @@ class TestGetRequiredModels:
         mock_settings.ollama_chat_model = "llama2:7b"
         mock_settings.ollama_embed_model = "nomic-embed-text"
 
-        with patch("jarvis.setup_wizard.load_settings", return_value=mock_settings):
+        with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
 
             assert "llama2:7b" in models
@@ -110,7 +110,7 @@ class TestGetRequiredModels:
 
     def test_returns_defaults_on_config_error(self):
         """Returns default models if config can't be loaded."""
-        with patch("jarvis.setup_wizard.load_settings", side_effect=Exception("Config error")):
+        with patch("desktop_app.setup_wizard.load_settings", side_effect=Exception("Config error")):
             models = get_required_models()
 
             assert len(models) == 2
@@ -159,10 +159,10 @@ class TestCheckOllamaStatus:
 
     def test_fully_setup_status(self):
         """Returns correct status when everything is set up."""
-        with patch("jarvis.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
-            with patch("jarvis.setup_wizard.check_ollama_server", return_value=(True, "0.1.23")):
-                with patch("jarvis.setup_wizard.get_required_models", return_value=["llama2:7b"]):
-                    with patch("jarvis.setup_wizard.check_installed_models", return_value=["llama2:7b"]):
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.1.23")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=["llama2:7b"]):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=["llama2:7b"]):
                         status = check_ollama_status()
 
                         assert status.is_cli_installed is True
@@ -172,9 +172,9 @@ class TestCheckOllamaStatus:
 
     def test_missing_cli_status(self):
         """Returns correct status when CLI is not installed."""
-        with patch("jarvis.setup_wizard.check_ollama_cli", return_value=(False, None)):
-            with patch("jarvis.setup_wizard.check_ollama_server", return_value=(False, None)):
-                with patch("jarvis.setup_wizard.get_required_models", return_value=["llama2:7b"]):
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(False, None)):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(False, None)):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=["llama2:7b"]):
                     status = check_ollama_status()
 
                     assert status.is_cli_installed is False
@@ -183,10 +183,10 @@ class TestCheckOllamaStatus:
 
     def test_missing_models_status(self):
         """Returns correct status when models are missing."""
-        with patch("jarvis.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
-            with patch("jarvis.setup_wizard.check_ollama_server", return_value=(True, "0.1.23")):
-                with patch("jarvis.setup_wizard.get_required_models", return_value=["llama2:7b", "codellama"]):
-                    with patch("jarvis.setup_wizard.check_installed_models", return_value=["llama2:7b"]):
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.1.23")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=["llama2:7b", "codellama"]):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=["llama2:7b"]):
                         status = check_ollama_status()
 
                         assert status.is_cli_installed is True
@@ -209,7 +209,7 @@ class TestShouldShowSetupWizard:
             missing_models=[],
         )
 
-        with patch("jarvis.setup_wizard.check_ollama_status", return_value=mock_status):
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is False
 
     def test_returns_true_when_cli_missing(self):
@@ -220,7 +220,7 @@ class TestShouldShowSetupWizard:
             missing_models=["llama2:7b"],
         )
 
-        with patch("jarvis.setup_wizard.check_ollama_status", return_value=mock_status):
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is True
 
     def test_returns_true_when_server_not_running(self):
@@ -232,7 +232,7 @@ class TestShouldShowSetupWizard:
             missing_models=[],
         )
 
-        with patch("jarvis.setup_wizard.check_ollama_status", return_value=mock_status):
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is True
 
     def test_returns_true_when_models_missing(self):
@@ -246,7 +246,7 @@ class TestShouldShowSetupWizard:
             missing_models=["llama2:7b"],
         )
 
-        with patch("jarvis.setup_wizard.check_ollama_status", return_value=mock_status):
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is True
 
 
@@ -367,14 +367,14 @@ class TestModelOptions:
 
     def test_model_options_available(self):
         """Model options include both recommended and lightweight options."""
-        from jarvis.setup_wizard import ModelsPage
+        from desktop_app.setup_wizard import ModelsPage
 
         assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
         assert "llama3.2:3b" in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):
         """Each model option has required info fields."""
-        from jarvis.setup_wizard import ModelsPage
+        from desktop_app.setup_wizard import ModelsPage
 
         for model_id, info in ModelsPage.MODEL_OPTIONS.items():
             assert "name" in info, f"Model {model_id} missing 'name'"
@@ -384,7 +384,7 @@ class TestModelOptions:
 
     def test_model_options_uses_centralized_config(self):
         """ModelsPage.MODEL_OPTIONS should reference the centralized config."""
-        from jarvis.setup_wizard import ModelsPage
+        from desktop_app.setup_wizard import ModelsPage
         from jarvis.config import SUPPORTED_CHAT_MODELS
 
         # Verify they're the same object (not just equal values)
@@ -396,7 +396,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_multilingual_model_options_available(self):
         """Multilingual whisper model options include recommended and lightweight options."""
-        from jarvis.setup_wizard import WhisperSetupPage
+        from desktop_app.setup_wizard import WhisperSetupPage
 
         model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS]
         assert "small" in model_ids
@@ -405,7 +405,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_english_model_options_available(self):
         """English-only whisper model options include recommended and lightweight options."""
-        from jarvis.setup_wizard import WhisperSetupPage
+        from desktop_app.setup_wizard import WhisperSetupPage
 
         model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN]
         assert "small.en" in model_ids
@@ -416,7 +416,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_multilingual_model_options_have_required_fields(self):
         """Each multilingual whisper model option has required info fields."""
-        from jarvis.setup_wizard import WhisperSetupPage
+        from desktop_app.setup_wizard import WhisperSetupPage
 
         for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS:
             assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
@@ -431,7 +431,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_english_model_options_have_required_fields(self):
         """Each English-only whisper model option has required info fields."""
-        from jarvis.setup_wizard import WhisperSetupPage
+        from desktop_app.setup_wizard import WhisperSetupPage
 
         for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN:
             assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"

@@ -1,11 +1,12 @@
 """Tests for auto-update functionality."""
 
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
 from pathlib import Path
 
-from jarvis.updater import (
+from desktop_app.updater import (
     check_for_updates,
     parse_version,
     get_platform_asset_name,
@@ -105,7 +106,7 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("1.0.0", "stable")):
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
             with patch("requests.get", return_value=mock_response):
                 with patch("sys.platform", "darwin"):
                     with patch("platform.machine", return_value="arm64"):
@@ -137,7 +138,7 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("1.0.0", "stable")):
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
             with patch("requests.get", return_value=mock_response):
                 with patch("sys.platform", "darwin"):
                     with patch("platform.machine", return_value="arm64"):
@@ -170,7 +171,7 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("1.0.0", "stable")):
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
             with patch("requests.get", return_value=mock_response):
                 with patch("sys.platform", "darwin"):
                     with patch("platform.machine", return_value="arm64"):
@@ -203,7 +204,7 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("1.0.0", "stable")):
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
             with patch("requests.get", return_value=mock_response):
                 with patch("sys.platform", "darwin"):
                     with patch("platform.machine", return_value="arm64"):
@@ -215,7 +216,7 @@ class TestCheckForUpdates:
     def test_handles_network_error(self):
         import requests
 
-        with patch("jarvis.updater.get_version", return_value=("1.0.0", "stable")):
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
             with patch(
                 "requests.get", side_effect=requests.RequestException("Network error")
             ):
@@ -248,7 +249,7 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("1.0.0", "stable")):
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
             with patch("requests.get", return_value=mock_response):
                 with patch("sys.platform", "darwin"):  # On macOS
                     with patch("platform.machine", return_value="arm64"):
@@ -281,8 +282,8 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("dev-abc1234", "develop")):
-            with patch("jarvis.updater.get_last_installed_asset_id", return_value=None):
+        with patch("desktop_app.updater.get_version", return_value=("dev-abc1234", "develop")):
+            with patch("desktop_app.updater.get_last_installed_asset_id", return_value=None):
                 with patch("requests.get", return_value=mock_response):
                     with patch("sys.platform", "darwin"):
                         with patch("platform.machine", return_value="arm64"):
@@ -315,8 +316,8 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("dev-abc1234", "develop")):
-            with patch("jarvis.updater.get_last_installed_asset_id", return_value=200001):  # Old ID
+        with patch("desktop_app.updater.get_version", return_value=("dev-abc1234", "develop")):
+            with patch("desktop_app.updater.get_last_installed_asset_id", return_value=200001):  # Old ID
                 with patch("requests.get", return_value=mock_response):
                     with patch("sys.platform", "darwin"):
                         with patch("platform.machine", return_value="arm64"):
@@ -348,8 +349,8 @@ class TestCheckForUpdates:
         ]
         mock_response.raise_for_status = MagicMock()
 
-        with patch("jarvis.updater.get_version", return_value=("dev-abc1234", "develop")):
-            with patch("jarvis.updater.get_last_installed_asset_id", return_value=200001):  # Same ID
+        with patch("desktop_app.updater.get_version", return_value=("dev-abc1234", "develop")):
+            with patch("desktop_app.updater.get_last_installed_asset_id", return_value=200001):  # Same ID
                 with patch("requests.get", return_value=mock_response):
                     with patch("sys.platform", "darwin"):
                         with patch("platform.machine", return_value="arm64"):
@@ -426,6 +427,7 @@ class TestPathEscaping:
         assert '\\\\' in escaped
 
     @pytest.mark.unit
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix path test")
     def test_applescript_normal_path_unchanged(self):
         path = Path('/Applications/Jarvis.app')
         escaped = _escape_applescript_path(path)
@@ -476,6 +478,7 @@ class TestPathEscaping:
         assert '`whoami`' in escaped
 
     @pytest.mark.unit
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix path test")
     def test_shell_normal_path_wrapped(self):
         path = Path('/opt/Jarvis/Jarvis')
         escaped = _escape_shell_path(path)
