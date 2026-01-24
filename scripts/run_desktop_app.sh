@@ -2,7 +2,21 @@
 
 # Test script for the Jarvis Desktop App
 
+# Parse arguments
+VOICE_DEBUG=0
+for arg in "$@"; do
+    case $arg in
+        --voice-debug)
+            VOICE_DEBUG=1
+            shift
+            ;;
+    esac
+done
+
 echo "🔧 Testing Jarvis Desktop App locally..."
+if [ "$VOICE_DEBUG" = "1" ]; then
+    echo "   📋 Voice debug: ENABLED"
+fi
 echo ""
 
 # Check Python version
@@ -32,6 +46,11 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
+
+# Set voice debug environment variable if requested
+if [ "$VOICE_DEBUG" = "1" ]; then
+    export JARVIS_VOICE_DEBUG=1
+fi
 
 python -m desktop_app
 
