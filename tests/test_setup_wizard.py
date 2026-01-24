@@ -101,12 +101,29 @@ class TestGetRequiredModels:
         mock_settings = MagicMock()
         mock_settings.ollama_chat_model = "llama2:7b"
         mock_settings.ollama_embed_model = "nomic-embed-text"
+        mock_settings.intent_judge_model = "llama3.2:3b"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
 
             assert "llama2:7b" in models
             assert "nomic-embed-text" in models
+
+    def test_includes_intent_judge_model_when_different_from_chat(self):
+        """Includes intent judge model when it differs from chat model."""
+        mock_settings = MagicMock()
+        mock_settings.ollama_chat_model = "gpt-oss:20b"  # Different from intent judge
+        mock_settings.ollama_embed_model = "nomic-embed-text"
+        mock_settings.intent_judge_model = "llama3.2:3b"
+
+        with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
+            models = get_required_models()
+
+            # Should have 3 models: chat, embed, and intent judge
+            assert len(models) == 3
+            assert "gpt-oss:20b" in models
+            assert "nomic-embed-text" in models
+            assert "llama3.2:3b" in models  # Intent judge model is always required
 
     def test_returns_defaults_on_config_error(self):
         """Returns default models if config can't be loaded."""

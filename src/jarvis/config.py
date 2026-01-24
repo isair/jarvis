@@ -118,6 +118,19 @@ class Settings:
     echo_energy_threshold: float
     echo_tolerance: float
 
+    # Audio Wake Word Detection
+    audio_wake_enabled: bool
+    audio_wake_threshold: float
+
+    # Intent Judge (LLM-based intent classification)
+    # Always used when available, falls back to simple wake word detection
+    intent_judge_model: str
+    intent_judge_timeout_sec: float
+    intent_judge_context_seconds: float | None  # None = auto-detect based on model size
+
+    # Transcript Buffer
+    transcript_buffer_duration_sec: float
+
     # Memory & Dialogue
     dialogue_memory_timeout: float
     memory_enrichment_max_results: int
@@ -283,6 +296,21 @@ def get_default_config() -> Dict[str, Any]:
         "echo_energy_threshold": 2.0,
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
 
+        # Audio Wake Word Detection
+        "audio_wake_enabled": True,  # Enable audio-level wake word detection
+        "audio_wake_threshold": 0.5,  # Detection confidence threshold (0.0-1.0)
+
+        # Intent Judge (LLM-based intent classification)
+        # Always used when available, falls back to simple wake word detection
+        "intent_judge_model": "llama3.2:3b",  # Model for intent judging (needs reasoning ability)
+        "intent_judge_timeout_sec": 3.0,  # Max time to wait for intent judge response
+        # Context duration for intent judge (None = auto-detect based on model size)
+        # Small models (1b/3b/7b): 120s, Large models (8b+): 300s (full buffer)
+        "intent_judge_context_seconds": None,
+
+        # Transcript Buffer
+        "transcript_buffer_duration_sec": 300.0,  # Rolling buffer duration (5 minutes)
+
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 10,
@@ -404,6 +432,21 @@ def load_settings() -> Settings:
     hot_window_seconds = float(merged.get("hot_window_seconds", 3.0))
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
+
+    # Audio Wake Word Detection
+    audio_wake_enabled = bool(merged.get("audio_wake_enabled", True))
+    audio_wake_threshold = float(merged.get("audio_wake_threshold", 0.5))
+    # Intent Judge - always used when available
+    intent_judge_model = str(merged.get("intent_judge_model", "llama3.2:3b"))
+    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 3.0))
+    intent_judge_context_seconds_val = merged.get("intent_judge_context_seconds")
+    intent_judge_context_seconds: float | None = None
+    if intent_judge_context_seconds_val not in (None, "", "null"):
+        intent_judge_context_seconds = float(intent_judge_context_seconds_val)
+
+    # Transcript Buffer
+    transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 300.0))
+
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
@@ -496,6 +539,18 @@ def load_settings() -> Settings:
         hot_window_seconds=hot_window_seconds,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
+
+        # Audio Wake Word Detection
+        audio_wake_enabled=audio_wake_enabled,
+        audio_wake_threshold=audio_wake_threshold,
+
+        # Intent Judge - always used when available
+        intent_judge_model=intent_judge_model,
+        intent_judge_timeout_sec=intent_judge_timeout_sec,
+        intent_judge_context_seconds=intent_judge_context_seconds,
+
+        # Transcript Buffer
+        transcript_buffer_duration_sec=transcript_buffer_duration_sec,
 
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,

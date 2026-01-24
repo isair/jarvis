@@ -17,7 +17,11 @@ from datetime import datetime
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
+from .transcript_buffer import TranscriptBuffer
+from .intent_judge import IntentJudge, create_intent_judge
+from .wake_detector import WakeWordDetector
 from ..debug import debug_log
+from ..reply.prompts.model_variants import detect_model_size, ModelSize
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -156,6 +160,53 @@ class VoiceListener(threading.Thread):
         # Energy tracking for echo detection
         self._recent_audio_energy: deque = deque(maxlen=50)
 
+        # Audio-level wake word detection timestamp
+        self._wake_timestamp: Optional[float] = None
+
+        # Rolling transcript buffer for context-aware processing
+        buffer_duration = float(getattr(self.cfg, "transcript_buffer_duration_sec", 300.0))
+        self._transcript_buffer = TranscriptBuffer(max_duration_sec=buffer_duration)
+        debug_log(f"transcript buffer initialized ({buffer_duration}s max duration)", "voice")
+
+        # Intent judge (full context, larger model) - always used when available
+        self._intent_judge = create_intent_judge(self.cfg)
+        if self._intent_judge is not None:
+            debug_log(f"intent judge initialized (model: {self._intent_judge.config.model})", "voice")
+        else:
+            debug_log("intent judge unavailable, using simple wake word detection", "voice")
+
+        # Intent judge context duration - how much transcript to send
+        # Auto-detect based on intent judge model size if not explicitly configured
+        configured_context = getattr(self.cfg, "intent_judge_context_seconds", None)
+        if configured_context is not None:
+            self._intent_judge_context_seconds = float(configured_context)
+        else:
+            # Auto-detect based on intent judge model
+            intent_model = str(getattr(self.cfg, "intent_judge_model", "llama3.2:3b"))
+            model_size = detect_model_size(intent_model)
+            # Small models (1b/3b/7b): 120s, Large models (8b+): 300s (full buffer)
+            self._intent_judge_context_seconds = 120.0 if model_size == ModelSize.SMALL else 300.0
+        debug_log(
+            f"intent judge context: {self._intent_judge_context_seconds}s "
+            f"({'auto-detected' if configured_context is None else 'configured'})",
+            "voice"
+        )
+
+        # Audio-level wake word detector (openWakeWord)
+        self._wake_detector: Optional[WakeWordDetector] = None
+        wake_word = str(getattr(self.cfg, "wake_word", "jarvis")).lower()
+        if bool(getattr(self.cfg, "audio_wake_enabled", True)):
+            self._wake_detector = WakeWordDetector(
+                wake_word=wake_word,
+                threshold=float(getattr(self.cfg, "audio_wake_threshold", 0.5)),
+                sample_rate=self._samplerate,
+                on_wake_detected=self._on_wake_detected,
+            )
+            if self._wake_detector.available:
+                debug_log(f"audio-level wake detector enabled for '{wake_word}'", "voice")
+            else:
+                debug_log(f"audio-level wake detector not available for '{wake_word}'", "voice")
+
         # Thinking tune player
         self._tune_player: Optional = None
 
@@ -206,7 +257,7 @@ class VoiceListener(threading.Thread):
         self.echo_detector.track_tts_finish()
 
         # Schedule delayed hot window activation
-        debug_log("scheduling hot window activation", "voice")
+        debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
     def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0) -> None:
@@ -235,7 +286,9 @@ class VoiceListener(threading.Thread):
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
 
         # Priority 1: Hot window processing (check first to allow salvaged input during hot window)
-        if self.state_manager.was_hot_window_active_at_voice_start():
+        # Check both: (1) hot window active at voice start, OR (2) hot window currently active
+        # This handles the case where echo triggers VAD before hot window activates
+        if self.state_manager.was_hot_window_active_at_voice_start() or self.state_manager.is_hot_window_active():
             # During hot window, apply echo detection but be more permissive
             if self.tts and self.tts.enabled and self.echo_detector._last_tts_text:
                 # Try salvaging during TTS first
@@ -249,7 +302,8 @@ class VoiceListener(threading.Thread):
 
                 if is_during_tts and self.echo_detector.should_reject_as_echo(
                     text_lower, utterance_energy, is_during_tts,
-                    getattr(self.cfg, 'tts_rate', 200), utterance_start_time
+                    getattr(self.cfg, 'tts_rate', 200), utterance_start_time,
+                    in_hot_window=True
                 ):
                     # Attempt to salvage suffix during TTS in hot window
                     salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
@@ -288,6 +342,9 @@ class VoiceListener(threading.Thread):
             self.state_manager.expire_hot_window(self.cfg.voice_debug)
             self.state_manager.clear_hot_window_voice_state()
             debug_log(f"hot window input accepted, starting collection: {text_lower}", "voice")
+
+            # Clear audio buffers to prevent concatenation issues
+            self._clear_audio_buffers()
 
             # Hot window input is now treated as the start of a query collection
             query_raw = text_lower.strip()
@@ -362,7 +419,102 @@ class VoiceListener(threading.Thread):
         # Check hot window expiry (only if not processed as hot window input)
         self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
-        # Priority 4: Wake word detection
+        # Priority 3: LLM-based intent judge (upgraded, with full context)
+        # IMPORTANT: Only run intent judge when NOT during TTS
+        # During TTS, echo detection + text-based stop word detection is enough
+        is_speaking_now = self.tts and self.tts.is_speaking()
+        intent_judgment = None
+
+        # Use the upgraded intent judge if available (with full transcript context)
+        if not is_speaking_now and self._intent_judge is not None and self._intent_judge.available:
+            # Get recent transcript segments for context (duration based on model size)
+            context_segments = self._transcript_buffer.get_last_seconds(self._intent_judge_context_seconds)
+
+            # Get TTS context for echo detection
+            last_tts_text = self.echo_detector._last_tts_text or ""
+            last_tts_finish_time = self.echo_detector._last_tts_finish_time or 0.0
+
+            # Determine if this could be a hot window follow-up
+            # This helps the intent judge know to look for echo + follow-up patterns
+            #
+            # We're generous here because:
+            # 1. Users often start speaking during TTS and continue into follow-up
+            # 2. Long utterances may span TTS completion + hot window
+            # 3. It's better to let the intent judge decide (it has full context)
+            grace_period = self.state_manager.hot_window_seconds + self.state_manager.echo_tolerance
+            could_be_hot_window = (
+                self.state_manager.was_hot_window_active_at_voice_start() or
+                self.state_manager.is_hot_window_active() or
+                # Treat as hot window if there was recent TTS, using these checks:
+                (last_tts_finish_time > 0 and (
+                    # Case 1: Utterance started during TTS (user speaking through TTS)
+                    (utterance_start_time > 0 and utterance_start_time < last_tts_finish_time) or
+                    # Case 2: Utterance ended within grace period after TTS
+                    (utterance_end_time > 0 and utterance_end_time - last_tts_finish_time < grace_period) or
+                    # Case 3: Fallback - processing happening within grace period
+                    (time.time() - last_tts_finish_time < grace_period)
+                ))
+            )
+
+            intent_judgment = self._intent_judge.judge(
+                segments=context_segments,
+                wake_timestamp=self._wake_timestamp,
+                last_tts_text=last_tts_text,
+                last_tts_finish_time=last_tts_finish_time,
+                in_hot_window=could_be_hot_window,
+            )
+
+            if intent_judgment is not None:
+                # If judge says stop command, interrupt TTS
+                if intent_judgment.stop and self.tts and self.tts.is_speaking():
+                    debug_log(f"🛑 Intent judge detected stop command", "voice")
+                    self.tts.interrupt()
+                    return
+
+                # If directed with query, process it
+                if intent_judgment.directed and intent_judgment.query:
+                    debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{intent_judgment.query}\"", "voice")
+                    # Cancel any pending hot window activation
+                    self.state_manager.cancel_hot_window_activation()
+
+                    # Clear audio buffers (also clears wake timestamp)
+                    self._clear_audio_buffers()
+
+                    # Use the extracted query (cleaned of pre-wake-word chatter)
+                    self.state_manager.start_collection(intent_judgment.query)
+
+                    # Start thinking tune and show processing message
+                    self._start_thinking_tune()
+                    try:
+                        print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                    except Exception:
+                        pass
+                    return
+
+                # If not directed with high confidence, check reasoning before rejecting
+                if not intent_judgment.directed and intent_judgment.confidence == "high":
+                    # Surgical fix: If intent judge claims "echo" but echo system already cleared
+                    # this utterance (we reached here, meaning Priority 2 didn't reject), don't
+                    # trust the LLM's echo reasoning - fall through to wake word detection instead.
+                    # The echo system does actual text similarity matching; the LLM sometimes
+                    # hallucinates echo matches that don't exist.
+                    reasoning_lower = (intent_judgment.reasoning or "").lower()
+                    if "echo" in reasoning_lower:
+                        debug_log(
+                            f"⚠️ Intent judge claimed echo but echo system cleared - "
+                            f"falling through to wake word check: \"{text_lower}\"",
+                            "voice"
+                        )
+                        # Fall through to wake word detection
+                    else:
+                        # Trust other rejection reasons (narrative mention, etc.)
+                        debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
+                        return
+
+                # For inconclusive results, fall through to wake word detection
+                debug_log(f"⏭️ Intent judge inconclusive ({intent_judgment.confidence}), checking wake word", "voice")
+
+        # Priority 4: Wake word detection (fallback when intent judge unavailable/inconclusive)
         wake_word = getattr(self.cfg, "wake_word", "jarvis")
         aliases = set(getattr(self.cfg, "wake_aliases", [])) | {wake_word}
         fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
@@ -371,6 +523,12 @@ class VoiceListener(threading.Thread):
         debug_log(f"wake word check: '{wake_word}' in '{text_lower}' → {wake_detected}", "voice")
 
         if wake_detected:
+            # Cancel any pending hot window activation when new query starts
+            self.state_manager.cancel_hot_window_activation()
+
+            # Clear audio buffers to prevent concatenation issues
+            self._clear_audio_buffers()
+
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
             self.state_manager.start_collection(query_fragment)
 
@@ -388,7 +546,11 @@ class VoiceListener(threading.Thread):
             return
 
         # Priority 6: Non-wake input (ignore)
-        debug_log(f"input ignored (no wake word detected): {text_lower}", "voice")
+        # Provide clear debug info about why input was ignored
+        intent_info = ""
+        if intent_judgment is not None:
+            intent_info = f", intent={intent_judgment.directed}/{intent_judgment.confidence}"
+        debug_log(f"input ignored (no wake word{intent_info}): {text_lower}", "voice")
 
     def _dispatch_query(self, query: str) -> None:
         """
@@ -398,6 +560,9 @@ class VoiceListener(threading.Thread):
             query: Complete user query to process
         """
         debug_log(f"dispatching query: '{query}'", "voice")
+
+        # Clear audio buffers to prevent stale audio from next query
+        self._clear_audio_buffers()
 
         # Set face state to THINKING
         try:
@@ -431,7 +596,8 @@ class VoiceListener(threading.Thread):
 
             # TTS completion callback for hot window
             def _on_tts_complete():
-                debug_log("TTS completion callback triggered", "voice")
+                import time as _time
+                debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
                 self.activate_hot_window()
 
             # Track TTS start for echo detection with actual text
@@ -454,6 +620,40 @@ class VoiceListener(threading.Thread):
             return rms
         except Exception:
             return 0.0
+
+    def _clear_audio_buffers(self) -> None:
+        """Clear all audio buffers and reset speech state.
+
+        Call this on state transitions to prevent old audio from being
+        incorrectly concatenated with new input.
+        """
+        self._utterance_frames = []
+        self._pre_roll.clear()
+        self.is_speech_active = False
+        self._silence_frames = 0
+
+        # Clear wake detection state
+        self._wake_timestamp = None
+        if self._wake_detector is not None:
+            self._wake_detector.reset()
+
+        # Drain the audio queue
+        try:
+            while not self._audio_q.empty():
+                self._audio_q.get_nowait()
+        except Exception:
+            pass
+
+        debug_log("audio buffers cleared", "voice")
+
+    def _on_wake_detected(self, timestamp: float) -> None:
+        """Callback when wake word is detected at audio level.
+
+        This is called from the WakeWordDetector when "hey jarvis" is
+        detected. We record the timestamp for use by the intent judge.
+        """
+        debug_log(f"audio wake detected at {timestamp:.3f}", "voice")
+        self._wake_timestamp = timestamp
 
     def _is_speech_frame(self, frame) -> bool:
         """Determine if audio frame contains speech."""
@@ -505,7 +705,8 @@ class VoiceListener(threading.Thread):
         Detect repetitive hallucinations that Whisper produces on quiet/ambiguous audio.
 
         Common patterns include repeated single words like "don't don't don't..."
-        or repeated short phrases. These are classic Whisper failure modes.
+        or repeated short phrases. Also detects character-level repetition patterns
+        like "Jろ Jろ Jろ..." which may appear with or without spaces.
 
         Args:
             text: Transcribed text to check
@@ -513,32 +714,76 @@ class VoiceListener(threading.Thread):
         Returns:
             True if the text appears to be a hallucination
         """
+        import re
+        from collections import Counter
+
         if not text:
             return False
 
-        words = text.lower().strip().split()
+        text_stripped = text.strip()
+        if len(text_stripped) < 6:
+            return False
+
+        # --- Character-level repetition detection ---
+        # Remove all whitespace to detect patterns like "Jろ Jろ Jろ" or "JろJろJろ"
+        text_no_space = re.sub(r'\s+', '', text_stripped.lower())
+
+        # Look for repeating patterns of 1-5 characters appearing 3+ times consecutively
+        # This catches "JろJろJろJろ" (pattern "Jろ" repeating)
+        for pattern_len in range(1, 6):
+            if len(text_no_space) < pattern_len * 3:
+                continue
+
+            # Check if text is mostly composed of a repeating pattern
+            for start in range(pattern_len):
+                pattern = text_no_space[start:start + pattern_len]
+                if not pattern:
+                    continue
+
+                # Count how many times this pattern repeats consecutively from this start position
+                remaining = text_no_space[start:]
+                repeat_count = 0
+                pos = 0
+                while pos + pattern_len <= len(remaining) and remaining[pos:pos + pattern_len] == pattern:
+                    repeat_count += 1
+                    pos += pattern_len
+
+                # If pattern repeats 4+ times and covers most of the string, it's a hallucination
+                covered_chars = repeat_count * pattern_len
+                coverage = covered_chars / len(text_no_space) if text_no_space else 0
+
+                if repeat_count >= 4 and coverage >= 0.6:
+                    debug_log(f"char-level repetition detected: pattern '{pattern}' repeats {repeat_count}x, coverage={coverage:.0%}", "voice")
+                    return True
+
+        # --- Word-level repetition detection (existing logic) ---
+        words = text_stripped.lower().split()
         if len(words) < 4:
             return False
 
-        # Check for excessive repetition of any single word
-        # If any word appears more than 50% of the time, it's likely a hallucination
-        from collections import Counter
-        word_counts = Counter(words)
+        # Strip punctuation from words for comparison (handles "word..." vs "word")
+        clean_words = [re.sub(r'[^\w]', '', w) for w in words]
+        clean_words = [w for w in clean_words if w]  # Remove empty strings
+
+        if len(clean_words) < 4:
+            return False
+
+        word_counts = Counter(clean_words)
         most_common_word, most_common_count = word_counts.most_common(1)[0]
 
         # If a single word makes up more than 50% of all words and appears 4+ times
-        if most_common_count >= 4 and most_common_count / len(words) > 0.5:
+        if most_common_count >= 4 and most_common_count / len(clean_words) > 0.5:
             debug_log(f"repetitive hallucination detected: '{most_common_word}' repeated {most_common_count}x in '{text[:50]}...'", "voice")
             return True
 
         # Check for repeated consecutive sequences (e.g., "don don don" or "stop stop stop")
         # Look for any word repeated 3+ times consecutively
         consecutive_count = 1
-        for i in range(1, len(words)):
-            if words[i] == words[i-1]:
+        for i in range(1, len(clean_words)):
+            if clean_words[i] == clean_words[i-1]:
                 consecutive_count += 1
                 if consecutive_count >= 3:
-                    debug_log(f"consecutive repetition detected: '{words[i]}' repeated {consecutive_count}+ times", "voice")
+                    debug_log(f"consecutive repetition detected: '{clean_words[i]}' repeated {consecutive_count}+ times", "voice")
                     return True
             else:
                 consecutive_count = 1
@@ -905,6 +1150,9 @@ class VoiceListener(threading.Thread):
                 try:
                     item = self._audio_q.get(timeout=0.2)
                 except queue.Empty:
+                    # Critical: Check timeouts even when no audio is being received
+                    # This ensures hot window expiry fires reliably
+                    self._check_query_timeout()
                     continue
 
                 if item is None:
@@ -928,9 +1176,15 @@ class VoiceListener(threading.Thread):
                 # Process frames
                 offset = 0
                 total = mono.shape[0]
+                frame_timestamp = time.time()  # Timestamp for this batch of frames
+
                 while offset + self._frame_samples <= total:
                     frame = mono[offset: offset + self._frame_samples]
                     offset += self._frame_samples
+
+                    # Feed to audio-level wake detector (openWakeWord)
+                    if self._wake_detector is not None and self._wake_detector.available:
+                        self._wake_detector.process_audio(frame)
 
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
@@ -1003,6 +1257,7 @@ class VoiceListener(threading.Thread):
             end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3]
             debug_log(f"utterance captured: duration={utterance_duration:.2f}s (started: {start_time_str}, ended: {end_time_str})", "voice")
 
+        # Transcribe full audio - the intent judge will extract the relevant query
         try:
             audio = np.concatenate(self._utterance_frames, axis=0).flatten()
         except Exception:
@@ -1099,6 +1354,16 @@ class VoiceListener(threading.Thread):
             debug_log(f"rejected repetitive hallucination: '{text[:80]}...'", "voice")
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
+
+        # Add to transcript buffer for context-aware processing
+        is_during_tts = self.tts is not None and self.tts.is_speaking()
+        self._transcript_buffer.add(
+            text=text,
+            start_time=utterance_start_time,
+            end_time=utterance_end_time,
+            energy=utterance_energy,
+            is_during_tts=is_during_tts,
+        )
 
         # Process the transcript with pre-calculated energy and utterance timing
         self._process_transcript(text, utterance_energy, utterance_start_time, utterance_end_time)

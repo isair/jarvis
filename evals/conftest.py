@@ -50,6 +50,13 @@ CLASS_DESCRIPTIONS = {
     "TestNutritionExtraction": "Tests LLM nutrition extraction accuracy for meal logging",
     "TestNutritionToolIntegration": "Tests full meal logging tool with macro extraction",
     "TestNutritionModelComparison": "Baseline tests for comparing nutrition extraction across models",
+    "TestIntentJudgeAccuracy": "Intent judge accuracy for voice command classification",
+    "TestIntentJudgePromptQuality": "Intent judge prompt construction quality",
+    "TestIntentJudgeFallback": "Intent judge fallback behavior when unavailable",
+    "TestIntentJudgeMultiSegment": "Intent judge with multi-segment buffers and multi-person conversations",
+    "TestTopicSwitching": "Tests correct tool selection when conversation topic changes",
+    "TestFollowUpContext": "Tests context retention for follow-up questions",
+    "TestMultiTurnExtended": "Extended multi-turn scenarios with longer conversations",
 }
 
 # Descriptions for non-parametrized tests
@@ -73,6 +80,13 @@ TEST_DESCRIPTIONS = {
     "test_log_meal_tool_extracts_macros": "LogMealTool stores meals with macros",
     "test_simple_meal_extraction": "Simple meal baseline (2 boiled eggs)",
     "test_extraction_with_quantities": "Extraction with explicit quantities",
+    # Multi-turn context tests
+    "test_weather_then_store_hours": "Topic switch: weather → store hours uses webSearch",
+    "test_weather_then_restaurant_search": "Topic switch: weather → restaurant uses webSearch",
+    "test_search_then_weather": "Topic switch: search → weather uses getWeather",
+    "test_follow_up_references_previous_context": "Follow-up references previous turn context",
+    "test_three_turn_topic_changes": "3-turn conversation with topic changes",
+    "test_rapid_topic_switching": "Rapid back-and-forth topic switching",
 }
 
 

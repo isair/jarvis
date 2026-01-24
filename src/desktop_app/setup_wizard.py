@@ -180,7 +180,13 @@ def check_ollama_server() -> Tuple[bool, Optional[str]]:
 
 
 def get_required_models() -> List[str]:
-    """Get list of required Ollama models from config."""
+    """Get list of required Ollama models from config.
+
+    Always includes:
+    - Chat model (user-selectable)
+    - Embedding model
+    - Intent judge model (llama3.2:3b - required for voice intent classification)
+    """
     try:
         cfg = load_settings()
         models = []
@@ -193,10 +199,21 @@ def get_required_models() -> List[str]:
         if cfg.ollama_embed_model:
             models.append(cfg.ollama_embed_model)
 
+        # Intent judge model - always required for voice intent classification
+        # This is separate from the chat model and cannot be changed by users
+        intent_judge_model = getattr(cfg, "intent_judge_model", "llama3.2:3b")
+        if intent_judge_model and intent_judge_model not in models:
+            models.append(intent_judge_model)
+
         return models
     except Exception:
         # Default models if config can't be loaded
-        return [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
+        # Note: DEFAULT_CHAT_MODEL is llama3.2:3b which is also the intent judge model,
+        # so the default list is effectively just 2 unique models
+        defaults = [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
+        if "llama3.2:3b" not in defaults:
+            defaults.append("llama3.2:3b")
+        return defaults
 
 
 def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
@@ -1226,11 +1243,13 @@ class ModelsPage(QWizardPage):
         """Update the models display based on selected model."""
         wizard = self.wizard()
 
-        # Get the embed model from config
+        # Get config values
         embed_model = "nomic-embed-text"
+        intent_judge_model = "llama3.2:3b"
         try:
             cfg = load_settings()
             embed_model = cfg.ollama_embed_model
+            intent_judge_model = getattr(cfg, "intent_judge_model", "llama3.2:3b")
         except Exception:
             pass
 
@@ -1239,8 +1258,11 @@ class ModelsPage(QWizardPage):
         if isinstance(wizard, SetupWizard) and wizard.ollama_status:
             installed = wizard.ollama_status.installed_models
 
-        # Required models: selected chat model + embed model
+        # Required models: selected chat model + embed model + intent judge model
+        # Intent judge (llama3.2:3b) is always required for voice intent classification
         required = [self._selected_model, embed_model]
+        if intent_judge_model and intent_judge_model not in required:
+            required.append(intent_judge_model)
 
         # Check which are missing
         def normalize_model(name: str) -> str:

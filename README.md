@@ -142,6 +142,22 @@ Speed is relative to original large model. [Source](https://github.com/openai/wh
 </details>
 
 <details>
+<summary><strong>Voice Interface (Advanced)</strong></summary>
+
+**LLM Intent Judge** - Jarvis uses `llama3.2:3b` for intelligent voice intent classification (echo detection, query extraction, stop commands). This model is automatically installed alongside your chosen chat model during setup. The intent judge cannot be disabled but gracefully falls back to simpler text matching if Ollama is unavailable.
+
+**Audio-Level Wake Word Detection** (optional) - More precise wake word timing using openWakeWord:
+```json
+{
+  "audio_wake_enabled": true,
+  "audio_wake_threshold": 0.5
+}
+```
+Requires openWakeWord library. Falls back to text detection if unavailable.
+
+</details>
+
+<details>
 <summary><strong>Text-to-Speech</strong></summary>
 
 System TTS works out of the box (Siri voices on macOS, Microsoft on Windows).

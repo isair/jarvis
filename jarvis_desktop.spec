@@ -83,6 +83,12 @@ hiddenimports = [
     'jarvis.listening.listener',
     'jarvis.listening.state_manager',
     'jarvis.listening.wake_detection',
+    'jarvis.listening.transcript_buffer',
+    'jarvis.listening.intent_judge',
+    'jarvis.listening.wake_detector',
+    # openWakeWord for audio-level wake detection
+    'openwakeword',
+    'openwakeword.model',
     # Memory modules
     'jarvis.memory',
     'jarvis.memory.conversation',

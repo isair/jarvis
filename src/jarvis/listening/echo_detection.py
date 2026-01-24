@@ -70,29 +70,53 @@ class EchoDetector:
         self._utterance_start_time = start_time
         self._utterance_end_time = end_time
     
-    def _check_text_similarity(self, heard_text: str, tts_text: str) -> bool:
+    def _normalize_for_comparison(self, text: str) -> str:
+        """
+        Normalize text for echo comparison.
+
+        Handles differences between TTS text and how Whisper transcribes it:
+        - Degree symbols: 9°C → 9 degrees celsius
+        - Common TTS pronunciation variations
+        """
+        normalized = text.lower().strip()
+
+        # Normalize degree symbols - TTS says "9 degrees celsius" for "9°C"
+        # Handle patterns like "9°c", "9°C", "9° C", etc.
+        normalized = re.sub(r'(\d+)\s*°\s*c\b', r'\1 degrees celsius', normalized)
+        normalized = re.sub(r'(\d+)\s*°\s*f\b', r'\1 degrees fahrenheit', normalized)
+        normalized = re.sub(r'(\d+)\s*°', r'\1 degrees', normalized)  # Generic degree
+
+        # Remove parentheses (TTS often reads "48°F (9°C)" as separate parts)
+        normalized = re.sub(r'\(([^)]+)\)', r'\1', normalized)
+
+        return normalized
+
+    def _check_text_similarity(self, heard_text: str, tts_text: str, threshold: int = 85) -> bool:
         """
         Check if heard text is similar to TTS text using fuzzy matching.
-        
+
         Args:
             heard_text: Text heard from audio
             tts_text: Text that was spoken by TTS
-            
+            threshold: Similarity threshold (0-100). Higher = stricter matching.
+                      Use 85 for normal mode, 92 for hot window mode.
+
         Returns:
             True if texts are similar (likely echo)
         """
         if not heard_text or not tts_text:
             return False
-        
-        heard_lower = heard_text.lower().strip()
-        tts_lower = tts_text.lower().strip()
+
+        # Normalize both texts to handle TTS/Whisper differences
+        heard_lower = self._normalize_for_comparison(heard_text)
+        tts_lower = self._normalize_for_comparison(tts_text)
 
         # Fallback to difflib if rapidfuzz is not available
         if not RAPIDFUZZ_AVAILABLE:
             if heard_lower in tts_lower:
                 return True
             similarity = difflib.SequenceMatcher(a=tts_lower, b=heard_lower).ratio()
-            return similarity >= 0.85
+            return similarity >= (threshold / 100.0)
 
         # Use rapidfuzz for more robust matching.
         # partial_ratio is excellent for finding echoes which are often substrings.
@@ -100,13 +124,13 @@ class EchoDetector:
         partial_score = fuzz.partial_ratio(heard_lower, tts_lower)
         token_set_score = fuzz.token_set_ratio(heard_lower, tts_lower)
 
-        # We take the higher of the two scores. A score of 85 is a reasonably high similarity threshold.
+        # We take the higher of the two scores.
         best_score = max(partial_score, token_set_score)
-        
-        is_similar = best_score >= 85
+
+        is_similar = best_score >= threshold
 
         if is_similar:
-            debug_log(f"text similarity match: score={best_score:.1f}, heard='{heard_lower}', tts='{tts_lower[:100]}...'", "echo")
+            debug_log(f"text similarity match: score={best_score:.1f} (threshold={threshold}), heard='{heard_lower}', tts='{tts_lower[:100]}...'", "echo")
 
         return is_similar
     
@@ -221,14 +245,28 @@ class EchoDetector:
             
         return heard_text
     
-    def should_reject_as_echo(self, heard_text: str, current_energy: float, 
+    def should_reject_as_echo(self, heard_text: str, current_energy: float,
                             is_during_tts: bool = False, tts_rate: float = 200.0,
-                            utterance_start_time: float = 0.0) -> bool:
-        """Main entry point for echo detection decision."""
+                            utterance_start_time: float = 0.0,
+                            in_hot_window: bool = False) -> bool:
+        """Main entry point for echo detection decision.
+
+        Args:
+            heard_text: Text heard from audio
+            current_energy: Current audio energy level
+            is_during_tts: Whether TTS is currently playing
+            tts_rate: TTS speaking rate in words per minute
+            utterance_start_time: When the utterance started
+            in_hot_window: Whether we're in hot window mode (use higher threshold)
+        """
         if not self._last_tts_text:
             return False
 
-        debug_log(f"echo check: heard='{heard_text[:50]}...', tts_available=True, is_during_tts={is_during_tts}, energy={current_energy:.4f}", "echo")
+        # Use higher similarity threshold in hot window to reduce false rejections
+        # of valid follow-up speech
+        similarity_threshold = 92 if in_hot_window else 85
+
+        debug_log(f"echo check: heard='{heard_text[:50]}...', tts_available=True, is_during_tts={is_during_tts}, energy={current_energy:.4f}, hot_window={in_hot_window}", "echo")
 
         # --- Case 1: During TTS Playback ---
         # Must use segment matching to allow for interruptions like "stop".
@@ -243,7 +281,7 @@ class EchoDetector:
         # Decisions are based on when the utterance started.
         if self._last_tts_finish_time > 0 and utterance_start_time > 0:
             time_since_finish = utterance_start_time - self._last_tts_finish_time
-            text_matches_full_tts = self._check_text_similarity(heard_text, self._last_tts_text)
+            text_matches_full_tts = self._check_text_similarity(heard_text, self._last_tts_text, similarity_threshold)
 
             # Primary Cooldown Window (e.g., < 0.3s)
             if 0 <= time_since_finish < self.echo_tolerance:
@@ -253,7 +291,7 @@ class EchoDetector:
                     return True
                 else:
                     debug_log(f"accepted in cooldown (high energy or no text match): '{heard_text}'", "voice")
-            
+
             # Extended Delayed-Echo Window (e.g., < 1.5s)
             elif self.echo_tolerance <= time_since_finish < 1.5:
                 if text_matches_full_tts:

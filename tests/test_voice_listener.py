@@ -341,3 +341,47 @@ class TestRepetitiveHallucinationDetection:
         listener = self._create_mock_listener()
         text = "the quick brown fox jumps over the lazy dog"  # 'the' is 2/9 = 22%
         assert listener._is_repetitive_hallucination(text) is False
+
+    def test_detects_japanese_latin_repetition(self):
+        """Detects 'Jろ Jろ Jろ...' mixed character repetition."""
+        listener = self._create_mock_listener()
+        text = "Jろ Jろ Jろ Jろ Jろ Jろ"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_no_space_repetition(self):
+        """Detects repetition without spaces."""
+        listener = self._create_mock_listener()
+        text = "JろJろJろJろJろJろ"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_single_char_repetition(self):
+        """Detects single character repetition."""
+        listener = self._create_mock_listener()
+        text = "aaaaaaaaaaaaa"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_word_with_trailing_punctuation(self):
+        """Detects repetition even with trailing punctuation."""
+        listener = self._create_mock_listener()
+        text = "don don don don don don..."
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_detects_whisper_thanks_pattern(self):
+        """Detects common Whisper hallucination 'Thanks for watching!'."""
+        listener = self._create_mock_listener()
+        # Whisper sometimes outputs this for silence - consecutive word repetition
+        # "thanks" appears 4/8 words = 50% but words repeat consecutively as phrases
+        text = "Thanks Thanks Thanks Thanks for watching"
+        assert listener._is_repetitive_hallucination(text) is True
+
+    def test_accepts_short_repetition(self):
+        """Doesn't flag short character strings even with repetition."""
+        listener = self._create_mock_listener()
+        text = "aaaa"  # Only 4 chars, too short
+        assert listener._is_repetitive_hallucination(text) is False
+
+    def test_accepts_partial_repetition(self):
+        """Accepts text where repetition is only partial."""
+        listener = self._create_mock_listener()
+        text = "hello hello world this is a normal sentence"
+        assert listener._is_repetitive_hallucination(text) is False

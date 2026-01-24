@@ -1,6 +1,6 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-01-25 15:16:57
+**Generated:** 2026-01-25 18:23:21
 
 ## 📊 Model Comparison
 
@@ -9,16 +9,16 @@ Use this to understand the performance tradeoffs when choosing a model.
 
 | Metric | llama3.2:3b | gpt-oss:20b |
 |--------|--------|--------|
-| ✅ Passed | 43 | 46 |
+| ✅ Passed | 49 | 52 |
 | ❌ Failed | 3 | 0 |
 | ⏭️ Skipped | 0 | 0 |
-| 📊 Total | 49 | 49 |
-| ⏱️ Duration | 64.7s | 343.4s |
-| 📈 Pass Rate | 🟢 93.5% | 🟢 100.0% |
+| 📊 Total | 55 | 55 |
+| ⏱️ Duration | 125.2s | 619.2s |
+| 📈 Pass Rate | 🟢 94.2% | 🟢 100.0% |
 
 ### Pass Rate Visualization
 
-**llama3.2:3b:** 🟢 `██████████████████░░` **93.5%**
+**llama3.2:3b:** 🟢 `██████████████████░░` **94.2%**
 **gpt-oss:20b:** 🟢 `████████████████████` **100.0%**
 
 ### 💡 Model Selection Guide
@@ -34,29 +34,35 @@ Use this to understand the performance tradeoffs when choosing a model.
 
 | Test Case | llama3.2:3b | gpt-oss:20b |
 |-----------|----------|----------|
+| 3-turn conversation with topic changes | ❌ | ✅ |
 | Agent calls webSearch for info queries | ✅ | ✅ |
 | Agent chains search → fetch for details | ✅ | ✅ |
 | Agent recalls interests before personalized search (mocked) | ✅ | ✅ |
 | Agent uses memory + nutrition data | ✅ | ✅ |
-| Bad: deflection without attempting answer | ❌ | ✅ |
+| Bad: deflection without attempting answer | ✅ | ✅ |
 | Bad: empty acknowledgment | ✅ | ✅ |
 | Bad: generic greeting ignores query | ✅ | ✅ |
 | Enrichment results appear in system message | ✅ | ✅ |
 | Extraction with explicit quantities | ✅ | ✅ |
+| Follow-up references previous turn context | ✅ | ✅ |
 | Good: brief but informative | ✅ | ✅ |
 | Good: complete weekly forecast | ✅ | ✅ |
 | Handles ambiguous portion descriptions | ✅ | ✅ |
 | LLM uses enrichment, skips redundant recallConversation | ✅ | ✅ |
-| Live weather query with real LLM | ❌ | ✅ |
+| Live weather query with real LLM | ✅ | ✅ |
 | Live: LLM checks memory before asking about interests | ✅ | ✅ |
 | Location context flows to search queries | ✅ | ✅ |
 | LogMealTool stores meals with macros | ✅ | ✅ |
+| Rapid back-and-forth topic switching | ✅ | ✅ |
 | Returns NONE for non-food inputs | ✅ | ✅ |
 | Returns valid JSON with all required fields | ✅ | ✅ |
 | Simple meal baseline (2 boiled eggs) | ✅ | ✅ |
-| caesar-salad | ✅ | ✅ |
+| Topic switch: search → weather uses getWeather | ✅ | ✅ |
+| Topic switch: weather → restaurant uses webSearch | ✅ | ✅ |
+| Topic switch: weather → store hours uses webSearch | ❌ | ✅ |
+| caesar-salad | ❌ | ✅ |
 | cheeseburger-fries | ✅ | ✅ |
-| chicken-broccoli | ❌ | ✅ |
+| chicken-broccoli | ✅ | ✅ |
 | eggs-toast | ✅ | ✅ |
 | oatmeal-banana | ✅ | ✅ |
 | personalized news | ✅ | ✅ |

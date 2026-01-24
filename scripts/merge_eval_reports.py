@@ -112,10 +112,37 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
     return report
 
 
+def is_intent_judge_test(test_name: str) -> bool:
+    """Check if a test is an intent judge test (uses fixed model, not configurable)."""
+    intent_judge_patterns = [
+        "test_hot_window_mode_indicated_in_prompt",
+        "test_tts_text_included_for_echo_detection",
+        "test_system_prompt_has_echo_guidance",
+        "test_returns_none_when_ollama_unavailable",
+        "test_intent_judge_case",
+        "test_multi_segment_case",
+    ]
+    return any(pattern in test_name for pattern in intent_judge_patterns)
+
+
 def generate_combined_report(reports: List[ModelReport]) -> str:
     """Generate a combined markdown report comparing multiple models."""
     lines = []
     now = datetime.now()
+
+    # Separate intent judge tests from main LLM tests
+    # Intent judge tests use fixed model (llama3.2:3b), so only show once
+    intent_judge_results = {}
+    main_llm_tests = set()
+
+    for report in reports:
+        for test_name, result in report.results.items():
+            if is_intent_judge_test(test_name):
+                # Only keep one result for intent judge tests (they're identical across runs)
+                if test_name not in intent_judge_results:
+                    intent_judge_results[test_name] = result
+            else:
+                main_llm_tests.add(test_name)
 
     # Header
     lines.append("# 🧪 Jarvis Evaluation Report")
@@ -130,7 +157,23 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("Use this to understand the performance tradeoffs when choosing a model.")
     lines.append("")
 
-    # Summary comparison table
+    # Calculate stats for main LLM tests only (excluding intent judge)
+    def calc_main_llm_stats(report: ModelReport) -> dict:
+        passed = failed = skipped = 0
+        duration = 0.0
+        for test_name, result in report.results.items():
+            if not is_intent_judge_test(test_name):
+                if result.outcome == "passed":
+                    passed += 1
+                elif result.outcome == "failed":
+                    failed += 1
+                elif result.outcome == "skipped":
+                    skipped += 1
+                duration += result.duration
+        return {"passed": passed, "failed": failed, "skipped": skipped,
+                "total": passed + failed + skipped, "duration": duration}
+
+    # Summary comparison table (main LLM tests only)
     header = "| Metric |"
     separator = "|--------|"
     for report in reports:
@@ -140,7 +183,9 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append(header)
     lines.append(separator)
 
-    # Rows
+    # Rows using main LLM stats
+    stats_by_model = {r.model_name: calc_main_llm_stats(r) for r in reports}
+
     metrics = [
         ("✅ Passed", "passed"),
         ("❌ Failed", "failed"),
@@ -152,7 +197,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     for label, attr in metrics:
         row = f"| {label} |"
         for report in reports:
-            val = getattr(report, attr)
+            val = stats_by_model[report.model_name][attr]
             if attr == "duration":
                 row += f" {val:.1f}s |"
             else:
@@ -162,20 +207,22 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     # Pass rate row
     row = "| 📈 Pass Rate |"
     for report in reports:
-        countable = report.passed + report.failed
-        rate = (report.passed / countable * 100) if countable > 0 else 0.0
+        stats = stats_by_model[report.model_name]
+        countable = stats["passed"] + stats["failed"]
+        rate = (stats["passed"] / countable * 100) if countable > 0 else 0.0
         emoji = "🟢" if rate >= 80 else "🟡" if rate >= 50 else "🔴"
         row += f" {emoji} {rate:.1f}% |"
     lines.append(row)
 
     lines.append("")
 
-    # Pass rate bars
+    # Pass rate bars (main LLM tests only)
     lines.append("### Pass Rate Visualization")
     lines.append("")
     for report in reports:
-        countable = report.passed + report.failed
-        rate = (report.passed / countable * 100) if countable > 0 else 0.0
+        stats = stats_by_model[report.model_name]
+        countable = stats["passed"] + stats["failed"]
+        rate = (stats["passed"] / countable * 100) if countable > 0 else 0.0
         bar_filled = int(rate / 5)  # 20 chars max
         bar_empty = 20 - bar_filled
         bar = "█" * bar_filled + "░" * bar_empty
@@ -192,24 +239,13 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("| `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |")
     lines.append("")
 
-    # Detailed comparison per test
+    # Detailed comparison per test (main LLM tests only)
     lines.append("---")
     lines.append("")
     lines.append("## 📋 Detailed Test Results")
     lines.append("")
 
-    # Collect all unique test names
-    all_tests = set()
-    for report in reports:
-        all_tests.update(report.results.keys())
-
-    # Group by test class (extract from test name pattern)
-    tests_by_class: Dict[str, List[str]] = {}
-    for test_name in sorted(all_tests):
-        # Try to infer class from test name patterns
-        tests_by_class.setdefault("All Tests", []).append(test_name)
-
-    # Build comparison table
+    # Build comparison table for main LLM tests only
     header = "| Test Case |"
     separator = "|-----------|"
     for report in reports:
@@ -228,7 +264,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         "unknown": "❓",
     }
 
-    for test_name in sorted(all_tests):
+    for test_name in sorted(main_llm_tests):
         row = f"| {test_name} |"
         for report in reports:
             result = report.results.get(test_name)
@@ -240,6 +276,36 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         lines.append(row)
 
     lines.append("")
+
+    # Intent Judge Tests Section (separate, single model)
+    if intent_judge_results:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 🎤 Intent Judge Tests")
+        lines.append("")
+        lines.append("> These tests evaluate the voice intent classification system.")
+        lines.append("> They use a fixed model (`llama3.2:3b`) and are not part of the model comparison.")
+        lines.append("")
+
+        # Calculate intent judge stats
+        ij_passed = sum(1 for r in intent_judge_results.values() if r.outcome == "passed")
+        ij_failed = sum(1 for r in intent_judge_results.values() if r.outcome == "failed")
+        ij_xfailed = sum(1 for r in intent_judge_results.values() if r.outcome == "xfailed")
+        ij_total = len(intent_judge_results)
+
+        lines.append(f"**Model:** `llama3.2:3b` (fixed)")
+        lines.append(f"**Results:** {ij_passed} passed, {ij_failed} failed, {ij_xfailed} expected failures")
+        lines.append("")
+
+        lines.append("| Test Case | Status |")
+        lines.append("|-----------|--------|")
+
+        for test_name in sorted(intent_judge_results.keys()):
+            result = intent_judge_results[test_name]
+            emoji = status_emoji.get(result.outcome, "❓")
+            lines.append(f"| {test_name} | {emoji} |")
+
+        lines.append("")
 
     # Legend
     lines.append("### 📖 Legend")
