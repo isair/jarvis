@@ -47,6 +47,14 @@ try:
 except Exception as e:
     print(f"Info: _sounddevice_data collection skipped: {e}")
 
+# Collect ctranslate2 data files (native libraries for faster-whisper)
+try:
+    ctranslate2_datas = collect_data_files('ctranslate2')
+    datas.extend(ctranslate2_datas)
+    print(f"Collected ctranslate2 data files: {len(ctranslate2_datas)} items")
+except Exception as e:
+    print(f"Warning: Could not collect ctranslate2 data files: {e}")
+
 # Windows: Also add PortAudio DLL directly to the root directory for ctypes.find_library
 # This is a belt-and-suspenders approach alongside the PATH fix in __init__.py
 # See: https://github.com/pyinstaller/pyinstaller/issues/7065
@@ -90,6 +98,28 @@ try:
             print(f"Info: Qt plugin directory '{plugin_name}' not found, skipping")
 except Exception as e:
     print(f"Warning: Could not collect Qt plugins: {e}")
+
+# Collect Qt WebEngine resources (needed for embedded memory viewer)
+try:
+    import PyQt6
+    qt_path = Path(PyQt6.__file__).parent
+    webengine_resources = qt_path / 'Qt6' / 'resources'
+    webengine_translations = qt_path / 'Qt6' / 'translations'
+    webengine_libexec = qt_path / 'Qt6' / 'libexec'
+
+    if webengine_resources.exists():
+        datas.append((str(webengine_resources), 'PyQt6/Qt6/resources'))
+        print(f"Collected Qt WebEngine resources: {webengine_resources}")
+
+    if webengine_translations.exists():
+        datas.append((str(webengine_translations), 'PyQt6/Qt6/translations'))
+        print(f"Collected Qt WebEngine translations: {webengine_translations}")
+
+    if webengine_libexec.exists():
+        datas.append((str(webengine_libexec), 'PyQt6/Qt6/libexec'))
+        print(f"Collected Qt WebEngine libexec: {webengine_libexec}")
+except Exception as e:
+    print(f"Warning: Could not collect Qt WebEngine resources: {e}")
 
 # Hidden imports that PyInstaller might miss
 hiddenimports = [
@@ -156,11 +186,23 @@ hiddenimports = [
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
     'PyQt6.sip',
+    # PyQt6 WebEngine (for embedded memory viewer)
+    'PyQt6.QtWebEngineWidgets',
+    'PyQt6.QtWebEngineCore',
+    'PyQt6.QtWebChannel',
     # Audio dependencies (critical for voice input)
     'sounddevice',
     '_sounddevice_data',
     '_sounddevice_data.portaudio-binaries',
     'webrtcvad',
+    # Speech recognition (faster-whisper backend)
+    'faster_whisper',
+    'ctranslate2',
+    'huggingface_hub',
+    'huggingface_hub.file_download',
+    'huggingface_hub.hf_api',
+    'huggingface_hub.utils',
+    'tokenizers',
     # Third-party dependencies
     'dotenv',
     'psutil',
