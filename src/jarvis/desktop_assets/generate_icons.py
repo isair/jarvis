@@ -24,10 +24,10 @@ def create_icon(color: str, filename: str, size: int = 256) -> None:
     try:
         # Try to use a nice font
         font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", size // 2)
-    except:
+    except OSError:
         try:
             font = ImageFont.truetype("arial.ttf", size // 2)
-        except:
+        except OSError:
             # Fallback to default
             font = ImageFont.load_default()
 

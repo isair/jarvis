@@ -25,6 +25,42 @@ from jarvis import get_version
 from jarvis.debug import debug_log
 
 GITHUB_REPO = "isair/jarvis"
+
+
+def _escape_applescript_path(path: Path) -> str:
+    """Escape a path for use in AppleScript POSIX file strings.
+
+    AppleScript POSIX file paths are enclosed in double quotes, so we need to
+    escape backslashes and double quotes.
+    """
+    return str(path).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _escape_batch_path(path: Path) -> str:
+    """Escape a path for use in Windows batch scripts.
+
+    Batch scripts handle paths in double quotes, but certain characters
+    like % need to be escaped. For safety, we reject paths with problematic
+    characters since they're unusual for app installation paths.
+    """
+    path_str = str(path)
+    # Reject paths with characters that are hard to safely escape in batch
+    dangerous_chars = ['%', '!', '^', '&', '<', '>', '|']
+    for char in dangerous_chars:
+        if char in path_str:
+            raise ValueError(f"Path contains unsafe character for batch script: {char}")
+    return path_str
+
+
+def _escape_shell_path(path: Path) -> str:
+    """Escape a path for use in shell scripts.
+
+    Uses single quotes which prevent all interpretation except for single quotes
+    themselves, which we escape by ending the string, adding escaped quote, and
+    starting a new string.
+    """
+    # Single quotes prevent interpretation, escape embedded single quotes
+    return "'" + str(path).replace("'", "'\"'\"'") + "'"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
 
@@ -324,10 +360,14 @@ def install_update_macos(download_path: Path) -> bool:
             raise FileNotFoundError("Jarvis.app not found in download")
 
         # Use AppleScript to move to trash and replace
+        # Escape paths to prevent injection if paths contain quotes
+        escaped_app = _escape_applescript_path(app_path)
+        escaped_new_app = _escape_applescript_path(new_app_path)
+        escaped_parent = _escape_applescript_path(app_path.parent)
         script = f'''
         tell application "Finder"
-            move POSIX file "{app_path}" to trash
-            move POSIX file "{new_app_path}" to folder "{app_path.parent}"
+            move POSIX file "{escaped_app}" to trash
+            move POSIX file "{escaped_new_app}" to folder "{escaped_parent}"
         end tell
         '''
         subprocess.run(["osascript", "-e", script], check=True)
@@ -353,6 +393,7 @@ def install_update_windows(download_path: Path) -> bool:
        - Wait for current process to exit
        - Replace executable
        - Launch new app
+       - Clean up temp directory
     3. Execute batch script and exit
     """
     import zipfile
@@ -361,6 +402,10 @@ def install_update_windows(download_path: Path) -> bool:
     temp_dir = Path(tempfile.mkdtemp())
 
     try:
+        # Validate paths don't contain dangerous batch characters
+        escaped_app = _escape_batch_path(app_path)
+        escaped_temp = _escape_batch_path(temp_dir)
+
         with zipfile.ZipFile(download_path, "r") as zf:
             zf.extractall(temp_dir)
 
@@ -369,14 +414,17 @@ def install_update_windows(download_path: Path) -> bool:
         if not new_exe_path.exists():
             raise FileNotFoundError("Jarvis.exe not found in download")
 
+        escaped_new_exe = _escape_batch_path(new_exe_path)
+
         batch_script = temp_dir / "update.bat"
+        # Note: %~f0 is safe - it's the batch file's own path, not user input
         batch_content = f'''@echo off
 echo Updating Jarvis...
 timeout /t 2 /nobreak > nul
-del /f "{app_path}"
-move /y "{new_exe_path}" "{app_path}"
-start "" "{app_path}"
-del "%~f0"
+del /f "{escaped_app}"
+move /y "{escaped_new_exe}" "{escaped_app}"
+start "" "{escaped_app}"
+rmdir /s /q "{escaped_temp}"
 '''
         batch_script.write_text(batch_content)
 
@@ -389,6 +437,8 @@ del "%~f0"
 
     except Exception as e:
         debug_log(f"Windows update failed: {e}", "updater")
+        # Clean up temp dir on failure
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return False
 
 
@@ -401,6 +451,7 @@ def install_update_linux(download_path: Path) -> bool:
        - Wait for current process to exit
        - Replace directory
        - Launch new app
+       - Clean up temp directory
     3. Execute script and exit
     """
     import tarfile
@@ -417,13 +468,19 @@ def install_update_linux(download_path: Path) -> bool:
         if not new_app_dir.exists():
             raise FileNotFoundError("Jarvis directory not found in download")
 
+        # Escape paths using single quotes to prevent shell injection
+        escaped_app_dir = _escape_shell_path(app_dir)
+        escaped_new_app = _escape_shell_path(new_app_dir)
+        escaped_temp = _escape_shell_path(temp_dir)
+        escaped_jarvis = _escape_shell_path(app_dir / "Jarvis")
+
         script_path = temp_dir / "update.sh"
         script_content = f'''#!/bin/bash
 sleep 2
-rm -rf "{app_dir}"
-mv "{new_app_dir}" "{app_dir}"
-"{app_dir}/Jarvis" &
-rm -f "$0"
+rm -rf {escaped_app_dir}
+mv {escaped_new_app} {escaped_app_dir}
+{escaped_jarvis} &
+rm -rf {escaped_temp}
 '''
         script_path.write_text(script_content)
         script_path.chmod(0o755)

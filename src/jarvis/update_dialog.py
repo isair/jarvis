@@ -4,6 +4,7 @@ Update notification and download progress dialogs.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import webbrowser
 from pathlib import Path
@@ -131,6 +132,7 @@ class UpdateProgressDialog(QDialog):
         self.download_worker: Optional[DownloadWorker] = None
         self.download_signals = DownloadSignals()
         self.download_path: Optional[Path] = None
+        self._temp_dir: Optional[Path] = None
         self._setup_ui()
         self._connect_signals()
 
@@ -184,7 +186,8 @@ class UpdateProgressDialog(QDialog):
 
     def start_download(self):
         """Start the download process."""
-        self.download_path = Path(tempfile.mkdtemp()) / self.release.asset_name
+        self._temp_dir = Path(tempfile.mkdtemp())
+        self.download_path = self._temp_dir / self.release.asset_name
 
         self.download_worker = DownloadWorker(
             self.release.download_url,
@@ -192,6 +195,15 @@ class UpdateProgressDialog(QDialog):
             self.download_signals,
         )
         self.download_worker.start()
+
+    def _cleanup_temp_dir(self):
+        """Clean up the temporary download directory."""
+        if self._temp_dir and self._temp_dir.exists():
+            try:
+                shutil.rmtree(self._temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._temp_dir = None
 
     def _on_progress(self, downloaded: int, total: int):
         if total > 0:
@@ -235,11 +247,15 @@ class UpdateProgressDialog(QDialog):
         self.progress_bar.setValue(0)
         self.cancel_btn.setText("Close")
         self.cancel_btn.setEnabled(True)
+        # Clean up temp directory on error
+        self._cleanup_temp_dir()
 
     def _cancel_download(self):
         if self.download_worker and self.download_worker.isRunning():
             self.download_worker.cancel()
             self.download_worker.wait()
+        # Clean up temp directory when cancelled
+        self._cleanup_temp_dir()
         self.reject()
 
     def closeEvent(self, event):

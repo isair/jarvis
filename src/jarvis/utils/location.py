@@ -152,17 +152,12 @@ def _get_local_network_ip() -> Optional[str]:
     will only work if the user manually configures their public IP.
     """
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
+        # Using context manager ensures socket is always closed
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             # Connect to a non-routable address to determine local IP
             # This doesn't actually send any data
             s.connect(("10.254.254.254", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-            return local_ip
-        except Exception:
-            s.close()
-
+            return s.getsockname()[0]
     except Exception:
         pass
 
@@ -244,36 +239,26 @@ def _get_external_ip_via_socket() -> Optional[str]:
     Returns:
         IP address used for external communication, None if failed.
     """
-    try:
-        # Try multiple well-known servers to increase reliability
-        servers = [
-            ("8.8.8.8", 80),      # Google DNS
-            ("1.1.1.1", 80),      # Cloudflare DNS
-            ("208.67.222.222", 80), # OpenDNS
-        ]
+    # Try multiple well-known servers to increase reliability
+    servers = [
+        ("8.8.8.8", 80),      # Google DNS
+        ("1.1.1.1", 80),      # Cloudflare DNS
+        ("208.67.222.222", 80), # OpenDNS
+    ]
 
-        for server_ip, port in servers:
-            try:
-                # Create a UDP socket (no actual data transmission)
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                try:
-                    # Connect to determine which local interface would be used
-                    s.connect((server_ip, port))
-                    detected_ip = s.getsockname()[0]
-                    s.close()
+    for server_ip, port in servers:
+        try:
+            # Using context manager ensures socket is always closed
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                # Connect to determine which local interface would be used
+                s.connect((server_ip, port))
+                detected_ip = s.getsockname()[0]
 
-                    # Return the first non-private IP we find
-                    if detected_ip and not _is_private_ip(detected_ip):
-                        return detected_ip
-
-                except Exception:
-                    s.close()
-
-            except Exception:
-                continue
-
-    except Exception:
-        pass
+                # Return the first non-private IP we find
+                if detected_ip and not _is_private_ip(detected_ip):
+                    return detected_ip
+        except Exception:
+            continue
 
     return None
 
@@ -367,13 +352,13 @@ def _resolve_public_ip_via_opendns(timeout: float = 1.5) -> Optional[str]:
         labels = b"".join(len(part).to_bytes(1, 'big') + part.encode('ascii') for part in "myip.opendns.com".split('.')) + b"\x00"
         qtype_qclass = b"\x00\x01\x00\x01"
         packet = header + labels + qtype_qclass
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(timeout)
-        try:
+
+        # Using context manager ensures socket is always closed
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
             s.sendto(packet, resolver_ip)
             data, _ = s.recvfrom(512)
-        finally:
-            s.close()
+
         if len(data) < 12 or data[0:2] != tid.to_bytes(2, 'big'):
             return None
         question_len = len(labels) + 4

@@ -939,6 +939,9 @@ class OllamaServerPage(QWizardPage):
             if isinstance(wizard, SetupWizard) and wizard.ollama_status and wizard.ollama_status.cli_path:
                 ollama_path = wizard.ollama_status.cli_path
 
+            # Note: We intentionally detach the Ollama server process so it keeps
+            # running after Jarvis exits. Ollama is a system service that should
+            # persist. The serve command is idempotent - it won't spawn duplicates.
             if sys.platform == "darwin":
                 # On macOS, try to open the Ollama app first
                 try:

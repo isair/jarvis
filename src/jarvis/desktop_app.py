@@ -942,7 +942,7 @@ class JarvisSystemTray:
                                 # Also try to log via debug_log (though it might not work)
                                 try:
                                     debug_log(f"daemon thread error: {e}", "desktop")
-                                except:
+                                except Exception:
                                     pass
                             finally:
                                 sys_module.stdout = old_stdout
@@ -952,7 +952,7 @@ class JarvisSystemTray:
                             error_msg = f"❌ Daemon setup error: {str(e)}\n{traceback.format_exc()}\n"
                             try:
                                 self.log_signals.new_log.emit(error_msg)
-                            except:
+                            except Exception:
                                 # If we can't emit, at least try stdout
                                 print(error_msg, file=old_stderr)
 
@@ -1120,14 +1120,20 @@ class JarvisSystemTray:
                     request_stop()
 
                     # Process events while waiting for thread to finish
+                    # Note: We avoid QThread.terminate() as it can corrupt state
+                    # If the daemon doesn't stop gracefully, it will be killed on process exit
                     start_time = time.time()
+                    warned = False
                     while not self.daemon_thread.isFinished():
                         self.app.processEvents()
                         elapsed = time.time() - start_time
-                        if elapsed > shutdown_wait_timeout_sec:
-                            self.log_signals.new_log.emit("⚠️ Daemon taking too long, forcing termination...\n")
-                            self.daemon_thread.terminate()
-                            self.daemon_thread.wait(1000)
+                        if elapsed > shutdown_wait_timeout_sec and not warned:
+                            self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
+                            debug_log("daemon thread not responding to stop request", "desktop")
+                            warned = True
+                        # Keep waiting up to 3x the timeout before giving up
+                        if elapsed > shutdown_wait_timeout_sec * 3:
+                            self.log_signals.new_log.emit("⚠️ Giving up waiting for daemon\n")
                             break
                         time.sleep(0.05)
 
@@ -1142,13 +1148,15 @@ class JarvisSystemTray:
                     set_diary_update_callbacks()
                 else:
                     # No dialog - simple wait
+                    # Note: We avoid QThread.terminate() as it can corrupt state
                     from jarvis.daemon import request_stop
                     request_stop()
 
                     if not self.daemon_thread.wait(shutdown_wait_timeout_sec * 1000):
-                        self.log_signals.new_log.emit("⚠️ Daemon taking too long, forcing termination...\n")
-                        self.daemon_thread.terminate()
-                        self.daemon_thread.wait(1000)
+                        self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
+                        debug_log("daemon thread not responding to stop request", "desktop")
+                        # Wait up to 3x timeout total before giving up
+                        self.daemon_thread.wait(shutdown_wait_timeout_sec * 2000)
 
                 self.daemon_thread = None
             elif self.daemon_process:
@@ -1395,7 +1403,7 @@ def main() -> int:
             if crash_log_file:
                 msg.setInformativeText(f"Check log file at:\n{crash_log_file}")
             msg.exec()
-        except:
+        except Exception:
             # Can't show dialog, error is already logged
             pass
 
