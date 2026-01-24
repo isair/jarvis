@@ -6,6 +6,36 @@ from typing import Any, Dict
 from dotenv import load_dotenv
 
 
+# ============================================================================
+# SUPPORTED CHAT MODELS - Single Source of Truth
+# ============================================================================
+# This is the authoritative list of officially supported chat models.
+# Other modules should import from here rather than defining their own lists.
+
+SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
+    "llama3.2:3b": {
+        "name": "Llama 3.2 3B (Recommended)",
+        "description": "Fast, concise responses, ~2GB download",
+        "size": "~2GB",
+        "ram": "8GB+",
+    },
+    "gpt-oss:20b": {
+        "name": "GPT-OSS 20B (High-end)",
+        "description": "Best performance, ~12GB download",
+        "size": "~12GB",
+        "ram": "16GB+",
+    },
+}
+
+# The default chat model (first in the supported list)
+DEFAULT_CHAT_MODEL = "llama3.2:3b"
+
+
+def get_supported_model_ids() -> set[str]:
+    """Get set of supported model IDs for quick lookup."""
+    return set(SUPPORTED_CHAT_MODELS.keys())
+
+
 def _default_db_path() -> str:
     base = Path.home() / ".local" / "share" / "jarvis"
     base.mkdir(parents=True, exist_ok=True)
@@ -130,6 +160,20 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return {}
 
 
+def load_config() -> Dict[str, Any]:
+    """
+    Load and return the merged configuration dictionary.
+
+    Returns defaults merged with any values from the config file.
+    Unlike load_settings(), this returns the raw dict instead of a Settings object.
+    """
+    cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
+    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else _default_config_path()
+    cfg_json = _load_json(cfg_path)
+    defaults = get_default_config()
+    return {**defaults, **cfg_json}
+
+
 def _ensure_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -169,7 +213,7 @@ def get_default_config() -> Dict[str, Any]:
         # LLM & AI Models
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
-        "ollama_chat_model": "llama3.2:3b",
+        "ollama_chat_model": DEFAULT_CHAT_MODEL,
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
         "llm_embedding_timeout_sec": 60.0,

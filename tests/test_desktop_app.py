@@ -1,0 +1,261 @@
+"""
+Tests for desktop_app.py functionality.
+
+Tests crash detection, model support checking, and other utility functions.
+Note: GUI components are not tested here - only the underlying logic.
+"""
+
+import pytest
+import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+
+class TestGetCrashPaths:
+    """Tests for get_crash_paths() function."""
+
+    def test_returns_three_paths(self):
+        """get_crash_paths() should return a tuple of 3 paths."""
+        from jarvis.desktop_app import get_crash_paths
+
+        result = get_crash_paths()
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+    def test_all_paths_are_path_objects(self):
+        """All returned paths should be Path objects."""
+        from jarvis.desktop_app import get_crash_paths
+
+        crash_log, crash_marker, previous_crash = get_crash_paths()
+        assert isinstance(crash_log, Path)
+        assert isinstance(crash_marker, Path)
+        assert isinstance(previous_crash, Path)
+
+    def test_paths_have_expected_names(self):
+        """Paths should have the expected filenames."""
+        from jarvis.desktop_app import get_crash_paths
+
+        crash_log, crash_marker, previous_crash = get_crash_paths()
+        assert crash_log.name == "jarvis_desktop_crash.log"
+        assert crash_marker.name == ".crash_marker"
+        assert previous_crash.name == "previous_crash.log"
+
+    def test_paths_share_same_parent_directory(self):
+        """All crash paths should be in the same directory."""
+        from jarvis.desktop_app import get_crash_paths
+
+        crash_log, crash_marker, previous_crash = get_crash_paths()
+        assert crash_log.parent == crash_marker.parent == previous_crash.parent
+
+    @patch("sys.platform", "darwin")
+    def test_macos_uses_library_logs(self):
+        """On macOS, should use ~/Library/Logs/Jarvis."""
+        # Need to reimport to pick up the mocked platform
+        import importlib
+        import jarvis.desktop_app as desktop_app
+
+        # Force reimport to test platform detection
+        # Note: This is tricky because the function reads sys.platform at runtime
+        from jarvis.desktop_app import get_crash_paths
+
+        crash_log, _, _ = get_crash_paths()
+        if sys.platform == "darwin":
+            assert "Library" in str(crash_log) or "Logs" in str(crash_log)
+
+
+class TestCrashMarkerFunctions:
+    """Tests for mark_session_started() and mark_session_clean_exit()."""
+
+    def test_mark_session_started_creates_marker(self):
+        """mark_session_started() should create the crash marker file."""
+        from jarvis.desktop_app import get_crash_paths, mark_session_started, mark_session_clean_exit
+
+        _, crash_marker, _ = get_crash_paths()
+
+        # Clean up first
+        crash_marker.unlink(missing_ok=True)
+        assert not crash_marker.exists()
+
+        # Start session
+        mark_session_started()
+        assert crash_marker.exists()
+
+        # Clean up
+        mark_session_clean_exit()
+
+    def test_mark_session_clean_exit_removes_marker(self):
+        """mark_session_clean_exit() should remove the crash marker file."""
+        from jarvis.desktop_app import get_crash_paths, mark_session_started, mark_session_clean_exit
+
+        _, crash_marker, _ = get_crash_paths()
+
+        # Create marker
+        mark_session_started()
+        assert crash_marker.exists()
+
+        # Clean exit
+        mark_session_clean_exit()
+        assert not crash_marker.exists()
+
+    def test_mark_session_clean_exit_handles_missing_marker(self):
+        """mark_session_clean_exit() should not error if marker doesn't exist."""
+        from jarvis.desktop_app import get_crash_paths, mark_session_clean_exit
+
+        _, crash_marker, _ = get_crash_paths()
+        crash_marker.unlink(missing_ok=True)
+
+        # Should not raise
+        mark_session_clean_exit()
+
+
+class TestCheckPreviousCrash:
+    """Tests for check_previous_crash() function."""
+
+    def test_returns_none_when_no_marker(self):
+        """check_previous_crash() should return None if no crash marker exists."""
+        from jarvis.desktop_app import get_crash_paths, check_previous_crash, mark_session_clean_exit
+
+        # Ensure clean state
+        mark_session_clean_exit()
+
+        result = check_previous_crash()
+        assert result is None
+
+    def test_returns_none_when_marker_but_no_crash_log(self):
+        """check_previous_crash() should return None if marker exists but no crash content."""
+        from jarvis.desktop_app import get_crash_paths, check_previous_crash, mark_session_started
+
+        crash_log, crash_marker, _ = get_crash_paths()
+
+        # Create marker but empty/missing crash log
+        mark_session_started()
+        crash_log.unlink(missing_ok=True)
+
+        result = check_previous_crash()
+        # Marker should be removed even if no crash content
+        assert not crash_marker.exists()
+
+    def test_returns_content_when_crash_detected(self):
+        """check_previous_crash() should return crash content when crash is detected."""
+        from jarvis.desktop_app import get_crash_paths, check_previous_crash
+
+        crash_log, crash_marker, previous_crash = get_crash_paths()
+
+        # Simulate a crash: marker exists and crash log has error content
+        crash_marker.touch()
+        crash_content = "Fatal error: Something went wrong\nTraceback (most recent call last):\n  File test.py"
+        crash_log.write_text(crash_content, encoding='utf-8')
+
+        result = check_previous_crash()
+
+        # Should return the crash content
+        assert result is not None
+        assert "Fatal" in result or "Traceback" in result
+
+        # Marker should be removed
+        assert not crash_marker.exists()
+
+        # Previous crash should be saved
+        assert previous_crash.exists()
+
+        # Clean up
+        crash_log.unlink(missing_ok=True)
+        previous_crash.unlink(missing_ok=True)
+
+    def test_ignores_normal_log_content(self):
+        """check_previous_crash() should ignore logs without error indicators."""
+        from jarvis.desktop_app import get_crash_paths, check_previous_crash
+
+        crash_log, crash_marker, _ = get_crash_paths()
+
+        # Create marker with normal (non-crash) log content
+        crash_marker.touch()
+        crash_log.write_text("Normal startup log\nEverything is fine", encoding='utf-8')
+
+        result = check_previous_crash()
+
+        # Should return None since no crash indicators
+        assert result is None
+
+        # Marker should still be removed
+        assert not crash_marker.exists()
+
+        # Clean up
+        crash_log.unlink(missing_ok=True)
+
+
+class TestCheckModelSupport:
+    """Tests for check_model_support() function."""
+
+    @patch("jarvis.config.load_config")
+    def test_returns_none_for_supported_model(self, mock_load_config):
+        """check_model_support() should return None for supported models."""
+        from jarvis.desktop_app import check_model_support
+        from jarvis.config import DEFAULT_CHAT_MODEL
+
+        mock_load_config.return_value = {"ollama_chat_model": DEFAULT_CHAT_MODEL}
+
+        result = check_model_support()
+        assert result is None
+
+    @patch("jarvis.config.load_config")
+    def test_returns_model_name_for_unsupported_model(self, mock_load_config):
+        """check_model_support() should return model name for unsupported models."""
+        from jarvis.desktop_app import check_model_support
+
+        mock_load_config.return_value = {"ollama_chat_model": "some-unsupported-model:7b"}
+
+        result = check_model_support()
+        assert result == "some-unsupported-model:7b"
+
+    @patch("jarvis.config.load_config")
+    def test_matches_base_model_name(self, mock_load_config):
+        """check_model_support() should match base model names without tags."""
+        from jarvis.desktop_app import check_model_support
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+
+        # Get a supported model and use just its base name
+        supported_model = next(iter(SUPPORTED_CHAT_MODELS.keys()))
+        base_name = supported_model.split(":")[0]
+
+        mock_load_config.return_value = {"ollama_chat_model": base_name}
+
+        result = check_model_support()
+        assert result is None  # Should be recognized as supported
+
+    @patch("jarvis.config.load_config")
+    def test_handles_config_error_gracefully(self, mock_load_config):
+        """check_model_support() should return None on config errors."""
+        from jarvis.desktop_app import check_model_support
+
+        mock_load_config.side_effect = Exception("Config error")
+
+        result = check_model_support()
+        assert result is None
+
+    @patch("jarvis.config.load_config")
+    def test_uses_default_when_not_configured(self, mock_load_config):
+        """check_model_support() should use default model when not in config."""
+        from jarvis.desktop_app import check_model_support
+
+        mock_load_config.return_value = {}  # No ollama_chat_model key
+
+        result = check_model_support()
+        # Default model is supported, so should return None
+        assert result is None
+
+
+class TestModelSupportIntegration:
+    """Integration tests for model support checking."""
+
+    def test_all_supported_models_pass_check(self):
+        """All models in SUPPORTED_CHAT_MODELS should pass the support check."""
+        from jarvis.desktop_app import check_model_support
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+
+        for model_id in SUPPORTED_CHAT_MODELS:
+            with patch("jarvis.config.load_config") as mock_config:
+                mock_config.return_value = {"ollama_chat_model": model_id}
+                result = check_model_support()
+                assert result is None, f"Model {model_id} should be supported"

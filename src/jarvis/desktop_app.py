@@ -44,7 +44,7 @@ except ImportError:
 
 from jarvis.debug import debug_log
 from jarvis.diary_dialog import DiaryUpdateDialog
-from jarvis.config import _default_config_path, _default_db_path
+from jarvis.config import _default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
 from jarvis.themes import JARVIS_THEME_STYLESHEET
 from jarvis.face_widget import FaceWindow
 
@@ -323,10 +323,6 @@ def show_crash_report_dialog(crash_content: str) -> None:
         debug_log(f"failed to show crash report dialog: {e}", "desktop")
 
 
-# Officially supported chat models
-SUPPORTED_CHAT_MODELS = {"llama3.2:3b", "gpt-oss:20b"}
-
-
 def check_model_support() -> Optional[str]:
     """
     Check if the configured chat model is officially supported.
@@ -334,15 +330,16 @@ def check_model_support() -> Optional[str]:
     Returns the model name if unsupported, None if supported.
     """
     try:
-        from jarvis.config import load_config
+        from jarvis.config import load_config, DEFAULT_CHAT_MODEL
         config = load_config()
-        model = config.get("ollama_chat_model", "llama3.2:3b")
+        model = config.get("ollama_chat_model", DEFAULT_CHAT_MODEL)
 
         # Normalize model name (remove tag if it matches base)
         base_model = model.split(":")[0] if ":" in model else model
 
         # Check against supported models (also check base name)
-        for supported in SUPPORTED_CHAT_MODELS:
+        supported_ids = get_supported_model_ids()
+        for supported in supported_ids:
             supported_base = supported.split(":")[0]
             if model == supported or base_model == supported_base:
                 return None

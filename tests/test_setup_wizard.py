@@ -382,6 +382,14 @@ class TestModelOptions:
             assert "size" in info, f"Model {model_id} missing 'size'"
             assert "ram" in info, f"Model {model_id} missing 'ram'"
 
+    def test_model_options_uses_centralized_config(self):
+        """ModelsPage.MODEL_OPTIONS should reference the centralized config."""
+        from jarvis.setup_wizard import ModelsPage
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+
+        # Verify they're the same object (not just equal values)
+        assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
+
 
 class TestWhisperModelOptions:
     """Tests for whisper model selection options in setup wizard."""

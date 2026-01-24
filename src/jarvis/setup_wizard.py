@@ -20,6 +20,8 @@ from enum import Enum, auto
 
 import requests
 
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL
+
 
 def is_apple_silicon() -> bool:
     """Check if running on Apple Silicon Mac."""
@@ -194,7 +196,7 @@ def get_required_models() -> List[str]:
         return models
     except Exception:
         # Default models if config can't be loaded
-        return ["llama3.2:3b", "nomic-embed-text"]
+        return [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
 
 
 def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
@@ -1057,21 +1059,8 @@ class OllamaServerPage(QWizardPage):
 class ModelsPage(QWizardPage):
     """Page for installing required AI models."""
 
-    # Model options with their details
-    MODEL_OPTIONS = {
-        "llama3.2:3b": {
-            "name": "Llama 3.2 3B (Recommended)",
-            "description": "Fast, concise responses, ~2GB download",
-            "size": "~2GB",
-            "ram": "8GB+",
-        },
-        "gpt-oss:20b": {
-            "name": "GPT-OSS 20B (High-end)",
-            "description": "Best performance, ~12GB download",
-            "size": "~12GB",
-            "ram": "16GB+",
-        },
-    }
+    # Use the centralized model configuration from config.py
+    MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1109,7 +1098,7 @@ class ModelsPage(QWizardPage):
 
         # Model option buttons
         self._model_buttons: Dict[str, QPushButton] = {}
-        self._selected_model: str = "llama3.2:3b"
+        self._selected_model: str = DEFAULT_CHAT_MODEL
 
         for model_id, info in self.MODEL_OPTIONS.items():
             btn = QPushButton()
@@ -1297,18 +1286,18 @@ class ModelsPage(QWizardPage):
     def initializePage(self):
         """Initialize page with current model status."""
         # Load the currently configured chat model
-        current_chat_model = "llama3.2:3b"
+        current_chat_model = DEFAULT_CHAT_MODEL
         try:
             cfg = load_settings()
             current_chat_model = cfg.ollama_chat_model
         except Exception:
             pass
 
-        # Pre-select the model if it's one of our options, otherwise default to llama3.2:3b
+        # Pre-select the model if it's one of our options, otherwise default
         if current_chat_model in self.MODEL_OPTIONS:
             self._selected_model = current_chat_model
         else:
-            self._selected_model = "llama3.2:3b"
+            self._selected_model = DEFAULT_CHAT_MODEL
 
         # Update button states
         for m_id, btn in self._model_buttons.items():
