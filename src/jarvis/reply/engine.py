@@ -10,6 +10,7 @@ from typing import Optional, TYPE_CHECKING
 from ..utils.redact import redact
 from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
+from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response
 from .enrichment import extract_search_params_for_memory
@@ -571,6 +572,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                 redacted_text=redacted,
                 max_retries=1,
             )
+
+            # Handle stop tool - end conversation without response
+            if result.reply_text == STOP_SIGNAL:
+                debug_log("stop signal received - ending conversation without reply", "planning")
+                try:
+                    print("💤 Returning to wake word mode\n", flush=True)
+                except Exception:
+                    pass
+
+                # Set face state to IDLE (waiting for wake word)
+                try:
+                    from ..face_widget import get_jarvis_state, JarvisState
+                    state_manager = get_jarvis_state()
+                    state_manager.set_state(JarvisState.IDLE)
+                except Exception:
+                    pass
+
+                # Return None to signal no response should be generated
+                # Don't add to dialogue memory - this is a dismissal, not a conversation
+                return None
+
             # Append tool result
             if result.reply_text:
                 messages.append({
