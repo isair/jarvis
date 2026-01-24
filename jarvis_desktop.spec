@@ -24,57 +24,11 @@ Plugins = PyQt6/Qt6/plugins
     print(f"Created qt.conf at {qt_conf_path}")
 
 # Collect all necessary data files
+# Note: Let PyInstaller's built-in hooks handle sounddevice, ctranslate2, and Qt WebEngine
+# Manual collection can conflict with hooks and cause crashes
 datas = [
     (str(src_path / 'jarvis' / 'desktop_assets' / '*.png'), 'jarvis/desktop_assets'),
 ]
-
-# Collect sounddevice data files (contains PortAudio DLLs required for Windows)
-try:
-    sounddevice_datas = collect_data_files('sounddevice')
-    datas.extend(sounddevice_datas)
-    print(f"Collected sounddevice data files: {len(sounddevice_datas)} items")
-except Exception as e:
-    print(f"Warning: Could not collect sounddevice data files: {e}")
-
-# Also try to collect _sounddevice_data directly (fallback for older versions)
-try:
-    import sounddevice
-    sd_path = Path(sounddevice.__file__).parent
-    sd_data_path = sd_path / '_sounddevice_data'
-    if sd_data_path.exists():
-        datas.append((str(sd_data_path), '_sounddevice_data'))
-        print(f"Collected _sounddevice_data from {sd_data_path}")
-except Exception as e:
-    print(f"Info: _sounddevice_data collection skipped: {e}")
-
-# Collect ctranslate2 data files (native libraries for faster-whisper)
-try:
-    ctranslate2_datas = collect_data_files('ctranslate2')
-    datas.extend(ctranslate2_datas)
-    print(f"Collected ctranslate2 data files: {len(ctranslate2_datas)} items")
-except Exception as e:
-    print(f"Warning: Could not collect ctranslate2 data files: {e}")
-
-# Windows: Also add PortAudio DLL directly to the root directory for ctypes.find_library
-# This is a belt-and-suspenders approach alongside the PATH fix in __init__.py
-# See: https://github.com/pyinstaller/pyinstaller/issues/7065
-binaries = []
-if sys.platform == 'win32':
-    try:
-        import sounddevice
-        sd_path = Path(sounddevice.__file__).parent
-        portaudio_binaries = sd_path / '_sounddevice_data' / 'portaudio-binaries'
-        if portaudio_binaries.exists():
-            # Try 64-bit DLL first, then 32-bit
-            for dll_name in ['libportaudio64bit.dll', 'libportaudio32bit.dll']:
-                dll_path = portaudio_binaries / dll_name
-                if dll_path.exists():
-                    # Copy to root of bundle so it's in the same directory as the exe
-                    binaries.append((str(dll_path), '.'))
-                    print(f"Added PortAudio DLL to binaries: {dll_path}")
-                    break
-    except Exception as e:
-        print(f"Warning: Could not add PortAudio DLL: {e}")
 
 # Add qt.conf for macOS
 if sys.platform == 'darwin':
@@ -99,27 +53,8 @@ try:
 except Exception as e:
     print(f"Warning: Could not collect Qt plugins: {e}")
 
-# Collect Qt WebEngine resources (needed for embedded memory viewer)
-try:
-    import PyQt6
-    qt_path = Path(PyQt6.__file__).parent
-    webengine_resources = qt_path / 'Qt6' / 'resources'
-    webengine_translations = qt_path / 'Qt6' / 'translations'
-    webengine_libexec = qt_path / 'Qt6' / 'libexec'
-
-    if webengine_resources.exists():
-        datas.append((str(webengine_resources), 'PyQt6/Qt6/resources'))
-        print(f"Collected Qt WebEngine resources: {webengine_resources}")
-
-    if webengine_translations.exists():
-        datas.append((str(webengine_translations), 'PyQt6/Qt6/translations'))
-        print(f"Collected Qt WebEngine translations: {webengine_translations}")
-
-    if webengine_libexec.exists():
-        datas.append((str(webengine_libexec), 'PyQt6/Qt6/libexec'))
-        print(f"Collected Qt WebEngine libexec: {webengine_libexec}")
-except Exception as e:
-    print(f"Warning: Could not collect Qt WebEngine resources: {e}")
+# Note: Qt WebEngine resources are handled by PyInstaller's hook-PyQt6.QtWebEngineWidgets.py
+# Manual collection can conflict with the hook and cause crashes
 
 # Hidden imports that PyInstaller might miss
 hiddenimports = [
@@ -244,7 +179,7 @@ hiddenimports = [
 a = Analysis(
     ['src/jarvis/desktop_app.py'],
     pathex=[str(src_path)],
-    binaries=binaries,
+    binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
