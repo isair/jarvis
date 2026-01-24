@@ -45,3 +45,5 @@ Ensure all your changes are covered by all appropriate form of automated tests -
 Run evals after finalising a change that can affect agent accuracy.
 
 Commit your changes when you finish a fix or feature before moving on to the next task.
+
+Before running `git commit --amend`, always check `git log --oneline -3` first to verify you're amending the correct commit.

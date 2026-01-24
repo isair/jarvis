@@ -152,10 +152,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
 
     # Log tool availability (helps diagnose hangs)
     mcp_count = len(mcp_tools)
+    total_tools = len(allowed_tools)
     if mcp_count > 0:
-        debug_log(f"🤖 starting with {len(allowed_tools)} tools available ({mcp_count} from MCP)", "planning")
+        debug_log(f"🤖 starting with {total_tools} tools available ({mcp_count} from MCP)", "planning")
     else:
-        debug_log(f"🤖 starting with {len(allowed_tools)} tools available", "planning")
+        debug_log(f"🤖 starting with {total_tools} tools available", "planning")
+
+    # Warn about too many tools (can overwhelm smaller models)
+    if total_tools > 15:
+        debug_log(f"⚠️ {total_tools} tools registered - this may overwhelm smaller models and cause confused responses", "planning")
 
     # Step 7: Messages-based loop with tool handling
     def _build_initial_system_message() -> str:
@@ -253,7 +258,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
                 # Note: Text-based fallback parsing was removed since all supported models
-                # (gpt-oss:20b, qwen3:4b) use native tool calling via the tools API parameter
+                # (gpt-oss:20b, llama3.2:3b) use native tool calling via the tools API parameter
 
         except Exception:
             pass
@@ -358,7 +363,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         """
         Handle responses where the model outputs JSON instead of natural language.
 
-        Some smaller models (e.g., qwen3:4b) occasionally output JSON-structured
+        Some smaller models (e.g., llama3.2:3b) occasionally output JSON-structured
         responses instead of plain text. This function extracts readable text from
         common JSON patterns.
 

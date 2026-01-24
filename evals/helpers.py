@@ -16,7 +16,7 @@ JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
 class MockConfig:
     """Minimal config object for eval tests."""
     ollama_base_url: str = "http://localhost:11434"
-    ollama_chat_model: str = "qwen3"
+    ollama_chat_model: str = "llama3.2:3b"
     ollama_embed_model: str = "nomic-embed-text"
     db_path: str = ":memory:"
     sqlite_vss_path: Optional[str] = None
