@@ -1716,9 +1716,10 @@ def main() -> int:
     try:
         print("Creating QApplication...", flush=True)
         from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QTimer
         print("QApplication imported successfully", flush=True)
 
-        # Create QApplication first (needed for wizard)
+        # Create QApplication first (needed for wizard and splash)
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
@@ -1729,11 +1730,22 @@ def main() -> int:
             print("⚠️ Previous session crashed, showing crash report dialog...", flush=True)
             show_crash_report_dialog(previous_crash)
 
+        # Show splash screen during startup
+        from jarvis.splash_screen import SplashScreen
+        splash = SplashScreen()
+        splash.show()
+        splash.set_status("Initializing...")
+        app.processEvents()
+
         # Check if setup wizard is needed
+        splash.set_status("Checking setup status...")
         print("Checking Ollama setup status...", flush=True)
         print("  Loading setup wizard module...", flush=True)
         try:
-            from jarvis.setup_wizard import should_show_setup_wizard, SetupWizard
+            from jarvis.setup_wizard import (
+                should_show_setup_wizard, SetupWizard,
+                check_ollama_server, check_ollama_cli
+            )
             print("  Setup wizard module loaded successfully", flush=True)
         except Exception as e:
             print(f"  ❌ Failed to load setup wizard: {e}", flush=True)
@@ -1741,7 +1753,40 @@ def main() -> int:
             traceback.print_exc()
             raise
 
-        if should_show_setup_wizard():
+        # Run setup check in background thread to keep splash animation alive
+        from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
+
+        class SetupCheckWorker(QThread):
+            """Worker thread to check setup status without blocking UI."""
+            finished = pyqtSignal(bool)  # Emits True if setup wizard needed
+
+            def run(self):
+                try:
+                    result = should_show_setup_wizard()
+                    self.finished.emit(result)
+                except Exception as e:
+                    print(f"  ❌ Setup check failed: {e}", flush=True)
+                    # On error, show wizard to let user fix issues
+                    self.finished.emit(True)
+
+        setup_check_result = [None]  # Use list to allow modification in closure
+
+        def on_setup_check_done(needs_wizard: bool):
+            setup_check_result[0] = needs_wizard
+
+        worker = SetupCheckWorker()
+        worker.finished.connect(on_setup_check_done)
+        worker.start()
+
+        # Use QEventLoop to wait while keeping UI fully responsive
+        # This allows the splash animation to run smoothly
+        loop = QEventLoop()
+        worker.finished.connect(loop.quit)
+        loop.exec()
+
+        if setup_check_result[0]:
+            # Hide splash while wizard is shown
+            splash.hide()
             print("🔧 Setup required - launching setup wizard...", flush=True)
             wizard = SetupWizard()
             # Ensure wizard is visible and has focus (prevents window manager issues)
@@ -1755,12 +1800,145 @@ def main() -> int:
                 return 0
 
             print("✅ Setup wizard completed successfully", flush=True)
+            # Show splash again after wizard
+            splash.show()
+            splash.set_status("Setup complete!")
+            app.processEvents()
         else:
             print("✅ Ollama setup looks good", flush=True)
 
+        # Even if setup was completed before, verify Ollama server is actually running
+        # This handles the case where user reinstalls or Ollama service isn't auto-started
+        splash.set_status("Checking Ollama server...")
+        app.processEvents()
+
+        # Run server check in background thread to keep splash animation alive
+        class ServerCheckWorker(QThread):
+            """Worker thread to check Ollama server status without blocking UI."""
+            finished = pyqtSignal(bool, object)  # Emits (is_running, version)
+
+            def run(self):
+                try:
+                    running, ver = check_ollama_server()
+                    self.finished.emit(running, ver)
+                except Exception as e:
+                    print(f"  ❌ Server check failed: {e}", flush=True)
+                    self.finished.emit(False, None)
+
+        server_check_result = [None, None]  # [is_running, version]
+
+        def on_server_check_done(running: bool, ver):
+            server_check_result[0] = running
+            server_check_result[1] = ver
+
+        server_worker = ServerCheckWorker()
+        server_worker.finished.connect(on_server_check_done)
+        server_worker.start()
+
+        # Use QEventLoop to wait while keeping UI fully responsive
+        server_loop = QEventLoop()
+        server_worker.finished.connect(server_loop.quit)
+        server_loop.exec()
+
+        is_running, version = server_check_result
+
+        if not is_running:
+            print("⚠️ Ollama server not running, attempting to start...", flush=True)
+            splash.set_status("Starting Ollama server...")
+            app.processEvents()
+
+            # Get ollama path
+            cli_installed, ollama_path = check_ollama_cli()
+            if not cli_installed:
+                ollama_path = "ollama"
+                print(f"  ⚠️ Ollama CLI not found in standard paths, trying '{ollama_path}' from PATH", flush=True)
+            else:
+                print(f"  📍 Found Ollama at: {ollama_path}", flush=True)
+
+            # Try to start Ollama server
+            ollama_process = None
+            try:
+                if sys.platform == "darwin":
+                    # On macOS, try to open the Ollama app first
+                    try:
+                        print("  🍎 Trying to open Ollama.app...", flush=True)
+                        ollama_process = subprocess.Popen(
+                            ["open", "-a", "Ollama"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                    except Exception as e:
+                        # Fall back to running serve command
+                        print(f"  ⚠️ Ollama.app not found ({e}), trying serve command...", flush=True)
+                        ollama_process = subprocess.Popen(
+                            [ollama_path, "serve"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True
+                        )
+                elif sys.platform == "win32":
+                    # On Windows, hide the console window
+                    print(f"  🪟 Starting Ollama server: {ollama_path} serve", flush=True)
+                    ollama_process = subprocess.Popen(
+                        [ollama_path, "serve"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                else:
+                    # On Linux and other platforms
+                    print(f"  🐧 Starting Ollama server: {ollama_path} serve", flush=True)
+                    ollama_process = subprocess.Popen(
+                        [ollama_path, "serve"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+
+                # Verify the process started
+                if ollama_process and ollama_process.poll() is not None:
+                    print(f"  ❌ Ollama process exited immediately with code {ollama_process.returncode}", flush=True)
+                else:
+                    print(f"  ✅ Ollama process started (PID: {ollama_process.pid if ollama_process else 'unknown'})", flush=True)
+
+                # Wait for Ollama to start (up to 15 seconds)
+                splash.set_status("Waiting for Ollama to start...")
+                app.processEvents()
+
+                import time
+                max_wait = 15
+                wait_interval = 0.5
+                waited = 0
+                while waited < max_wait:
+                    # Use shorter sleeps with more frequent UI updates for smooth animation
+                    for _ in range(5):  # 5 x 100ms = 500ms total
+                        time.sleep(0.1)
+                        app.processEvents()
+                    waited += wait_interval
+
+                    is_running, version = check_ollama_server()
+                    if is_running:
+                        print(f"✅ Ollama server started (version {version})", flush=True)
+                        break
+
+                    # Update splash with progress
+                    splash.set_status(f"Waiting for Ollama to start... ({int(waited)}s)")
+                    app.processEvents()
+
+                if not is_running:
+                    print("⚠️ Ollama server failed to start within timeout", flush=True)
+                    # Don't block startup - daemon will handle connection errors
+            except Exception as e:
+                print(f"⚠️ Failed to start Ollama: {e}", flush=True)
+                # Continue anyway - user may start Ollama manually
+        else:
+            print(f"✅ Ollama server is running (version {version})", flush=True)
+
         # Check if user is using an unsupported model
+        splash.set_status("Checking model compatibility...")
         unsupported_model = check_model_support()
         if unsupported_model:
+            splash.hide()
             print(f"⚠️ Unsupported model detected: {unsupported_model}", flush=True)
             if show_unsupported_model_dialog(unsupported_model):
                 # User wants to open setup wizard
@@ -1773,14 +1951,22 @@ def main() -> int:
                 if result != wizard.DialogCode.Accepted:
                     print("Setup wizard cancelled - exiting", flush=True)
                     return 0
+            splash.show()
+            splash.set_status("Model check complete!")
+            app.processEvents()
 
+        splash.set_status("Loading Jarvis...")
         print("Initializing JarvisSystemTray...", flush=True)
         tray_instance = JarvisSystemTray()
         print("JarvisSystemTray initialized successfully", flush=True)
 
         # Always auto-start listening (logs will be shown via start_daemon)
+        splash.set_status("Starting voice assistant...")
         print("🚀 Auto-starting Jarvis listener...", flush=True)
         tray_instance.start_daemon()
+
+        # Close splash screen
+        splash.close_splash()
 
         if crash_log_file:
             # Show notification with log file location

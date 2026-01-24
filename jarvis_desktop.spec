@@ -67,6 +67,7 @@ hiddenimports = [
     'jarvis.llm',
     'jarvis.main',
     'jarvis.setup_wizard',
+    'jarvis.splash_screen',
     'jarvis.updater',
     'jarvis.update_dialog',
     # Listening modules
