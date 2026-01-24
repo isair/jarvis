@@ -3,6 +3,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+from pathlib import Path
+
 from jarvis.updater import (
     check_for_updates,
     parse_version,
@@ -12,6 +14,9 @@ from jarvis.updater import (
     UpdateChannel,
     UpdateStatus,
     ReleaseInfo,
+    _escape_applescript_path,
+    _escape_batch_path,
+    _escape_shell_path,
 )
 
 
@@ -402,3 +407,76 @@ class TestReleaseInfo:
         assert release.prerelease is False
         assert release.asset_size == 52428800
         assert release.asset_id == 100002
+
+
+class TestPathEscaping:
+    """Tests for path escaping functions to prevent script injection."""
+
+    @pytest.mark.unit
+    def test_applescript_escapes_quotes(self):
+        path = Path('/Users/test/"quoted"/app')
+        escaped = _escape_applescript_path(path)
+        assert '\\"' in escaped
+        assert '"quoted"' not in escaped
+
+    @pytest.mark.unit
+    def test_applescript_escapes_backslashes(self):
+        path = Path('/Users/test\\backslash/app')
+        escaped = _escape_applescript_path(path)
+        assert '\\\\' in escaped
+
+    @pytest.mark.unit
+    def test_applescript_normal_path_unchanged(self):
+        path = Path('/Applications/Jarvis.app')
+        escaped = _escape_applescript_path(path)
+        assert escaped == '/Applications/Jarvis.app'
+
+    @pytest.mark.unit
+    def test_batch_rejects_percent_sign(self):
+        path = Path('C:\\Users\\test%USERPROFILE%\\app')
+        with pytest.raises(ValueError, match="unsafe character"):
+            _escape_batch_path(path)
+
+    @pytest.mark.unit
+    def test_batch_rejects_ampersand(self):
+        path = Path('C:\\Users\\test&echo bad\\app')
+        with pytest.raises(ValueError, match="unsafe character"):
+            _escape_batch_path(path)
+
+    @pytest.mark.unit
+    def test_batch_rejects_pipe(self):
+        path = Path('C:\\Users\\test|dir\\app')
+        with pytest.raises(ValueError, match="unsafe character"):
+            _escape_batch_path(path)
+
+    @pytest.mark.unit
+    def test_batch_normal_path_unchanged(self):
+        path = Path('C:\\Program Files\\Jarvis\\Jarvis.exe')
+        escaped = _escape_batch_path(path)
+        assert escaped == 'C:\\Program Files\\Jarvis\\Jarvis.exe'
+
+    @pytest.mark.unit
+    def test_shell_escapes_single_quotes(self):
+        path = Path("/Users/test's folder/app")
+        escaped = _escape_shell_path(path)
+        # Single quotes should be escaped by ending quote, adding escaped quote, starting new quote
+        assert "'" in escaped
+        assert escaped.startswith("'")
+        assert escaped.endswith("'")
+
+    @pytest.mark.unit
+    def test_shell_handles_special_chars(self):
+        path = Path('/Users/test $HOME `whoami`/app')
+        escaped = _escape_shell_path(path)
+        # In single quotes, $ and backticks are literal
+        assert escaped.startswith("'")
+        assert escaped.endswith("'")
+        # The content should be preserved (not interpreted)
+        assert '$HOME' in escaped
+        assert '`whoami`' in escaped
+
+    @pytest.mark.unit
+    def test_shell_normal_path_wrapped(self):
+        path = Path('/opt/Jarvis/Jarvis')
+        escaped = _escape_shell_path(path)
+        assert escaped == "'/opt/Jarvis/Jarvis'"
