@@ -248,6 +248,8 @@ a.binaries = filtered_binaries
 # These should come from the system's Visual C++ Redistributable instead
 if sys.platform == 'win32':
     vcruntime_dlls = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll']
+
+    # Filter from a.binaries
     filtered_binaries = []
     for binary in a.binaries:
         name = binary[0].lower()
@@ -255,11 +257,28 @@ if sys.platform == 'win32':
 
         # Exclude VC++ runtime DLLs that come from PyQt6's Qt6\bin directory
         if name in vcruntime_dlls and 'pyqt6' in binary_path:
-            print(f"Excluding PyQt6 bundled VC++ runtime: {binary[0]} from {binary[1]}")
+            print(f"Excluding PyQt6 bundled VC++ runtime (binary): {binary[0]} from {binary[1]}")
             continue
         filtered_binaries.append(binary)
 
     a.binaries = filtered_binaries
+
+    # Also filter from a.datas - PyQt6's Qt hooks may add DLLs as data files
+    filtered_datas = []
+    for data in a.datas:
+        data_dest = data[0].lower()
+        data_src = str(data[1]).lower() if len(data) > 1 else ''
+
+        # Check if this is a VC++ runtime DLL in the PyQt6 directory structure
+        is_vcruntime = any(dll in data_dest for dll in vcruntime_dlls)
+        in_pyqt6 = 'pyqt6' in data_dest or 'pyqt6' in data_src
+
+        if is_vcruntime and in_pyqt6:
+            print(f"Excluding PyQt6 bundled VC++ runtime (data): {data[0]} from {data[1]}")
+            continue
+        filtered_datas.append(data)
+
+    a.datas = filtered_datas
 
 # On macOS, ensure OpenSSL libraries are bundled properly
 if sys.platform == 'darwin':
