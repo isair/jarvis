@@ -412,7 +412,17 @@ class VoiceListener(threading.Thread):
         from ..reply.engine import run_reply_engine
 
         # Process the query (keep thinking tune playing during processing)
-        reply = run_reply_engine(self.db, self.cfg, None, query, self.dialogue_memory)
+        try:
+            reply = run_reply_engine(self.db, self.cfg, None, query, self.dialogue_memory)
+        except Exception as e:
+            # Log the error visibly - this should never happen silently
+            print(f"\n  ❌ Reply engine error: {e}", flush=True)
+            debug_log(f"reply engine exception: {e}", "voice")
+            self._stop_thinking_tune()
+            # Provide user feedback via TTS
+            if self.tts and self.tts.enabled:
+                self.tts.speak("Sorry, I encountered an error processing your request.")
+            return
 
         # Handle TTS with proper callbacks
         if reply and self.tts and self.tts.enabled:

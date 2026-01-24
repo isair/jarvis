@@ -12,6 +12,8 @@ import warnings
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
+from ..debug import debug_log
+
 
 def _extract_domain_description(url: str) -> tuple[str, bool]:
     """
@@ -294,6 +296,7 @@ class TextToSpeech:
 
         voice_set = f"$v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet);"
         if pwsh:
+            debug_log(f"Windows TTS: using PowerShell ({pwsh})", "tts")
             # Read the text to speak from stdin to avoid any quoting/interpolation issues
             script = (
                 "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
@@ -309,16 +312,16 @@ class TextToSpeech:
                     self._current_process = subprocess.Popen(
                         [pwsh, "-NoProfile", "-Command", script],
                         stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                 try:
                     if self._current_process.stdin is not None:
                         self._current_process.stdin.write(text.encode("utf-8", errors="replace"))
                         self._current_process.stdin.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    debug_log(f"Windows TTS: stdin write error: {e}", "tts")
                 while self._current_process.poll() is None:
                     if self._should_interrupt.is_set():
                         return True
@@ -326,14 +329,29 @@ class TextToSpeech:
                         self._current_process.wait(timeout=0.1)
                     except subprocess.TimeoutExpired:
                         continue
+                # Check return code like macOS version does
+                if self._current_process.returncode != 0:
+                    # Capture stderr for debugging
+                    stderr_output = ""
+                    try:
+                        if self._current_process.stderr:
+                            stderr_output = self._current_process.stderr.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                    print(f"  ⚠️ TTS PowerShell exited with code {self._current_process.returncode}", flush=True)
+                    if stderr_output:
+                        debug_log(f"Windows TTS PowerShell stderr: {stderr_output[:500]}", "tts")
                 return False
-            except Exception:
-                pass  # Fall back to cscript below
+            except Exception as e:
+                debug_log(f"Windows TTS: PowerShell error: {e}, falling back to cscript", "tts")
+                # Fall back to cscript below
 
         # Fallback: use Windows Script Host with VBScript (broadly available)
         cscript = shutil.which("cscript")
         if not cscript:
+            print("  ⚠️ TTS: Neither PowerShell nor cscript found on Windows", flush=True)
             return False
+        debug_log("Windows TTS: falling back to cscript/VBScript", "tts")
         vbs_text = text.replace('"', '""')
         vbs_code = (
             'Dim v\n'
@@ -351,8 +369,8 @@ class TextToSpeech:
             with self._process_lock:
                 self._current_process = subprocess.Popen(
                     [cscript, "//nologo", tmp_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             while self._current_process.poll() is None:
@@ -362,8 +380,20 @@ class TextToSpeech:
                     self._current_process.wait(timeout=0.1)
                 except subprocess.TimeoutExpired:
                     continue
+            # Check return code
+            if self._current_process.returncode != 0:
+                stderr_output = ""
+                try:
+                    if self._current_process.stderr:
+                        stderr_output = self._current_process.stderr.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                print(f"  ⚠️ TTS cscript exited with code {self._current_process.returncode}", flush=True)
+                if stderr_output:
+                    debug_log(f"Windows TTS cscript stderr: {stderr_output[:500]}", "tts")
             return False
-        except Exception:
+        except Exception as e:
+            print(f"  ⚠️ TTS VBScript error: {e}", flush=True)
             return False
         finally:
             if tmp_path:

@@ -411,7 +411,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
     turn = 0
 
     # Visible progress indicator before LLM loop (helps diagnose hangs)
-    debug_log(f"  💬 Starting LLM conversation loop (max {max_turns} turns)...", "planning")
+    print(f"  💬 Generating response...", flush=True)
+    debug_log(f"Starting LLM conversation loop (max {max_turns} turns)...", "planning")
 
     while turn < max_turns:
         turn += 1
