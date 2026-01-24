@@ -263,7 +263,7 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
         "whisper_vad": True,
-        "whisper_min_confidence": 0.3,
+        "whisper_min_confidence": 0.5,  # Filter low-confidence segments (hallucinations)
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
 
@@ -416,7 +416,7 @@ def load_settings() -> Settings:
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     mcps = _ensure_dict(merged.get("mcps"))
-    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.7))
+    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))

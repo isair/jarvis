@@ -1031,7 +1031,35 @@ class VoiceListener(threading.Thread):
                     path_or_hf_repo=self._mlx_model_repo,
                     language="en",
                 )
-                text = result.get("text", "").strip()
+
+                # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
+                min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.5)
+                segments = result.get("segments", [])
+
+                if segments:
+                    filtered_texts = []
+                    for seg in segments:
+                        avg_logprob = seg.get("avg_logprob", 0)
+                        no_speech_prob = seg.get("no_speech_prob", 0)
+
+                        # Convert avg_logprob to confidence (typically -1 to 0, so add 1)
+                        confidence = min(1.0, max(0.0, avg_logprob + 1.0))
+
+                        # Also check no_speech_prob - high value means likely not speech
+                        if no_speech_prob > 0.5:
+                            debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg.get('text', '')[:50]}'", "voice")
+                            continue
+
+                        if confidence < min_confidence:
+                            debug_log(f"MLX segment filtered (confidence={confidence:.2f}): '{seg.get('text', '')[:50]}'", "voice")
+                            continue
+
+                        filtered_texts.append(seg.get("text", ""))
+
+                    text = " ".join(filtered_texts).strip()
+                else:
+                    # Fallback to full text if no segments
+                    text = result.get("text", "").strip()
             else:
                 # faster-whisper transcription
                 try:
