@@ -49,7 +49,12 @@ def setup_crash_logging():
     """Set up crash logging for the bundled app to capture startup errors."""
     if getattr(sys, 'frozen', False):
         # Running as bundled app
-        log_dir = Path.home() / "Library" / "Logs" if sys.platform == "darwin" else Path.home()
+        if sys.platform == "darwin":
+            log_dir = Path.home() / "Library" / "Logs"
+        elif sys.platform == "win32":
+            log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
+        else:
+            log_dir = Path.home() / ".jarvis"
         log_file = log_dir / "jarvis_desktop_crash.log"
 
         try:
@@ -61,6 +66,11 @@ def setup_crash_logging():
             sys.stdout = log_handle
             sys.stderr = log_handle
 
+            # Enable faulthandler to dump Python traceback on segfaults/aborts
+            # This catches SIGSEGV, SIGFPE, SIGABRT, SIGBUS, SIGILL
+            import faulthandler
+            faulthandler.enable(file=log_handle)
+
             print(f"=== Jarvis Desktop App Crash Log ===", flush=True)
             print(f"Timestamp: {__import__('datetime').datetime.now()}", flush=True)
             print(f"Platform: {sys.platform}", flush=True)
@@ -68,6 +78,12 @@ def setup_crash_logging():
             print(f"Executable: {sys.executable}", flush=True)
             print(f"Frozen: {getattr(sys, 'frozen', False)}", flush=True)
             print(f"Bundle dir: {getattr(sys, '_MEIPASS', 'N/A')}", flush=True)
+            print("=" * 50, flush=True)
+            print(f"📁 This log: {log_file}", flush=True)
+            if sys.platform == "darwin":
+                print(f"📁 System crash reports: ~/Library/Logs/DiagnosticReports/", flush=True)
+            elif sys.platform == "win32":
+                print(f"📁 Windows Event Viewer: eventvwr.msc → Windows Logs → Application", flush=True)
             print("=" * 50, flush=True)
             print(flush=True)
 
