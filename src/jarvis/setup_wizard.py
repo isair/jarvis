@@ -206,11 +206,17 @@ def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
         ollama_path = shutil.which("ollama") or "ollama"
 
     try:
+        # Hide console window on Windows
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+
         result = subprocess.run(
             [ollama_path, "list"],
             capture_output=True,
             text=True,
-            timeout=30
+            encoding='utf-8',
+            errors='replace',
+            timeout=30,
+            creationflags=creationflags
         )
 
         if result.returncode != 0:
@@ -362,12 +368,22 @@ class CommandWorker(QThread):
 
     def run(self):
         try:
+            # Use UTF-8 encoding with error replacement for cross-platform compatibility
+            # Windows defaults to cp1252 which can't handle Ollama's UTF-8 output
+            # Hide console window on Windows
+            creationflags = 0
+            if sys.platform == 'win32':
+                creationflags = subprocess.CREATE_NO_WINDOW
+
             process = subprocess.Popen(
                 self.command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1,
+                creationflags=creationflags
             )
 
             for line in iter(process.stdout.readline, ""):
