@@ -52,14 +52,10 @@ from jarvis.face_widget import FaceWindow
 def setup_crash_logging():
     """Set up crash logging for the bundled app to capture startup errors."""
     if getattr(sys, 'frozen', False):
-        # Running as bundled app
-        if sys.platform == "darwin":
-            log_dir = Path.home() / "Library" / "Logs"
-        elif sys.platform == "win32":
-            log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
-        else:
-            log_dir = Path.home() / ".jarvis"
-        log_file = log_dir / "jarvis_desktop_crash.log"
+        # Running as bundled app - use shared crash path helper
+        crash_log, _, _ = get_crash_paths()
+        log_file = crash_log
+        log_dir = log_file.parent
 
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -96,6 +92,235 @@ def setup_crash_logging():
             # If we can't set up logging, at least try to show a dialog
             return None
     return None
+
+
+def get_crash_paths() -> tuple[Path, Path, Path]:
+    """Get paths for crash log, marker, and previous crash log."""
+    if sys.platform == "darwin":
+        log_dir = Path.home() / "Library" / "Logs" / "Jarvis"
+    elif sys.platform == "win32":
+        log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
+    else:
+        log_dir = Path.home() / ".jarvis"
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    crash_log = log_dir / "jarvis_desktop_crash.log"
+    crash_marker = log_dir / ".crash_marker"
+    previous_crash = log_dir / "previous_crash.log"
+
+    return crash_log, crash_marker, previous_crash
+
+
+def check_previous_crash() -> Optional[str]:
+    """
+    Check if previous session crashed and return crash details if so.
+
+    Returns crash log content if previous session crashed, None otherwise.
+    """
+    try:
+        crash_log, crash_marker, previous_crash = get_crash_paths()
+
+        if crash_marker.exists():
+            # Previous session didn't exit cleanly
+            crash_marker.unlink()
+
+            crash_content = None
+
+            # Check for crash log content
+            if crash_log.exists():
+                content = crash_log.read_text(encoding='utf-8', errors='replace')
+                # Only report if there's actual crash info (faulthandler output or errors)
+                if 'Fatal' in content or 'Error' in content or 'Traceback' in content:
+                    crash_content = content
+                    # Save to previous_crash for reference
+                    previous_crash.write_text(content, encoding='utf-8')
+
+            return crash_content
+
+        return None
+    except Exception:
+        return None
+
+
+def mark_session_started():
+    """Mark that a session has started (for crash detection)."""
+    try:
+        _, crash_marker, _ = get_crash_paths()
+        crash_marker.touch()
+    except Exception:
+        pass
+
+
+def mark_session_clean_exit():
+    """Mark that session exited cleanly (remove crash marker)."""
+    try:
+        _, crash_marker, _ = get_crash_paths()
+        crash_marker.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def show_crash_report_dialog(crash_content: str) -> None:
+    """
+    Show a dialog offering to submit a crash report to GitHub.
+
+    Args:
+        crash_content: The crash log content to include in the report.
+    """
+    try:
+        from PyQt6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+            QPushButton, QTextEdit, QCheckBox
+        )
+        from PyQt6.QtCore import Qt
+        import webbrowser
+        import urllib.parse
+        from jarvis import get_version
+
+        class CrashReportDialog(QDialog):
+            def __init__(self, crash_info: str):
+                super().__init__()
+                self.crash_info = crash_info
+                self.setWindowTitle("🐛 Jarvis Crash Report")
+                self.setMinimumSize(600, 450)
+                self.setStyleSheet(JARVIS_THEME_STYLESHEET)
+                self._setup_ui()
+
+            def _setup_ui(self):
+                layout = QVBoxLayout(self)
+                layout.setSpacing(16)
+
+                # Header
+                header = QLabel("😵 Jarvis crashed in the previous session")
+                header.setStyleSheet("font-size: 18px; font-weight: bold; color: #f87171;")
+                layout.addWidget(header)
+
+                # Description
+                desc = QLabel(
+                    "Would you like to report this crash? This helps us fix bugs faster.\n"
+                    "The report will open as a GitHub issue (you can review before submitting)."
+                )
+                desc.setWordWrap(True)
+                desc.setStyleSheet("color: #a1a1aa;")
+                layout.addWidget(desc)
+
+                # Crash log preview
+                preview_label = QLabel("📋 Crash details (will be included in report):")
+                preview_label.setStyleSheet("color: #71717a; margin-top: 8px;")
+                layout.addWidget(preview_label)
+
+                self.log_preview = QTextEdit()
+                self.log_preview.setPlainText(self.crash_info[:3000])  # Limit preview
+                self.log_preview.setReadOnly(True)
+                self.log_preview.setStyleSheet("""
+                    QTextEdit {
+                        background-color: #18181b;
+                        color: #a1a1aa;
+                        font-family: monospace;
+                        font-size: 11px;
+                        border: 1px solid #27272a;
+                        border-radius: 4px;
+                    }
+                """)
+                self.log_preview.setMaximumHeight(200)
+                layout.addWidget(self.log_preview)
+
+                # Privacy note
+                privacy = QLabel(
+                    "ℹ️ No personal data is collected. You control what's submitted via GitHub."
+                )
+                privacy.setStyleSheet("color: #71717a; font-size: 11px;")
+                layout.addWidget(privacy)
+
+                # Buttons
+                btn_layout = QHBoxLayout()
+                btn_layout.addStretch()
+
+                dismiss_btn = QPushButton("Dismiss")
+                dismiss_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #27272a;
+                        color: #a1a1aa;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 4px;
+                    }
+                    QPushButton:hover {
+                        background-color: #3f3f46;
+                    }
+                """)
+                dismiss_btn.clicked.connect(self.reject)
+                btn_layout.addWidget(dismiss_btn)
+
+                report_btn = QPushButton("📝 Report on GitHub")
+                report_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2563eb;
+                        color: white;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 4px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #3b82f6;
+                    }
+                """)
+                report_btn.clicked.connect(self._open_github_issue)
+                btn_layout.addWidget(report_btn)
+
+                layout.addLayout(btn_layout)
+
+            def _open_github_issue(self):
+                """Open GitHub issue with crash details pre-filled."""
+                try:
+                    version = get_version()
+                except Exception:
+                    version = "unknown"
+
+                # Truncate crash info for URL (GitHub has limits)
+                truncated = self.crash_info[:4000]
+                if len(self.crash_info) > 4000:
+                    truncated += "\n\n... (truncated, full log in comment)"
+
+                title = "Crash Report"
+                body = f"""## Crash Report
+
+**Version:** {version}
+**Platform:** {sys.platform}
+
+### Crash Log
+```
+{truncated}
+```
+
+### Steps to Reproduce
+(Please describe what you were doing when the crash occurred)
+
+1.
+2.
+3.
+
+### Additional Context
+(Any other relevant information)
+"""
+                # URL encode
+                params = urllib.parse.urlencode({
+                    'title': title,
+                    'body': body,
+                    'labels': 'bug,crash'
+                })
+                url = f"https://github.com/isair/jarvis/issues/new?{params}"
+
+                webbrowser.open(url)
+                self.accept()
+
+        dialog = CrashReportDialog(crash_content)
+        dialog.exec()
+
+    except Exception as e:
+        debug_log(f"failed to show crash report dialog: {e}", "desktop")
 
 
 def acquire_single_instance_lock() -> bool:
@@ -1329,8 +1554,18 @@ def main() -> int:
         print("⚠️ Another instance of Jarvis Desktop is already running. Exiting.")
         return 0
 
+    # Check for previous crash BEFORE setting up new crash logging
+    # This way we can read the old crash log before it's overwritten
+    previous_crash = check_previous_crash()
+
     # Set up crash logging for bundled apps
     crash_log_file = setup_crash_logging()
+
+    # Mark that this session has started (for crash detection on next launch)
+    mark_session_started()
+
+    # Register clean exit handler
+    atexit.register(mark_session_clean_exit)
 
     print("Starting Jarvis Desktop App...", flush=True)
     print(f"Python executable: {sys.executable}", flush=True)
@@ -1362,6 +1597,11 @@ def main() -> int:
         if app is None:
             app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
+
+        # Show crash report dialog if previous session crashed
+        if previous_crash:
+            print("⚠️ Previous session crashed, showing crash report dialog...", flush=True)
+            show_crash_report_dialog(previous_crash)
 
         # Check if setup wizard is needed
         print("Checking Ollama setup status...", flush=True)
