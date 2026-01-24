@@ -169,6 +169,11 @@ def chat_with_messages(
     if tools and isinstance(tools, list) and len(tools) > 0:
         payload["tools"] = tools
 
+    # Disable "thinking mode" for qwen3 models (causes very slow responses)
+    # See: https://docs.ollama.com/capabilities/thinking
+    if chat_model.startswith("qwen3"):
+        payload["think"] = False
+
     try:
         resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)
         resp.raise_for_status()

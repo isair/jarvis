@@ -66,8 +66,11 @@ class WeatherTool(Tool):
             "required": []
         }
 
-    def _get_user_location(self, context: ToolContext) -> Optional[str]:
-        """Get user's current location from config/auto-detection."""
+    def _get_user_location(self, context: ToolContext) -> Optional[Dict[str, Any]]:
+        """Get user's current location from config/auto-detection.
+
+        Returns dict with 'lat', 'lon', and 'display_name' keys, or None if unavailable.
+        """
         try:
             location_info = get_location_info(
                 config_ip=getattr(context.cfg, 'location_ip_address', None),
@@ -79,18 +82,29 @@ class WeatherTool(Tool):
                 debug_log(f"    ⚠️ location detection failed: {location_info.get('error')}", "tools")
                 return None
 
-            # Build a location string suitable for geocoding
-            city = location_info.get("city")
-            country = location_info.get("country")
+            # Use coordinates directly (avoids geocoding issues with district names)
+            lat = location_info.get("latitude")
+            lon = location_info.get("longitude")
+            if lat is None or lon is None:
+                return None
 
-            if city and country:
-                return f"{city}, {country}"
-            elif city:
-                return city
-            elif country:
-                return country
+            # Build display name from available fields
+            city = location_info.get("city", "")
+            region = location_info.get("region", "")
+            country = location_info.get("country", "")
 
-            return None
+            # Prefer city, but fall back to region if city is a district
+            display_parts = []
+            if city:
+                display_parts.append(city)
+            if region and region != city:
+                display_parts.append(region)
+            if country:
+                display_parts.append(country)
+
+            display_name = ", ".join(display_parts) if display_parts else "your location"
+
+            return {"lat": lat, "lon": lon, "display_name": display_name}
         except Exception as e:
             debug_log(f"    ⚠️ location detection error: {e}", "tools")
             return None
@@ -101,56 +115,66 @@ class WeatherTool(Tool):
 
         try:
             # Get location from args, or fall back to user's detected location
-            location = ""
+            location_str = ""
             if args and isinstance(args, dict):
-                location = str(args.get("location", "")).strip()
+                location_str = str(args.get("location", "")).strip()
 
-            # If no location provided, use user's detected location
-            if not location:
-                debug_log("    📍 No location provided, using user's detected location", "tools")
-                location = self._get_user_location(context)
-                if not location:
+            # Determine coordinates and display name
+            lat: Optional[float] = None
+            lon: Optional[float] = None
+            location_display: str = ""
+
+            if location_str:
+                # User specified a location - need to geocode it
+                debug_log(f"    🌤️ geocoding user-specified location: '{location_str}'", "tools")
+
+                geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
+                geocode_params = {
+                    "name": location_str,
+                    "count": 1,
+                    "language": "en",
+                    "format": "json"
+                }
+
+                geo_response = requests.get(geocode_url, params=geocode_params, timeout=10)
+                geo_response.raise_for_status()
+                geo_data = geo_response.json()
+
+                if not geo_data.get("results"):
+                    return ToolExecutionResult(
+                        success=False,
+                        reply_text=f"Could not find location '{location_str}'. Try a different city name or spelling."
+                    )
+
+                place = geo_data["results"][0]
+                lat = place["latitude"]
+                lon = place["longitude"]
+                place_name = place.get("name", location_str)
+                country = place.get("country", "")
+                admin1 = place.get("admin1", "")  # State/region
+
+                # Build display name
+                location_display = place_name
+                if admin1 and admin1 != place_name:
+                    location_display += f", {admin1}"
+                if country:
+                    location_display += f", {country}"
+
+                debug_log(f"    📍 resolved to {location_display} ({lat}, {lon})", "tools")
+            else:
+                # No location provided - use auto-detected coordinates directly
+                debug_log("    📍 No location provided, using user's detected coordinates", "tools")
+                user_loc = self._get_user_location(context)
+                if not user_loc:
                     return ToolExecutionResult(
                         success=False,
                         reply_text="I couldn't determine your location. Please specify a city name."
                     )
 
-            debug_log(f"    🌤️ getting weather for '{location}'", "tools")
-
-            # Step 1: Geocode the location to get coordinates
-            geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
-            geocode_params = {
-                "name": location,
-                "count": 1,
-                "language": "en",
-                "format": "json"
-            }
-
-            geo_response = requests.get(geocode_url, params=geocode_params, timeout=10)
-            geo_response.raise_for_status()
-            geo_data = geo_response.json()
-
-            if not geo_data.get("results"):
-                return ToolExecutionResult(
-                    success=False,
-                    reply_text=f"Could not find location '{location}'. Try a different city name or spelling."
-                )
-
-            place = geo_data["results"][0]
-            lat = place["latitude"]
-            lon = place["longitude"]
-            place_name = place.get("name", location)
-            country = place.get("country", "")
-            admin1 = place.get("admin1", "")  # State/region
-
-            # Build display name
-            location_display = place_name
-            if admin1 and admin1 != place_name:
-                location_display += f", {admin1}"
-            if country:
-                location_display += f", {country}"
-
-            debug_log(f"    📍 resolved to {location_display} ({lat}, {lon})", "tools")
+                lat = user_loc["lat"]
+                lon = user_loc["lon"]
+                location_display = user_loc["display_name"]
+                debug_log(f"    📍 using detected location: {location_display} ({lat}, {lon})", "tools")
 
             # Step 2: Get current weather
             weather_url = "https://api.open-meteo.com/v1/forecast"
@@ -214,7 +238,9 @@ class WeatherTool(Tool):
             reply_text = "\n".join(lines)
 
             debug_log(f"    ✅ weather retrieved: {weather_desc}, {temp_c}°C", "tools")
-            context.user_print(f"✅ Weather for {place_name}: {weather_desc}, {temp_c}°C")
+            # Use first part of location_display for concise output
+            short_name = location_display.split(",")[0].strip()
+            context.user_print(f"✅ Weather for {short_name}: {weather_desc}, {temp_c}°C")
 
             return ToolExecutionResult(success=True, reply_text=reply_text)
 

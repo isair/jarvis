@@ -209,11 +209,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         # Note: tools_desc is NOT included here because tools are passed via the native tools API parameter
         # Including tools in both places confuses the model and causes it to not use tools properly
 
-        # Disable Qwen3's "thinking mode" which causes very slow responses
-        # See: https://github.com/ollama/ollama/issues/10456
-        if cfg.ollama_chat_model.startswith("qwen3"):
-            guidance.append("/no_think")
-
         return "\n".join(guidance)
 
     messages = []  # type: ignore[var-annotated]

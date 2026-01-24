@@ -119,27 +119,16 @@ class TestWeatherTool:
     @patch('src.jarvis.tools.builtin.weather.get_location_info')
     def test_run_no_location_with_successful_fallback(self, mock_location, mock_get):
         """Test weather with no location but successful user location detection."""
-        # Mock successful location detection
+        # Mock successful location detection with coordinates (no geocoding needed)
         mock_location.return_value = {
             "city": "London",
-            "country": "United Kingdom"
+            "region": "England",
+            "country": "United Kingdom",
+            "latitude": 51.5074,
+            "longitude": -0.1278
         }
 
-        # Mock geocoding response
-        geo_response = Mock()
-        geo_response.status_code = 200
-        geo_response.json.return_value = {
-            "results": [{
-                "latitude": 51.5074,
-                "longitude": -0.1278,
-                "name": "London",
-                "country": "United Kingdom",
-                "admin1": "England"
-            }]
-        }
-        geo_response.raise_for_status = Mock()
-
-        # Mock weather response
+        # Mock weather response (no geocoding call needed - we use coordinates directly)
         weather_response = Mock()
         weather_response.status_code = 200
         weather_response.json.return_value = {
@@ -154,9 +143,9 @@ class TestWeatherTool:
         }
         weather_response.raise_for_status = Mock()
 
-        mock_get.side_effect = [geo_response, weather_response]
+        mock_get.return_value = weather_response
 
-        # Call with no location - should use fallback
+        # Call with no location - should use fallback coordinates directly
         result = self.tool.run({}, self.context)
 
         assert isinstance(result, ToolExecutionResult)
@@ -164,6 +153,8 @@ class TestWeatherTool:
         assert "London" in result.reply_text
         # Verify location detection was called
         mock_location.assert_called_once()
+        # Verify only one request (weather, not geocoding)
+        assert mock_get.call_count == 1
 
     @patch('requests.get')
     def test_run_network_timeout(self, mock_get):
