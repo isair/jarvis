@@ -168,8 +168,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         guidance = [system_prompt.strip()]
         # Voice/ASR clarification appended to all conversations to account for transcription noise
         asr_note = (
-            "Input is captured via speech transcription and may include errors, missing words, or punctuation issues. "
-            "Prioritize the user's intent over literal wording. If meaning is uncertain, ask a brief clarifying question."
+            "Input is voice transcription that may include: errors, missing words, filler words (um, uh, like), "
+            "or unrelated speech captured before the user addressed you. "
+            "Extract the user's actual request/question directed at you - ignore any preceding chatter or conversation fragments. "
+            "Prioritize their intent over literal wording."
         )
         guidance.append(asr_note)
 
