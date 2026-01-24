@@ -223,8 +223,11 @@ class TestShouldShowSetupWizard:
         with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is True
 
-    def test_returns_true_when_server_not_running(self):
-        """Returns True when server is not running."""
+    def test_returns_false_when_server_not_running_but_cli_installed(self):
+        """Returns False when server is not running but CLI is installed.
+
+        The app can auto-start the server, so no wizard needed.
+        """
         mock_status = OllamaStatus(
             is_cli_installed=True,
             cli_path="/usr/bin/ollama",
@@ -233,7 +236,7 @@ class TestShouldShowSetupWizard:
         )
 
         with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
-            assert should_show_setup_wizard() is True
+            assert should_show_setup_wizard() is False
 
     def test_returns_true_when_models_missing(self):
         """Returns True when required models are missing."""

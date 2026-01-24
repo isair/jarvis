@@ -281,10 +281,27 @@ def check_ollama_status() -> OllamaStatus:
 def should_show_setup_wizard() -> bool:
     """
     Check if the setup wizard should be shown.
-    Returns True if any setup step is incomplete.
+
+    Returns True only if user intervention is needed:
+    - CLI not installed (user must install Ollama)
+    - Models missing (user must download models)
+
+    Does NOT return True just because server isn't running,
+    since the app can auto-start the server if CLI is installed.
     """
     status = check_ollama_status()
-    return not status.is_fully_setup
+
+    # If CLI not installed, user needs to install Ollama
+    if not status.is_cli_installed:
+        return True
+
+    # If server is running and models are missing, user needs to download them
+    if status.is_server_running and len(status.missing_models) > 0:
+        return True
+
+    # If CLI is installed but server not running, we can start it ourselves
+    # No need for wizard in this case
+    return False
 
 
 # --- PyQt6 UI components below ---
