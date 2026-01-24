@@ -15,6 +15,19 @@ import time
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
+
+# Fix Qt WebEngine process path in bundled apps
+# Must be set before PyQt6.QtWebEngineWidgets is imported
+if getattr(sys, 'frozen', False):
+    bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    # QtWebEngineProcess is inside the PyQt6 framework bundle
+    webengine_process = os.path.join(
+        bundle_dir, 'PyQt6', 'Qt6', 'lib', 'QtWebEngineCore.framework',
+        'Helpers', 'QtWebEngineProcess.app', 'Contents', 'MacOS', 'QtWebEngineProcess'
+    )
+    if os.path.exists(webengine_process):
+        os.environ['QTWEBENGINEPROCESS_PATH'] = webengine_process
+
 import subprocess
 import signal
 import psutil
