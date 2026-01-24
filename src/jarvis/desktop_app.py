@@ -16,17 +16,8 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
-# Fix Qt WebEngine process path in bundled apps
-# Must be set before PyQt6.QtWebEngineWidgets is imported
-if getattr(sys, 'frozen', False):
-    bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    # QtWebEngineProcess is inside the PyQt6 framework bundle
-    webengine_process = os.path.join(
-        bundle_dir, 'PyQt6', 'Qt6', 'lib', 'QtWebEngineCore.framework',
-        'Helpers', 'QtWebEngineProcess.app', 'Contents', 'MacOS', 'QtWebEngineProcess'
-    )
-    if os.path.exists(webengine_process):
-        os.environ['QTWEBENGINEPROCESS_PATH'] = webengine_process
+# Note: QtWebEngine is not used on macOS bundled apps due to sandbox/bundling issues
+# The Memory Viewer opens in the system browser instead (see MemoryViewerWindow)
 
 import subprocess
 import signal
@@ -262,8 +253,14 @@ class MemoryViewerWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Determine if we should use embedded WebEngine or browser fallback
+        # On macOS bundled apps, QtWebEngine crashes due to sandbox/bundling issues
+        # so we use the system browser instead. Windows works fine with WebEngine.
+        is_macos_bundle = sys.platform == 'darwin' and getattr(sys, 'frozen', False)
+        use_webengine = HAS_WEBENGINE and not is_macos_bundle
+
         web_view_created = False
-        if HAS_WEBENGINE:
+        if use_webengine:
             # Use embedded web view - URL will be set in showEvent when window is shown
             try:
                 self.web_view = QWebEngineView()
@@ -274,7 +271,7 @@ class MemoryViewerWindow(QMainWindow):
                 self.web_view = None
 
         if not web_view_created:
-            # Fallback: show message with button to open in browser
+            # Fallback: show message and open in browser
             self.web_view = None
 
             fallback_container = QWidget()
@@ -297,10 +294,12 @@ class MemoryViewerWindow(QMainWindow):
             title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             fallback_layout.addWidget(title_label)
 
-            message_label = QLabel(
-                "PyQt6-WebEngine not installed.\n"
-                "Opening in your default browser..."
-            )
+            if is_macos_bundle:
+                fallback_message = "Opening in your default browser..."
+            else:
+                fallback_message = "PyQt6-WebEngine not installed.\nOpening in your default browser..."
+
+            message_label = QLabel(fallback_message)
             message_label.setStyleSheet("""
                 font-size: 14px;
                 color: #71717a;
