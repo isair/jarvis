@@ -183,10 +183,11 @@ jobs:
         run: |
           pyinstaller jarvis_desktop.spec
 
-      - name: 🔐 Ad-hoc code sign the app
-        run: |
-          # Ad-hoc sign all binaries in the app bundle for macOS compatibility
-          codesign --force --deep --sign - dist/Jarvis.app || true
+      # Note: Ad-hoc code signing is intentionally skipped
+      # codesign --force --deep breaks Qt WebEngine's symlink structure
+      # causing crashes when QWebEngineView is shown.
+      # See: https://github.com/pyinstaller/pyinstaller/issues/6612
+      # Users can bypass Gatekeeper by right-clicking and selecting "Open"
 
       - name: 📦 Package macOS build
         run: |
