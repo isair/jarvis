@@ -51,6 +51,17 @@ def create_icon(color: str, filename: str, size: int = 256) -> None:
         resized = img.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
         resized.save(filename.replace('.png', f'_{icon_size}.png'))
 
+    # Create .ico file for Windows (multiple sizes in one file)
+    ico_sizes = [16, 32, 48, 64, 128, 256]
+    ico_images = [img.resize((s, s), Image.Resampling.LANCZOS) for s in ico_sizes]
+    ico_filename = filename.replace('.png', '.ico')
+    # Save ICO with multiple sizes - PIL handles multi-size ICO via append_images
+    ico_images[-1].save(
+        ico_filename,
+        format='ICO',
+        append_images=ico_images[:-1]
+    )
+
 
 if __name__ == '__main__':
     import os

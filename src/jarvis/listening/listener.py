@@ -401,11 +401,12 @@ class VoiceListener(threading.Thread):
 
         # Set face state to THINKING
         try:
-            from ..face_widget import get_jarvis_state, JarvisState
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             state_manager.set_state(JarvisState.THINKING)
-        except Exception:
-            pass
+            debug_log("face state set to THINKING (dispatch_query)", "voice")
+        except Exception as e:
+            debug_log(f"failed to set face state to THINKING: {e}", "voice")
 
         # Import reply engine
         from ..reply.engine import run_reply_engine
@@ -867,7 +868,7 @@ class VoiceListener(threading.Thread):
 
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
-                from ..face_widget import get_jarvis_state, JarvisState
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
                 state_manager = get_jarvis_state()
                 state_manager.set_state(JarvisState.IDLE)
             except Exception:

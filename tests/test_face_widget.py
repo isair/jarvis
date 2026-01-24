@@ -21,10 +21,10 @@ class TestFaceWindowPositioning:
 
         # Mock QApplication.primaryScreen
         with patch(
-            "jarvis.face_widget.QApplication.primaryScreen", return_value=mock_screen
+            "desktop_app.face_widget.QApplication.primaryScreen", return_value=mock_screen
         ):
             # Import after patching to avoid needing actual display
-            from jarvis.face_widget import FaceWindow
+            from desktop_app.face_widget import FaceWindow
 
             # Mock the parent class __init__ to avoid Qt initialization issues
             with patch.object(FaceWindow, "__init__", lambda self, parent=None: None):
@@ -58,9 +58,9 @@ class TestFaceWindowPositioning:
     def test_handles_none_screen_gracefully(self):
         """FaceWindow should handle missing screen gracefully."""
         with patch(
-            "jarvis.face_widget.QApplication.primaryScreen", return_value=None
+            "desktop_app.face_widget.QApplication.primaryScreen", return_value=None
         ):
-            from jarvis.face_widget import FaceWindow
+            from desktop_app.face_widget import FaceWindow
 
             with patch.object(FaceWindow, "__init__", lambda self, parent=None: None):
                 window = FaceWindow.__new__(FaceWindow)
@@ -97,10 +97,10 @@ class TestFaceWindowPositioning:
             )
 
             with patch(
-                "jarvis.face_widget.QApplication.primaryScreen",
+                "desktop_app.face_widget.QApplication.primaryScreen",
                 return_value=mock_screen,
             ):
-                from jarvis.face_widget import FaceWindow
+                from desktop_app.face_widget import FaceWindow
 
                 with patch.object(
                     FaceWindow, "__init__", lambda self, parent=None: None
@@ -118,3 +118,205 @@ class TestFaceWindowPositioning:
                     x, y = move_calls[0]
                     assert x == expected_x, f"For screen {screen_right}x{screen_height}"
                     assert y == expected_y, f"For screen {screen_right}x{screen_height}"
+
+
+class TestFaceWidgetImports:
+    """Tests that daemon modules can import face_widget from the correct location.
+
+    These smoke tests catch broken imports after refactoring, which previously
+    failed silently due to try/except ImportError blocks in daemon code.
+    """
+
+    @pytest.mark.unit
+    def test_face_widget_importable_from_desktop_app(self):
+        """face_widget should be importable from desktop_app package."""
+        from desktop_app.face_widget import get_jarvis_state, JarvisState
+        assert get_jarvis_state is not None
+        assert JarvisState is not None
+
+    @pytest.mark.unit
+    def test_jarvis_state_enum_has_expected_values(self):
+        """JarvisState enum should have all expected states."""
+        from desktop_app.face_widget import JarvisState
+
+        expected_states = ['ASLEEP', 'IDLE', 'LISTENING', 'THINKING', 'SPEAKING']
+        for state in expected_states:
+            assert hasattr(JarvisState, state), f"JarvisState missing {state}"
+
+    @pytest.mark.unit
+    def test_tts_module_face_widget_import(self):
+        """TTS module's face_widget import should work.
+
+        This tests the actual import path used in jarvis/output/tts.py
+        """
+        # Simulate the import done in tts.py
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            success = True
+        except ImportError:
+            success = False
+
+        assert success, "TTS module cannot import face_widget - check import path"
+
+    @pytest.mark.unit
+    def test_listener_module_face_widget_import(self):
+        """Listener module's face_widget import should work.
+
+        This tests the actual import path used in jarvis/listening/listener.py
+        """
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            success = True
+        except ImportError:
+            success = False
+
+        assert success, "Listener module cannot import face_widget - check import path"
+
+    @pytest.mark.unit
+    def test_state_manager_module_face_widget_import(self):
+        """State manager module's face_widget import should work.
+
+        This tests the actual import path used in jarvis/listening/state_manager.py
+        """
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            success = True
+        except ImportError:
+            success = False
+
+        assert success, "State manager cannot import face_widget - check import path"
+
+    @pytest.mark.unit
+    def test_reply_engine_module_face_widget_import(self):
+        """Reply engine module's face_widget import should work.
+
+        This tests the actual import path used in jarvis/reply/engine.py
+        """
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            success = True
+        except ImportError:
+            success = False
+
+        assert success, "Reply engine cannot import face_widget - check import path"
+
+
+class TestJarvisStateManager:
+    """Tests for JarvisStateManager cross-process state sharing."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state_file(self):
+        """Clean up state file and singleton before/after each test."""
+        import tempfile
+        import os
+        from desktop_app import face_widget
+
+        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+
+        # Reset singleton before test
+        face_widget._jarvis_state_instance = None
+
+        # Clean up state file
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
+        yield
+
+        # Reset singleton after test
+        face_widget._jarvis_state_instance = None
+
+        # Clean up state file
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
+    @pytest.mark.unit
+    def test_state_manager_creates_file_if_not_exists(self):
+        """State manager should create state file if it doesn't exist."""
+        import tempfile
+        import os
+        from desktop_app.face_widget import get_jarvis_state, JarvisState
+
+        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+
+        # File shouldn't exist before getting state manager
+        assert not os.path.exists(state_file)
+
+        # Get state manager (creates singleton)
+        sm = get_jarvis_state()
+
+        # File should now exist
+        assert os.path.exists(state_file)
+
+        # Default state should be ASLEEP
+        assert sm.state == JarvisState.ASLEEP
+
+    @pytest.mark.unit
+    def test_state_manager_reads_existing_file_state(self):
+        """State manager should read existing state from file instead of overwriting."""
+        import tempfile
+        import os
+        from desktop_app import face_widget
+        from desktop_app.face_widget import JarvisState
+
+        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+
+        # Create file with SPEAKING state BEFORE creating state manager
+        with open(state_file, 'w') as f:
+            f.write("speaking")
+
+        # Now get state manager - it should read existing state, not overwrite
+        sm = face_widget.get_jarvis_state()
+
+        # State should be SPEAKING (from file), not ASLEEP (default init)
+        assert sm.state == JarvisState.SPEAKING
+
+    @pytest.mark.unit
+    def test_state_manager_file_based_sharing(self):
+        """State changes should persist to file for cross-process sharing."""
+        import tempfile
+        import os
+        from desktop_app import face_widget
+        from desktop_app.face_widget import JarvisState
+
+        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+
+        # Get state manager and set state
+        sm = face_widget.get_jarvis_state()
+        sm.set_state(JarvisState.SPEAKING)
+
+        # Verify file contains correct state
+        with open(state_file, 'r') as f:
+            content = f.read().strip()
+        assert content == "speaking"
+
+        # Reset singleton to simulate a "new process"
+        face_widget._jarvis_state_instance = None
+
+        # Get a "fresh" state manager - should read from file
+        sm2 = face_widget.get_jarvis_state()
+        assert sm2.state == JarvisState.SPEAKING
+
+    @pytest.mark.unit
+    def test_state_manager_handles_invalid_file_content(self):
+        """State manager should handle invalid file content gracefully."""
+        import tempfile
+        import os
+        from desktop_app import face_widget
+        from desktop_app.face_widget import JarvisState
+
+        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+
+        # Create file with invalid content
+        with open(state_file, 'w') as f:
+            f.write("invalid_state")
+
+        # Get state manager - should reinitialize with ASLEEP
+        sm = face_widget.get_jarvis_state()
+
+        # State should be ASLEEP (default) since file had invalid content
+        assert sm.state == JarvisState.ASLEEP
+
+        # File should be fixed
+        with open(state_file, 'r') as f:
+            content = f.read().strip()
+        assert content == "asleep"

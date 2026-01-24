@@ -107,7 +107,7 @@ jobs:
 
       - name: 🎨 Generate icons
         run: |
-          python src/jarvis/desktop_assets/generate_icons.py
+          python src/desktop_app/desktop_assets/generate_icons.py
 
       - name: 🔨 Build executable
         run: |
@@ -177,7 +177,7 @@ jobs:
 
       - name: 🎨 Generate icons
         run: |
-          python src/jarvis/desktop_assets/generate_icons.py
+          python src/desktop_app/desktop_assets/generate_icons.py
 
       - name: 🔨 Build application
         run: |
@@ -255,7 +255,7 @@ jobs:
 
       - name: 🎨 Generate icons
         run: |
-          python src/jarvis/desktop_assets/generate_icons.py
+          python src/desktop_app/desktop_assets/generate_icons.py
 
       - name: 🔨 Build executable
         run: |

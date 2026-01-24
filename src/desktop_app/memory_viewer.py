@@ -2,7 +2,7 @@
 🧠 Jarvis Memory Viewer
 
 A beautiful web interface for exploring Jarvis's conversation memories.
-Run directly: python -m jarvis.memory_viewer
+Run directly: python -m desktop_app.memory_viewer
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from typing import Any, Optional
 
 from flask import Flask, jsonify, request, Response
 
-from .config import load_settings
-from .debug import debug_log
+from jarvis.config import load_settings
+from jarvis.debug import debug_log
 
 
 app = Flask(__name__)

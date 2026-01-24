@@ -82,7 +82,7 @@ class StateManager:
 
         # Set face state to LISTENING
         try:
-            from ..face_widget import get_jarvis_state, JarvisState
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             state_manager.set_state(JarvisState.LISTENING)
         except Exception:
@@ -213,7 +213,7 @@ class StateManager:
 
             # Set face state to LISTENING
             try:
-                from ..face_widget import get_jarvis_state, JarvisState
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
                 state_manager = get_jarvis_state()
                 state_manager.set_state(JarvisState.LISTENING)
             except Exception:
@@ -256,7 +256,7 @@ class StateManager:
 
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
-                from ..face_widget import get_jarvis_state, JarvisState
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
                 state_manager = get_jarvis_state()
                 state_manager.set_state(JarvisState.IDLE)
             except Exception:
@@ -287,7 +287,7 @@ class StateManager:
 
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
-                from ..face_widget import get_jarvis_state, JarvisState
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
                 state_manager = get_jarvis_state()
                 state_manager.set_state(JarvisState.IDLE)
             except Exception:

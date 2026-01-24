@@ -12,8 +12,6 @@ Tools define when/how to be used. Profiles define what to do after tools execute
 
 Tools return raw data without LLM processing. Profiles handle all response formatting and personality through the daemon's LLM loop. This ensures consistent response style across all profiles.
 
-Always use the shared theme for UI under `src/jarvis/themes.py`.
-
 ## README Maintenance
 
 Keep README.md up-to-date when making changes that affect user-facing functionality. Update the README when:

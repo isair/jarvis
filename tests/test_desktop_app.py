@@ -5,7 +5,9 @@ Tests crash detection, model support checking, and other utility functions.
 Note: GUI components are not tested here - only the underlying logic.
 """
 
+import os
 import pytest
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -17,7 +19,7 @@ class TestGetCrashPaths:
 
     def test_returns_three_paths(self):
         """get_crash_paths() should return a tuple of 3 paths."""
-        from jarvis.desktop_app import get_crash_paths
+        from desktop_app import get_crash_paths
 
         result = get_crash_paths()
         assert isinstance(result, tuple)
@@ -25,7 +27,7 @@ class TestGetCrashPaths:
 
     def test_all_paths_are_path_objects(self):
         """All returned paths should be Path objects."""
-        from jarvis.desktop_app import get_crash_paths
+        from desktop_app import get_crash_paths
 
         crash_log, crash_marker, previous_crash = get_crash_paths()
         assert isinstance(crash_log, Path)
@@ -34,7 +36,7 @@ class TestGetCrashPaths:
 
     def test_paths_have_expected_names(self):
         """Paths should have the expected filenames."""
-        from jarvis.desktop_app import get_crash_paths
+        from desktop_app import get_crash_paths
 
         crash_log, crash_marker, previous_crash = get_crash_paths()
         assert crash_log.name == "jarvis_desktop_crash.log"
@@ -43,7 +45,7 @@ class TestGetCrashPaths:
 
     def test_paths_share_same_parent_directory(self):
         """All crash paths should be in the same directory."""
-        from jarvis.desktop_app import get_crash_paths
+        from desktop_app import get_crash_paths
 
         crash_log, crash_marker, previous_crash = get_crash_paths()
         assert crash_log.parent == crash_marker.parent == previous_crash.parent
@@ -51,13 +53,8 @@ class TestGetCrashPaths:
     @patch("sys.platform", "darwin")
     def test_macos_uses_library_logs(self):
         """On macOS, should use ~/Library/Logs/Jarvis."""
-        # Need to reimport to pick up the mocked platform
-        import importlib
-        import jarvis.desktop_app as desktop_app
-
-        # Force reimport to test platform detection
         # Note: This is tricky because the function reads sys.platform at runtime
-        from jarvis.desktop_app import get_crash_paths
+        from desktop_app import get_crash_paths
 
         crash_log, _, _ = get_crash_paths()
         if sys.platform == "darwin":
@@ -69,7 +66,7 @@ class TestCrashMarkerFunctions:
 
     def test_mark_session_started_creates_marker(self):
         """mark_session_started() should create the crash marker file."""
-        from jarvis.desktop_app import get_crash_paths, mark_session_started, mark_session_clean_exit
+        from desktop_app import get_crash_paths, mark_session_started, mark_session_clean_exit
 
         _, crash_marker, _ = get_crash_paths()
 
@@ -86,7 +83,7 @@ class TestCrashMarkerFunctions:
 
     def test_mark_session_clean_exit_removes_marker(self):
         """mark_session_clean_exit() should remove the crash marker file."""
-        from jarvis.desktop_app import get_crash_paths, mark_session_started, mark_session_clean_exit
+        from desktop_app import get_crash_paths, mark_session_started, mark_session_clean_exit
 
         _, crash_marker, _ = get_crash_paths()
 
@@ -100,7 +97,7 @@ class TestCrashMarkerFunctions:
 
     def test_mark_session_clean_exit_handles_missing_marker(self):
         """mark_session_clean_exit() should not error if marker doesn't exist."""
-        from jarvis.desktop_app import get_crash_paths, mark_session_clean_exit
+        from desktop_app import get_crash_paths, mark_session_clean_exit
 
         _, crash_marker, _ = get_crash_paths()
         crash_marker.unlink(missing_ok=True)
@@ -114,7 +111,7 @@ class TestCheckPreviousCrash:
 
     def test_returns_none_when_no_marker(self):
         """check_previous_crash() should return None if no crash marker exists."""
-        from jarvis.desktop_app import get_crash_paths, check_previous_crash, mark_session_clean_exit
+        from desktop_app import get_crash_paths, check_previous_crash, mark_session_clean_exit
 
         # Ensure clean state
         mark_session_clean_exit()
@@ -124,7 +121,7 @@ class TestCheckPreviousCrash:
 
     def test_returns_none_when_marker_but_no_crash_log(self):
         """check_previous_crash() should return None if marker exists but no crash content."""
-        from jarvis.desktop_app import get_crash_paths, check_previous_crash, mark_session_started
+        from desktop_app import get_crash_paths, check_previous_crash, mark_session_started
 
         crash_log, crash_marker, _ = get_crash_paths()
 
@@ -138,7 +135,7 @@ class TestCheckPreviousCrash:
 
     def test_returns_content_when_crash_detected(self):
         """check_previous_crash() should return crash content when crash is detected."""
-        from jarvis.desktop_app import get_crash_paths, check_previous_crash
+        from desktop_app import get_crash_paths, check_previous_crash
 
         crash_log, crash_marker, previous_crash = get_crash_paths()
 
@@ -165,7 +162,7 @@ class TestCheckPreviousCrash:
 
     def test_ignores_normal_log_content(self):
         """check_previous_crash() should ignore logs without error indicators."""
-        from jarvis.desktop_app import get_crash_paths, check_previous_crash
+        from desktop_app import get_crash_paths, check_previous_crash
 
         crash_log, crash_marker, _ = get_crash_paths()
 
@@ -191,7 +188,7 @@ class TestCheckModelSupport:
     @patch("jarvis.config.load_config")
     def test_returns_none_for_supported_model(self, mock_load_config):
         """check_model_support() should return None for supported models."""
-        from jarvis.desktop_app import check_model_support
+        from desktop_app import check_model_support
         from jarvis.config import DEFAULT_CHAT_MODEL
 
         mock_load_config.return_value = {"ollama_chat_model": DEFAULT_CHAT_MODEL}
@@ -202,7 +199,7 @@ class TestCheckModelSupport:
     @patch("jarvis.config.load_config")
     def test_returns_model_name_for_unsupported_model(self, mock_load_config):
         """check_model_support() should return model name for unsupported models."""
-        from jarvis.desktop_app import check_model_support
+        from desktop_app import check_model_support
 
         mock_load_config.return_value = {"ollama_chat_model": "some-unsupported-model:7b"}
 
@@ -212,7 +209,7 @@ class TestCheckModelSupport:
     @patch("jarvis.config.load_config")
     def test_matches_base_model_name(self, mock_load_config):
         """check_model_support() should match base model names without tags."""
-        from jarvis.desktop_app import check_model_support
+        from desktop_app import check_model_support
         from jarvis.config import SUPPORTED_CHAT_MODELS
 
         # Get a supported model and use just its base name
@@ -227,7 +224,7 @@ class TestCheckModelSupport:
     @patch("jarvis.config.load_config")
     def test_handles_config_error_gracefully(self, mock_load_config):
         """check_model_support() should return None on config errors."""
-        from jarvis.desktop_app import check_model_support
+        from desktop_app import check_model_support
 
         mock_load_config.side_effect = Exception("Config error")
 
@@ -237,7 +234,7 @@ class TestCheckModelSupport:
     @patch("jarvis.config.load_config")
     def test_uses_default_when_not_configured(self, mock_load_config):
         """check_model_support() should use default model when not in config."""
-        from jarvis.desktop_app import check_model_support
+        from desktop_app import check_model_support
 
         mock_load_config.return_value = {}  # No ollama_chat_model key
 
@@ -251,7 +248,7 @@ class TestModelSupportIntegration:
 
     def test_all_supported_models_pass_check(self):
         """All models in SUPPORTED_CHAT_MODELS should pass the support check."""
-        from jarvis.desktop_app import check_model_support
+        from desktop_app import check_model_support
         from jarvis.config import SUPPORTED_CHAT_MODELS
 
         for model_id in SUPPORTED_CHAT_MODELS:
@@ -259,3 +256,60 @@ class TestModelSupportIntegration:
                 mock_config.return_value = {"ollama_chat_model": model_id}
                 result = check_model_support()
                 assert result is None, f"Model {model_id} should be supported"
+
+
+class TestMemoryViewerModulePath:
+    """Tests to verify memory viewer module references are valid.
+
+    These tests catch issues like wrong module paths in subprocess calls
+    without requiring actual GUI/server components.
+    """
+
+    def test_memory_viewer_module_is_importable(self):
+        """The module used for subprocess mode should be importable."""
+        import importlib
+
+        pytest.importorskip("flask")
+
+        # This is the module path used in MemoryViewerWindow.start_server()
+        # If this fails, the subprocess command will fail at runtime
+        module = importlib.import_module("desktop_app.memory_viewer")
+        assert hasattr(module, "app"), "memory_viewer should have Flask 'app' attribute"
+        assert hasattr(module, "main"), "memory_viewer should have 'main' function"
+
+    def test_memory_viewer_subprocess_module_runs(self):
+        """The module should be runnable with python -m (with correct PYTHONPATH)."""
+        pytest.importorskip("flask")
+
+        # Set PYTHONPATH the same way start_server() does
+        src_path = Path(__file__).parent.parent / "src"
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(src_path)
+
+        # Test that the module can at least be imported in subprocess
+        result = subprocess.run(
+            [sys.executable, "-c", "import desktop_app.memory_viewer"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        assert result.returncode == 0, f"Module import failed: {result.stderr}"
+
+    def test_memory_viewer_module_path_matches_code(self):
+        """Verify the module path in start_server matches the actual location."""
+        import re
+        from pathlib import Path
+
+        # Read the actual code to find the module path used
+        app_py = Path(__file__).parent.parent / "src" / "desktop_app" / "app.py"
+        content = app_py.read_text(encoding="utf-8")
+
+        # Find the subprocess module path
+        match = re.search(r'"-m",\s*"([^"]+)"', content)
+        assert match, "Could not find subprocess module path in app.py"
+
+        module_path = match.group(1)
+        assert module_path == "desktop_app.memory_viewer", (
+            f"Module path should be 'desktop_app.memory_viewer', found '{module_path}'"
+        )

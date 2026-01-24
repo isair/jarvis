@@ -36,7 +36,7 @@ echo.
 
 REM Generate icons
 echo Generating icons...
-"%MAMBA_ENV%\python.exe" src\jarvis\desktop_assets\generate_icons.py
+"%MAMBA_ENV%\python.exe" src\desktop_app\desktop_assets\generate_icons.py
 echo.
 
 REM Run the desktop app
@@ -46,5 +46,5 @@ echo    Select 'Start Listening' from menu to begin
 echo    Or press Ctrl+C to quit
 echo.
 
-"%MAMBA_ENV%\python.exe" -m jarvis.desktop_app
+"%MAMBA_ENV%\python.exe" -m desktop_app
 

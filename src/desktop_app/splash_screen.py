@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QRadialGradient, QFont
 from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
 
-from jarvis.themes import COLORS
+from desktop_app.themes import COLORS
 
 
 class AnimatedOrb(QWidget):

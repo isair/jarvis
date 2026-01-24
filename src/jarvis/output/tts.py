@@ -216,17 +216,17 @@ class TextToSpeech:
         """
         # Import here to avoid circular dependencies
         try:
-            from ..face_widget import get_jarvis_state, JarvisState
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             if is_speaking:
+                debug_log("setting face state to SPEAKING", "tts")
                 state_manager.set_state(JarvisState.SPEAKING)
             # Note: When speaking ends, we don't change state here - let daemon manage transitions
         except ImportError:
-            # Face widget not available (headless mode or import order)
-            pass
-        except Exception:
+            debug_log("face widget not available (ImportError)", "tts")
+        except Exception as e:
             # Don't let face widget errors affect TTS
-            pass
+            debug_log(f"failed to set face state to SPEAKING: {e}", "tts")
 
     def _mac_say(self, text: str) -> bool:
         """Returns True if interrupted, False if completed normally"""
@@ -699,17 +699,17 @@ class ChatterboxTTS:
         """
         # Import here to avoid circular dependencies
         try:
-            from ..face_widget import get_jarvis_state, JarvisState
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             if is_speaking:
+                debug_log("setting face state to SPEAKING (chatterbox)", "tts")
                 state_manager.set_state(JarvisState.SPEAKING)
             # Note: When speaking ends, we don't change state here - let daemon manage transitions
         except ImportError:
-            # Face widget not available (headless mode or import order)
-            pass
-        except Exception:
+            debug_log("face widget not available (ImportError) (chatterbox)", "tts")
+        except Exception as e:
             # Don't let face widget errors affect TTS
-            pass
+            debug_log(f"failed to set face state to SPEAKING (chatterbox): {e}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:

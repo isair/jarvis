@@ -43,10 +43,10 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
-from jarvis.diary_dialog import DiaryUpdateDialog
 from jarvis.config import _default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
-from jarvis.themes import JARVIS_THEME_STYLESHEET
-from jarvis.face_widget import FaceWindow
+from desktop_app.diary_dialog import DiaryUpdateDialog
+from desktop_app.themes import JARVIS_THEME_STYLESHEET
+from desktop_app.face_widget import FaceWindow
 
 
 def setup_crash_logging():
@@ -691,7 +691,7 @@ class MemoryViewerWindow(QMainWindow):
             if is_frozen:
                 # Bundled app: run Flask server in a thread
                 try:
-                    from jarvis.memory_viewer import app as flask_app
+                    from desktop_app.memory_viewer import app as flask_app
                 except Exception as import_err:
                     debug_log(f"failed to import memory_viewer: {import_err}", "desktop")
                     return False
@@ -743,7 +743,7 @@ class MemoryViewerWindow(QMainWindow):
                 print(f"   -> PYTHONPATH: {env.get('PYTHONPATH', 'not set')}", flush=True)
 
                 self.server_process = subprocess.Popen(
-                    [python_exe, "-m", "jarvis.memory_viewer"],
+                    [python_exe, "-m", "desktop_app.memory_viewer"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.PIPE,
@@ -1058,7 +1058,7 @@ class JarvisSystemTray:
 
     def show_setup_wizard(self) -> None:
         """Show the setup wizard window."""
-        from jarvis.setup_wizard import SetupWizard
+        from desktop_app.setup_wizard import SetupWizard
         from PyQt6.QtWidgets import QWizard
 
         # Remember if daemon was running before wizard
@@ -1084,8 +1084,8 @@ class JarvisSystemTray:
         Args:
             show_no_update_dialog: If True, shows a dialog even when no update is available.
         """
-        from jarvis.updater import check_for_updates, is_frozen
-        from jarvis.update_dialog import (
+        from desktop_app.updater import check_for_updates, is_frozen
+        from desktop_app.update_dialog import (
             UpdateAvailableDialog,
             UpdateProgressDialog,
             show_no_update_dialog as show_no_update,
@@ -1731,7 +1731,7 @@ def main() -> int:
             show_crash_report_dialog(previous_crash)
 
         # Show splash screen during startup
-        from jarvis.splash_screen import SplashScreen
+        from desktop_app.splash_screen import SplashScreen
         splash = SplashScreen()
         splash.show()
         splash.set_status("Initializing...")
@@ -1742,7 +1742,7 @@ def main() -> int:
         print("Checking Ollama setup status...", flush=True)
         print("  Loading setup wizard module...", flush=True)
         try:
-            from jarvis.setup_wizard import (
+            from desktop_app.setup_wizard import (
                 should_show_setup_wizard, SetupWizard,
                 check_ollama_server, check_ollama_cli
             )

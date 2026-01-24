@@ -301,7 +301,7 @@ try:
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
-    from jarvis.themes import JARVIS_THEME_STYLESHEET, COLORS
+    from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
 
     # Import location utilities with crash protection for Windows native modules
     try:

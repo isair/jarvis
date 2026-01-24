@@ -27,7 +27,7 @@ Plugins = PyQt6/Qt6/plugins
 # Note: Let PyInstaller's built-in hooks handle sounddevice, ctranslate2, and Qt WebEngine
 # Manual collection can conflict with hooks and cause crashes
 datas = [
-    (str(src_path / 'jarvis' / 'desktop_assets' / '*.png'), 'jarvis/desktop_assets'),
+    (str(src_path / 'desktop_app' / 'desktop_assets' / '*.png'), 'desktop_app/desktop_assets'),
 ]
 
 # Add qt.conf for macOS
@@ -66,10 +66,17 @@ hiddenimports = [
     'jarvis.debug',
     'jarvis.llm',
     'jarvis.main',
-    'jarvis.setup_wizard',
-    'jarvis.splash_screen',
-    'jarvis.updater',
-    'jarvis.update_dialog',
+    # Desktop app modules
+    'desktop_app',
+    'desktop_app.app',
+    'desktop_app.splash_screen',
+    'desktop_app.setup_wizard',
+    'desktop_app.updater',
+    'desktop_app.update_dialog',
+    'desktop_app.themes',
+    'desktop_app.face_widget',
+    'desktop_app.diary_dialog',
+    'desktop_app.memory_viewer',
     # Listening modules
     'jarvis.listening',
     'jarvis.listening.echo_detection',
@@ -178,7 +185,7 @@ hiddenimports = [
 ]
 
 a = Analysis(
-    ['src/jarvis/desktop_app.py'],
+    ['src/desktop_app/app.py'],
     pathex=[str(src_path)],
     binaries=[],
     datas=datas,
@@ -327,7 +334,7 @@ if sys.platform == 'darwin':
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=str(src_path / 'jarvis' / 'desktop_assets' / 'icon_idle.png'),
+        icon=str(src_path / 'desktop_app' / 'desktop_assets' / 'icon_idle.png'),
     )
 
     coll = COLLECT(
@@ -344,7 +351,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
         name='Jarvis.app',
-        icon=str(src_path / 'jarvis' / 'desktop_assets' / 'icon_idle.png'),
+        icon=str(src_path / 'desktop_app' / 'desktop_assets' / 'icon_idle.png'),
         bundle_identifier='com.jarvis.assistant',
         info_plist={
             'NSHighResolutionCapable': 'True',
@@ -452,7 +459,7 @@ elif sys.platform == 'win32':
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=str(src_path / 'jarvis' / 'desktop_assets' / 'icon_idle.png'),
+        icon=str(src_path / 'desktop_app' / 'desktop_assets' / 'icon_idle.ico'),
     )
 
 else:

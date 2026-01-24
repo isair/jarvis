@@ -18,7 +18,7 @@ echo ""
 # Generate icons
 echo "🎨 Generating icons..."
 cd "$(dirname "$0")/.." || exit
-python src/jarvis/desktop_assets/generate_icons.py
+python src/desktop_app/desktop_assets/generate_icons.py
 echo ""
 
 # Run the desktop app
@@ -33,5 +33,5 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
 
-python -m jarvis.desktop_app
+python -m desktop_app
 

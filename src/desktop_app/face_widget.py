@@ -87,8 +87,19 @@ class JarvisStateManager(QObject):
         self._state = JarvisState.ASLEEP  # Start asleep
         self._state_lock = threading.Lock()
         self._state_file = _get_jarvis_state_file()
-        # Clean up any stale state file on init
-        self._write_state(JarvisState.ASLEEP)
+        # Read existing state from file if present (for cross-process sharing)
+        # Only write initial ASLEEP if file doesn't exist or has invalid content
+        try:
+            if os.path.exists(self._state_file):
+                with open(self._state_file, 'r') as f:
+                    content = f.read().strip()
+                    self._state = JarvisState(content)  # Use existing state
+            else:
+                # No file exists, initialize it
+                self._write_state(JarvisState.ASLEEP)
+        except (ValueError, OSError):
+            # Invalid content or file error, reinitialize
+            self._write_state(JarvisState.ASLEEP)
 
     @property
     def state(self) -> JarvisState:
@@ -99,7 +110,8 @@ class JarvisStateManager(QObject):
                 with open(self._state_file, 'r') as f:
                     content = f.read().strip()
                     return JarvisState(content)
-        except Exception:
+        except (ValueError, OSError):
+            # Invalid content or read error - fall back to in-memory state
             pass
 
         with self._state_lock:
@@ -110,7 +122,8 @@ class JarvisStateManager(QObject):
         try:
             with open(self._state_file, 'w') as f:
                 f.write(state.value)
-        except Exception:
+        except OSError:
+            # File write failed - state won't be shared across processes
             pass
 
     def set_state(self, state: JarvisState) -> None:
