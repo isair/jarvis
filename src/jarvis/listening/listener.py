@@ -476,20 +476,25 @@ class VoiceListener(threading.Thread):
 
     def _filter_noisy_segments(self, segments):
         """Filter out low-confidence Whisper segments."""
-        min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.7)
+        min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
+        marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
         filtered = []
 
         for seg in segments:
+            confidence = None
             if hasattr(seg, 'avg_logprob'):
                 confidence = min(1.0, max(0.0, (seg.avg_logprob + 1.0)))
-                if confidence < min_confidence:
-                    debug_log(f"low confidence segment filtered: '{seg.text}' (conf: {confidence:.3f})", "voice")
-                    continue
             elif hasattr(seg, 'no_speech_prob'):
                 confidence = 1.0 - seg.no_speech_prob
-                if confidence < min_confidence:
-                    debug_log(f"low confidence segment filtered: '{seg.text}' (conf: {confidence:.3f})", "voice")
-                    continue
+
+            if confidence is not None and confidence < min_confidence:
+                if confidence >= marginal_threshold:
+                    # Marginal confidence - show in log viewer (not debug)
+                    print(f"🔇 Low confidence ({confidence:.2f}): \"{seg.text.strip()[:50]}...\"", flush=True)
+                else:
+                    # Very low confidence - debug only
+                    debug_log(f"segment filtered (confidence={confidence:.2f}): '{seg.text}'", "voice")
+                continue
 
             filtered.append(seg)
 
@@ -1033,7 +1038,8 @@ class VoiceListener(threading.Thread):
                 )
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
-                min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.5)
+                min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
+                marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
                 segments = result.get("segments", [])
 
                 if segments:
@@ -1044,14 +1050,20 @@ class VoiceListener(threading.Thread):
 
                         # Convert avg_logprob to confidence (typically -1 to 0, so add 1)
                         confidence = min(1.0, max(0.0, avg_logprob + 1.0))
+                        seg_text = seg.get("text", "").strip()
 
                         # Also check no_speech_prob - high value means likely not speech
                         if no_speech_prob > 0.5:
-                            debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg.get('text', '')[:50]}'", "voice")
+                            debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg_text[:50]}'", "voice")
                             continue
 
                         if confidence < min_confidence:
-                            debug_log(f"MLX segment filtered (confidence={confidence:.2f}): '{seg.get('text', '')[:50]}'", "voice")
+                            if confidence >= marginal_threshold:
+                                # Marginal confidence - show in log viewer (not debug)
+                                print(f"🔇 Low confidence ({confidence:.2f}): \"{seg_text[:50]}...\"", flush=True)
+                            else:
+                                # Very low confidence - debug only
+                                debug_log(f"MLX segment filtered (confidence={confidence:.2f}): '{seg_text[:50]}'", "voice")
                             continue
 
                         filtered_texts.append(seg.get("text", ""))
