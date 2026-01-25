@@ -368,3 +368,111 @@ class TestHotWindowEchoDetection:
         # This is fine - the intent judge handles ambiguous cases
         result_92 = detector._check_text_similarity(partial_echo, tts_text, threshold=92)
         # We don't assert on this as it depends on the fuzzy match algorithm
+
+
+class TestSalvageDuringTTS:
+    """Tests for cleanup_leading_echo_during_tts functionality.
+
+    This tests the salvage logic that extracts user speech from utterances
+    that start during TTS (mixed echo + user speech).
+    """
+
+    @pytest.fixture
+    def detector(self):
+        return EchoDetector()
+
+    def test_salvages_user_speech_after_echo(self, detector):
+        """Extracts user speech that follows TTS echo.
+
+        Scenario: User starts speaking during TTS, mic picks up end of TTS
+        plus user's actual question.
+        """
+        tts_text = (
+            "According to the BBC Weather forecast, tomorrow in Kensington is expected "
+            "to be quite gloomy with overcast conditions. You might want to bundle up "
+            "and plan your outdoor activities accordingly."
+        )
+        detector._last_tts_text = tts_text
+        detector._tts_start_time = 1000.0
+
+        # User's mic picks up end of TTS + their actual question
+        heard = (
+            "You might want to bundle up and plan your outdoor activities accordingly. "
+            "Okay, let's switch the topic now. I want to talk about philosophy."
+        )
+
+        # Utterance started 10 seconds into TTS
+        result = detector.cleanup_leading_echo_during_tts(heard, tts_rate=200, utterance_start_time=1010.0)
+
+        # Should remove echo and keep user's speech
+        assert "bundle up" not in result.lower(), "Echo portion should be removed"
+        assert "philosophy" in result.lower(), "User's actual question should be preserved"
+        assert "switch the topic" in result.lower(), "User's speech should be preserved"
+
+    def test_salvage_with_timing_mismatch(self, detector):
+        """Salvages correctly even when timing estimate is off.
+
+        Real-world scenario: mic timing doesn't perfectly match TTS timing
+        due to audio processing delays, pre-roll buffer, etc.
+        """
+        tts_text = (
+            "It's going to be quite chilly. You might want to bundle up "
+            "and plan your outdoor activities accordingly."
+        )
+        detector._last_tts_text = tts_text
+        detector._tts_start_time = 1000.0
+
+        # User's mic picks up end of TTS + their question
+        # Timing estimate would be wrong, but full-text fallback should work
+        heard = "plan your outdoor activities accordingly. What do you think life is about?"
+
+        # Even with wrong timing estimate, should find match in full TTS
+        result = detector.cleanup_leading_echo_during_tts(heard, tts_rate=200, utterance_start_time=1005.0)
+
+        assert "outdoor activities" not in result.lower(), "Echo should be removed"
+        assert "life is about" in result.lower(), "User's question should be preserved"
+
+    def test_no_salvage_when_no_overlap(self, detector):
+        """Returns original text when no overlap with TTS."""
+        detector._last_tts_text = "The weather is nice today"
+        detector._tts_start_time = 1000.0
+
+        heard = "What time is it?"
+        result = detector.cleanup_leading_echo_during_tts(heard, tts_rate=200, utterance_start_time=1005.0)
+
+        assert result == heard, "Should return original when no echo overlap"
+
+    def test_no_salvage_when_all_echo(self, detector):
+        """Returns original when entire utterance is echo (no user speech to salvage)."""
+        tts_text = "The weather is nice and sunny today"
+        detector._last_tts_text = tts_text
+        detector._tts_start_time = 1000.0
+
+        # Entire heard text matches end of TTS - nothing to salvage
+        heard = "nice and sunny today"
+        result = detector.cleanup_leading_echo_during_tts(heard, tts_rate=200, utterance_start_time=1005.0)
+
+        # Should return original since there's nothing left after removing echo
+        assert result == heard
+
+    def test_echo_not_in_salvaged_output(self, detector):
+        """Verifies echo portion doesn't slip into salvaged output.
+
+        This is the critical test - ensures we don't accidentally include
+        echo text in what we return to the user.
+        """
+        tts_text = (
+            "According to the forecast, it will rain tomorrow. "
+            "Would you like me to suggest indoor activities?"
+        )
+        detector._last_tts_text = tts_text
+        detector._tts_start_time = 1000.0
+
+        heard = "Would you like me to suggest indoor activities? No thanks, tell me about philosophy instead."
+        result = detector.cleanup_leading_echo_during_tts(heard, tts_rate=200, utterance_start_time=1008.0)
+
+        # Critical: echo words should NOT be in the result
+        assert "suggest indoor activities" not in result.lower(), "Echo phrase must not be in output"
+        assert "would you like" not in result.lower(), "Echo phrase must not be in output"
+        # User's actual request should be preserved
+        assert "philosophy" in result.lower(), "User's request should be preserved"
