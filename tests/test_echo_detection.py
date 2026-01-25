@@ -260,3 +260,111 @@ class TestHotWindowEchoDetection:
         # Should be less likely to reject in hot window due to higher threshold
         # (The actual behavior depends on similarity scores)
         assert result is False  # "tell me more" is different enough
+
+    def test_partial_echo_from_long_tts(self):
+        """Detects partial echo from a long TTS response.
+
+        This tests the scenario where TTS outputs a long response and Whisper
+        picks up only a portion of it, potentially with transcription errors.
+        Common in rooms with echo/reverb at higher volumes.
+        """
+        detector = EchoDetector()
+        # Simulate a long weather response
+        tts_text = (
+            "You're in London, and I've got the latest weather update for you: "
+            "it's currently overcast with light rain showers, and the temperature "
+            "is around 8 degrees celsius at 18:48 UTC. I'd recommend grabbing an "
+            "umbrella to stay dry. Would you like me to suggest any outdoor "
+            "activities or provide more weather details?"
+        )
+        detector.track_tts_start(tts_text)
+        detector.track_tts_finish()
+
+        utterance_start = time.time()
+
+        # Partial echo that Whisper picked up (with some transcription variations)
+        partial_echo = "the temperature is around 8 degrees celsius. I'd recommend grabbing an umbrella"
+
+        # Should detect as echo - this is clearly part of the TTS output
+        result = detector._check_text_similarity(partial_echo, tts_text, threshold=70)
+        assert result is True, f"Should detect partial echo at threshold 70"
+
+    def test_echo_with_whisper_transcription_errors(self):
+        """Detects echo even with Whisper transcription errors.
+
+        Whisper sometimes mishears numbers and times (e.g., "18:48" as "1848").
+        The fuzzy matching should still catch these as echo.
+        """
+        detector = EchoDetector()
+        tts_text = "the temperature is 8 degrees celsius at 18:48 UTC"
+        detector.track_tts_start(tts_text)
+        detector.track_tts_finish()
+
+        # Whisper transcription with errors
+        heard_with_errors = "the temperature is around 8 degrees celsius at 1848 UTC"
+
+        # Should still detect similarity despite transcription errors
+        result = detector._check_text_similarity(heard_with_errors, tts_text, threshold=70)
+        assert result is True, "Should detect echo despite transcription errors"
+
+    def test_echo_question_from_tts(self):
+        """Detects when a question from TTS is echoed back.
+
+        TTS often ends with questions like "Would you like more details?"
+        These should be detected as echo, not new user queries.
+        """
+        detector = EchoDetector()
+        tts_text = (
+            "The weather is nice today. Would you like me to suggest "
+            "any outdoor activities or provide more weather details?"
+        )
+        detector.track_tts_start(tts_text)
+        detector.track_tts_finish()
+
+        # Echo of the question portion
+        echoed_question = "would you like me to suggest any outdoor activities"
+
+        result = detector._check_text_similarity(echoed_question, tts_text, threshold=70)
+        assert result is True, "Should detect echoed question from TTS"
+
+    def test_accepts_genuine_followup_in_hot_window(self):
+        """Accepts genuine follow-up that differs from TTS content."""
+        detector = EchoDetector()
+        tts_text = "The weather in London is currently overcast with rain"
+        detector.track_tts_start(tts_text)
+        detector.track_tts_finish()
+
+        utterance_start = time.time()
+
+        # Genuine follow-up question - different content
+        followup = "what about tomorrow's forecast"
+
+        result = detector.should_reject_as_echo(
+            heard_text=followup,
+            current_energy=0.03,
+            is_during_tts=False,
+            utterance_start_time=utterance_start,
+            in_hot_window=True
+        )
+        assert result is False, "Should accept genuine follow-up question"
+
+    def test_threshold_70_catches_partial_matches(self):
+        """Verifies threshold 70 catches partial echo matches.
+
+        When using threshold 70 in hot window for fast rejection,
+        partial echoes with ~75% similarity should be caught.
+        """
+        detector = EchoDetector()
+        tts_text = "London has about 8 hours of daylight in winter months"
+
+        # Partial echo with some differences
+        partial_echo = "London has about 8 hours of daylight"
+
+        # At threshold 70, should match (this is clearly a partial echo)
+        result_70 = detector._check_text_similarity(partial_echo, tts_text, threshold=70)
+        assert result_70 is True, "Threshold 70 should catch partial echo"
+
+        # At threshold 92 (default hot window), might not match as strictly
+        # This is fine - the intent judge handles ambiguous cases
+        result_92 = detector._check_text_similarity(partial_echo, tts_text, threshold=92)
+        # We don't assert on this as it depends on the fuzzy match algorithm

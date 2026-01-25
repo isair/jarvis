@@ -121,6 +121,18 @@ After TTS finishes, allow wake-word-free follow-up.
 - Intent judge determines if speech is echo or real follow-up
 - Judge has full context: TTS text, timing, transcript content
 
+**Echo Detection Flow (Hot Window):**
+1. During TTS: Use segment-based matching to detect echo
+2. After TTS (delayed echo):
+   - Short queries (≤4 words): Skip similarity check (false positives on common words)
+   - Longer queries (>4 words): Reject if similarity ≥70% to TTS
+3. Accepted input: Use the ACTUAL text heard, not intent judge synthesis
+   - Intent judge synthesizes from conversation context, which can return wrong queries
+   - Hot window input should reflect what the user actually said
+4. This approach handles high-volume environments with room reverb, where:
+   - Partial echoes may not reach the normal 85% threshold
+   - Whisper transcription errors can lower similarity scores
+
 **Expiry:** Timer-based, guaranteed to fire even if no audio
 
 ### 3. During TTS

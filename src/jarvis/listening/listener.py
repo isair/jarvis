@@ -268,27 +268,29 @@ class VoiceListener(threading.Thread):
         end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
 
-        # Priority 1: Hot window processing (check first to allow salvaged input during hot window)
+        # Priority 1: Hot window echo rejection (fast path for obvious echo)
+        # Per spec, hot window input should go to intent judge for final determination.
+        # Here we only do fast rejection of obvious echo to avoid unnecessary LLM calls.
         # Check both: (1) hot window active at voice start, OR (2) hot window currently active
-        # This handles the case where echo triggers VAD before hot window activates
-        if self.state_manager.was_hot_window_active_at_voice_start() or self.state_manager.is_hot_window_active():
-            # During hot window, apply echo detection but be more permissive
-            if self.tts and self.tts.enabled and self.echo_detector._last_tts_text:
-                # Try salvaging during TTS first
-                is_speaking_now = self.tts.is_speaking()
-                if is_speaking_now:
-                    is_during_tts = True
-                else:
-                    tts_finish_time = self.echo_detector._last_tts_finish_time
-                    echo_tolerance = self.echo_detector.echo_tolerance
-                    is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
+        in_hot_window = self.state_manager.was_hot_window_active_at_voice_start() or self.state_manager.is_hot_window_active()
+        if in_hot_window and self.tts and self.tts.enabled and self.echo_detector._last_tts_text:
+            # Determine if utterance started during TTS
+            is_speaking_now = self.tts.is_speaking()
+            if is_speaking_now:
+                is_during_tts = True
+            else:
+                tts_finish_time = self.echo_detector._last_tts_finish_time
+                echo_tolerance = self.echo_detector.echo_tolerance
+                is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
 
-                if is_during_tts and self.echo_detector.should_reject_as_echo(
+            # During TTS: use segment matching for echo detection
+            if is_during_tts:
+                if self.echo_detector.should_reject_as_echo(
                     text_lower, utterance_energy, is_during_tts,
                     getattr(self.cfg, 'tts_rate', 200), utterance_start_time,
                     in_hot_window=True
                 ):
-                    # Attempt to salvage suffix during TTS in hot window
+                    # Attempt to salvage suffix during TTS
                     salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
                         text_lower,
                         getattr(self.cfg, 'tts_rate', 200),
@@ -297,47 +299,52 @@ class VoiceListener(threading.Thread):
                     if salvaged and salvaged.strip() and salvaged != text_lower:
                         debug_log(f"hot window: accepted salvaged suffix during TTS: '{salvaged}'", "voice")
                         text_lower = salvaged
-                    else:
-                        # Only reject in hot window if we can't salvage anything
-                        if self.echo_detector._matches_tts_segment(text_lower, getattr(self.cfg, 'tts_rate', 200), utterance_start_time):
-                            debug_log(f"rejected as echo during hot window (segment match, no salvage): '{text_lower}'", "echo")
-                            if not self.cfg.voice_debug:
-                                try:
-                                    print("🔇 Ignoring echo from previous response")
-                                except Exception:
-                                    pass
-                            self.state_manager.expire_hot_window(self.cfg.voice_debug)
-                            self.state_manager.clear_hot_window_voice_state()
-                            return
-                elif not is_during_tts and self.echo_detector._check_text_similarity(text_lower, self.echo_detector._last_tts_text):
-                    # For delayed echoes (after TTS), check against full TTS text since the echo
-                    # is most likely from the end of TTS and segment timing can be inaccurate
-                    debug_log(f"rejected as delayed echo during hot window (full text match): '{text_lower}'", "echo")
-                    if not self.cfg.voice_debug:
-                        try:
-                            print("🔇 Ignoring echo from previous response")
-                        except Exception:
-                            pass
-                    self.state_manager.expire_hot_window(self.cfg.voice_debug)
-                    self.state_manager.clear_hot_window_voice_state()
-                    return
+                    elif self.echo_detector._matches_tts_segment(text_lower, getattr(self.cfg, 'tts_rate', 200), utterance_start_time):
+                        # Clear echo during TTS - reject without intent judge
+                        debug_log(f"rejected as echo during hot window (segment match, no salvage): '{text_lower}'", "echo")
+                        if not self.cfg.voice_debug:
+                            try:
+                                print("🔇 Ignoring echo from previous response")
+                            except Exception:
+                                pass
+                        self.state_manager.expire_hot_window(self.cfg.voice_debug)
+                        self.state_manager.clear_hot_window_voice_state()
+                        return
+            else:
+                # After TTS: use length-aware echo detection
+                # Short queries (<=4 words) skip fast rejection - they can't be full echoes
+                # and partial_ratio gives false positives on common words like "how", "weather"
+                word_count = len(text_lower.split())
+                if word_count > 4:
+                    # For longer text (>4 words), use threshold 70 for fast rejection
+                    # This catches partial echoes with transcription errors
+                    if self.echo_detector._check_text_similarity(text_lower, self.echo_detector._last_tts_text, threshold=70):
+                        debug_log(f"rejected as delayed echo during hot window (>4 words, similarity >= 70): '{text_lower}'", "echo")
+                        if not self.cfg.voice_debug:
+                            try:
+                                print("🔇 Ignoring echo from previous response")
+                            except Exception:
+                                pass
+                        self.state_manager.expire_hot_window(self.cfg.voice_debug)
+                        self.state_manager.clear_hot_window_voice_state()
+                        return
+                # Short queries (<=4 words): Skip fast rejection, accept directly below
 
+            # Hot window input passed echo check - accept it directly using the ACTUAL text
+            # Don't route through intent judge as it synthesizes from context (causing wrong queries)
             self.state_manager.expire_hot_window(self.cfg.voice_debug)
             self.state_manager.clear_hot_window_voice_state()
-            debug_log(f"hot window input accepted, starting collection: {text_lower}", "voice")
+            debug_log(f"hot window input accepted: '{text_lower}'", "voice")
 
             # Clear audio buffers to prevent concatenation issues
             self._clear_audio_buffers()
 
-            # Hot window input is now treated as the start of a query collection
+            # Use the actual text as query (with leading echo cleanup)
             query_raw = text_lower.strip()
             query = self.echo_detector.cleanup_leading_echo(query_raw) if self.tts and self.tts.enabled else query_raw
 
             if query:
-                # Start collection, just like with a wake word
                 self.state_manager.start_collection(query)
-
-                # Start thinking tune and show processing message
                 self._start_thinking_tune()
                 try:
                     print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
