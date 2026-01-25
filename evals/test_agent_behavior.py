@@ -228,7 +228,7 @@ class TestContextUtilization:
             return ToolExecutionResult(success=True, reply_text="OK")
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             nonlocal call_count
             call_count += 1
 
@@ -285,7 +285,7 @@ class TestToolUsage:
             return ToolExecutionResult(success=True, reply_text="Tech news: AI advances, new chip releases.")
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -325,7 +325,7 @@ class TestToolUsage:
             return ToolExecutionResult(success=True, reply_text="OK")
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             nonlocal call_count
             call_count += 1
 
@@ -394,7 +394,7 @@ class TestMultiStepReasoning:
             return ToolExecutionResult(success=True, reply_text="OK")
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             nonlocal call_count
             call_count += 1
 
@@ -459,7 +459,7 @@ class TestMultiStepReasoning:
         call_count = 0
         has_recalled_memory = False
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             nonlocal call_count, has_recalled_memory
             call_count += 1
 
@@ -598,7 +598,7 @@ class TestMemoryEnrichment:
 
         captured_messages = []
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             captured_messages.extend(messages)
             return create_mock_llm_response(
                 "Based on your love for Italian food and goal to eat more veggies, "
@@ -652,7 +652,7 @@ class TestMemoryEnrichment:
             return ToolExecutionResult(success=True, reply_text="OK")
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
             nonlocal call_count
             call_count += 1
 

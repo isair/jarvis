@@ -392,7 +392,13 @@ def pytest_sessionfinish(session, exitstatus):
     _eval_report.end_time = datetime.now()
 
     # Write the markdown report (ensure UTF-8 encoding for emojis/unicode)
-    report_path = ROOT / "EVALS.md"
+    # Support custom report path via environment variable
+    report_path_str = os.environ.get("EVAL_REPORT_PATH")
+    if report_path_str:
+        report_path = Path(report_path_str)
+    else:
+        report_path = ROOT / "EVALS.md"
+
     markdown = _eval_report.generate_markdown()
     report_path.write_text(markdown, encoding="utf-8")
     print(f"\n📄 Eval report saved to: {report_path}")

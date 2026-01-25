@@ -1,79 +1,86 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-01-07 23:33:03
-**Judge Model:** `gpt-oss:20b`
-**Duration:** 168.36s
+**Generated:** 2026-01-25 15:16:57
 
-## 📊 Summary
+## 📊 Model Comparison
 
-| Metric | Count |
-|--------|-------|
-| ✅ Passed | 18 |
-| ❌ Failed | 0 |
-| ⏭️ Skipped | 0 |
-| 🔸 Expected Fail | 0 |
-| 🎉 Unexpectedly Passed | 0 |
-| **Total** | **18** |
+This report compares eval results across officially supported models.
+Use this to understand the performance tradeoffs when choosing a model.
 
-**Pass Rate:** 🟢 `████████████████████` **100.0%**
+| Metric | llama3.2:3b | gpt-oss:20b |
+|--------|--------|--------|
+| ✅ Passed | 43 | 46 |
+| ❌ Failed | 3 | 0 |
+| ⏭️ Skipped | 0 | 0 |
+| 📊 Total | 49 | 49 |
+| ⏱️ Duration | 64.7s | 343.4s |
+| 📈 Pass Rate | 🟢 93.5% | 🟢 100.0% |
+
+### Pass Rate Visualization
+
+**llama3.2:3b:** 🟢 `██████████████████░░` **93.5%**
+**gpt-oss:20b:** 🟢 `████████████████████` **100.0%**
+
+### 💡 Model Selection Guide
+
+| Model | Best For | Trade-offs |
+|-------|----------|------------|
+| `llama3.2:3b` | Quick responses, lower RAM usage | May struggle with complex reasoning |
+| `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |
 
 ---
 
-## 📋 Detailed Results
+## 📋 Detailed Test Results
 
-### ✅ TestResponseQuality
-> LLM-as-judge evaluations for response quality
+| Test Case | llama3.2:3b | gpt-oss:20b |
+|-----------|----------|----------|
+| Agent calls webSearch for info queries | ✅ | ✅ |
+| Agent chains search → fetch for details | ✅ | ✅ |
+| Agent recalls interests before personalized search (mocked) | ✅ | ✅ |
+| Agent uses memory + nutrition data | ✅ | ✅ |
+| Bad: deflection without attempting answer | ❌ | ✅ |
+| Bad: empty acknowledgment | ✅ | ✅ |
+| Bad: generic greeting ignores query | ✅ | ✅ |
+| Enrichment results appear in system message | ✅ | ✅ |
+| Extraction with explicit quantities | ✅ | ✅ |
+| Good: brief but informative | ✅ | ✅ |
+| Good: complete weekly forecast | ✅ | ✅ |
+| Handles ambiguous portion descriptions | ✅ | ✅ |
+| LLM uses enrichment, skips redundant recallConversation | ✅ | ✅ |
+| Live weather query with real LLM | ❌ | ✅ |
+| Live: LLM checks memory before asking about interests | ✅ | ✅ |
+| Location context flows to search queries | ✅ | ✅ |
+| LogMealTool stores meals with macros | ✅ | ✅ |
+| Returns NONE for non-food inputs | ✅ | ✅ |
+| Returns valid JSON with all required fields | ✅ | ✅ |
+| Simple meal baseline (2 boiled eggs) | ✅ | ✅ |
+| caesar-salad | ✅ | ✅ |
+| cheeseburger-fries | ✅ | ✅ |
+| chicken-broccoli | ❌ | ✅ |
+| eggs-toast | ✅ | ✅ |
+| oatmeal-banana | ✅ | ✅ |
+| personalized news | ✅ | ✅ |
+| personalized restaurant | ✅ | ✅ |
+| pizza-slice | ✅ | ✅ |
+| protein-shake | ✅ | ✅ |
+| spaghetti-bolognese | ✅ | ✅ |
+| specific topic recall | ✅ | ✅ |
+| test_hot_window_mode_indicated_in_prompt | ✅ | ✅ |
+| test_returns_none_when_ollama_unavailable | ✅ | ✅ |
+| test_system_prompt_has_echo_guidance | ✅ | ✅ |
+| test_tts_text_included_for_echo_detection | ✅ | ✅ |
+| time-based recall | ✅ | ✅ |
 
-| Test Case | Status | Duration |
-|-----------|--------|----------|
-| Good: complete weekly forecast | ✅ PASSED | 8.70s |
-| Good: brief but informative | ✅ PASSED | 9.70s |
-| Bad: generic greeting ignores query | ✅ PASSED | 5.30s |
-| Bad: deflection without attempting answer | ✅ PASSED | 4.62s |
-| Bad: empty acknowledgment | ✅ PASSED | 8.08s |
+### 📖 Legend
 
-### ✅ TestContextUtilization
-> Tests that agent uses location/time/memory context
-
-| Test Case | Status | Duration |
-|-----------|--------|----------|
-| Location context flows to search queries | ✅ PASSED | 0.36s |
-
-### ✅ TestToolUsage
-> Validates tool selection and argument quality
-
-| Test Case | Status | Duration |
-|-----------|--------|----------|
-| Agent calls webSearch for info queries | ✅ PASSED | 0.00s |
-| Agent chains search → fetch for details | ✅ PASSED | 0.00s |
-
-### ✅ TestMultiStepReasoning
-> Complex scenarios requiring tool chaining and synthesis
-
-| Test Case | Status | Duration |
-|-----------|--------|----------|
-| Agent uses memory + nutrition data | ✅ PASSED | 0.16s |
-| Agent recalls interests before personalized search (mocked) | ✅ PASSED | 0.02s |
-
-### ✅ TestMemoryEnrichment
-> Tests automatic memory enrichment keyword extraction
-
-| Test Case | Status | Duration |
-|-----------|--------|----------|
-| personalized news | ✅ PASSED | 5.12s |
-| personalized restaurant | ✅ PASSED | 3.08s |
-| specific topic recall | ✅ PASSED | 4.63s |
-| time-based recall | ✅ PASSED | 7.00s |
-| Enrichment results appear in system message | ✅ PASSED | 0.00s |
-| LLM uses enrichment, skips redundant recallConversation | ✅ PASSED | 0.01s |
-
-### ✅ TestLiveEndToEnd
-> Live tests with real LLM inference
-
-| Test Case | Status | Duration |
-|-----------|--------|----------|
-| Live weather query with real LLM | ✅ PASSED | 49.84s |
-| Live: LLM checks memory before asking about interests | ✅ PASSED | 61.76s |
+| Symbol | Meaning |
+|--------|---------|
+| ✅ | Passed |
+| ❌ | Failed |
+| ⏭️ | Skipped (missing dependencies) |
+| 🔸 | Expected failure (known limitation) |
+| 🎉 | Unexpectedly passed (bug fixed!) |
+| ➖ | Not run for this model |
 
 ---
 

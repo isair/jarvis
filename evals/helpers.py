@@ -221,13 +221,15 @@ def judge_response_answers_query(query: str, response: str, context: Optional[st
     Returns:
         JudgeVerdict with pass/fail, score, and reasoning
     """
-    system_prompt = """You are an evaluation judge for a voice assistant. Your job is to determine if the assistant's response actually answers the user's question.
+    system_prompt = """You are an evaluation judge for a voice assistant. Your job is to determine if the assistant's response actually answers the user's question with real information.
 
 Score the response on these criteria (0-10 each):
-1. RELEVANCE: Does the response address the specific question asked?
-2. COMPLETENESS: Does it provide the information the user was seeking?
-3. ACCURACY: Is the information factually plausible (based on any context provided)?
-4. NO_DEFLECTION: Does it avoid generic greetings or deflections like "How can I help you?"
+1. RELEVANCE: Does the response address the specific question asked? Score 0 if it doesn't mention the topic at all.
+2. COMPLETENESS: Does it provide the information the user was seeking? Score 0 for empty acknowledgments like "Sure!", "OK!", "Got it!" that provide no actual information.
+3. ACCURACY: Is the information factually plausible (based on any context provided)? Score 0 if no factual information is provided.
+4. NO_DEFLECTION: Does it avoid generic greetings, deflections like "How can I help you?", or empty acknowledgments? Score 0 for responses under 20 characters that don't answer the question.
+
+IMPORTANT: A response that just acknowledges without providing any actual information (e.g., "Sure thing!", "OK!", "Got it!") should score 0 on COMPLETENESS and fail overall.
 
 Output your evaluation in this EXACT format:
 RELEVANCE: [0-10]
