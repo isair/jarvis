@@ -698,6 +698,10 @@ class MemoryViewerWindow(QMainWindow):
 
                 def run_flask_server():
                     try:
+                        # Suppress Werkzeug's development server warning in bundled apps
+                        import logging
+                        logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
                         # Disable Flask's reloader and debug mode
                         flask_app.run(
                             host="127.0.0.1",
