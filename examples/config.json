@@ -45,7 +45,8 @@
     "jarvus",
     "jarviz",
     "javis",
-    "jairus"
+    "jairus",
+    "jarryst"
   ],
   "wake_fuzzy_ratio": 0.78,
   "whisper_model": "small",

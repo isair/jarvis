@@ -254,7 +254,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Wake Word Detection
         "wake_word": "jarvis",
-        "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus"],
+        "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst"],
         "wake_fuzzy_ratio": 0.78,
 
         # Whisper Speech Recognition
