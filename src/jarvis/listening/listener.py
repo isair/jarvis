@@ -311,13 +311,11 @@ class VoiceListener(threading.Thread):
                         self.state_manager.clear_hot_window_voice_state()
                         return
             else:
-                # After TTS: use length-aware echo detection
-                # Short queries (<=4 words) skip fast rejection - they can't be full echoes
-                # and partial_ratio gives false positives on common words like "how", "weather"
+                # After TTS: use length-aware echo detection for fast rejection
+                # Short queries (<=4 words) skip fast rejection - partial_ratio gives false positives
+                # Longer queries (>4 words) use threshold 70 to catch partial echoes
                 word_count = len(text_lower.split())
                 if word_count > 4:
-                    # For longer text (>4 words), use threshold 70 for fast rejection
-                    # This catches partial echoes with transcription errors
                     if self.echo_detector._check_text_similarity(text_lower, self.echo_detector._last_tts_text, threshold=70):
                         debug_log(f"rejected as delayed echo during hot window (>4 words, similarity >= 70): '{text_lower}'", "echo")
                         if not self.cfg.voice_debug:
@@ -328,29 +326,11 @@ class VoiceListener(threading.Thread):
                         self.state_manager.expire_hot_window(self.cfg.voice_debug)
                         self.state_manager.clear_hot_window_voice_state()
                         return
-                # Short queries (<=4 words): Skip fast rejection, accept directly below
 
-            # Hot window input passed echo check - accept it directly using the ACTUAL text
-            # Don't route through intent judge as it synthesizes from context (causing wrong queries)
-            self.state_manager.expire_hot_window(self.cfg.voice_debug)
-            self.state_manager.clear_hot_window_voice_state()
-            debug_log(f"hot window input accepted: '{text_lower}'", "voice")
-
-            # Clear audio buffers to prevent concatenation issues
-            self._clear_audio_buffers()
-
-            # Use the actual text as query (with leading echo cleanup)
-            query_raw = text_lower.strip()
-            query = self.echo_detector.cleanup_leading_echo(query_raw) if self.tts and self.tts.enabled else query_raw
-
-            if query:
-                self.state_manager.start_collection(query)
-                self._start_thinking_tune()
-                try:
-                    print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
-                except Exception:
-                    pass
-            return
+            # Hot window input passed fast echo check - fall through to intent judge
+            # Per spec: "Any speech triggers the intent judge (no wake word needed)"
+            # The intent judge will make the final decision on echo vs real follow-up
+            debug_log(f"hot window: passed fast echo check, will use intent judge: '{text_lower}'", "voice")
 
         # Priority 2: Check for echo (during TTS or echo window) - strict rejection outside hot window
         if self.tts and self.tts.enabled:
