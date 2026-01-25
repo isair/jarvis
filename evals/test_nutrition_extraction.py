@@ -66,7 +66,7 @@ MEAL_TEST_CASES = [
             carbs_range=(0, 20),  # Broccoli has minimal carbs; some models report 0
             fat_range=(3, 15),
         ),
-        id="chicken-broccoli"
+        id="Nutrition: chicken with broccoli"
     ),
     pytest.param(
         MealTestCase(
@@ -76,7 +76,7 @@ MEAL_TEST_CASES = [
             carbs_range=(5, 35),  # Smaller models may underestimate toast carbs
             fat_range=(10, 30),
         ),
-        id="eggs-toast"
+        id="Nutrition: scrambled eggs with toast"
     ),
     pytest.param(
         MealTestCase(
@@ -86,7 +86,7 @@ MEAL_TEST_CASES = [
             carbs_range=(25, 45),
             fat_range=(10, 25),
         ),
-        id="pizza-slice"
+        id="Nutrition: pepperoni pizza slice"
     ),
     pytest.param(
         MealTestCase(
@@ -96,7 +96,7 @@ MEAL_TEST_CASES = [
             carbs_range=(50, 90),
             fat_range=(3, 12),
         ),
-        id="oatmeal-banana"
+        id="Nutrition: oatmeal with banana"
     ),
     pytest.param(
         MealTestCase(
@@ -106,7 +106,7 @@ MEAL_TEST_CASES = [
             carbs_range=(60, 120),
             fat_range=(35, 70),
         ),
-        id="cheeseburger-fries"
+        id="Nutrition: cheeseburger with fries"
     ),
     pytest.param(
         MealTestCase(
@@ -116,7 +116,7 @@ MEAL_TEST_CASES = [
             carbs_range=(10, 30),
             fat_range=(20, 40),
         ),
-        id="caesar-salad"
+        id="Nutrition: caesar salad with chicken"
     ),
     pytest.param(
         MealTestCase(
@@ -126,7 +126,7 @@ MEAL_TEST_CASES = [
             carbs_range=(15, 40),
             fat_range=(10, 25),
         ),
-        id="protein-shake"
+        id="Nutrition: protein shake"
     ),
     pytest.param(
         MealTestCase(
@@ -136,7 +136,7 @@ MEAL_TEST_CASES = [
             carbs_range=(60, 100),
             fat_range=(15, 35),
         ),
-        id="spaghetti-bolognese"
+        id="Nutrition: spaghetti bolognese"
     ),
 ]
 

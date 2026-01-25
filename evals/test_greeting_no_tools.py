@@ -43,30 +43,30 @@ requires_judge_llm = pytest.mark.skipif(
 
 # Greetings in multiple languages - should NOT trigger tools
 GREETING_TEST_CASES = [
-    ("hello", False, "English hello"),
-    ("hi there", False, "English hi"),
-    ("hey", False, "English hey"),
-    ("ni hao", False, "Chinese greeting"),
-    ("bonjour", False, "French greeting"),
-    ("hola", False, "Spanish greeting"),
-    ("merhaba", False, "Turkish greeting"),
-    ("ciao", False, "Italian greeting"),
-    ("guten tag", False, "German greeting"),
-    ("how are you", False, "English wellbeing"),
-    ("thank you", False, "English thanks"),
-    ("thanks", False, "English thanks short"),
-    ("goodbye", False, "English goodbye"),
-    ("good morning", False, "English morning"),
-    ("good night", False, "English night"),
+    pytest.param("hello", False, id="Greeting: hello"),
+    pytest.param("hi there", False, id="Greeting: hi there"),
+    pytest.param("hey", False, id="Greeting: hey"),
+    pytest.param("ni hao", False, id="Greeting: ni hao (Chinese)"),
+    pytest.param("bonjour", False, id="Greeting: bonjour (French)"),
+    pytest.param("hola", False, id="Greeting: hola (Spanish)"),
+    pytest.param("merhaba", False, id="Greeting: merhaba (Turkish)"),
+    pytest.param("ciao", False, id="Greeting: ciao (Italian)"),
+    pytest.param("guten tag", False, id="Greeting: guten tag (German)"),
+    pytest.param("how are you", False, id="Greeting: how are you"),
+    pytest.param("thank you", False, id="Greeting: thank you"),
+    pytest.param("thanks", False, id="Greeting: thanks"),
+    pytest.param("goodbye", False, id="Greeting: goodbye"),
+    pytest.param("good morning", False, id="Greeting: good morning"),
+    pytest.param("good night", False, id="Greeting: good night"),
 ]
 
 # Queries that SHOULD trigger tools
 TOOL_REQUIRED_TEST_CASES = [
-    ("what's the weather", True, "Weather query"),
-    ("search for python tutorials", True, "Web search"),
-    ("what's the weather in Tokyo", True, "Weather with location"),
-    ("look up the news today", True, "News search"),
-    ("what did I eat yesterday", True, "Meal recall"),
+    pytest.param("what's the weather", True, id="Tool query: weather"),
+    pytest.param("search for python tutorials", True, id="Tool query: web search"),
+    pytest.param("what's the weather in Tokyo", True, id="Tool query: weather with location"),
+    pytest.param("look up the news today", True, id="Tool query: news search"),
+    pytest.param("what did I eat yesterday", True, id="Tool query: meal recall"),
 ]
 
 
@@ -98,15 +98,15 @@ class TestModelSizeDetection:
 
     @pytest.mark.eval
     @pytest.mark.parametrize("model_name,expected_size", [
-        pytest.param("llama3.2:3b", "SMALL", id="llama3.2:3b"),
-        pytest.param("llama3.2:1b", "SMALL", id="llama3.2:1b"),
-        pytest.param("mistral:7b", "SMALL", id="mistral:7b"),
-        pytest.param("gpt-oss:20b", "LARGE", id="gpt-oss:20b"),
-        pytest.param("llama3.1:8b", "LARGE", id="llama3.1:8b"),
-        pytest.param("qwen2.5:14b", "LARGE", id="qwen2.5:14b"),
-        pytest.param("gemma2:27b", "LARGE", id="gemma2:27b"),
-        pytest.param(None, "LARGE", id="None defaults to LARGE"),
-        pytest.param("", "LARGE", id="Empty defaults to LARGE"),
+        pytest.param("llama3.2:3b", "SMALL", id="Model size: llama3.2:3b → SMALL"),
+        pytest.param("llama3.2:1b", "SMALL", id="Model size: llama3.2:1b → SMALL"),
+        pytest.param("mistral:7b", "SMALL", id="Model size: mistral:7b → SMALL"),
+        pytest.param("gpt-oss:20b", "LARGE", id="Model size: gpt-oss:20b → LARGE"),
+        pytest.param("llama3.1:8b", "LARGE", id="Model size: llama3.1:8b → LARGE"),
+        pytest.param("qwen2.5:14b", "LARGE", id="Model size: qwen2.5:14b → LARGE"),
+        pytest.param("gemma2:27b", "LARGE", id="Model size: gemma2:27b → LARGE"),
+        pytest.param(None, "LARGE", id="Model size: None → LARGE (default)"),
+        pytest.param("", "LARGE", id="Model size: empty → LARGE (default)"),
     ])
     def test_model_size_detection(self, model_name: str, expected_size: str):
         """Verify model size is correctly detected from model name."""
@@ -134,12 +134,11 @@ class TestGreetingNoTools:
     """
 
     @pytest.mark.eval
-    @pytest.mark.parametrize("query,should_use_tools,desc", GREETING_TEST_CASES)
+    @pytest.mark.parametrize("query,should_use_tools", GREETING_TEST_CASES)
     def test_greeting_no_tool_calls(
         self,
         query: str,
         should_use_tools: bool,
-        desc: str,
         mock_config,
         eval_db,
         eval_dialogue_memory
@@ -170,7 +169,7 @@ class TestGreetingNoTools:
                 text=query, dialogue_memory=eval_dialogue_memory
             )
 
-        print(f"\n  Query: '{query}' ({desc})")
+        print(f"\n  Query: '{query}'")
         print(f"  Tools called: {capture.tool_names() or 'none'}")
         print(f"  Response: {(response or '')[:80]}...")
 
@@ -178,12 +177,11 @@ class TestGreetingNoTools:
             f"Greeting '{query}' should NOT trigger tools. Called: {capture.tool_names()}"
 
     @pytest.mark.eval
-    @pytest.mark.parametrize("query,should_use_tools,desc", TOOL_REQUIRED_TEST_CASES)
+    @pytest.mark.parametrize("query,should_use_tools", TOOL_REQUIRED_TEST_CASES)
     def test_tool_queries_still_work(
         self,
         query: str,
         should_use_tools: bool,
-        desc: str,
         mock_config,
         eval_db,
         eval_dialogue_memory
@@ -225,7 +223,7 @@ class TestGreetingNoTools:
                 text=query, dialogue_memory=eval_dialogue_memory
             )
 
-        print(f"\n  Query: '{query}' ({desc})")
+        print(f"\n  Query: '{query}'")
         print(f"  Tools called: {capture.tool_names() or 'none'}")
         print(f"  Response: {(response or '')[:80]}...")
 
@@ -258,17 +256,16 @@ class TestGreetingNoToolsLive:
 
     @pytest.mark.eval
     @requires_judge_llm
-    @pytest.mark.parametrize("query,should_use_tools,desc", [
-        pytest.param("hello", False, "English hello"),
-        pytest.param("ni hao", False, "Chinese greeting"),
-        pytest.param("bonjour", False, "French greeting"),
-        pytest.param("how are you", False, "Wellbeing query"),
+    @pytest.mark.parametrize("query,should_use_tools", [
+        pytest.param("hello", False, id="Live greeting: hello"),
+        pytest.param("ni hao", False, id="Live greeting: ni hao (Chinese)"),
+        pytest.param("bonjour", False, id="Live greeting: bonjour (French)"),
+        pytest.param("how are you", False, id="Live greeting: how are you"),
     ])
     def test_greeting_no_tools_live(
         self,
         query: str,
         should_use_tools: bool,
-        desc: str,
         mock_config,
         eval_db,
         eval_dialogue_memory
@@ -299,7 +296,7 @@ class TestGreetingNoToolsLive:
             )
 
         print(f"\n  Live Greeting Test ({JUDGE_MODEL}):")
-        print(f"  Query: '{query}' ({desc})")
+        print(f"  Query: '{query}'")
         print(f"  Tools called: {capture.tool_names() or 'none'}")
         print(f"  Response: {(response or '')[:100]}...")
         print(f"  Model size: {'small' if is_small else 'large'}")

@@ -181,7 +181,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
 
     # Calculate stats for main LLM tests only (excluding intent judge)
     def calc_main_llm_stats(report: ModelReport) -> dict:
-        passed = failed = skipped = 0
+        passed = failed = skipped = xfailed = partial = 0
         duration = 0.0
         for test_name, result in report.results.items():
             if not is_intent_judge_test(test_name):
@@ -191,9 +191,15 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
                     failed += 1
                 elif result.outcome == "skipped":
                     skipped += 1
+                elif result.outcome == "xfailed":
+                    xfailed += 1
+                elif result.outcome == "partial":
+                    partial += 1
                 duration += result.duration
+        total = passed + failed + skipped + xfailed + partial
         return {"passed": passed, "failed": failed, "skipped": skipped,
-                "total": passed + failed + skipped, "duration": duration}
+                "xfailed": xfailed, "partial": partial,
+                "total": total, "duration": duration}
 
     # Summary comparison table (main LLM tests only)
     header = "| Metric |"
@@ -211,6 +217,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     metrics = [
         ("✅ Passed", "passed"),
         ("❌ Failed", "failed"),
+        ("🔸 Expected Fail", "xfailed"),
         ("⏭️ Skipped", "skipped"),
         ("📊 Total", "total"),
         ("⏱️ Duration", "duration"),

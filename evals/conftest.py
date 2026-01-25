@@ -100,9 +100,25 @@ TEST_DESCRIPTIONS = {
 
 
 def _parse_parametrize_id(node_id: str) -> Optional[str]:
-    """Extract the parametrize case ID from a node_id like 'test_foo[case-name]'."""
+    """Extract the parametrize case ID from a node_id like 'test_foo[case-name]'.
+
+    Returns None if the bracket content is just a pytest-repeat suffix like '1-3'.
+    """
     match = re.search(r'\[(.+)\]$', node_id)
-    return match.group(1) if match else None
+    if not match:
+        return None
+
+    case_id = match.group(1)
+
+    # Check if this is just a pytest-repeat suffix (e.g., "1-3", "2-3")
+    # These have format "N-M" where N is run number and M is total runs
+    if re.match(r'^\d+-\d+$', case_id):
+        return None
+
+    # Strip pytest-repeat suffix from the end of case IDs (e.g., "greeting-1-3" -> "greeting")
+    case_id = re.sub(r'-\d+-\d+$', '', case_id)
+
+    return case_id
 
 
 def _extract_judge_notes(stdout: Optional[str]) -> Optional[Dict[str, str]]:
@@ -265,9 +281,8 @@ def _get_aggregation_key(result: TestResult) -> str:
     # Use class_name + test_name + case_id (if any) as the aggregation key
     key_parts = [result.class_name, result.test_name]
     if result.case_id:
-        # Strip repeat suffix from case_id too
-        case_id = re.sub(r'-\d+-\d+$', '', result.case_id)
-        key_parts.append(case_id)
+        # case_id should already have repeat suffixes stripped by _parse_parametrize_id
+        key_parts.append(result.case_id)
     return "::".join(key_parts)
 
 
@@ -289,13 +304,12 @@ class EvalReport:
         for result in self.results:
             key = _get_aggregation_key(result)
             if key not in aggregated:
-                # Strip repeat suffix from description too
-                desc = re.sub(r'-\d+-\d+$', '', result.description)
+                # Description should already have repeat suffixes stripped
                 aggregated[key] = AggregatedTestResult(
                     name=_strip_repeat_suffix(result.name),
                     class_name=result.class_name,
                     test_name=result.test_name,
-                    description=desc,
+                    description=result.description,
                 )
             aggregated[key].runs.append(result)
 

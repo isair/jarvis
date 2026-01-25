@@ -528,22 +528,22 @@ class TestMemoryEnrichment:
         pytest.param(
             "what news might interest me?",
             ["interests", "hobbies", "preferences"],
-            id="personalized news"
+            id="Memory enrichment: personalized news"
         ),
         pytest.param(
             "recommend a restaurant I'd enjoy",
             ["food", "restaurant", "cuisine", "preferences"],
-            id="personalized restaurant"
+            id="Memory enrichment: personalized restaurant"
         ),
         pytest.param(
             "what did we discuss about the python project?",
             ["python", "project", "code", "programming"],
-            id="specific topic recall"
+            id="Memory enrichment: topic recall"
         ),
         pytest.param(
             "what did I eat yesterday?",
             ["eat", "food", "meal", "nutrition"],
-            id="time-based recall"
+            id="Memory enrichment: time-based recall"
         ),
     ])
     def test_enrichment_extracts_correct_keywords(self, query: str, expected_keywords: list, mock_config):
