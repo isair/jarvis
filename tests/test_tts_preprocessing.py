@@ -1,7 +1,13 @@
 """Tests for TTS link preprocessing functionality."""
 
 import pytest
-from src.jarvis.output.tts import _preprocess_for_speech, _extract_domain_description
+from src.jarvis.output.tts import (
+    _preprocess_for_speech,
+    _extract_domain_description,
+    _estimate_tts_duration,
+    DEFAULT_WPM,
+    AUDIO_BUFFER_DELAY_SEC,
+)
 
 
 class TestExtractDomainDescription:
@@ -103,4 +109,58 @@ class TestPreprocessForSpeech:
         # Should say "example.com" not "www.example.com"
         assert "www." not in result
         assert "example.com" in result
+
+
+class TestEstimateTtsDuration:
+    """Tests for TTS duration estimation (for audio buffer timing)."""
+
+    def test_estimates_duration_based_on_word_count(self):
+        # 175 WPM means 175 words takes 60 seconds
+        # So 35 words should take ~12 seconds + buffer
+        text = " ".join(["word"] * 35)
+        duration = _estimate_tts_duration(text, 175)
+        expected = (35 / 175) * 60 + AUDIO_BUFFER_DELAY_SEC
+        assert abs(duration - expected) < 0.01
+
+    def test_includes_audio_buffer_delay(self):
+        # Even for short text, should include buffer delay
+        text = "hello"
+        duration = _estimate_tts_duration(text, 175)
+        assert duration >= AUDIO_BUFFER_DELAY_SEC
+
+    def test_uses_default_wpm_for_zero(self):
+        text = "one two three four five"  # 5 words
+        duration_zero = _estimate_tts_duration(text, 0)
+        duration_default = _estimate_tts_duration(text, DEFAULT_WPM)
+        assert duration_zero == duration_default
+
+    def test_uses_default_wpm_for_negative(self):
+        text = "one two three four five"
+        duration_negative = _estimate_tts_duration(text, -100)
+        duration_default = _estimate_tts_duration(text, DEFAULT_WPM)
+        assert duration_negative == duration_default
+
+    def test_faster_rate_means_shorter_duration(self):
+        text = " ".join(["word"] * 50)
+        slow_duration = _estimate_tts_duration(text, 100)
+        fast_duration = _estimate_tts_duration(text, 200)
+        assert fast_duration < slow_duration
+
+    def test_longer_text_means_longer_duration(self):
+        short_text = "hello world"
+        long_text = " ".join(["word"] * 100)
+        short_duration = _estimate_tts_duration(short_text, 175)
+        long_duration = _estimate_tts_duration(long_text, 175)
+        assert long_duration > short_duration
+
+    def test_empty_text_returns_buffer_only(self):
+        duration = _estimate_tts_duration("", 175)
+        assert duration == AUDIO_BUFFER_DELAY_SEC
+
+    def test_realistic_sentence_duration(self):
+        # "Hello, how are you doing today?" is ~7 words at 175 WPM
+        text = "Hello, how are you doing today?"
+        duration = _estimate_tts_duration(text, 175)
+        # Should be about 2.4 seconds (7/175*60) + 0.5 buffer = ~2.9 seconds
+        assert 2.5 < duration < 3.5
 

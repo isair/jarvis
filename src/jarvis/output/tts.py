@@ -8,11 +8,41 @@ import signal
 import tempfile
 import os
 import re
+import time
 import warnings
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
 from ..debug import debug_log
+
+
+# Default speaking rates for TTS estimation
+DEFAULT_WPM = 200  # Default rate used in config (words per minute)
+AUDIO_BUFFER_DELAY_SEC = 0.5  # Extra delay for audio buffer latency
+
+
+def _estimate_tts_duration(text: str, wpm: int) -> float:
+    """
+    Estimate how long TTS audio will take to play.
+
+    Args:
+        text: The text being spoken
+        wpm: Words per minute rate
+
+    Returns:
+        Estimated duration in seconds
+    """
+    # Count words (simple split on whitespace)
+    words = len(text.split())
+
+    # Calculate duration based on WPM
+    if wpm <= 0:
+        wpm = DEFAULT_WPM
+
+    duration_sec = (words / wpm) * 60.0
+
+    # Add buffer for audio latency
+    return duration_sec + AUDIO_BUFFER_DELAY_SEC
 
 
 def _extract_domain_description(url: str) -> tuple[str, bool]:
@@ -181,10 +211,18 @@ class TextToSpeech:
         self._should_interrupt.clear()
         system = platform.system().lower()
         interrupted = False
-        
+
+        # Estimate audio duration for proper callback timing
+        # TTS processes may exit before audio finishes playing due to audio buffering
+        effective_wpm = self.rate if self.rate else DEFAULT_WPM
+        estimated_duration = _estimate_tts_duration(text, effective_wpm)
+        start_time = time.time()
+
+        debug_log(f"TTS starting: {len(text.split())} words, rate={effective_wpm} WPM, estimated={estimated_duration:.1f}s", "tts")
+
         # Signal speaking state to face widget
         self._notify_speaking_state(True)
-        
+
         try:
             if system == "darwin":
                 interrupted = self._mac_say(text)
@@ -192,14 +230,33 @@ class TextToSpeech:
                 interrupted = self._win_sapi(text)
             else:
                 interrupted = self._linux_say(text)
+
+            # Wait for estimated remaining duration to ensure audio has finished
+            # TTS processes often exit before audio playback completes due to buffering
+            if not interrupted:
+                elapsed = time.time() - start_time
+                remaining = estimated_duration - elapsed
+                if remaining > 0:
+                    debug_log(f"TTS process done, waiting {remaining:.1f}s for audio buffer", "tts")
+                    wait_until = time.time() + remaining
+                    while time.time() < wait_until:
+                        if self._should_interrupt.is_set():
+                            debug_log("TTS interrupted during audio buffer wait", "tts")
+                            interrupted = True
+                            break
+                        time.sleep(0.1)
+
+            actual_duration = time.time() - start_time
+            debug_log(f"TTS complete: actual duration={actual_duration:.1f}s (estimated={estimated_duration:.1f}s)", "tts")
+
         finally:
             with self._process_lock:
                 self._current_process = None
             self._is_speaking.clear()
-            
+
             # Signal speaking stopped to face widget
             self._notify_speaking_state(False)
-            
+
             # Call completion callback if set and not interrupted
             if self._completion_callback is not None and not interrupted:
                 try:
