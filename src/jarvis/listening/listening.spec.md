@@ -149,13 +149,13 @@ class TranscriptSegment:
     is_during_tts: bool    # Whether TTS was playing during this segment
 
 class TranscriptBuffer:
-    max_duration_sec: float = 300.0  # 5 minutes, aligned with short-term memory
+    max_duration_sec: float = 120.0  # 2 minutes - enough for multi-person conversation context
 ```
 
 ### Memory Alignment
 
 The transcript buffer serves as the "live" portion of short-term memory:
-- **Transcript buffer:** Last 5 minutes of raw speech (before processing)
+- **Transcript buffer:** Last 2 minutes of raw speech (before processing)
 - **Short-term memory:** Processed conversation turns (user queries + assistant responses)
 - **Long-term memory (diary):** Summarized memories
 
@@ -169,13 +169,11 @@ The transcript buffer serves as the "live" portion of short-term memory:
 
 ## Intent Judge
 
-### Context Duration
+### Context Duration & Query Synthesis
 
-The intent judge receives transcript context based on model size:
-- **Small models (1b/3b/7b):** 120 seconds (2 minutes)
-- **Large models (8b+):** 300 seconds (5 minutes, full buffer)
+The intent judge receives the full transcript buffer (default: 120 seconds / 2 minutes) and **synthesizes a complete query** using conversation context.
 
-This enables Jarvis to **chime into ongoing conversations** between people. When someone in a room asks "Jarvis, what do you think?", the judge has enough context to understand what they were discussing.
+This enables Jarvis to **chime into ongoing conversations** between people. When someone asks "Jarvis, what do you think?", the judge uses context to understand what they were discussing and creates a complete, actionable query.
 
 **Multi-person conversation example:**
 ```
@@ -184,14 +182,12 @@ This enables Jarvis to **chime into ongoing conversations** between people. When
 [12:29:00] Person A: "Jarvis, what do you think?"
 ```
 
-With 2+ minutes of context, the intent judge understands "what do you think?" refers to the weather/picnic discussion and extracts an appropriate query.
-
-Override with `intent_judge_context_seconds` in config if needed.
+The intent judge synthesizes: `"what do you think about the weather tomorrow for the picnic"`
 
 ### Input Format
 
 ```
-Transcript (context duration based on model size):
+Transcript (last 120 seconds):
 [12:28:30] "I wonder what the weather will be like tomorrow"
 [12:28:45] "Yeah, we should check before planning the picnic"
 [12:29:00] "Jarvis what do you think"
@@ -207,10 +203,10 @@ Current state: wake_word_mode
 ```json
 {
   "directed": true,
-  "query": "what time is it",
+  "query": "what do you think about the weather tomorrow for the picnic",
   "stop": false,
   "confidence": "high",
-  "reasoning": "Clear wake word followed by time question"
+  "reasoning": "synthesized context from conversation about weather and picnic"
 }
 ```
 
@@ -241,11 +237,10 @@ Judge output: {"directed": true, "query": "Ni hao", "reasoning": "First segment 
   "audio_wake_enabled": true,
   "audio_wake_threshold": 0.5,
 
-  "transcript_buffer_duration_sec": 300,
+  "transcript_buffer_duration_sec": 120,
 
   "intent_judge_model": "llama3.2:3b",
   "intent_judge_timeout_sec": 3.0,
-  "intent_judge_context_seconds": null,
 
   "hot_window_seconds": 3.0,
   "echo_tolerance": 0.3
@@ -254,8 +249,7 @@ Judge output: {"directed": true, "query": "Ni hao", "reasoning": "First segment 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `intent_judge_context_seconds` | `null` (auto) | Transcript context sent to intent judge. When null, auto-detects: 120s for small models (1b/3b/7b), 300s for large models (8b+). |
-| `transcript_buffer_duration_sec` | 300 | Total buffer retention (5 min). Must be >= `intent_judge_context_seconds`. |
+| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for transcript buffer. Used for both retention and context passed to intent judge. 2 minutes provides good context for multi-person conversations. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 

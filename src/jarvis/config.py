@@ -126,9 +126,8 @@ class Settings:
     # Always used when available, falls back to simple wake word detection
     intent_judge_model: str
     intent_judge_timeout_sec: float
-    intent_judge_context_seconds: float | None  # None = auto-detect based on model size
 
-    # Transcript Buffer
+    # Transcript Buffer - duration for both retention and context passed to intent judge
     transcript_buffer_duration_sec: float
 
     # Memory & Dialogue
@@ -304,12 +303,10 @@ def get_default_config() -> Dict[str, Any]:
         # Always used when available, falls back to simple wake word detection
         "intent_judge_model": "llama3.2:3b",  # Model for intent judging (needs reasoning ability)
         "intent_judge_timeout_sec": 3.0,  # Max time to wait for intent judge response
-        # Context duration for intent judge (None = auto-detect based on model size)
-        # Small models (1b/3b/7b): 120s, Large models (8b+): 300s (full buffer)
-        "intent_judge_context_seconds": None,
 
-        # Transcript Buffer
-        "transcript_buffer_duration_sec": 300.0,  # Rolling buffer duration (5 minutes)
+        # Transcript Buffer - used for both retention and context passed to intent judge
+        # 120s (2 min) provides enough context for multi-person conversations
+        "transcript_buffer_duration_sec": 120.0,
 
         # Memory & Dialogue
         "dialogue_memory_timeout": 300.0,
@@ -439,13 +436,9 @@ def load_settings() -> Settings:
     # Intent Judge - always used when available
     intent_judge_model = str(merged.get("intent_judge_model", "llama3.2:3b"))
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 3.0))
-    intent_judge_context_seconds_val = merged.get("intent_judge_context_seconds")
-    intent_judge_context_seconds: float | None = None
-    if intent_judge_context_seconds_val not in (None, "", "null"):
-        intent_judge_context_seconds = float(intent_judge_context_seconds_val)
 
-    # Transcript Buffer
-    transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 300.0))
+    # Transcript Buffer - used for both retention and context passed to intent judge
+    transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 120.0))
 
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
@@ -547,7 +540,6 @@ def load_settings() -> Settings:
         # Intent Judge - always used when available
         intent_judge_model=intent_judge_model,
         intent_judge_timeout_sec=intent_judge_timeout_sec,
-        intent_judge_context_seconds=intent_judge_context_seconds,
 
         # Transcript Buffer
         transcript_buffer_duration_sec=transcript_buffer_duration_sec,

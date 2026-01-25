@@ -254,7 +254,8 @@ class TestConfigNewOptions:
 
         defaults = get_default_config()
 
-        assert defaults["transcript_buffer_duration_sec"] == 300.0
+        # 120s (2 min) provides good context for multi-person conversations
+        assert defaults["transcript_buffer_duration_sec"] == 120.0
 
     def test_load_settings_includes_new_options(self):
         """load_settings includes new options in Settings."""

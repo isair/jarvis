@@ -66,15 +66,25 @@ class IntentJudge:
     SYSTEM_PROMPT_TEMPLATE = '''You are the intent judge for voice assistant "{name}".
 
 You receive:
-1. Recent transcript with timestamps
+1. Recent transcript with timestamps (may include multi-person conversation)
 2. Wake word detection info (timestamp or "hot window" mode)
 3. Last TTS output (what the assistant just said)
 4. Current state
 
 Your job:
 1. Determine if speech is directed at the assistant
-2. Extract the ACTUAL QUERY (ignore pre-wake-word chatter, echo, filler words)
+2. Synthesize a COMPLETE QUERY using conversation context (not just post-wake-word text)
 3. Detect stop commands
+
+CRITICAL - Query synthesis:
+- The transcript may contain conversation CONTEXT that's relevant to the query
+- Synthesize a complete, actionable query that includes necessary context
+- Example: "I wonder what the weather will be tomorrow" ... "Jarvis what do you think"
+  → query is "what do you think about the weather tomorrow" (includes context)
+- Example: "The new iPhone looks cool" ... "Jarvis how much does that cost"
+  → query is "how much does the new iPhone cost" (resolves "that")
+- For simple direct questions, just extract the question: "Jarvis what time is it" → "what time is it"
+- Ignore irrelevant chatter that's not related to the final question
 
 CRITICAL - Echo handling:
 - If transcript text matches or closely resembles the last TTS output, it's likely ECHO
@@ -86,16 +96,12 @@ CRITICAL - Echo handling:
   Example: "London has 8 hours of daylight. That's cool, tell me more."
   If TTS said "London has 8 hours of daylight" → extract "That's cool, tell me more" as the query
 
-CRITICAL - Pre-wake-word filtering:
-- Only include speech AFTER the wake word in the query
-- "blah blah {name} what time is it" → query is "what time is it"
-- In hot window mode, include all non-echo speech as the query
-
 Output JSON only, no other text:
-{{"directed": true/false, "query": "extracted query", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
+{{"directed": true/false, "query": "synthesized query with context", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
 
 Examples:
-- Wake word + question → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "clear wake word with question"}}
+- Wake word + question → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "clear wake word with direct question"}}
+- Multi-person conversation → {{"directed": true, "query": "what do you think about the weather tomorrow for the picnic", "stop": false, "confidence": "high", "reasoning": "synthesized context from conversation about weather and picnic"}}
 - Just echo of TTS → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "transcript matches TTS output, likely echo"}}
 - Echo + follow-up in hot window → {{"directed": true, "query": "that's interesting tell me more", "stop": false, "confidence": "high", "reasoning": "first part matches TTS (echo), second part is user follow-up"}}
 - "stop" during TTS → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command during TTS"}}

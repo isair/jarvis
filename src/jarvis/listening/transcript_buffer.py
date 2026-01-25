@@ -54,11 +54,11 @@ class TranscriptBuffer:
     Thread-safe for concurrent access from audio processing threads.
     """
 
-    def __init__(self, max_duration_sec: float = 300.0):
+    def __init__(self, max_duration_sec: float = 120.0):
         """Initialize the transcript buffer.
 
         Args:
-            max_duration_sec: Maximum duration of transcripts to retain (default 5 minutes)
+            max_duration_sec: Maximum duration of transcripts to retain (default 2 minutes)
         """
         self.max_duration_sec = max_duration_sec
         self._segments: List[TranscriptSegment] = []

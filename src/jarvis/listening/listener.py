@@ -21,7 +21,6 @@ from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, create_intent_judge
 from .wake_detector import WakeWordDetector
 from ..debug import debug_log
-from ..reply.prompts.model_variants import detect_model_size, ModelSize
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -164,9 +163,10 @@ class VoiceListener(threading.Thread):
         self._wake_timestamp: Optional[float] = None
 
         # Rolling transcript buffer for context-aware processing
-        buffer_duration = float(getattr(self.cfg, "transcript_buffer_duration_sec", 300.0))
-        self._transcript_buffer = TranscriptBuffer(max_duration_sec=buffer_duration)
-        debug_log(f"transcript buffer initialized ({buffer_duration}s max duration)", "voice")
+        # Used for both retention and context passed to intent judge
+        self._buffer_duration = float(getattr(self.cfg, "transcript_buffer_duration_sec", 120.0))
+        self._transcript_buffer = TranscriptBuffer(max_duration_sec=self._buffer_duration)
+        debug_log(f"transcript buffer initialized ({self._buffer_duration}s)", "voice")
 
         # Intent judge (full context, larger model) - always used when available
         self._intent_judge = create_intent_judge(self.cfg)
@@ -174,23 +174,6 @@ class VoiceListener(threading.Thread):
             debug_log(f"intent judge initialized (model: {self._intent_judge.config.model})", "voice")
         else:
             debug_log("intent judge unavailable, using simple wake word detection", "voice")
-
-        # Intent judge context duration - how much transcript to send
-        # Auto-detect based on intent judge model size if not explicitly configured
-        configured_context = getattr(self.cfg, "intent_judge_context_seconds", None)
-        if configured_context is not None:
-            self._intent_judge_context_seconds = float(configured_context)
-        else:
-            # Auto-detect based on intent judge model
-            intent_model = str(getattr(self.cfg, "intent_judge_model", "llama3.2:3b"))
-            model_size = detect_model_size(intent_model)
-            # Small models (1b/3b/7b): 120s, Large models (8b+): 300s (full buffer)
-            self._intent_judge_context_seconds = 120.0 if model_size == ModelSize.SMALL else 300.0
-        debug_log(
-            f"intent judge context: {self._intent_judge_context_seconds}s "
-            f"({'auto-detected' if configured_context is None else 'configured'})",
-            "voice"
-        )
 
         # Audio-level wake word detector (openWakeWord)
         self._wake_detector: Optional[WakeWordDetector] = None
@@ -427,8 +410,8 @@ class VoiceListener(threading.Thread):
 
         # Use the upgraded intent judge if available (with full transcript context)
         if not is_speaking_now and self._intent_judge is not None and self._intent_judge.available:
-            # Get recent transcript segments for context (duration based on model size)
-            context_segments = self._transcript_buffer.get_last_seconds(self._intent_judge_context_seconds)
+            # Get recent transcript segments for context (full buffer)
+            context_segments = self._transcript_buffer.get_last_seconds(self._buffer_duration)
 
             # Get TTS context for echo detection
             last_tts_text = self.echo_detector._last_tts_text or ""
