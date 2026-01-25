@@ -151,7 +151,7 @@ def _get_test_description(test_name: str, case_id: Optional[str]) -> str:
 
 @dataclass
 class TestResult:
-    """Captured result from a single test."""
+    """Captured result from a single test run."""
     name: str
     outcome: str  # passed, failed, skipped, xfailed, xpassed
     duration: float
@@ -165,6 +165,113 @@ class TestResult:
 
 
 @dataclass
+class AggregatedTestResult:
+    """Aggregated results from multiple runs of the same test."""
+    name: str
+    class_name: str
+    test_name: str
+    description: str
+    runs: List[TestResult] = field(default_factory=list)
+
+    @property
+    def pass_count(self) -> int:
+        return sum(1 for r in self.runs if r.outcome in ("passed", "xpassed"))
+
+    @property
+    def fail_count(self) -> int:
+        return sum(1 for r in self.runs if r.outcome == "failed")
+
+    @property
+    def skip_count(self) -> int:
+        return sum(1 for r in self.runs if r.outcome == "skipped")
+
+    @property
+    def xfail_count(self) -> int:
+        return sum(1 for r in self.runs if r.outcome == "xfailed")
+
+    @property
+    def total_runs(self) -> int:
+        return len(self.runs)
+
+    @property
+    def pass_rate(self) -> float:
+        countable = self.pass_count + self.fail_count
+        return (self.pass_count / countable * 100) if countable > 0 else 0.0
+
+    @property
+    def total_duration(self) -> float:
+        return sum(r.duration for r in self.runs)
+
+    @property
+    def avg_duration(self) -> float:
+        return self.total_duration / len(self.runs) if self.runs else 0.0
+
+    @property
+    def overall_outcome(self) -> str:
+        """Determine overall outcome based on pass rate."""
+        if self.skip_count == self.total_runs:
+            return "skipped"
+        if self.xfail_count == self.total_runs:
+            return "xfailed"
+        if self.pass_count == self.total_runs:
+            return "passed"
+        if self.fail_count == self.total_runs:
+            return "failed"
+        return "partial"
+
+    @property
+    def pass_rate_str(self) -> str:
+        """Format pass rate as 'X/Y (Z%)'."""
+        countable = self.pass_count + self.fail_count
+        if countable == 0:
+            if self.skip_count > 0:
+                return "SKIPPED"
+            if self.xfail_count > 0:
+                return f"{self.xfail_count}/{self.total_runs} XFAIL"
+            return "N/A"
+        return f"{self.pass_count}/{countable} ({self.pass_rate:.0f}%)"
+
+    @property
+    def judge_notes(self) -> Optional[Dict[str, str]]:
+        """Return judge notes from first run that has them."""
+        for run in self.runs:
+            if run.judge_notes:
+                return run.judge_notes
+        return None
+
+    @property
+    def reason(self) -> Optional[str]:
+        """Return reason from first run that has it."""
+        for run in self.runs:
+            if run.reason:
+                return run.reason
+        return None
+
+
+def _strip_repeat_suffix(node_id: str) -> str:
+    """
+    Strip pytest-repeat iteration suffix from node ID.
+
+    pytest-repeat adds suffixes like [1-3], [2-3], [3-3] to repeated tests.
+    This strips those suffixes to get the base test identifier for aggregation.
+    """
+    # Match patterns like [1-3], [2-3], [3-3] at the end of node ID
+    # But preserve parametrize IDs like [greeting-en], [weather-query], etc.
+    return re.sub(r'\[(\d+)-(\d+)\]$', '', node_id)
+
+
+def _get_aggregation_key(result: TestResult) -> str:
+    """Get a unique key for aggregating repeated test runs."""
+    # Use class_name + test_name + case_id (if any) as the aggregation key
+    key_parts = [result.class_name, result.test_name]
+    if result.case_id:
+        # Strip repeat suffix from case_id too
+        case_id = re.sub(r'-\d+-\d+$', '', result.case_id)
+        key_parts.append(case_id)
+    return "::".join(key_parts)
+
+
+@dataclass
 class EvalReport:
     """Aggregated eval results for markdown generation."""
     results: List[TestResult] = field(default_factory=list)
@@ -175,8 +282,31 @@ class EvalReport:
     def add_result(self, result: TestResult):
         self.results.append(result)
 
+    def get_aggregated_results(self) -> List[AggregatedTestResult]:
+        """Aggregate results from multiple runs of the same test."""
+        aggregated: Dict[str, AggregatedTestResult] = {}
+
+        for result in self.results:
+            key = _get_aggregation_key(result)
+            if key not in aggregated:
+                # Strip repeat suffix from description too
+                desc = re.sub(r'-\d+-\d+$', '', result.description)
+                aggregated[key] = AggregatedTestResult(
+                    name=_strip_repeat_suffix(result.name),
+                    class_name=result.class_name,
+                    test_name=result.test_name,
+                    description=desc,
+                )
+            aggregated[key].runs.append(result)
+
+        return list(aggregated.values())
+
     @property
-    def total(self) -> int:
+    def total_unique_tests(self) -> int:
+        return len(self.get_aggregated_results())
+
+    @property
+    def total_runs(self) -> int:
         return len(self.results)
 
     @property
@@ -209,8 +339,17 @@ class EvalReport:
         return sum(r.duration for r in self.results)
 
     def generate_markdown(self) -> str:
-        """Generate a pretty markdown report."""
+        """Generate a pretty markdown report with pass rates from multiple runs."""
         lines = []
+        aggregated_results = self.get_aggregated_results()
+
+        # Calculate overall stats from aggregated results
+        total_tests = len(aggregated_results)
+        fully_passed = sum(1 for r in aggregated_results if r.overall_outcome == "passed")
+        fully_failed = sum(1 for r in aggregated_results if r.overall_outcome == "failed")
+        partial = sum(1 for r in aggregated_results if r.overall_outcome == "partial")
+        skipped = sum(1 for r in aggregated_results if r.overall_outcome == "skipped")
+        xfailed = sum(1 for r in aggregated_results if r.overall_outcome == "xfailed")
 
         # Header
         lines.append("# 🧪 Jarvis Evaluation Report")
@@ -218,6 +357,7 @@ class EvalReport:
         lines.append(f"**Generated:** {self.end_time.strftime('%Y-%m-%d %H:%M:%S') if self.end_time else 'N/A'}")
         lines.append(f"**Judge Model:** `{self.judge_model}`")
         lines.append(f"**Duration:** {self.duration:.2f}s")
+        lines.append(f"**Runs per test:** {self.total_runs // total_tests if total_tests > 0 else 0}")
         lines.append("")
 
         # Summary stats
@@ -225,26 +365,27 @@ class EvalReport:
         lines.append("")
         lines.append("| Metric | Count |")
         lines.append("|--------|-------|")
-        lines.append(f"| ✅ Passed | {self.passed} |")
-        lines.append(f"| ❌ Failed | {self.failed} |")
-        lines.append(f"| ⏭️ Skipped | {self.skipped} |")
-        lines.append(f"| 🔸 Expected Fail | {self.xfailed} |")
-        lines.append(f"| 🎉 Unexpectedly Passed | {self.xpassed} |")
-        lines.append(f"| **Total** | **{self.total}** |")
+        lines.append(f"| ✅ Fully Passed (100%) | {fully_passed} |")
+        lines.append(f"| ⚠️ Partial Pass | {partial} |")
+        lines.append(f"| ❌ Fully Failed (0%) | {fully_failed} |")
+        lines.append(f"| ⏭️ Skipped | {skipped} |")
+        lines.append(f"| 🔸 Expected Fail | {xfailed} |")
+        lines.append(f"| **Unique Tests** | **{total_tests}** |")
+        lines.append(f"| **Total Runs** | **{self.total_runs}** |")
         lines.append("")
 
-        # Pass rate bar
+        # Pass rate bar (based on individual runs)
         pass_rate = self.pass_rate
         bar_filled = int(pass_rate / 5)  # 20 chars max
         bar_empty = 20 - bar_filled
         bar = "█" * bar_filled + "░" * bar_empty
         emoji = "🟢" if pass_rate >= 80 else "🟡" if pass_rate >= 50 else "🔴"
-        lines.append(f"**Pass Rate:** {emoji} `{bar}` **{pass_rate:.1f}%**")
+        lines.append(f"**Overall Pass Rate:** {emoji} `{bar}` **{pass_rate:.1f}%** ({self.passed}/{self.passed + self.failed} runs)")
         lines.append("")
 
-        # Group results by class
-        by_class: Dict[str, List[TestResult]] = {}
-        for result in self.results:
+        # Group aggregated results by class
+        by_class: Dict[str, List[AggregatedTestResult]] = {}
+        for result in aggregated_results:
             if result.class_name not in by_class:
                 by_class[result.class_name] = []
             by_class[result.class_name].append(result)
@@ -256,9 +397,9 @@ class EvalReport:
         lines.append("")
 
         for class_name, class_results in by_class.items():
-            class_passed = sum(1 for r in class_results if r.outcome in ("passed", "xpassed"))
-            class_total = len([r for r in class_results if r.outcome not in ("skipped",)])
-            class_emoji = "✅" if class_passed == class_total and class_total > 0 else "⚠️" if class_passed > 0 else "❌"
+            class_fully_passed = sum(1 for r in class_results if r.overall_outcome == "passed")
+            class_total = len([r for r in class_results if r.overall_outcome not in ("skipped",)])
+            class_emoji = "✅" if class_fully_passed == class_total and class_total > 0 else "⚠️" if class_fully_passed > 0 else "❌"
 
             # Class header with description
             lines.append(f"### {class_emoji} {class_name}")
@@ -278,11 +419,12 @@ class EvalReport:
                         "failed": "❌",
                         "skipped": "⏭️",
                         "xfailed": "🔸",
-                        "xpassed": "🎉",
-                    }.get(result.outcome, "❓")
+                        "partial": "⚠️",
+                    }.get(result.overall_outcome, "❓")
 
                     lines.append(f"#### {status_emoji} {result.description}")
                     lines.append("")
+                    lines.append(f"**Pass Rate:** {result.pass_rate_str}")
 
                     if result.judge_notes:
                         notes = result.judge_notes
@@ -296,12 +438,12 @@ class EvalReport:
                             lines.append(f"**Judge notes:** {notes['reasoning']}")
                         lines.append("")
 
-                    lines.append(f"*Duration: {result.duration:.2f}s*")
+                    lines.append(f"*Avg Duration: {result.avg_duration:.2f}s*")
                     lines.append("")
             else:
-                # Table format for non-judge tests
-                lines.append("| Test Case | Status | Duration |")
-                lines.append("|-----------|--------|----------|")
+                # Table format for non-judge tests with pass rates
+                lines.append("| Test Case | Pass Rate | Status | Avg Duration |")
+                lines.append("|-----------|-----------|--------|--------------|")
 
                 for result in class_results:
                     status_emoji = {
@@ -309,15 +451,15 @@ class EvalReport:
                         "failed": "❌",
                         "skipped": "⏭️",
                         "xfailed": "🔸",
-                        "xpassed": "🎉",
-                    }.get(result.outcome, "❓")
+                        "partial": "⚠️",
+                    }.get(result.overall_outcome, "❓")
 
-                    status_text = result.outcome.upper()
+                    status_text = result.overall_outcome.upper()
                     if result.reason:
                         reason_short = result.reason[:30] + "..." if len(result.reason) > 30 else result.reason
                         status_text += f" ({reason_short})"
 
-                    lines.append(f"| {result.description} | {status_emoji} {status_text} | {result.duration:.2f}s |")
+                    lines.append(f"| {result.description} | {result.pass_rate_str} | {status_emoji} {status_text} | {result.avg_duration:.2f}s |")
 
                 lines.append("")
 

@@ -19,10 +19,11 @@ from typing import Dict, List, Optional, Tuple
 
 @dataclass
 class TestResult:
-    """Result for a single test case."""
+    """Result for a single test case (aggregated across multiple runs)."""
     name: str
-    outcome: str  # passed, failed, skipped, xfailed, xpassed
+    outcome: str  # passed, failed, skipped, xfailed, xpassed, partial
     duration: float
+    pass_rate: str = ""  # e.g., "3/3 (100%)" or "2/3 (67%)"
 
 
 @dataclass
@@ -71,41 +72,62 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
                 report.duration = float(match.group(1))
 
     # Parse individual test results from tables
+    # Support both old format (| Test Case | Status | Duration |)
+    # and new format (| Test Case | Pass Rate | Status | Avg Duration |)
     in_table = False
+    table_format = "old"  # "old" or "new"
     for line in content.split("\n"):
+        if "| Test Case | Pass Rate | Status | Avg Duration |" in line:
+            in_table = True
+            table_format = "new"
+            continue
         if "| Test Case | Status | Duration |" in line:
             in_table = True
+            table_format = "old"
             continue
         if in_table and line.startswith("|") and "---" not in line:
-            # Parse table row: | Test Case | ✅ PASSED | 1.23s |
             parts = [p.strip() for p in line.split("|")[1:-1]]
-            if len(parts) >= 3:
+
+            if table_format == "new" and len(parts) >= 4:
+                # Parse new format: | Test Case | Pass Rate | Status | Avg Duration |
                 test_name = parts[0]
+                pass_rate = parts[1]
+                status_cell = parts[2]
+                duration_cell = parts[3]
+            elif len(parts) >= 3:
+                # Parse old format: | Test Case | Status | Duration |
+                test_name = parts[0]
+                pass_rate = ""
                 status_cell = parts[1]
                 duration_cell = parts[2]
+            else:
+                continue
 
-                # Extract outcome from status cell
-                outcome = "unknown"
-                if "✅" in status_cell:
-                    outcome = "passed"
-                elif "❌" in status_cell:
-                    outcome = "failed"
-                elif "⏭️" in status_cell:
-                    outcome = "skipped"
-                elif "🔸" in status_cell:
-                    outcome = "xfailed"
-                elif "🎉" in status_cell:
-                    outcome = "xpassed"
+            # Extract outcome from status cell
+            outcome = "unknown"
+            if "✅" in status_cell:
+                outcome = "passed"
+            elif "❌" in status_cell:
+                outcome = "failed"
+            elif "⏭️" in status_cell:
+                outcome = "skipped"
+            elif "🔸" in status_cell:
+                outcome = "xfailed"
+            elif "🎉" in status_cell:
+                outcome = "xpassed"
+            elif "⚠️" in status_cell:
+                outcome = "partial"
 
-                # Extract duration
-                duration_match = re.search(r"([\d.]+)s", duration_cell)
-                duration = float(duration_match.group(1)) if duration_match else 0.0
+            # Extract duration
+            duration_match = re.search(r"([\d.]+)s", duration_cell)
+            duration = float(duration_match.group(1)) if duration_match else 0.0
 
-                report.results[test_name] = TestResult(
-                    name=test_name,
-                    outcome=outcome,
-                    duration=duration
-                )
+            report.results[test_name] = TestResult(
+                name=test_name,
+                outcome=outcome,
+                duration=duration,
+                pass_rate=pass_rate
+            )
         elif in_table and not line.startswith("|"):
             in_table = False
 
@@ -261,6 +283,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         "skipped": "⏭️",
         "xfailed": "🔸",
         "xpassed": "🎉",
+        "partial": "⚠️",
         "unknown": "❓",
     }
 
@@ -270,7 +293,11 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
             result = report.results.get(test_name)
             if result:
                 emoji = status_emoji.get(result.outcome, "❓")
-                row += f" {emoji} |"
+                # Include pass rate if available
+                if result.pass_rate:
+                    row += f" {emoji} {result.pass_rate} |"
+                else:
+                    row += f" {emoji} |"
             else:
                 row += " ➖ |"
         lines.append(row)
@@ -297,13 +324,14 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         lines.append(f"**Results:** {ij_passed} passed, {ij_failed} failed, {ij_xfailed} expected failures")
         lines.append("")
 
-        lines.append("| Test Case | Status |")
-        lines.append("|-----------|--------|")
+        lines.append("| Test Case | Pass Rate | Status |")
+        lines.append("|-----------|-----------|--------|")
 
         for test_name in sorted(intent_judge_results.keys()):
             result = intent_judge_results[test_name]
             emoji = status_emoji.get(result.outcome, "❓")
-            lines.append(f"| {test_name} | {emoji} |")
+            pass_rate_str = result.pass_rate if result.pass_rate else "N/A"
+            lines.append(f"| {test_name} | {pass_rate_str} | {emoji} |")
 
         lines.append("")
 
@@ -312,8 +340,9 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("")
     lines.append("| Symbol | Meaning |")
     lines.append("|--------|---------|")
-    lines.append("| ✅ | Passed |")
-    lines.append("| ❌ | Failed |")
+    lines.append("| ✅ | Fully passed (100% pass rate) |")
+    lines.append("| ⚠️ | Partial pass (some runs failed) |")
+    lines.append("| ❌ | Fully failed (0% pass rate) |")
     lines.append("| ⏭️ | Skipped (missing dependencies) |")
     lines.append("| 🔸 | Expected failure (known limitation) |")
     lines.append("| 🎉 | Unexpectedly passed (bug fixed!) |")

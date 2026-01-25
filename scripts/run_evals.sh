@@ -13,6 +13,7 @@
 # Environment variables:
 #   EVAL_JUDGE_MODEL    - Model to use for LLM-as-judge (default: gpt-oss:20b)
 #   EVAL_JUDGE_BASE_URL - Ollama base URL (default: http://localhost:11434)
+#   EVAL_REPEAT_COUNT   - Number of times to run each test (default: 3)
 
 set -e
 
@@ -107,7 +108,9 @@ run_evals_for_model() {
     echo ""
 
     # Build the pytest command (--tb=short for cleaner tracebacks, -s to capture stdout for judge notes)
-    local CMD="python -m pytest evals/ $PYTEST_ARGS --tb=short"
+    # Each test runs REPEAT_COUNT times for pass rate calculation
+    local REPEAT_COUNT="${EVAL_REPEAT_COUNT:-3}"
+    local CMD="python -m pytest evals/ $PYTEST_ARGS --tb=short --count=$REPEAT_COUNT"
 
     if [ -n "$FILTER" ]; then
         if [ -n "$EXCLUDE_PATTERNS" ]; then

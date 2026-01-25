@@ -16,6 +16,7 @@ geoip2==4.8.0
 openwakeword>=0.6.0
 miniupnpc==2.2.8
 pytest==8.3.2
+pytest-repeat==0.9.3
 mcp==1.13.1
 chatterbox-tts==0.1.2
 pygame>=2.1.0
