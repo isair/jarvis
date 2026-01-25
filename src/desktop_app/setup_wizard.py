@@ -2428,6 +2428,12 @@ class CompletePage(QWizardPage):
 
         self.setLayout(layout)
 
+    def initializePage(self):
+        """Hide Cancel button on final page - user can use window close if needed."""
+        wizard = self.wizard()
+        if wizard:
+            wizard.button(QWizard.WizardButton.CancelButton).setVisible(False)
+
     def nextId(self) -> int:
         """No next page."""
         return -1
