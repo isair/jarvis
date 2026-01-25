@@ -1,6 +1,6 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-01-25 18:23:21
+**Generated:** 2026-01-25 22:11:48
 
 ## 📊 Model Comparison
 
@@ -9,16 +9,16 @@ Use this to understand the performance tradeoffs when choosing a model.
 
 | Metric | llama3.2:3b | gpt-oss:20b |
 |--------|--------|--------|
-| ✅ Passed | 49 | 52 |
-| ❌ Failed | 3 | 0 |
+| ✅ Passed | 43 | 50 |
+| ❌ Failed | 1 | 0 |
 | ⏭️ Skipped | 0 | 0 |
-| 📊 Total | 55 | 55 |
-| ⏱️ Duration | 125.2s | 619.2s |
-| 📈 Pass Rate | 🟢 94.2% | 🟢 100.0% |
+| 📊 Total | 44 | 50 |
+| ⏱️ Duration | 50.0s | 259.6s |
+| 📈 Pass Rate | 🟢 97.7% | 🟢 100.0% |
 
 ### Pass Rate Visualization
 
-**llama3.2:3b:** 🟢 `██████████████████░░` **94.2%**
+**llama3.2:3b:** 🟢 `███████████████████░` **97.7%**
 **gpt-oss:20b:** 🟢 `████████████████████` **100.0%**
 
 ### 💡 Model Selection Guide
@@ -34,55 +34,64 @@ Use this to understand the performance tradeoffs when choosing a model.
 
 | Test Case | llama3.2:3b | gpt-oss:20b |
 |-----------|----------|----------|
-| 3-turn conversation with topic changes | ❌ | ✅ |
-| Agent calls webSearch for info queries | ✅ | ✅ |
-| Agent chains search → fetch for details | ✅ | ✅ |
-| Agent recalls interests before personalized search (mocked) | ✅ | ✅ |
-| Agent uses memory + nutrition data | ✅ | ✅ |
-| Bad: deflection without attempting answer | ✅ | ✅ |
-| Bad: empty acknowledgment | ✅ | ✅ |
-| Bad: generic greeting ignores query | ✅ | ✅ |
-| Enrichment results appear in system message | ✅ | ✅ |
-| Extraction with explicit quantities | ✅ | ✅ |
-| Follow-up references previous turn context | ✅ | ✅ |
-| Good: brief but informative | ✅ | ✅ |
-| Good: complete weekly forecast | ✅ | ✅ |
-| Handles ambiguous portion descriptions | ✅ | ✅ |
-| LLM uses enrichment, skips redundant recallConversation | ✅ | ✅ |
-| Live weather query with real LLM | ✅ | ✅ |
-| Live: LLM checks memory before asking about interests | ✅ | ✅ |
-| Location context flows to search queries | ✅ | ✅ |
-| LogMealTool stores meals with macros | ✅ | ✅ |
-| Rapid back-and-forth topic switching | ✅ | ✅ |
-| Returns NONE for non-food inputs | ✅ | ✅ |
-| Returns valid JSON with all required fields | ✅ | ✅ |
-| Simple meal baseline (2 boiled eggs) | ✅ | ✅ |
-| Topic switch: search → weather uses getWeather | ✅ | ✅ |
-| Topic switch: weather → restaurant uses webSearch | ✅ | ✅ |
-| Topic switch: weather → store hours uses webSearch | ❌ | ✅ |
-| caesar-salad | ❌ | ✅ |
-| cheeseburger-fries | ✅ | ✅ |
-| chicken-broccoli | ✅ | ✅ |
-| eggs-toast | ✅ | ✅ |
-| oatmeal-banana | ✅ | ✅ |
-| personalized news | ✅ | ✅ |
-| personalized restaurant | ✅ | ✅ |
-| pizza-slice | ✅ | ✅ |
-| protein-shake | ✅ | ✅ |
-| spaghetti-bolognese | ✅ | ✅ |
-| specific topic recall | ✅ | ✅ |
-| test_hot_window_mode_indicated_in_prompt | ✅ | ✅ |
-| test_returns_none_when_ollama_unavailable | ✅ | ✅ |
-| test_system_prompt_has_echo_guidance | ✅ | ✅ |
-| test_tts_text_included_for_echo_detection | ✅ | ✅ |
-| time-based recall | ✅ | ✅ |
+| 1-3 | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| 2-3 | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| 3-3 | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Bad: deflection without attempting answer | ❌ 0/3 (0%) | ✅ 3/3 (100%) |
+| Bad: empty acknowledgment | ⚠️ 2/3 (67%) | ✅ 3/3 (100%) |
+| Bad: generic greeting ignores query | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Empty defaults to LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Good: brief but informative | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Good: complete weekly forecast | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| None defaults to LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| bonjour-False-French greeting | 🔸 3/3 XFAIL | ✅ 3/3 (100%) |
+| caesar-salad | ⚠️ 2/3 (67%) | ✅ 3/3 (100%) |
+| cheeseburger-fries | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| chicken-broccoli | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| ciao-False-Italian greeting | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| eggs-toast | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| gemma2:27b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| good morning-False-English morning | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| good night-False-English night | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| goodbye-False-English goodbye | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| gpt-oss:20b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| guten tag-False-German greeting | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| hello-False-English hello | 🔸 3/3 XFAIL | ✅ 3/3 (100%) |
+| hey-False-English hey | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| hi there-False-English hi | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| hola-False-Spanish greeting | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| how are you-False-English wellbeing | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| how are you-False-Wellbeing query | 🔸 3/3 XFAIL | ✅ 3/3 (100%) |
+| llama3.1:8b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| llama3.2:1b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| llama3.2:3b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| look up the news today-True-News search | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| merhaba-False-Turkish greeting | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| mistral:7b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| ni hao-False-Chinese greeting | ⚠️ 1/1 (100%) | ✅ 3/3 (100%) |
+| oatmeal-banana | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| personalized news | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| personalized restaurant | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| pizza-slice | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| protein-shake | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| qwen2.5:14b | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| search for python tutorials-True-Web search | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| spaghetti-bolognese | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| specific topic recall | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| thank you-False-English thanks | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| thanks-False-English thanks short | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| time-based recall | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| what did I eat yesterday-True-Meal recall | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| what's the weather in Tokyo-True-Weather with location | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| what's the weather-True-Weather query | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 
 ### 📖 Legend
 
 | Symbol | Meaning |
 |--------|---------|
-| ✅ | Passed |
-| ❌ | Failed |
+| ✅ | Fully passed (100% pass rate) |
+| ⚠️ | Partial pass (some runs failed) |
+| ❌ | Fully failed (0% pass rate) |
 | ⏭️ | Skipped (missing dependencies) |
 | 🔸 | Expected failure (known limitation) |
 | 🎉 | Unexpectedly passed (bug fixed!) |
