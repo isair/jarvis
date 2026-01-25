@@ -664,11 +664,11 @@ class MemoryViewerWindow(QMainWindow):
 
     def start_server(self) -> bool:
         """Start the memory viewer Flask server."""
-        print("🧠 Starting memory viewer server...", flush=True)
-
         if self.is_server_running:
-            print("   ✓ Server already marked as running", flush=True)
+            debug_log("memory viewer server already running (skipping start)", "desktop")
             return True
+
+        print("🧠 Starting memory viewer server...", flush=True)
 
         try:
             # Check if server is already running on the port
