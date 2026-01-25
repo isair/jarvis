@@ -1748,7 +1748,8 @@ def main() -> int:
         try:
             from desktop_app.setup_wizard import (
                 should_show_setup_wizard, SetupWizard,
-                check_ollama_server, check_ollama_cli
+                check_ollama_server, check_ollama_cli,
+                get_required_models, check_installed_models
             )
             print("  Setup wizard module loaded successfully", flush=True)
         except Exception as e:
@@ -1937,6 +1938,45 @@ def main() -> int:
                 # Continue anyway - user may start Ollama manually
         else:
             print(f"✅ Ollama server is running (version {version})", flush=True)
+
+        # Check for missing required models (important for users upgrading from older versions)
+        # This catches the case where server wasn't running at initial check but models are missing
+        splash.set_status("Verifying required models...")
+        app.processEvents()
+
+        required_models = get_required_models()
+        installed_models = check_installed_models()
+
+        # Normalize model names for comparison (remove :latest suffix)
+        def normalize_model(name: str) -> str:
+            return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
+
+        installed_normalized = {normalize_model(m) for m in installed_models}
+        missing_models = [
+            m for m in required_models
+            if normalize_model(m) not in installed_normalized and m not in installed_models
+        ]
+
+        if missing_models:
+            splash.hide()
+            print(f"⚠️ Missing required models: {missing_models}", flush=True)
+            print("🔧 Opening setup wizard to install missing models...", flush=True)
+            wizard = SetupWizard()
+            wizard.show()
+            wizard.raise_()
+            wizard.activateWindow()
+            result = wizard.exec()
+
+            if result != wizard.DialogCode.Accepted:
+                print("Setup wizard cancelled - exiting", flush=True)
+                return 0
+
+            print("✅ Model installation complete", flush=True)
+            splash.show()
+            splash.set_status("Models installed!")
+            app.processEvents()
+        else:
+            print("✅ All required models are installed", flush=True)
 
         # Check if user is using an unsupported model
         splash.set_status("Checking model compatibility...")
