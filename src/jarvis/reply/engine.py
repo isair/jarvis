@@ -14,6 +14,7 @@ from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response
 from .enrichment import extract_search_params_for_memory
+from .prompts import detect_model_size, get_system_prompts
 import json
 import uuid
 from datetime import datetime, timezone
@@ -164,52 +165,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
         debug_log(f"⚠️ {total_tools} tools registered - this may overwhelm smaller models and cause confused responses", "planning")
 
     # Step 7: Messages-based loop with tool handling
+    # Detect model size for prompt selection
+    model_size = detect_model_size(cfg.ollama_chat_model)
+    prompts = get_system_prompts(model_size)
+    debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model}", "planning")
+
     def _build_initial_system_message() -> str:
+        # Start with profile-specific system prompt
         guidance = [system_prompt.strip()]
-        # Voice/ASR clarification appended to all conversations to account for transcription noise
-        asr_note = (
-            "Input is voice transcription that may include: errors, missing words, filler words (um, uh, like), "
-            "or unrelated speech captured before the user addressed you. "
-            "Extract the user's actual request/question directed at you - ignore any preceding chatter or conversation fragments. "
-            "Prioritize their intent over literal wording."
-        )
-        guidance.append(asr_note)
 
-        # General inference and context usage guidance
-        inference_guidance = (
-            "Prioritize reasonable inference from available context, memory, and patterns over asking for clarification. "
-            "When you make assumptions or inferences, be transparent about them. "
-            "Only ask clarifying questions when the request is genuinely ambiguous and inference would likely be wrong."
-        )
-        guidance.append(inference_guidance)
-
-        # Tool usage incentives and best practices
-        tool_incentives = (
-            "Proactively use available tools to provide better, more accurate responses. "
-            "Prefer tools over guessing when you can get definitive, current, or personalized information. "
-            "Tools enhance your capabilities - use them confidently to deliver superior assistance. "
-            "Always try tools before asking the user for information you might already be able to get via them."
-        )
-        guidance.append(tool_incentives)
-
-        # Voice assistant communication style
-        voice_style = (
-            "Keep responses concise and conversational since this is a voice assistant. "
-            "Two to three sentences maximum. Prioritize clarity and brevity - users are listening, not reading. "
-            "Avoid unnecessary elaboration unless specifically requested. "
-            "Do NOT offer follow-up suggestions or ask if the user wants more info - just respond directly. "
-            "IMPORTANT: Always respond in natural language - never output JSON, code, or structured data as your response."
-        )
-        guidance.append(voice_style)
-
-        # Brief tool guidance - detailed tool info is passed via the tools API parameter
-        tool_guidance = (
-            "You have access to tools - use them proactively when you need current information or to perform actions. "
-            "After receiving tool results, use the data to FULFILL THE USER'S ORIGINAL REQUEST. "
-            "Do NOT describe the structure of tool responses - extract the relevant information and present it conversationally. "
-            "Tool results are raw data for you to interpret and use, not content to describe or explain."
-        )
-        guidance.append(tool_guidance)
+        # Add model-size-appropriate prompt components
+        guidance.extend(prompts.to_list())
 
         if conversation_context:
             guidance.append("\nRelevant conversation history:\n" + conversation_context)

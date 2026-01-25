@@ -241,6 +241,37 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
 - Output and debugging:
   - `voice_debug` toggles verbose stderr debug vs emoji console output.
 
+### Model-Size-Aware Prompts
+
+The reply engine automatically detects model size and adjusts prompts accordingly. This is critical because small models (1b, 3b, 7b) lack the reasoning capacity to infer when NOT to use tools from implicit guidance.
+
+**Detection:**
+```python
+from jarvis.reply.prompts import detect_model_size, get_system_prompts
+
+model_size = detect_model_size(cfg.ollama_chat_model)  # SMALL or LARGE
+prompts = get_system_prompts(model_size)
+```
+
+**Prompt Differences:**
+
+| Component | Large Model (8b+) | Small Model (1b-7b) |
+|-----------|-------------------|---------------------|
+| `tool_incentives` | "Proactively use available tools..." | "Use tools ONLY when explicitly required..." |
+| `tool_guidance` | "Use them proactively..." | Brief guidance without proactive language |
+| `tool_constraints` | Not included | Explicit list of when NOT to use tools |
+
+**Small Model Constraints:**
+Small models receive an explicit list of scenarios where tools should NOT be used:
+- Greetings in any language (hello, ni hao, bonjour, etc.)
+- Small talk, thank you, goodbye
+- Questions answerable from general knowledge
+- Casual conversation
+
+This prevents issues like calling `webSearch` for "ni hao" (Chinese greeting).
+
+See `src/jarvis/reply/prompts/prompts.spec.md` for full prompt architecture documentation.
+
 ### Logging and Privacy
 - Use `debug_log` for key steps: `profile`, `memory`, `planning`, and `voice` categories.
 - Avoid excessive logging; logs must remain readable and privacy-preserving.

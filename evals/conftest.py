@@ -57,6 +57,9 @@ CLASS_DESCRIPTIONS = {
     "TestTopicSwitching": "Tests correct tool selection when conversation topic changes",
     "TestFollowUpContext": "Tests context retention for follow-up questions",
     "TestMultiTurnExtended": "Extended multi-turn scenarios with longer conversations",
+    "TestModelSizeDetection": "Tests model size detection from model names",
+    "TestGreetingNoTools": "Tests that greetings don't trigger tool calls (mocked)",
+    "TestGreetingNoToolsLive": "Live tests that greetings don't trigger tool calls",
 }
 
 # Descriptions for non-parametrized tests
@@ -87,6 +90,12 @@ TEST_DESCRIPTIONS = {
     "test_follow_up_references_previous_context": "Follow-up references previous turn context",
     "test_three_turn_topic_changes": "3-turn conversation with topic changes",
     "test_rapid_topic_switching": "Rapid back-and-forth topic switching",
+    # Greeting no-tools tests
+    "test_model_size_detection": "Model size detection from model name",
+    "test_greeting_no_tool_calls": "Greeting should not trigger tool calls",
+    "test_tool_queries_still_work": "Tool-requiring queries still trigger tools",
+    "test_greeting_no_tools_live": "Live: greeting should not trigger tool calls",
+    "test_weather_still_triggers_tools_live": "Live: weather query triggers tools",
 }
 
 
