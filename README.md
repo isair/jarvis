@@ -1,6 +1,6 @@
 # Jarvis
 
-Your AI assistant that never forgets and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers (e.g. home automation). No subscriptions, no cloud, just say "Jarvis" and talk naturally.
+Your AI assistant that never forgets and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers (e.g. home automation). No subscriptions, no cloud, just say "Jarvis" and talk naturally - it can even chime into ongoing conversations when you ask.
 
 ---
 
@@ -66,6 +66,19 @@ I can see the error on your screen - "Cannot return null for non-nullable field"
 Your User type has `email: String!` but the resolver is returning null...
 ```
 
+**Chiming into conversations:**
+```
+👤 Person A: I wonder what the weather will be like tomorrow
+👤 Person B: Yeah, we should check before planning the picnic
+👤 Person A: Jarvis, what do you think?
+
+✨ Working on it: what do you think about the weather tomorrow for the picnic
+🧰 Tool: getWeather…
+
+🤖 Jarvis (life)
+Tomorrow looks great for a picnic! Sunny with highs around 72°F...
+```
+
 </details>
 
 ## Quick Install
@@ -105,7 +118,7 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 - **Unlimited Memory** - Never forgets. Search across all history. Memory Viewer GUI included.
 - **Smart Personalities** - Developer (debugging), Business (planning), Life Coach (health tracking)
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
-- **Voice Interface** - Wake word ("Jarvis"), interruptible ("stop"), natural follow-ups
+- **Voice Interface** - Wake word ("Jarvis"), interruptible ("stop"), natural follow-ups, can chime into ongoing conversations
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
