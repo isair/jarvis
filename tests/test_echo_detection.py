@@ -197,6 +197,62 @@ class TestEchoRejection:
         )
         assert result is False
 
+    @pytest.mark.unit
+    def test_rejects_echo_during_tts_with_timing_drift(self):
+        """Rejects echo during TTS even when timing-based segment matching fails.
+
+        When TTS timing drifts (plays faster/slower than expected), segment
+        matching may check the wrong portion of the TTS text. The fallback
+        full-TTS check should catch these cases for long utterances.
+        """
+        detector = EchoDetector()
+        # Weather forecast TTS
+        tts_text = (
+            "the weather tomorrow is expected to be mostly cloudy with a high "
+            "of around 8 degrees celsius 46.4 degrees fahrenheit and a low of "
+            "2 degrees celsius 35.6 degrees fahrenheit it should be quite breezy"
+        )
+        detector.track_tts_start(tts_text)
+
+        # Simulate TTS playing faster than expected - utterance starts early in TTS
+        # but the actual audio is from the middle/end (timing drift)
+        tts_start = detector._tts_start_time
+        # Utterance starts 2 seconds after TTS, but this is actually audio from later in TTS
+        utterance_start = tts_start + 2.0
+
+        # This fragment is from the middle of TTS but segment matching will
+        # look at the wrong segment due to timing drift
+        heard = "35.6 degrees fahrenheit it should be quite breezy"
+
+        result = detector.should_reject_as_echo(
+            heard_text=heard,
+            current_energy=0.01,
+            is_during_tts=True,
+            tts_rate=200.0,
+            utterance_start_time=utterance_start
+        )
+        # Should be rejected via full-TTS fallback (8 words, 100% similarity)
+        assert result is True, "Should reject echo via full-TTS fallback when segment matching fails"
+
+    @pytest.mark.unit
+    def test_accepts_stop_command_during_tts_fallback(self):
+        """Stop commands should not trigger the full-TTS fallback rejection.
+
+        The fallback only applies to utterances > 4 words, so short commands
+        like 'stop' should still be accepted during TTS.
+        """
+        detector = EchoDetector()
+        detector.track_tts_start("the weather tomorrow will be sunny and warm")
+
+        result = detector.should_reject_as_echo(
+            heard_text="stop",
+            current_energy=0.05,
+            is_during_tts=True,
+            tts_rate=200.0,
+            utterance_start_time=time.time()
+        )
+        assert result is False, "Stop command should not be rejected during TTS"
+
 
 class TestLeadingEchoCleanup:
     """Tests for cleanup_leading_echo functionality."""

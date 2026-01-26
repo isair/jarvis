@@ -332,12 +332,24 @@ class EchoDetector:
         debug_log(f"echo check: heard='{heard_text[:50]}...', tts_available=True, is_during_tts={is_during_tts}, energy={current_energy:.4f}, hot_window={in_hot_window}", "echo")
 
         # --- Case 1: During TTS Playback ---
-        # Must use segment matching to allow for interruptions like "stop".
+        # Use segment matching first to allow for interruptions like "stop".
+        # But also fallback to full-TTS check for long utterances with timing drift.
         if is_during_tts:
             if self._matches_tts_segment(heard_text, tts_rate, utterance_start_time):
                 debug_log(f"rejected as echo during TTS (segment match): '{heard_text}'", "echo")
                 return True
-            debug_log("NOT echo during TTS - text does not match segment.", "echo")
+
+            # Fallback: For long utterances (>4 words), check against full TTS at lower threshold.
+            # This catches echoes with significant timing drift that segment matching misses.
+            # Short utterances skip this to avoid false rejections of "stop", "quiet" etc.
+            word_count = len(heard_text.split())
+            if word_count > 4:
+                # Use threshold 70 for during-TTS fallback (same as hot window after-TTS check)
+                if self._check_text_similarity(heard_text, self._last_tts_text, threshold=70):
+                    debug_log(f"rejected as echo during TTS (full-TTS fallback, {word_count} words): '{heard_text}'", "echo")
+                    return True
+
+            debug_log("NOT echo during TTS - text does not match segment or full TTS.", "echo")
             return False
 
         # --- Case 2: After TTS Playback ---
