@@ -503,6 +503,23 @@ class VoiceListener(threading.Thread):
                         pass
                     return
 
+                # If directed with high confidence but no extracted query, use actual text
+                # Per spec: "Hot window input should reflect what the user actually said"
+                # This handles cases where intent judge correctly identifies directed speech
+                # but fails to extract/synthesize a query (e.g., conversational follow-ups)
+                if intent_judgment.directed and intent_judgment.confidence == "high":
+                    debug_log(f"✅ Intent judge accepted (directed, high confidence, using actual text): \"{text_lower}\"", "voice")
+                    self.state_manager.cancel_hot_window_activation()
+                    self._transcript_buffer.mark_segment_processed(text_lower)
+                    self._clear_audio_buffers()
+                    self.state_manager.start_collection(text_lower)
+                    self._start_thinking_tune()
+                    try:
+                        print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                    except Exception:
+                        pass
+                    return
+
                 # If not directed with high confidence, check reasoning before rejecting
                 if not intent_judgment.directed and intent_judgment.confidence == "high":
                     # Surgical fix: If intent judge claims "echo" but echo system already cleared
