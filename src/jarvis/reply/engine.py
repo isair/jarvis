@@ -353,6 +353,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
             if not isinstance(data, dict):
                 return None
 
+            # Detect malformed tool call attempts (model hallucinating tool calls in content)
+            # These have "name", "function", or "parameters" fields but no actual content
+            tool_call_fields = {"name", "function", "parameters", "arguments", "tool_name"}
+            if any(field in data for field in tool_call_fields):
+                # This looks like a malformed tool call, not a valid response
+                debug_log(f"  ⚠️ JSON looks like malformed tool call (has {[f for f in tool_call_fields if f in data]}), rejecting", "planning")
+                return None
+
             # Common fields that contain human-readable responses
             text_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
             for field in text_fields:
