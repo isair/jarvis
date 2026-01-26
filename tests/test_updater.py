@@ -410,6 +410,117 @@ class TestReleaseInfo:
         assert release.asset_id == 100002
 
 
+class TestInstallUpdateWindows:
+    """Tests for Windows update installation."""
+
+    @pytest.mark.unit
+    def test_batch_script_waits_for_pid(self, tmp_path):
+        """Verify the Windows batch script waits for the current process to exit."""
+        import os
+        import subprocess
+        import zipfile
+        from unittest.mock import patch, MagicMock, call
+
+        # Create a mock zip file with Jarvis.exe
+        zip_path = tmp_path / "update.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("Jarvis.exe", b"mock executable content")
+
+        # Mock get_app_path to return a fake path
+        mock_app_path = tmp_path / "Jarvis.exe"
+        mock_app_path.write_bytes(b"old executable")
+
+        # Import here to avoid issues with platform checks
+        from desktop_app.updater import install_update_windows
+
+        # Capture the batch script content via the Popen call
+        batch_content_captured = []
+
+        def capture_popen(args, **kwargs):
+            if args[0] == "cmd" and args[1] == "/c":
+                # Read the batch script content
+                batch_path = Path(args[2])
+                if batch_path.exists():
+                    batch_content_captured.append(batch_path.read_text())
+            return MagicMock()
+
+        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+            # Mock CREATE_NO_WINDOW for non-Windows platforms
+            if not hasattr(subprocess, 'CREATE_NO_WINDOW'):
+                with patch.object(subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True):
+                    with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                        result = install_update_windows(zip_path)
+            else:
+                with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                    result = install_update_windows(zip_path)
+
+            assert result is True
+            assert len(batch_content_captured) == 1
+            batch_content = batch_content_captured[0]
+
+            # Verify key elements of the PID-waiting batch script
+            current_pid = os.getpid()
+            assert f"pid eq {current_pid}" in batch_content
+            assert ":wait_loop" in batch_content
+            assert "goto wait_loop" in batch_content
+            assert "tasklist" in batch_content
+            assert "Process exited" in batch_content
+
+
+class TestInstallUpdateLinux:
+    """Tests for Linux update installation."""
+
+    @pytest.mark.unit
+    def test_shell_script_waits_for_pid(self, tmp_path):
+        """Verify the Linux shell script waits for the current process to exit."""
+        import os
+        import tarfile
+        from unittest.mock import patch, MagicMock
+
+        # Create a mock tar.gz file with Jarvis directory
+        tar_path = tmp_path / "update.tar.gz"
+        jarvis_dir = tmp_path / "jarvis_content" / "Jarvis"
+        jarvis_dir.mkdir(parents=True)
+        (jarvis_dir / "Jarvis").write_bytes(b"mock executable content")
+
+        with tarfile.open(tar_path, "w:gz") as tf:
+            tf.add(jarvis_dir, arcname="Jarvis")
+
+        # Mock get_app_path to return a fake path
+        mock_app_dir = tmp_path / "installed" / "Jarvis"
+        mock_app_dir.mkdir(parents=True)
+        (mock_app_dir / "Jarvis").write_bytes(b"old executable")
+
+        # Import here to avoid issues with platform checks
+        from desktop_app.updater import install_update_linux
+
+        # Capture the shell script content via the Popen call
+        script_content_captured = []
+
+        def capture_popen(args, **kwargs):
+            if len(args) == 1 and args[0].endswith("update.sh"):
+                # Read the shell script content
+                script_path = Path(args[0])
+                if script_path.exists():
+                    script_content_captured.append(script_path.read_text())
+            return MagicMock()
+
+        with patch("desktop_app.updater.get_app_path", return_value=mock_app_dir):
+            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                result = install_update_linux(tar_path)
+
+                assert result is True
+                assert len(script_content_captured) == 1
+                script_content = script_content_captured[0]
+
+                # Verify key elements of the PID-waiting shell script
+                current_pid = os.getpid()
+                assert f"kill -0 {current_pid}" in script_content
+                assert "while" in script_content
+                assert "sleep 1" in script_content
+                assert "Process exited" in script_content
+
+
 class TestPathEscaping:
     """Tests for path escaping functions to prevent script injection."""
 

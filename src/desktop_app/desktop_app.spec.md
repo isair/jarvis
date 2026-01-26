@@ -147,9 +147,45 @@ The desktop app includes an auto-update mechanism:
 1. **Check**: Queries GitHub releases API for newer versions
 2. **Notify**: Shows dialog with changelog and download option
 3. **Download**: Downloads new installer with progress bar
-4. **Install**: Launches installer and exits current app
+4. **Install**: Platform-specific installation (see below)
 
 Updates are only available in bundled mode (PyInstaller builds).
+
+### Platform-Specific Update Installation
+
+| Platform | Strategy |
+|----------|----------|
+| **macOS** | Uses AppleScript to move current app to trash, move new app in place, and relaunch (synchronous, works because Unix allows moving running apps) |
+| **Windows** | Creates a batch script that waits for the current process (by PID via `tasklist`) to exit, then replaces the executable and relaunches |
+| **Linux** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, then replaces the directory and relaunches |
+
+### Update Flow (Windows/Linux)
+
+```mermaid
+sequenceDiagram
+    participant App as Current App
+    participant Batch as Batch Script
+    participant New as New App
+
+    App->>App: Download update zip
+    App->>App: Save diary (pre-install callback)
+    App->>App: Extract to temp dir
+    App->>App: Create batch script (with current PID)
+    App->>App: Save asset ID to track update
+    App->>Batch: Launch batch script
+    App->>App: Exit quickly (diary already saved)
+    Batch->>Batch: Wait for PID to exit (tasklist loop)
+    Batch->>Batch: Delete old executable
+    Batch->>Batch: Move new executable in place
+    Batch->>New: Launch new app
+    Batch->>Batch: Clean up temp directory
+```
+
+### Important Notes
+
+- **Diary is saved before update installation**: The `pre_install_callback` mechanism ensures the diary is saved before the update process begins, so no data is lost
+- **Asset ID tracking**: For develop channel updates (where version stays "latest"), we track the GitHub asset ID to detect new builds
+- **Robust Windows update**: The batch script waits for the actual process to exit (by PID) rather than using a fixed timeout, ensuring the update doesn't fail due to slow shutdown
 
 ## Memory Viewer
 

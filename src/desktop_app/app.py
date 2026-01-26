@@ -1122,15 +1122,24 @@ class JarvisSystemTray:
                 # Show update available dialog
                 dialog = UpdateAvailableDialog(status)
                 if dialog.exec() == QDialog.DialogCode.Accepted:
-                    # User chose to update
-                    progress_dialog = UpdateProgressDialog(status.latest_release)
+                    # User chose to update - create callback to save diary before install
+                    def save_session_before_update():
+                        """Stop daemon and save diary before update installation."""
+                        if self.is_listening:
+                            debug_log("Saving session before update...", "updater")
+                            self.stop_daemon(show_diary_dialog=True)
+
+                    progress_dialog = UpdateProgressDialog(
+                        status.latest_release,
+                        pre_install_callback=save_session_before_update,
+                    )
                     progress_dialog.show()
                     progress_dialog.start_download()
 
                     result = progress_dialog.exec()
                     if result == QDialog.DialogCode.Accepted:
-                        # Update successful, exit app
-                        self.quit_app()
+                        # Update successful, exit app (diary already saved via pre_install_callback)
+                        self.quit_app(skip_diary=True)
             elif show_no_update_dialog:
                 show_no_update(status.current_version)
 
@@ -1643,11 +1652,16 @@ class JarvisSystemTray:
 
                     debug_log("daemon process ended unexpectedly", "desktop")
 
-    def quit_app(self) -> None:
-        """Quit the desktop app."""
+    def quit_app(self, skip_diary: bool = False) -> None:
+        """Quit the desktop app.
+
+        Args:
+            skip_diary: If True, skips the diary dialog during shutdown.
+                       Used when quitting for an update to allow faster exit.
+        """
         # Stop daemon if running
         if self.is_listening:
-            self.stop_daemon()
+            self.stop_daemon(show_diary_dialog=not skip_diary)
 
         debug_log("desktop app shutting down", "desktop")
         self.tray_icon.hide()

@@ -126,9 +126,19 @@ class UpdateAvailableDialog(QDialog):
 class UpdateProgressDialog(QDialog):
     """Dialog showing download and installation progress."""
 
-    def __init__(self, release: ReleaseInfo, parent=None):
+    def __init__(self, release: ReleaseInfo, pre_install_callback=None, parent=None):
+        """Initialize the update progress dialog.
+
+        Args:
+            release: The release info to download and install.
+            pre_install_callback: Optional callback called after download completes
+                but before installation starts. Use this to save state (e.g., diary)
+                before the update process begins. The callback should be synchronous.
+            parent: Parent widget.
+        """
         super().__init__(parent)
         self.release = release
+        self._pre_install_callback = pre_install_callback
         self.download_worker: Optional[DownloadWorker] = None
         self.download_signals = DownloadSignals()
         self.download_path: Optional[Path] = None
@@ -215,10 +225,28 @@ class UpdateProgressDialog(QDialog):
             self.status_label.setText(f"Downloading: {downloaded_mb:.1f} / {total_mb:.1f} MB")
 
     def _on_completed(self, path: str):
+        self.cancel_btn.setEnabled(False)
+
+        # Run pre-install callback (e.g., save diary) before installing
+        if self._pre_install_callback:
+            self.title_label.setText("Preparing Update")
+            self.status_label.setText("Saving your session...")
+            self.progress_bar.setRange(0, 0)  # Indeterminate
+
+            # Process events to show the status update
+            from PyQt6.QtWidgets import QApplication
+            QApplication.processEvents()
+
+            try:
+                self._pre_install_callback()
+            except Exception as e:
+                # Log but don't fail the update if diary save fails
+                from jarvis.debug import debug_log
+                debug_log(f"Pre-install callback failed: {e}", "updater")
+
         self.title_label.setText("Installing Update")
         self.status_label.setText("Installing update...")
         self.progress_bar.setRange(0, 0)  # Indeterminate
-        self.cancel_btn.setEnabled(False)
 
         # Short delay before install
         QTimer.singleShot(500, lambda: self._install(Path(path)))

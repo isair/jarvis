@@ -390,7 +390,7 @@ def install_update_windows(download_path: Path) -> bool:
     Strategy:
     1. Extract zip to temp location
     2. Create batch script to:
-       - Wait for current process to exit
+       - Wait for current process to actually exit (by PID)
        - Replace executable
        - Launch new app
        - Clean up temp directory
@@ -400,6 +400,7 @@ def install_update_windows(download_path: Path) -> bool:
 
     app_path = get_app_path()
     temp_dir = Path(tempfile.mkdtemp())
+    current_pid = os.getpid()
 
     try:
         # Validate paths don't contain dangerous batch characters
@@ -417,11 +418,26 @@ def install_update_windows(download_path: Path) -> bool:
         escaped_new_exe = _escape_batch_path(new_exe_path)
 
         batch_script = temp_dir / "update.bat"
-        # Note: %~f0 is safe - it's the batch file's own path, not user input
+        # Wait for the current process to exit by checking if PID still exists.
+        # This is more reliable than a fixed timeout since the app may take time
+        # to shut down (e.g., saving diary entries).
+        # tasklist returns errorlevel 0 if process found, 1 if not found.
         batch_content = f'''@echo off
 echo Updating Jarvis...
-timeout /t 2 /nobreak > nul
+echo Waiting for process {current_pid} to exit...
+:wait_loop
+tasklist /fi "pid eq {current_pid}" 2>nul | find "{current_pid}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
+echo Process exited, applying update...
 del /f "{escaped_app}"
+if exist "{escaped_app}" (
+    echo Failed to delete old executable, retrying...
+    timeout /t 2 /nobreak >nul
+    del /f "{escaped_app}"
+)
 move /y "{escaped_new_exe}" "{escaped_app}"
 start "" "{escaped_app}"
 rmdir /s /q "{escaped_temp}"
@@ -448,7 +464,7 @@ def install_update_linux(download_path: Path) -> bool:
     Strategy:
     1. Extract tar.gz to temp location
     2. Create shell script to:
-       - Wait for current process to exit
+       - Wait for current process to actually exit (by PID)
        - Replace directory
        - Launch new app
        - Clean up temp directory
@@ -458,6 +474,7 @@ def install_update_linux(download_path: Path) -> bool:
 
     app_dir = get_app_path()
     temp_dir = Path(tempfile.mkdtemp())
+    current_pid = os.getpid()
 
     try:
         with tarfile.open(download_path, "r:gz") as tf:
@@ -475,8 +492,16 @@ def install_update_linux(download_path: Path) -> bool:
         escaped_jarvis = _escape_shell_path(app_dir / "Jarvis")
 
         script_path = temp_dir / "update.sh"
+        # Wait for the current process to exit by checking if PID still exists.
+        # This is more reliable than a fixed timeout since the app may take time
+        # to shut down (e.g., saving diary entries).
         script_content = f'''#!/bin/bash
-sleep 2
+echo "Updating Jarvis..."
+echo "Waiting for process {current_pid} to exit..."
+while kill -0 {current_pid} 2>/dev/null; do
+    sleep 1
+done
+echo "Process exited, applying update..."
 rm -rf {escaped_app_dir}
 mv {escaped_new_app} {escaped_app_dir}
 {escaped_jarvis} &
