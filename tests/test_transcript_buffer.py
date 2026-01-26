@@ -276,6 +276,94 @@ class TestTranscriptBuffer:
         assert buf.oldest_timestamp == now - 12
         assert buf.newest_timestamp == now
 
+    def test_update_last_segment_text(self):
+        """Can update the text of the last segment."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("echo plus user speech", now - 2, now)
+
+        # Update to just user speech (simulating salvage)
+        result = buf.update_last_segment_text("user speech")
+        assert result is True
+
+        segments = buf.get_all()
+        assert len(segments) == 1
+        assert segments[0].text == "user speech"
+
+    def test_update_last_segment_text_clears_tts_flag(self):
+        """Updating text clears is_during_tts flag (salvaged text is user speech)."""
+        buf = TranscriptBuffer()
+        now = _now()
+        # Add segment marked as during TTS (mixed echo+user speech)
+        buf.add("echo plus user speech", now - 2, now, is_during_tts=True)
+
+        segments = buf.get_all()
+        assert segments[0].is_during_tts is True
+
+        # Salvage user speech - should clear TTS flag
+        result = buf.update_last_segment_text("user speech")
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].text == "user speech"
+        assert segments[0].is_during_tts is False  # Flag should be cleared
+
+    def test_update_last_segment_text_empty_buffer(self):
+        """Updating empty buffer returns False."""
+        buf = TranscriptBuffer()
+        result = buf.update_last_segment_text("new text")
+        assert result is False
+
+    def test_update_last_segment_text_empty_string(self):
+        """Updating with empty string returns False."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("original text", now - 1, now)
+
+        result = buf.update_last_segment_text("")
+        assert result is False
+
+        # Original text should be unchanged
+        segments = buf.get_all()
+        assert segments[0].text == "original text"
+
+    def test_update_last_segment_text_whitespace_only(self):
+        """Updating with whitespace-only string returns False."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("original text", now - 1, now)
+
+        result = buf.update_last_segment_text("   ")
+        assert result is False
+
+        # Original text should be unchanged
+        segments = buf.get_all()
+        assert segments[0].text == "original text"
+
+    def test_clear_last_segment_tts_flag(self):
+        """Can clear TTS flag when echo check confirms not echo."""
+        buf = TranscriptBuffer()
+        now = _now()
+        # Add segment that started during TTS but echo check says it's NOT echo
+        buf.add("user speech during tts", now - 2, now, is_during_tts=True)
+
+        segments = buf.get_all()
+        assert segments[0].is_during_tts is True
+
+        # Clear flag after echo check confirms not echo
+        result = buf.clear_last_segment_tts_flag()
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].is_during_tts is False
+        assert segments[0].text == "user speech during tts"  # Text unchanged
+
+    def test_clear_last_segment_tts_flag_empty_buffer(self):
+        """Clearing TTS flag on empty buffer returns False."""
+        buf = TranscriptBuffer()
+        result = buf.clear_last_segment_tts_flag()
+        assert result is False
+
 
 class TestThreadSafety:
     """Tests for thread safety."""

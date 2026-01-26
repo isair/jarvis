@@ -52,8 +52,8 @@ Model-size-specific components:
 
 ### Small Model Tool Constraints
 
-Small models receive a **focused greeting constraint** that is **repeated twice (x2)** in the prompt.
-The constraint is intentionally narrow - it only targets the greeting case without restricting
+Small models receive **focused constraints** that are **repeated twice (x2)** in the prompt.
+The constraints target specific cases where small models incorrectly call tools, without restricting
 legitimate tool use (like web search for current information).
 
 This leverages research findings on prompt repetition:
@@ -68,12 +68,13 @@ This leverages research findings on prompt repetition:
 GREETING HANDLING:
 When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
 
-GREETING HANDLING:
-When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
+USER INSTRUCTIONS:
+When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests.
 ```
 
 **Design Rationale:**
-- The constraint is narrowly scoped to greetings only
+- Constraints are narrowly scoped to specific problematic cases
+- Covers greetings AND behavioral instructions (both don't require tools)
 - It does NOT restrict web search for current information queries
 - It does NOT prevent tools from being used for legitimate tasks
 - Small models should still use tools when the user asks about news, weather, etc.

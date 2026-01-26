@@ -135,36 +135,65 @@ class EchoDetector:
         return is_similar
     
     def _matches_tts_segment(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> bool:
-        """Checks if heard text matches the likely TTS segment playing at a given time."""
+        """Checks if heard text matches the likely TTS segment playing at a given time.
+
+        Uses two-phase approach:
+        1. First check time-based segment (handles typical cases)
+        2. If no match, search forward with extended window (handles TTS timing drift)
+
+        TTS timing can drift significantly from calculated position due to:
+        - Variable speech rate (pauses, emphasis)
+        - System TTS buffering delays
+        - Audio processing latency
+        """
         if not (self._tts_start_time > 0 and utterance_start_time > 0):
             return False
 
         time_offset = utterance_start_time - self._tts_start_time
         time_offset_with_tolerance = max(0, time_offset - self.echo_tolerance)
-        
+
         estimated_words_per_sec = tts_rate / 60.0
         tts_words = self._last_tts_text.split()
-        
+
         if not tts_words:
             return False
-            
+
         estimated_word_index = int(time_offset_with_tolerance * estimated_words_per_sec)
-        
+
         # The window for checking the echo must be large enough to account for transcription errors
         # and the length of the heard text itself.
         heard_word_count = len(heard_text.split())
         # Use round() instead of int() for better accuracy and add a base tolerance.
         tolerance_words = round(self.echo_tolerance * estimated_words_per_sec) + 5
-        
+
         start_idx = max(0, estimated_word_index - tolerance_words)
         # The end of the window should be far enough out to contain all the words we heard.
         end_idx = min(len(tts_words), estimated_word_index + heard_word_count + tolerance_words)
-        
+
+        # Phase 1: Check precise time-based segment
         relevant_tts_text = " ".join(tts_words[start_idx:end_idx])
         if relevant_tts_text:
             debug_log(f"checking TTS portion: time_offset={time_offset:.2f}s, '{relevant_tts_text[:50]}...'", "echo")
-            return self._check_text_similarity(heard_text, relevant_tts_text)
-            
+            if self._check_text_similarity(heard_text, relevant_tts_text):
+                return True
+
+        # Phase 2: Search forward for TTS timing drift
+        # TTS often runs ahead of calculated position due to variable speech rate and buffering
+        # Extend search forward by up to 8 seconds worth of text (conservative to avoid false positives)
+        drift_seconds = 8.0
+        drift_words = int(drift_seconds * estimated_words_per_sec)
+        extended_start = end_idx  # Start where phase 1 ended
+        extended_end = min(len(tts_words), end_idx + drift_words)
+
+        if extended_end > extended_start:
+            extended_segment = " ".join(tts_words[extended_start:extended_end])
+            if extended_segment:
+                debug_log(f"checking extended TTS portion (drift +{extended_end - extended_start} words): '{extended_segment[:50]}...'", "echo")
+                # Use higher threshold (90) to reduce false positives in extended search
+                if self._check_text_similarity(heard_text, extended_segment, threshold=90):
+                    debug_log(f"matched in extended search (TTS timing drift)", "echo")
+                    return True
+
         return False
 
     def cleanup_leading_echo_during_tts(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> str:
@@ -213,17 +242,16 @@ class EchoDetector:
                     max_overlap = i
                     break
 
-        # Phase 2: If timing-based failed, search the full TTS text
-        # This handles cases where mic timing doesn't match TTS timing perfectly
-        if max_overlap < self._min_overlap_accept_words:
-            # Find any contiguous match of heard prefix in TTS suffix
-            # We want: tts_clean ends with heard_clean[:i] for some i
-            limit = min(len(tts_clean), len(heard_clean))
-            for i in range(limit, self._min_overlap_accept_words - 1, -1):
-                if tts_clean[-i:] == heard_clean[:i]:
+        # Phase 2: Search full TTS text for better match
+        # Always try to find the longest overlap at TTS end, not just timing-based segment
+        # This handles timing drift and finds cases where entire heard text is TTS
+        limit = min(len(tts_clean), len(heard_clean))
+        for i in range(limit, max(max_overlap, self._min_overlap_accept_words - 1), -1):
+            if tts_clean[-i:] == heard_clean[:i]:
+                if i > max_overlap:
+                    debug_log(f"salvage: found longer match at TTS end ({i} vs {max_overlap} words)", "echo")
                     max_overlap = i
-                    debug_log(f"salvage: found full TTS match (timing-based failed)", "echo")
-                    break
+                break
 
         if 0 < max_overlap < len(heard_words) and max_overlap >= self._min_overlap_accept_words:
             cleaned_text = " ".join(heard_words[max_overlap:])
@@ -238,25 +266,46 @@ class EchoDetector:
         if not heard_text or not self._last_tts_text:
             return heard_text
 
-        heard_words = heard_text.lower().strip().split()
-        tts_words = self._last_tts_text.lower().strip().split()
+        # Normalize to handle TTS/Whisper differences (e.g., "5.7°C" vs "5.7 degrees Celsius")
+        heard_normalized = self._normalize_for_comparison(heard_text)
+        tts_normalized = self._normalize_for_comparison(self._last_tts_text)
+
+        heard_words = heard_normalized.split()
+        tts_words = tts_normalized.split()
+        original_heard_words = heard_text.lower().strip().split()
 
         if not heard_words or not tts_words:
             return heard_text
 
+        # Strip punctuation from words for comparison (handles "kensington," vs "kensington")
+        def strip_punct(word: str) -> str:
+            return re.sub(r"[^\w']", "", word)
+
+        heard_clean = [strip_punct(w) for w in heard_words]
+        tts_clean = [strip_punct(w) for w in tts_words]
+
         max_overlap = 0
-        for i in range(min(len(tts_words), len(heard_words)), 0, -1):
-            if tts_words[-i:] == heard_words[:i]:
+        for i in range(min(len(tts_clean), len(heard_clean)), 0, -1):
+            if tts_clean[-i:] == heard_clean[:i]:
                 max_overlap = i
                 break
-        
+
         # Only cleanup if there's a remainder and the overlap is at least 2 words.
         if 0 < max_overlap < len(heard_words) and max_overlap >= 2:
-            cleaned_text = " ".join(heard_words[max_overlap:])
+            # Use original words for output (preserving capitalization etc.)
+            # But we need to map normalized word count to original word count
+            # This is approximate - normalized may have different word count
+            original_word_count = len(original_heard_words)
+            normalized_word_count = len(heard_words)
+            if original_word_count == normalized_word_count:
+                cleaned_text = " ".join(original_heard_words[max_overlap:])
+            else:
+                # Word count differs due to normalization - use normalized words
+                cleaned_text = " ".join(heard_words[max_overlap:])
             overlap_text = " ".join(heard_words[:max_overlap])
-            debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Original: '{heard_text}', Cleaned: '{cleaned_text}'", "echo")
+            debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text
-            
+
         return heard_text
     
     def should_reject_as_echo(self, heard_text: str, current_energy: float,

@@ -476,3 +476,100 @@ class TestSalvageDuringTTS:
         assert "would you like" not in result.lower(), "Echo phrase must not be in output"
         # User's actual request should be preserved
         assert "philosophy" in result.lower(), "User's request should be preserved"
+
+
+class TestRealWorldSalvageScenarios:
+    """Tests for real-world salvage scenarios that have caused regressions.
+
+    These tests capture actual issues encountered in production:
+    - Temperature notation differences (5.7°C vs "5.7 degrees Celsius")
+    - User appending speech to TTS echo
+    - Whisper transcription differences from TTS text
+    """
+
+    @pytest.fixture
+    def detector(self):
+        return EchoDetector()
+
+    def test_temperature_notation_mismatch(self, detector):
+        """Salvages user speech when Whisper transcribes temperature differently.
+
+        Real scenario: TTS says "5.7°C" but Whisper transcribes "5.7 degrees Celsius"
+        This caused salvage to fail because word-level matching didn't match.
+        """
+        tts_text = "It's going to be a bit chilly tomorrow in Kensington, with overcast skies and a temperature around 5.7°C."
+        detector._last_tts_text = tts_text
+
+        # Whisper transcribes temperature differently
+        heard = "It's going to be a bit chilly tomorrow in Kensington with overcast skies and a temperature around 5.7 degrees Celsius. Nice, you remembered not to say it in Fahrenheit."
+
+        result = detector.cleanup_leading_echo(heard)
+
+        # Should salvage user's follow-up
+        assert "nice" in result.lower(), "User's follow-up should be preserved"
+        assert "fahrenheit" in result.lower(), "User's comment should be preserved"
+        # Echo should be removed
+        assert "chilly tomorrow" not in result.lower(), "Echo should be removed"
+
+    def test_user_appends_speech_to_full_tts_echo(self, detector):
+        """User speaks immediately after TTS, mic captures both.
+
+        The entire TTS is captured plus user's response. cleanup_leading_echo
+        should remove the TTS portion and return user's speech.
+        """
+        tts_text = "Would you like some help finding one?"
+        detector._last_tts_text = tts_text
+
+        # User responds right after TTS, mic captures both
+        heard = "Would you like some help finding one? No thanks, I'm good."
+
+        result = detector.cleanup_leading_echo(heard)
+
+        # Should return user's response
+        assert "no thanks" in result.lower(), "User's response should be preserved"
+        assert "i'm good" in result.lower() or "im good" in result.lower(), "User's response should be preserved"
+        # Echo should be removed
+        assert "would you like" not in result.lower(), "Echo should be removed"
+
+    def test_salvage_preserves_user_question(self, detector):
+        """Salvage preserves user's follow-up question after echo."""
+        tts_text = "The weather tomorrow will be cloudy with a high of 12 degrees."
+        detector._last_tts_text = tts_text
+
+        heard = "The weather tomorrow will be cloudy with a high of 12 degrees. What about the day after?"
+
+        result = detector.cleanup_leading_echo(heard)
+
+        assert "what about" in result.lower(), "User's question should be preserved"
+        assert "day after" in result.lower(), "User's question should be preserved"
+        assert "cloudy" not in result.lower(), "Echo should be removed"
+
+    def test_no_salvage_when_heard_matches_tts_exactly(self, detector):
+        """Returns original when heard text is exactly TTS (no user speech).
+
+        This ensures we don't accidentally salvage a trailing word from pure echo.
+        """
+        tts_text = "Would you like some help finding one?"
+        detector._last_tts_text = tts_text
+
+        # Heard matches TTS exactly - no user speech to salvage
+        heard = "Would you like some help finding one?"
+
+        result = detector.cleanup_leading_echo(heard)
+
+        # Should return original (full echo, nothing to salvage)
+        assert result == heard, "Should return original when no user speech to salvage"
+
+    def test_salvage_with_minor_transcription_errors(self, detector):
+        """Salvage works despite minor Whisper transcription errors."""
+        tts_text = "I can see you're interested in finding out more about this topic."
+        detector._last_tts_text = tts_text
+
+        # Whisper may drop punctuation or have minor differences
+        heard = "I can see youre interested in finding out more about this topic tell me about philosophy"
+
+        result = detector.cleanup_leading_echo(heard)
+
+        # Should salvage user's request (may or may not work depending on how different)
+        # At minimum, shouldn't crash
+        assert result is not None

@@ -73,39 +73,49 @@ You receive:
 
 Your job:
 1. Determine if speech is directed at the assistant
-2. Synthesize a COMPLETE QUERY using conversation context (not just post-wake-word text)
+2. Extract the USER'S SPEECH as the query (question OR statement - both valid)
 3. Detect stop commands
 
-CRITICAL - Query synthesis:
-- The transcript may contain conversation CONTEXT that's relevant to the query
-- Synthesize a complete, actionable query that includes necessary context
-- Example: "I wonder what the weather will be tomorrow" ... "Jarvis what do you think"
-  → query is "what do you think about the weather tomorrow" (includes context)
-- Example: "The new iPhone looks cool" ... "Jarvis how much does that cost"
-  → query is "how much does the new iPhone cost" (resolves "that")
-- For simple direct questions, just extract the question: "Jarvis what time is it" → "what time is it"
-- Ignore irrelevant chatter that's not related to the final question
+CRITICAL - Two modes of operation:
 
-CRITICAL - Echo handling:
-- If transcript text matches or closely resembles the last TTS output, it's likely ECHO
-- Echo is the assistant's own speech being picked up by the microphone
-- Echo typically appears within 1-2 seconds after TTS finishes
-- Segments marked "(during TTS)" are almost certainly echo
-- Real user speech has DIFFERENT content than what TTS said
-- IMPORTANT: A single transcript may contain BOTH echo AND real speech!
-  Example: "London has 8 hours of daylight. That's cool, tell me more."
-  If TTS said "London has 8 hours of daylight" → extract "That's cool, tell me more" as the query
+MODE 1: WAKE WORD (look for "WAKE WORD DETECTED" marker)
+- Find the segment marked "WAKE WORD DETECTED"
+- Extract the question/request from that segment (after the wake word)
+- Example: "Jarvis what time is it" → query is "what time is it"
+- May synthesize context from earlier conversation if needed
 
-Output JSON only, no other text:
-{{"directed": true/false, "query": "synthesized query with context", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
+MODE 2: HOT WINDOW (no wake word needed)
+- User is responding to/continuing conversation with assistant
+- In hot window, user speech IS DIRECTED (directed=true) - they're talking to assistant
+- Focus on segments WITHOUT "(during TTS)" marker - that's the user
+- Segments WITH "(during TTS)" are echo of assistant's speech - SKIP these
+- User's response can be a QUESTION or STATEMENT - both are valid queries
+- Example: Assistant asked "What do you think?" → User says "I think it's great"
+  → directed=true, query is "I think it's great" (user's statement response)
+
+CRITICAL - Echo detection (applies to both modes):
+- "(during TTS)" marker = assistant's speech being transcribed = ECHO
+- NEVER use text from "(during TTS)" segments as the query
+- The query MUST come from segments WITHOUT "(during TTS)" marker
+- Example transcript:
+  [00:01] (during TTS) "What do you think" ← SKIP (echo)
+  [00:03] "I think it's great" ← USER SPEECH → query is "I think it's great"
+
+CRITICAL - Current segment marker:
+- "(CURRENT - JUDGE THIS)" marker = the specific segment to judge NOW
+- When this marker is present, THIS is the segment you must extract the query from
+- Ignore older segments without this marker - they were already processed
+
+Output JSON only:
+{{"directed": true/false, "query": "extracted query", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
 
 Examples:
-- Wake word + question → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "clear wake word with direct question"}}
-- Multi-person conversation → {{"directed": true, "query": "what do you think about the weather tomorrow for the picnic", "stop": false, "confidence": "high", "reasoning": "synthesized context from conversation about weather and picnic"}}
-- Just echo of TTS → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "transcript matches TTS output, likely echo"}}
-- Echo + follow-up in hot window → {{"directed": true, "query": "that's interesting tell me more", "stop": false, "confidence": "high", "reasoning": "first part matches TTS (echo), second part is user follow-up"}}
-- "stop" during TTS → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command during TTS"}}
-- Mentioned in narrative → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "assistant mentioned in past tense, not addressing"}}'''
+- Wake word + question → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word with question"}}
+- Wake word + request → {{"directed": true, "query": "recommend a good restaurant nearby", "stop": false, "confidence": "high", "reasoning": "wake word with request"}}
+- Hot window + user statement → {{"directed": true, "query": "I think absurdism is better than nihilism", "stop": false, "confidence": "high", "reasoning": "user speaking in hot window = directed"}}
+- Hot window + user response → {{"directed": true, "query": "that sounds good to me", "stop": false, "confidence": "high", "reasoning": "hot window speech is always directed"}}
+- Hot window + only "(during TTS)" segments → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo, no user speech"}}
+- "stop" or "quiet" command → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}'''
 
     def __init__(self, config: Optional[IntentJudgeConfig] = None):
         """Initialize the intent judge.
@@ -141,6 +151,7 @@ Examples:
         last_tts_text: str,
         last_tts_finish_time: float,
         in_hot_window: bool,
+        current_text: str = "",
     ) -> str:
         """Build the user prompt with full context.
 
@@ -150,11 +161,15 @@ Examples:
             last_tts_text: What TTS last said
             last_tts_finish_time: When TTS finished
             in_hot_window: Whether we're in hot window mode
+            current_text: The text that triggered this intent judgment (for marking)
 
         Returns:
             Formatted prompt for the LLM
         """
         lines = ["Transcript:"]
+
+        # Find the segment matching current_text (normalize for comparison)
+        current_text_lower = current_text.lower().strip() if current_text else ""
 
         for seg in segments:
             ts = seg.format_timestamp()
@@ -163,6 +178,9 @@ Examples:
                 markers.append("during TTS")
             if wake_timestamp and seg.start_time <= wake_timestamp <= seg.end_time:
                 markers.append("WAKE WORD DETECTED")
+            # Mark the current segment being judged (match by text content)
+            if current_text_lower and seg.text.lower().strip() == current_text_lower:
+                markers.append("CURRENT - JUDGE THIS")
 
             marker_str = f" ({', '.join(markers)})" if markers else ""
             lines.append(f'[{ts}]{marker_str} "{seg.text}"')
@@ -231,6 +249,7 @@ Examples:
         last_tts_text: str = "",
         last_tts_finish_time: float = 0.0,
         in_hot_window: bool = False,
+        current_text: str = "",
     ) -> Optional[IntentJudgment]:
         """Judge whether speech is directed at assistant and extract query.
 
@@ -240,6 +259,7 @@ Examples:
             last_tts_text: What TTS last said (for echo detection)
             last_tts_finish_time: When TTS finished
             in_hot_window: Whether we're in hot window mode
+            current_text: The text that triggered this judgment (for marking current segment)
 
         Returns:
             IntentJudgment or None if judgment failed
@@ -258,6 +278,7 @@ Examples:
                 last_tts_text,
                 last_tts_finish_time,
                 in_hot_window,
+                current_text,
             )
 
             # Log input

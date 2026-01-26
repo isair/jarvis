@@ -117,7 +117,9 @@ class WeatherTool(Tool):
             # Get location from args, or fall back to user's detected location
             location_str = ""
             if args and isinstance(args, dict):
-                location_str = str(args.get("location", "")).strip()
+                raw_location = args.get("location")
+                # Handle None values (LLM may pass location: null/None)
+                location_str = str(raw_location).strip() if raw_location else ""
 
             # Determine coordinates and display name
             lat: Optional[float] = None

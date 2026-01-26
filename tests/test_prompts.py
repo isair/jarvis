@@ -54,8 +54,12 @@ class TestPromptComponents:
         prompts = get_system_prompts(ModelSize.SMALL)
 
         assert prompts.tool_constraints is not None
+        # Should have greeting constraints
         assert "greeting" in prompts.tool_constraints.lower()
         assert "ni hao" in prompts.tool_constraints.lower()
+        # Should have user instruction constraints
+        assert "user instructions" in prompts.tool_constraints.lower()
+        assert "celsius" in prompts.tool_constraints.lower()
 
     def test_large_model_no_tool_constraints(self):
         """Large models don't have explicit tool constraints."""

@@ -218,6 +218,57 @@ class TranscriptBuffer:
 
         return "\n".join(lines)
 
+    def update_last_segment_text(self, new_text: str) -> bool:
+        """Update the text of the most recent segment after echo salvage.
+
+        Used when echo salvage extracts clean user speech from a mixed
+        echo+speech segment. This ensures the intent judge sees clean data.
+
+        IMPORTANT: This also clears the is_during_tts flag because the
+        salvaged text is real user speech, not echo. Without this, the
+        intent judge would skip the segment as echo.
+
+        Args:
+            new_text: The cleaned/salvaged text to replace the original
+
+        Returns:
+            True if update succeeded, False if buffer is empty
+        """
+        if not new_text or not new_text.strip():
+            return False
+
+        with self._lock:
+            if not self._segments:
+                return False
+
+            old_text = self._segments[-1].text
+            self._segments[-1].text = new_text.strip()
+            # Clear TTS flag - salvaged text is user speech, not echo
+            self._segments[-1].is_during_tts = False
+
+        debug_log(f"transcript buffer: updated last segment from '{old_text[:50]}...' to '{new_text[:50]}...'", "voice")
+        return True
+
+    def clear_last_segment_tts_flag(self) -> bool:
+        """Clear the is_during_tts flag on the most recent segment.
+
+        Used when echo detection confirms a segment is NOT echo, even though
+        it started during TTS. This ensures the intent judge sees it as
+        user speech rather than skipping it as potential echo.
+
+        Returns:
+            True if flag was cleared, False if buffer is empty
+        """
+        with self._lock:
+            if not self._segments:
+                return False
+
+            if self._segments[-1].is_during_tts:
+                self._segments[-1].is_during_tts = False
+                debug_log("transcript buffer: cleared TTS flag on last segment (confirmed not echo)", "voice")
+
+        return True
+
     def clear(self) -> None:
         """Clear all segments from the buffer."""
         with self._lock:

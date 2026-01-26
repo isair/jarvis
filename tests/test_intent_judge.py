@@ -290,8 +290,9 @@ class TestEchoFollowUpPattern:
         judge = IntentJudge()
         prompt = judge._build_system_prompt()
 
-        # Check that the prompt mentions handling mixed echo + real speech
-        assert "BOTH echo AND real speech" in prompt or "echo + follow-up" in prompt.lower()
+        # Check that the prompt mentions echo handling
+        assert "(during TTS)" in prompt  # Should explain during TTS marker
+        assert "echo" in prompt.lower()  # Should mention echo
 
     def test_user_prompt_with_echo_and_followup(self):
         """User prompt correctly formats transcript with potential echo + follow-up."""
@@ -346,3 +347,104 @@ class TestEchoFollowUpPattern:
         assert result.directed is True
         # The extracted query should be the follow-up, not the echo
         assert "tell me more" in result.query.lower()
+
+
+class TestCurrentSegmentMarker:
+    """Tests for CURRENT - JUDGE THIS marker functionality."""
+
+    def test_current_segment_marked_in_prompt(self):
+        """Prompt marks the current segment being judged."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("old query from before", 1000.0, 1001.0),
+            TranscriptSegment("hello jarvis", 1002.0, 1003.0),  # New segment
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="hello jarvis",  # Mark this as current
+        )
+
+        # The current segment should be marked
+        assert "CURRENT - JUDGE THIS" in prompt
+        # Verify it's associated with the right segment
+        assert '"hello jarvis"' in prompt
+
+    def test_current_segment_not_marked_when_no_match(self):
+        """Prompt doesn't mark segments when current_text doesn't match."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("hello jarvis", 1000.0, 1001.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="something else",  # Doesn't match any segment
+        )
+
+        # No segment should be marked as current
+        assert "CURRENT - JUDGE THIS" not in prompt
+
+    def test_current_segment_case_insensitive_match(self):
+        """Current segment matching is case insensitive."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("Hello Jarvis", 1000.0, 1001.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="hello jarvis",  # Different case
+        )
+
+        # Should still mark the segment
+        assert "CURRENT - JUDGE THIS" in prompt
+
+    def test_judge_passes_current_text_to_prompt(self):
+        """judge() method passes current_text parameter correctly."""
+        judge = IntentJudge()
+        judge._available = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "response": '{"directed": true, "query": "no thank you", "stop": false, "confidence": "high", "reasoning": "user response"}'
+        }
+
+        segments = [
+            TranscriptSegment("old processed query", 1000.0, 1001.0),
+            TranscriptSegment("no thank you", 1002.0, 1003.0),
+        ]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response) as mock_post:
+            judge.judge(
+                segments,
+                wake_timestamp=None,
+                last_tts_text="Would you like more info?",
+                last_tts_finish_time=1001.5,
+                in_hot_window=True,
+                current_text="no thank you",
+            )
+
+            # Verify the prompt sent to the API contains the marker
+            call_args = mock_post.call_args
+            prompt = call_args[1]["json"]["prompt"]
+            assert "CURRENT - JUDGE THIS" in prompt
+
+    def test_system_prompt_includes_current_segment_guidance(self):
+        """System prompt explains the CURRENT - JUDGE THIS marker."""
+        judge = IntentJudge()
+        prompt = judge._build_system_prompt()
+
+        # System prompt should explain the marker
+        assert "CURRENT - JUDGE THIS" in prompt
+        assert "segment to judge" in prompt.lower()

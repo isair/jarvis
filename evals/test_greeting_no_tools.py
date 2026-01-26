@@ -60,6 +60,17 @@ GREETING_TEST_CASES = [
     pytest.param("good night", False, id="Greeting: good night"),
 ]
 
+# User instructions about behavior - should NOT trigger tools
+USER_INSTRUCTION_TEST_CASES = [
+    pytest.param("always use Celsius when telling me temperatures", False, id="Instruction: use Celsius"),
+    pytest.param("remember to always tell me things in Celsius", False, id="Instruction: remember Celsius"),
+    pytest.param("be more brief in your responses", False, id="Instruction: be more brief"),
+    pytest.param("speak in French from now on", False, id="Instruction: speak in French"),
+    pytest.param("always give me the short version", False, id="Instruction: short version"),
+    pytest.param("don't use emojis in your responses", False, id="Instruction: no emojis"),
+    pytest.param("note that I prefer metric units", False, id="Instruction: prefer metric"),
+]
+
 # Queries that SHOULD trigger tools
 TOOL_REQUIRED_TEST_CASES = [
     pytest.param("what's the weather", True, id="Tool query: weather"),
@@ -134,7 +145,7 @@ class TestGreetingNoTools:
     """
 
     @pytest.mark.eval
-    @pytest.mark.parametrize("query,should_use_tools", GREETING_TEST_CASES)
+    @pytest.mark.parametrize("query,should_use_tools", GREETING_TEST_CASES + USER_INSTRUCTION_TEST_CASES)
     def test_greeting_no_tool_calls(
         self,
         query: str,
@@ -316,6 +327,61 @@ class TestGreetingNoToolsLive:
                         f"Large model greeting '{query}' should NOT trigger tools. "
                         f"Called: {capture.tool_names()}"
                     )
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    @pytest.mark.parametrize("query,should_use_tools", [
+        pytest.param("always use Celsius when telling me temperatures", False, id="Live instruction: use Celsius"),
+        pytest.param("remember to always tell me things in Celsius", False, id="Live instruction: remember Celsius"),
+        pytest.param("be more brief in your responses", False, id="Live instruction: be more brief"),
+    ])
+    def test_user_instructions_no_tools_live(
+        self,
+        query: str,
+        should_use_tools: bool,
+        mock_config,
+        eval_db,
+        eval_dialogue_memory
+    ):
+        """Live test: user instructions about behavior should not trigger tool calls."""
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        is_small = _is_small_model(JUDGE_MODEL)
+
+        capture = ToolCallCapture()
+
+        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
+            from jarvis.tools.types import ToolExecutionResult
+            capture.record(tool_name, tool_args or {})
+            return ToolExecutionResult(success=True, reply_text="Tool result")
+
+        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run):
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory
+            )
+
+        print(f"\n  Live User Instruction Test ({JUDGE_MODEL}):")
+        print(f"  Query: '{query}'")
+        print(f"  Tools called: {capture.tool_names() or 'none'}")
+        print(f"  Response: {(response or '')[:100]}...")
+        print(f"  Model size: {'small' if is_small else 'large'}")
+
+        if capture.has_any_tool():
+            if is_small:
+                pytest.xfail(
+                    f"Small model {JUDGE_MODEL} called tools for instruction '{query}'. "
+                    f"This is a known limitation of small models. Called: {capture.tool_names()}"
+                )
+            else:
+                pytest.fail(
+                    f"Large model instruction '{query}' should NOT trigger tools. "
+                    f"Called: {capture.tool_names()}"
+                )
 
     @pytest.mark.eval
     @requires_judge_llm

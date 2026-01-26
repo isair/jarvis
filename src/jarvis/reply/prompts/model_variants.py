@@ -96,7 +96,10 @@ TOOL_GUIDANCE_SMALL = (
 # and "Lost in the Middle: How Language Models Use Long Contexts" (arXiv:2307.03172)
 # Repetition places the constraint both early (primacy) and late (recency) in the prompt.
 _TOOL_CONSTRAINTS_BASE = """GREETING HANDLING:
-When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data."""
+When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
+
+USER INSTRUCTIONS:
+When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE
