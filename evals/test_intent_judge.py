@@ -472,6 +472,8 @@ KNOWN_FAILING_CASES = {
     "multiple_echoes_then_interrupt",
     # Multi-person conversation context synthesis - requires more sophisticated prompt
     "multi_person_weather_discussion",
+    # Vague reference resolution - 3b model doesn't resolve "that" to topic from context
+    "multi_person_vague_reference",
 }
 
 
@@ -479,7 +481,12 @@ KNOWN_FAILING_CASES = {
 # Helper Functions
 # =============================================================================
 
-def create_transcript_segment(text: str, start_time: float = 1000.0, is_during_tts: bool = False):
+def create_transcript_segment(
+    text: str,
+    start_time: float = 1000.0,
+    is_during_tts: bool = False,
+    processed: bool = False,
+):
     """Create a TranscriptSegment for testing."""
     from jarvis.listening.transcript_buffer import TranscriptSegment
     return TranscriptSegment(
@@ -488,6 +495,7 @@ def create_transcript_segment(text: str, start_time: float = 1000.0, is_during_t
         end_time=start_time + 2.0,
         energy=0.01,
         is_during_tts=is_during_tts,
+        processed=processed,
     )
 
 
@@ -751,3 +759,71 @@ class TestIntentJudgeMultiSegment:
                 f"Expected query to NOT contain '{case.expected_query_not_contains}', "
                 f"got '{result.query}'. Reasoning: {result.reasoning}"
             )
+
+
+class TestProcessedSegmentFiltering:
+    """Tests for processed segment filtering in intent judge.
+
+    These tests verify that segments marked as "processed" (queries already
+    extracted) are filtered out from the intent judge prompt, preventing
+    re-extraction of old queries.
+    """
+
+    def test_processed_segment_not_reextracted(self):
+        """Intent judge should NOT extract from processed segments.
+
+        This is the bug scenario: user asks "Jarvis what's the weather",
+        query is extracted and segment is marked as processed.
+        Later, user asks "Jarvis tell me a random topic" - the intent judge
+        should extract "tell me a random topic", NOT "what's the weather".
+        """
+        if not is_intent_judge_available():
+            pytest.skip("Intent judge model (llama3.2:3b) not available")
+
+        from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
+
+        judge = IntentJudge(IntentJudgeConfig(
+            assistant_name="Jarvis",
+            model="llama3.2:3b",
+            timeout_sec=10.0,
+        ))
+
+        # Simulate the bug scenario:
+        # 1. First query was processed (marked as processed=True)
+        # 2. Second query is the current one (processed=False)
+        segments = [
+            create_transcript_segment(
+                text="Jarvis what's the weather in London",
+                start_time=1000.0,
+                processed=True,  # This was already processed
+            ),
+            create_transcript_segment(
+                text="Jarvis tell me a random topic",
+                start_time=1010.0,
+                processed=False,  # This is the current query
+            ),
+        ]
+
+        result = judge.judge(
+            segments=segments,
+            wake_timestamp=1010.0,  # Wake on second segment
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=False,
+            current_text="Jarvis tell me a random topic",
+        )
+
+        assert result is not None, "Intent judge returned None"
+        assert result.directed is True, f"Expected directed=True, got {result.directed}"
+
+        # The critical check: query should be from the NEW segment, not the old one
+        assert "random" in result.query.lower() or "topic" in result.query.lower(), (
+            f"Expected query about 'random topic', got '{result.query}'. "
+            f"The intent judge re-extracted from the old processed segment!"
+        )
+        assert "weather" not in result.query.lower(), (
+            f"Query contains 'weather' which is from the processed segment! "
+            f"Got: '{result.query}'"
+        )
+
+        print(f"\n✅ Correctly extracted new query: '{result.query}'")

@@ -67,6 +67,25 @@ class TestTranscriptSegment:
         s = str(seg)
         assert "[TTS]" in s
 
+    def test_processed_flag_default_false(self):
+        """Processed flag defaults to False."""
+        seg = TranscriptSegment(
+            text="hello",
+            start_time=1000.0,
+            end_time=1001.0,
+        )
+        assert seg.processed is False
+
+    def test_processed_flag_explicit(self):
+        """Can create segment with processed=True."""
+        seg = TranscriptSegment(
+            text="hello",
+            start_time=1000.0,
+            end_time=1001.0,
+            processed=True,
+        )
+        assert seg.processed is True
+
 
 class TestTranscriptBuffer:
     """Tests for TranscriptBuffer class."""
@@ -363,6 +382,150 @@ class TestTranscriptBuffer:
         buf = TranscriptBuffer()
         result = buf.clear_last_segment_tts_flag()
         assert result is False
+
+    def test_mark_segment_processed(self):
+        """Can mark a segment as processed by text match."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("jarvis whats the weather", now - 3, now - 2)
+        buf.add("jarvis tell me a joke", now - 1, now)
+
+        # Mark first segment as processed
+        result = buf.mark_segment_processed("jarvis whats the weather")
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is True
+        assert segments[1].processed is False
+
+    def test_mark_segment_processed_case_insensitive(self):
+        """Marking processed is case-insensitive."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("Jarvis What's The Weather", now - 1, now)
+
+        # Match with different case
+        result = buf.mark_segment_processed("jarvis what's the weather")
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is True
+
+    def test_mark_segment_processed_strips_whitespace(self):
+        """Marking processed ignores leading/trailing whitespace."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("jarvis hello", now - 1, now)
+
+        result = buf.mark_segment_processed("  jarvis hello  ")
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is True
+
+    def test_mark_segment_processed_marks_most_recent_match(self):
+        """When multiple segments match, marks the most recent one."""
+        buf = TranscriptBuffer()
+        now = _now()
+        # Add same text twice
+        buf.add("jarvis hello", now - 3, now - 2)
+        buf.add("other segment", now - 2, now - 1)
+        buf.add("jarvis hello", now - 1, now)
+
+        result = buf.mark_segment_processed("jarvis hello")
+        assert result is True
+
+        segments = buf.get_all()
+        # First "jarvis hello" (index 0) should NOT be marked
+        assert segments[0].processed is False
+        # "other segment" (index 1) should NOT be marked
+        assert segments[1].processed is False
+        # Second "jarvis hello" (index 2) should be marked
+        assert segments[2].processed is True
+
+    def test_mark_segment_processed_skips_already_processed(self):
+        """When searching for match, skips segments already marked."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("jarvis hello", now - 2, now - 1)
+        buf.add("jarvis hello", now - 1, now)
+
+        # Mark first call - should mark the most recent (index 1)
+        result1 = buf.mark_segment_processed("jarvis hello")
+        assert result1 is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is False
+        assert segments[1].processed is True
+
+        # Mark second call - should now mark the older one (index 0)
+        result2 = buf.mark_segment_processed("jarvis hello")
+        assert result2 is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is True
+        assert segments[1].processed is True
+
+    def test_mark_segment_processed_no_match(self):
+        """Returns False when no matching segment found."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("jarvis hello", now - 1, now)
+
+        result = buf.mark_segment_processed("jarvis goodbye")
+        assert result is False
+
+    def test_mark_segment_processed_empty_buffer(self):
+        """Returns False on empty buffer."""
+        buf = TranscriptBuffer()
+        result = buf.mark_segment_processed("any text")
+        assert result is False
+
+    def test_mark_segment_processed_empty_text(self):
+        """Returns False for empty search text."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("some text", now - 1, now)
+
+        result = buf.mark_segment_processed("")
+        assert result is False
+
+        result = buf.mark_segment_processed("   ")
+        assert result is False
+
+    def test_mark_last_segment_processed(self):
+        """Can mark the last segment as processed."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("first", now - 2, now - 1)
+        buf.add("second", now - 1, now)
+
+        result = buf.mark_last_segment_processed()
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is False
+        assert segments[1].processed is True
+
+    def test_mark_last_segment_processed_empty_buffer(self):
+        """Returns False on empty buffer."""
+        buf = TranscriptBuffer()
+        result = buf.mark_last_segment_processed()
+        assert result is False
+
+    def test_mark_last_segment_processed_idempotent(self):
+        """Marking last segment twice doesn't fail."""
+        buf = TranscriptBuffer()
+        now = _now()
+        buf.add("test", now - 1, now)
+
+        buf.mark_last_segment_processed()
+        # Second call should also succeed (already marked)
+        result = buf.mark_last_segment_processed()
+        assert result is True
+
+        segments = buf.get_all()
+        assert segments[0].processed is True
 
 
 class TestThreadSafety:

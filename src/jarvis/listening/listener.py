@@ -484,6 +484,11 @@ class VoiceListener(threading.Thread):
                     # Cancel any pending hot window activation
                     self.state_manager.cancel_hot_window_activation()
 
+                    # Mark the current segment as processed to prevent re-extraction
+                    # This is critical: without this, the LLM may re-extract old queries
+                    # from the rolling buffer when new queries come in
+                    self._transcript_buffer.mark_segment_processed(text_lower)
+
                     # Clear audio buffers (also clears wake timestamp)
                     self._clear_audio_buffers()
 
@@ -527,6 +532,10 @@ class VoiceListener(threading.Thread):
                                 "voice"
                             )
                             self.state_manager.cancel_hot_window_activation()
+
+                            # Mark the current segment as processed to prevent re-extraction
+                            self._transcript_buffer.mark_segment_processed(text_lower)
+
                             self._clear_audio_buffers()
                             self.state_manager.start_collection(text_lower)
                             self._start_thinking_tune()
@@ -558,6 +567,9 @@ class VoiceListener(threading.Thread):
         if wake_detected:
             # Cancel any pending hot window activation when new query starts
             self.state_manager.cancel_hot_window_activation()
+
+            # Mark the current segment as processed to prevent re-extraction
+            self._transcript_buffer.mark_segment_processed(text_lower)
 
             # Clear audio buffers to prevent concatenation issues
             self._clear_audio_buffers()

@@ -103,8 +103,8 @@ CRITICAL - Echo detection (applies to both modes):
 
 CRITICAL - Current segment marker:
 - "(CURRENT - JUDGE THIS)" marker = the specific segment to judge NOW
-- When this marker is present, THIS is the segment you must extract the query from
-- Ignore older segments without this marker - they were already processed
+  → When this marker is present, extract the query from THIS segment ONLY
+- Segments without this marker = context only (background conversation)
 
 Output JSON only:
 {{"directed": true/false, "query": "extracted query", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
@@ -172,14 +172,21 @@ Examples:
         current_text_lower = current_text.lower().strip() if current_text else ""
 
         for seg in segments:
+            # Skip processed segments entirely - they already had queries extracted
+            # The dialogue memory has context from those processed turns
+            is_current_segment = current_text_lower and seg.text.lower().strip() == current_text_lower
+            if seg.processed and not is_current_segment:
+                continue
+
             ts = seg.format_timestamp()
             markers = []
+
             if seg.is_during_tts:
                 markers.append("during TTS")
             if wake_timestamp and seg.start_time <= wake_timestamp <= seg.end_time:
                 markers.append("WAKE WORD DETECTED")
             # Mark the current segment being judged (match by text content)
-            if current_text_lower and seg.text.lower().strip() == current_text_lower:
+            if is_current_segment:
                 markers.append("CURRENT - JUDGE THIS")
 
             marker_str = f" ({', '.join(markers)})" if markers else ""

@@ -24,6 +24,7 @@ class TranscriptSegment:
     end_time: float                    # Unix timestamp when speech ended
     energy: float = 0.0                # Audio energy level
     is_during_tts: bool = False        # Whether TTS was playing during this segment
+    processed: bool = False            # Whether a query was already extracted from this segment
 
     def __post_init__(self):
         """Normalize text on creation."""
@@ -266,6 +267,49 @@ class TranscriptBuffer:
             if self._segments[-1].is_during_tts:
                 self._segments[-1].is_during_tts = False
                 debug_log("transcript buffer: cleared TTS flag on last segment (confirmed not echo)", "voice")
+
+        return True
+
+    def mark_segment_processed(self, text: str) -> bool:
+        """Mark a segment as processed after query extraction.
+
+        Used to prevent the intent judge from re-extracting queries from
+        segments that have already been processed. This is critical for
+        distinguishing new queries from old ones in the rolling buffer.
+
+        Args:
+            text: Text content of the segment to mark (case-insensitive match)
+
+        Returns:
+            True if a matching segment was marked, False otherwise
+        """
+        text_lower = text.strip().lower() if text else ""
+        if not text_lower:
+            return False
+
+        with self._lock:
+            # Search from newest to oldest to mark the most recent match
+            for seg in reversed(self._segments):
+                if seg.text.lower().strip() == text_lower and not seg.processed:
+                    seg.processed = True
+                    debug_log(f"transcript buffer: marked segment as processed: '{seg.text[:50]}...'", "voice")
+                    return True
+
+        return False
+
+    def mark_last_segment_processed(self) -> bool:
+        """Mark the most recent segment as processed.
+
+        Returns:
+            True if segment was marked, False if buffer is empty
+        """
+        with self._lock:
+            if not self._segments:
+                return False
+
+            if not self._segments[-1].processed:
+                self._segments[-1].processed = True
+                debug_log(f"transcript buffer: marked last segment as processed: '{self._segments[-1].text[:50]}...'", "voice")
 
         return True
 

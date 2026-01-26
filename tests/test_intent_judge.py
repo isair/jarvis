@@ -448,3 +448,101 @@ class TestCurrentSegmentMarker:
         # System prompt should explain the marker
         assert "CURRENT - JUDGE THIS" in prompt
         assert "segment to judge" in prompt.lower()
+
+
+class TestProcessedSegmentFiltering:
+    """Tests for processed segment filtering functionality.
+
+    When segments have had queries extracted, they should be filtered out
+    from the intent judge prompt to prevent re-extraction of old queries.
+    """
+
+    def test_processed_segments_filtered_from_prompt(self):
+        """Processed segments are not included in the prompt."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("jarvis whats the weather", 1000.0, 1001.0, processed=True),
+            TranscriptSegment("jarvis tell me a joke", 1002.0, 1003.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="jarvis tell me a joke",
+        )
+
+        # The processed segment should NOT appear in the prompt
+        assert "whats the weather" not in prompt
+        # The current segment should appear
+        assert "tell me a joke" in prompt
+
+    def test_current_segment_shown_even_if_processed(self):
+        """Current segment is shown even if marked as processed (edge case)."""
+        judge = IntentJudge()
+        # This edge case shouldn't happen in practice, but handle it gracefully
+        segments = [
+            TranscriptSegment("jarvis tell me a joke", 1000.0, 1001.0, processed=True),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="jarvis tell me a joke",  # Same as processed segment
+        )
+
+        # Current segment should still be shown (it's what we're judging)
+        assert "tell me a joke" in prompt
+        assert "CURRENT - JUDGE THIS" in prompt
+
+    def test_multiple_processed_segments_all_filtered(self):
+        """Multiple processed segments are all filtered."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("first old query", 1000.0, 1001.0, processed=True),
+            TranscriptSegment("second old query", 1001.0, 1002.0, processed=True),
+            TranscriptSegment("new query", 1002.0, 1003.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="new query",
+        )
+
+        # Both processed segments should be filtered
+        assert "first old query" not in prompt
+        assert "second old query" not in prompt
+        # Current segment should be present
+        assert "new query" in prompt
+
+    def test_unprocessed_context_segments_preserved(self):
+        """Non-wake-word context segments (unprocessed) are preserved."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("I wonder about the weather", 1000.0, 1001.0),  # Context
+            TranscriptSegment("jarvis old query", 1001.0, 1002.0, processed=True),  # Processed
+            TranscriptSegment("Yeah me too", 1002.0, 1003.0),  # Context
+            TranscriptSegment("jarvis what do you think", 1003.0, 1004.0),  # Current
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=True,
+            current_text="jarvis what do you think",
+        )
+
+        # Context segments (not processed, not wake word) should be preserved
+        assert "I wonder about the weather" in prompt
+        assert "Yeah me too" in prompt
+        # Processed segment should be filtered
+        assert "old query" not in prompt
+        # Current segment should be present
+        assert "what do you think" in prompt
