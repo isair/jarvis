@@ -133,7 +133,12 @@ def check_ollama_cli() -> Tuple[bool, Optional[str]]:
         return True, ollama_path
 
     # Check macOS-specific paths
+    # Note: When Jarvis is bundled as a .app and launched from Finder,
+    # shutil.which() won't work because Finder apps have a minimal PATH.
+    # We need to check the standard Ollama.app installation path explicitly.
     macos_paths = [
+        # Standard Ollama.app installation path (most common)
+        "/Applications/Ollama.app/Contents/Resources/ollama",
         "/usr/local/bin/ollama",
         "/opt/homebrew/bin/ollama",
         os.path.expanduser("~/bin/ollama"),
@@ -714,11 +719,15 @@ class WelcomePage(QWizardPage):
 
         # Update MLX Whisper status (Apple Silicon only)
         if self._is_apple_silicon:
+            is_bundled = getattr(sys, 'frozen', False)
             mlx_status = check_mlx_whisper_status()
             if isinstance(wizard, SetupWizard):
                 wizard.mlx_whisper_status = mlx_status
 
-            if mlx_status.is_fully_setup:
+            if is_bundled:
+                # In bundled mode, MLX-Whisper is not available
+                self._update_status_row(self.mlx_whisper_status, "ℹ️ Using faster-whisper (CPU)", True)
+            elif mlx_status.is_fully_setup:
                 self._update_status_row(self.mlx_whisper_status, "✅ Ready (GPU acceleration)", True)
             elif not mlx_status.is_ffmpeg_installed:
                 self._update_status_row(self.mlx_whisper_status, "⚠️ FFmpeg not installed", False)
@@ -1934,6 +1943,8 @@ class WhisperSetupPage(QWizardPage):
 
     def _refresh_mlx_status(self):
         """Refresh MLX Whisper installation status (Apple Silicon only)."""
+        # Check if running as a bundled app (PyInstaller)
+        is_bundled = getattr(sys, 'frozen', False)
         status = check_mlx_whisper_status()
 
         # Update wizard status
@@ -1941,6 +1952,37 @@ class WhisperSetupPage(QWizardPage):
         if isinstance(wizard, SetupWizard):
             wizard.mlx_whisper_status = status
 
+        # In bundled mode, MLX-Whisper cannot be detected or installed
+        # because PyInstaller freezes the Python environment
+        if is_bundled:
+            # FFmpeg can still be installed via Homebrew and detected
+            if status.is_ffmpeg_installed:
+                self._update_status_row(self.ffmpeg_status, f"✅ Installed ({status.ffmpeg_path})", True)
+                self.install_ffmpeg_btn.setEnabled(False)
+                self.install_ffmpeg_btn.setText("✅ FFmpeg Installed")
+            else:
+                self._update_status_row(self.ffmpeg_status, "❌ Not installed", False)
+                self.install_ffmpeg_btn.setEnabled(True)
+                self.install_ffmpeg_btn.setText("🎬 Install FFmpeg")
+
+            # MLX-Whisper not available in bundled app
+            self._update_status_row(self.mlx_status, "⚠️ Not available in bundled app", False)
+            self.install_mlx_btn.setEnabled(False)
+            self.install_mlx_btn.setText("🧠 Not Available")
+            self.install_mlx_btn.setToolTip(
+                "MLX-Whisper cannot be installed in the bundled app.\n"
+                "The app will use faster-whisper (CPU) instead."
+            )
+
+            self.status_label.setText(
+                "ℹ️ MLX-Whisper is not available in the bundled app. "
+                "Speech recognition will use faster-whisper (CPU-based)."
+            )
+            self.status_label.setStyleSheet("color: #a1a1aa;")
+            self.completeChanged.emit()
+            return
+
+        # Non-bundled mode: normal detection and installation
         # Update FFmpeg status
         if status.is_ffmpeg_installed:
             self._update_status_row(self.ffmpeg_status, f"✅ Installed ({status.ffmpeg_path})", True)

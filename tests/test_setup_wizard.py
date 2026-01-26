@@ -50,14 +50,32 @@ class TestCheckOllamaCli:
         with patch("shutil.which", return_value=None):
             with patch("os.path.isfile") as mock_isfile:
                 with patch("os.access", return_value=True):
-                    # First call for /usr/local/bin/ollama returns False
-                    # Second call for /opt/homebrew/bin/ollama returns True
+                    # First call for /Applications/Ollama.app/... returns False
+                    # /usr/local/bin/ollama returns False
+                    # /opt/homebrew/bin/ollama returns True
                     mock_isfile.side_effect = lambda p: p == "/opt/homebrew/bin/ollama"
 
                     is_installed, path = check_ollama_cli()
 
                     assert is_installed is True
                     assert path == "/opt/homebrew/bin/ollama"
+
+    def test_checks_macos_ollama_app_path(self):
+        """On macOS, checks standard Ollama.app installation path first.
+
+        This is important for bundled apps launched from Finder where
+        shutil.which() doesn't work due to minimal PATH environment.
+        """
+        with patch("shutil.which", return_value=None):
+            with patch("os.path.isfile") as mock_isfile:
+                with patch("os.access", return_value=True):
+                    # Standard Ollama.app path should be checked first
+                    mock_isfile.side_effect = lambda p: p == "/Applications/Ollama.app/Contents/Resources/ollama"
+
+                    is_installed, path = check_ollama_cli()
+
+                    assert is_installed is True
+                    assert path == "/Applications/Ollama.app/Contents/Resources/ollama"
 
 
 class TestCheckOllamaServer:
