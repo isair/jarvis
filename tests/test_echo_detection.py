@@ -629,3 +629,109 @@ class TestRealWorldSalvageScenarios:
         # Should salvage user's request (may or may not work depending on how different)
         # At minimum, shouldn't crash
         assert result is not None
+
+
+class TestFullTTSFallbackSalvage:
+    """Tests for salvaging user speech in the full-TTS fallback path.
+
+    The full-TTS fallback (threshold 70) catches echoes with significant timing drift
+    that segment matching misses. But when the heard text contains TTS echo + user speech,
+    we should salvage the user speech instead of rejecting the entire utterance.
+
+    Real bug scenario:
+    - TTS: "...Temperature will be around 10°C (50°F). A great day to grab a cuppa."
+    - Heard: "50 degrees Fahrenheit. A great day to grab a cup. Tell me a random topic."
+    - OLD behavior: Rejected entire utterance as echo (74.6% similarity to full TTS)
+    - NEW behavior: Salvage "Tell me a random topic" from the suffix
+    """
+
+    @pytest.fixture
+    def detector(self):
+        return EchoDetector()
+
+    def test_salvages_user_speech_from_mixed_echo(self, detector):
+        """User speech after TTS echo should not be rejected.
+
+        The similarity match finds the echo prefix, but there's user speech
+        at the end that should be salvaged.
+        """
+        tts_text = (
+            "I think there's been a mix-up! We were just talking about the weather "
+            "in Kensington, London. Let me check again. According to the tool, "
+            "tomorrow's forecast for Kensington is: Overcast with a chance of light "
+            "drizzle. Temperature will be around 10°C (50°F). A great day to grab "
+            "a cuppa and enjoy the outdoors."
+        )
+        detector.track_tts_start(tts_text)
+        detector._tts_start_time = 1000.0
+
+        # Heard: end of TTS + user speech
+        heard = (
+            "50 degrees Fahrenheit. A great day to grab a cup and enjoy the outdoors. "
+            "Fine, yeah. Then tell me a random topic about philosophy."
+        )
+
+        # This should NOT be rejected because there's salvageable user speech
+        result = detector.should_reject_as_echo(
+            heard_text=heard,
+            current_energy=0.01,
+            is_during_tts=True,
+            tts_rate=200,
+            utterance_start_time=1012.0  # Near end of TTS
+        )
+
+        assert result is False, (
+            "Should NOT reject when there's user speech to salvage. "
+            "The full-TTS fallback should check for salvageable suffix."
+        )
+
+    def test_still_rejects_pure_echo_in_fallback(self, detector):
+        """Pure echo (no user speech) should still be rejected by fallback."""
+        tts_text = (
+            "I think there's been a mix-up! We were just talking about the weather. "
+            "Let me check again. Tomorrow's forecast is overcast with light drizzle. "
+            "Temperature will be around 10°C."
+        )
+        detector.track_tts_start(tts_text)
+        detector._tts_start_time = 1000.0
+
+        # Heard: just echo, no user speech
+        heard = "Tomorrow's forecast is overcast with light drizzle. Temperature will be around 10 degrees Celsius."
+
+        result = detector.should_reject_as_echo(
+            heard_text=heard,
+            current_energy=0.01,
+            is_during_tts=True,
+            tts_rate=200,
+            utterance_start_time=1005.0
+        )
+
+        assert result is True, "Pure echo should still be rejected"
+
+    def test_salvage_suffix_from_echo_returns_user_speech(self, detector):
+        """_salvage_suffix_from_echo returns the user speech portion."""
+        tts_text = "The weather is nice. Would you like to hear more?"
+        detector._last_tts_text = tts_text
+        detector._tts_start_time = 1000.0
+
+        heard = "Would you like to hear more? No thanks, tell me about philosophy."
+
+        result = detector._salvage_suffix_from_echo(heard, tts_rate=200, utterance_start_time=1005.0)
+
+        assert result is not None
+        assert "philosophy" in result.lower(), "User speech should be salvaged"
+        assert "would you like" not in result.lower(), "Echo should be removed"
+
+    def test_salvage_returns_none_for_pure_echo(self, detector):
+        """_salvage_suffix_from_echo returns None for pure echo."""
+        tts_text = "The weather is nice today."
+        detector._last_tts_text = tts_text
+        detector._tts_start_time = 1000.0
+
+        # Pure echo, nothing to salvage
+        heard = "The weather is nice today."
+
+        result = detector._salvage_suffix_from_echo(heard, tts_rate=200, utterance_start_time=1005.0)
+
+        # Should return None (nothing salvaged) or original text
+        assert result is None or result == heard

@@ -259,8 +259,76 @@ class EchoDetector:
             debug_log(f"cleaned leading echo during TTS. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text
 
+        # Phase 3: Fuzzy matching fallback for transcription differences
+        # When exact word matching fails (e.g., "cuppa" vs "cup"), try fuzzy matching
+        # on prefixes of heard text against the TTS TAIL (not full TTS)
+        if RAPIDFUZZ_AVAILABLE and len(heard_words) > self._min_overlap_accept_words:
+            # Get the tail of TTS (last ~50% of words) - this is what would be echoed
+            # when mic picks up the end of TTS playback
+            tts_words_list = self._last_tts_text.lower().strip().split()
+            tts_tail_start = max(0, len(tts_words_list) // 2)
+            tts_tail = " ".join(tts_words_list[tts_tail_start:])
+            tts_tail_normalized = self._normalize_for_comparison(tts_tail)
+
+            # Try different split points in the heard text
+            # Start from around 70% of words (likely some echo) and work down to min overlap
+            min_prefix_words = self._min_overlap_accept_words
+            max_prefix_words = min(len(heard_words) - 2, int(len(heard_words) * 0.85))
+
+            for prefix_len in range(max_prefix_words, min_prefix_words - 1, -1):
+                heard_prefix = " ".join(heard_words[:prefix_len])
+                heard_prefix_normalized = self._normalize_for_comparison(heard_prefix)
+
+                # Check if this prefix matches the TTS TAIL using partial_ratio
+                # This ensures we're matching the END of TTS (the echo) not middle content
+                score = fuzz.partial_ratio(heard_prefix_normalized, tts_tail_normalized)
+
+                if score >= 85:
+                    suffix = " ".join(heard_words[prefix_len:])
+                    # Make sure suffix is meaningful (not just a word or two)
+                    # AND that the suffix doesn't also match TTS (would mean pure echo)
+                    if len(suffix.split()) >= 2:
+                        suffix_normalized = self._normalize_for_comparison(suffix)
+                        suffix_match = fuzz.partial_ratio(suffix_normalized, tts_tail_normalized)
+                        # Only salvage if suffix is sufficiently DIFFERENT from TTS
+                        if suffix_match < 70:
+                            debug_log(
+                                f"salvage (fuzzy): prefix_score={score}, suffix_score={suffix_match}, "
+                                f"prefix='{heard_prefix[:40]}...', suffix='{suffix}'", "echo"
+                            )
+                            return suffix
+
         return heard_text
     
+    def _salvage_suffix_from_echo(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> Optional[str]:
+        """Check if heard text has user speech after a TTS echo prefix.
+
+        This handles the case where the microphone picks up the end of TTS
+        followed by user speech. For example:
+        - TTS: "...temperature will be around 10°C. A great day to grab a cuppa."
+        - Heard: "10 degrees. A great day to grab a cup. Tell me a random topic."
+        - Salvaged: "Tell me a random topic."
+
+        Returns:
+            Salvaged user speech if found, None otherwise
+        """
+        if not heard_text or not self._last_tts_text:
+            return None
+
+        # Use cleanup_leading_echo_during_tts which already handles this
+        salvaged = self.cleanup_leading_echo_during_tts(heard_text, tts_rate, utterance_start_time)
+
+        # If salvage returned something different, there's user speech
+        if salvaged and salvaged != heard_text:
+            return salvaged
+
+        # Also try the simpler cleanup_leading_echo for cases where timing info isn't helpful
+        salvaged = self.cleanup_leading_echo(heard_text)
+        if salvaged and salvaged != heard_text:
+            return salvaged
+
+        return None
+
     def cleanup_leading_echo(self, heard_text: str) -> str:
         """Removes leading text from a query if it overlaps with the end of the last TTS."""
         if not heard_text or not self._last_tts_text:
@@ -346,6 +414,14 @@ class EchoDetector:
             if word_count > 4:
                 # Use threshold 70 for during-TTS fallback (same as hot window after-TTS check)
                 if self._check_text_similarity(heard_text, self._last_tts_text, threshold=70):
+                    # Before rejecting, check if the match is concentrated in a prefix
+                    # If there's user speech in the suffix, we should salvage it, not reject
+                    salvaged = self._salvage_suffix_from_echo(heard_text, tts_rate, utterance_start_time)
+                    if salvaged and salvaged != heard_text:
+                        debug_log(f"full-TTS fallback: salvaged suffix '{salvaged}' from mixed echo+speech", "echo")
+                        # Don't reject - there's user speech to salvage
+                        # The caller should use cleanup_leading_echo_during_tts to get the clean text
+                        return False
                     debug_log(f"rejected as echo during TTS (full-TTS fallback, {word_count} words): '{heard_text}'", "echo")
                     return True
 
