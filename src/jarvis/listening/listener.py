@@ -268,6 +268,9 @@ class VoiceListener(threading.Thread):
         end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
 
+        # Track if this input was received during TTS (for logging purposes)
+        received_during_tts = self.tts and self.tts.is_speaking()
+
         # Priority 1: Hot window echo rejection (fast path for obvious echo)
         # Per spec, hot window input should go to intent judge for final determination.
         # Here we only do fast rejection of obvious echo to avoid unnecessary LLM calls.
@@ -580,7 +583,17 @@ class VoiceListener(threading.Thread):
         intent_info = ""
         if intent_judgment is not None:
             intent_info = f", intent={intent_judgment.directed}/{intent_judgment.confidence}"
-        debug_log(f"input ignored (no wake word{intent_info}): {text_lower}", "voice")
+
+        if received_during_tts:
+            # User spoke during TTS but it wasn't a stop command - this is likely a response
+            # to a TTS question that arrived before hot window activated
+            debug_log(f"input ignored (during TTS, not a stop command{intent_info}): {text_lower}", "voice")
+            try:
+                print(f"  ⏳ Heard during TTS (waiting for hot window): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
+            except Exception:
+                pass
+        else:
+            debug_log(f"input ignored (no wake word{intent_info}): {text_lower}", "voice")
 
     def _dispatch_query(self, query: str) -> None:
         """
