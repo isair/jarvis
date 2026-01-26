@@ -87,19 +87,10 @@ class JarvisStateManager(QObject):
         self._state = JarvisState.ASLEEP  # Start asleep
         self._state_lock = threading.Lock()
         self._state_file = _get_jarvis_state_file()
-        # Read existing state from file if present (for cross-process sharing)
-        # Only write initial ASLEEP if file doesn't exist or has invalid content
-        try:
-            if os.path.exists(self._state_file):
-                with open(self._state_file, 'r') as f:
-                    content = f.read().strip()
-                    self._state = JarvisState(content)  # Use existing state
-            else:
-                # No file exists, initialize it
-                self._write_state(JarvisState.ASLEEP)
-        except (ValueError, OSError):
-            # Invalid content or file error, reinitialize
-            self._write_state(JarvisState.ASLEEP)
+        # Always start fresh in ASLEEP state on app launch
+        # (state file is for cross-process communication during a session,
+        # not for persisting state across app restarts)
+        self._write_state(JarvisState.ASLEEP)
 
     @property
     def state(self) -> JarvisState:

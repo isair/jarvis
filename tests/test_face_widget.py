@@ -251,8 +251,13 @@ class TestJarvisStateManager:
         assert sm.state == JarvisState.ASLEEP
 
     @pytest.mark.unit
-    def test_state_manager_reads_existing_file_state(self):
-        """State manager should read existing state from file instead of overwriting."""
+    def test_state_manager_always_starts_asleep(self):
+        """State manager should always start ASLEEP, ignoring stale file state.
+
+        The state file is for cross-process communication during a session,
+        not for persisting state across app restarts. A fresh launch should
+        always start in ASLEEP state.
+        """
         import tempfile
         import os
         from desktop_app import face_widget
@@ -260,19 +265,27 @@ class TestJarvisStateManager:
 
         state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
 
-        # Create file with SPEAKING state BEFORE creating state manager
+        # Create file with SPEAKING state (leftover from previous session)
         with open(state_file, 'w') as f:
             f.write("speaking")
 
-        # Now get state manager - it should read existing state, not overwrite
+        # Reset singleton to simulate a fresh app launch
+        face_widget._jarvis_state_instance = None
+
+        # Get state manager - should start ASLEEP, not read stale file
         sm = face_widget.get_jarvis_state()
 
-        # State should be SPEAKING (from file), not ASLEEP (default init)
-        assert sm.state == JarvisState.SPEAKING
+        # State should be ASLEEP (fresh start), not SPEAKING (stale state)
+        assert sm.state == JarvisState.ASLEEP
 
     @pytest.mark.unit
     def test_state_manager_file_based_sharing(self):
-        """State changes should persist to file for cross-process sharing."""
+        """State changes should persist to file for cross-process sharing.
+
+        During a session, the daemon (separate process) writes state to the file
+        and the desktop app reads it via the state property. But on fresh launch,
+        the state manager always resets to ASLEEP.
+        """
         import tempfile
         import os
         from desktop_app import face_widget
@@ -284,17 +297,20 @@ class TestJarvisStateManager:
         sm = face_widget.get_jarvis_state()
         sm.set_state(JarvisState.SPEAKING)
 
-        # Verify file contains correct state
+        # Verify file contains correct state (for cross-process sharing)
         with open(state_file, 'r') as f:
             content = f.read().strip()
         assert content == "speaking"
 
-        # Reset singleton to simulate a "new process"
-        face_widget._jarvis_state_instance = None
+        # Verify the same instance reads updated state from file
+        assert sm.state == JarvisState.SPEAKING
 
-        # Get a "fresh" state manager - should read from file
-        sm2 = face_widget.get_jarvis_state()
-        assert sm2.state == JarvisState.SPEAKING
+        # Simulate external process updating state (daemon writes to file)
+        with open(state_file, 'w') as f:
+            f.write("thinking")
+
+        # Same instance should pick up change from file
+        assert sm.state == JarvisState.THINKING
 
     @pytest.mark.unit
     def test_state_manager_handles_invalid_file_content(self):
