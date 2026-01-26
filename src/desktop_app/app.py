@@ -25,9 +25,11 @@ import psutil
 import threading
 import traceback
 import atexit
+import webbrowser
+import urllib.parse
 from pathlib import Path
 from typing import Optional
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QWidget, QLabel, QDialog
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 
@@ -541,22 +543,51 @@ class LogViewerWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # Header
-        header = QWidget()
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 8)
-        header_layout.setSpacing(4)
+        # Header row with title on left, button on right
+        header_row = QWidget()
+        header_row_layout = QHBoxLayout(header_row)
+        header_row_layout.setContentsMargins(0, 0, 0, 8)
+        header_row_layout.setSpacing(12)
+
+        # Title and subtitle on the left
+        title_section = QWidget()
+        title_layout = QVBoxLayout(title_section)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(4)
 
         title = QLabel("📝 Jarvis Logs")
         title.setObjectName("title")
         title.setStyleSheet("font-size: 20px; font-weight: 600; color: #fbbf24;")
-        header_layout.addWidget(title)
+        title_layout.addWidget(title)
 
         subtitle = QLabel("Real-time activity and debug output")
         subtitle.setObjectName("subtitle")
-        header_layout.addWidget(subtitle)
+        title_layout.addWidget(subtitle)
 
-        layout.addWidget(header)
+        header_row_layout.addWidget(title_section)
+        header_row_layout.addStretch()
+
+        # Report button on the right
+        report_btn = QPushButton("🐛 Report Issue")
+        report_btn.setToolTip("Report a bug or unexpected behavior on GitHub")
+        report_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27272a;
+                color: #fafafa;
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #3f3f46;
+                border-color: #f59e0b;
+            }
+        """)
+        report_btn.clicked.connect(self._report_issue)
+        header_row_layout.addWidget(report_btn)
+
+        layout.addWidget(header_row)
 
         # Create text display for logs with monospace font
         self.log_display = QTextEdit()
@@ -579,6 +610,63 @@ class LogViewerWindow(QMainWindow):
         """Clear all logs."""
         self.log_display.clear()
         self.append_log("📝 Jarvis Logs\n" + "="*60 + "\n")
+
+    def _report_issue(self) -> None:
+        """Open GitHub issue with redacted log contents."""
+        from jarvis import get_version
+        from jarvis.utils.redact import _REDACTION_RULES
+
+        try:
+            version = get_version()
+        except Exception:
+            version = "unknown"
+
+        # Get all log content and redact sensitive information (preserving line breaks)
+        log_content = self.log_display.toPlainText()
+        redacted_logs = log_content
+        for pattern, repl in _REDACTION_RULES:
+            redacted_logs = pattern.sub(repl, redacted_logs)
+
+        # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
+        if len(redacted_logs) > 5000:
+            redacted_logs = redacted_logs[:5000] + "\n\n... (truncated)"
+
+        title = "Bug Report"
+        body = f"""## Bug Report
+
+**Version:** {version}
+**Platform:** {sys.platform}
+
+### Description
+(Please describe what went wrong or what you expected to happen)
+
+
+
+### Steps to Reproduce
+1.
+2.
+3.
+
+<details>
+<summary>📋 Logs (click to expand)</summary>
+
+```
+{redacted_logs}
+```
+
+</details>
+
+### Additional Context
+(Any other relevant information)
+"""
+        params = urllib.parse.urlencode({
+            'title': title,
+            'body': body,
+            'labels': 'bug'
+        })
+        url = f"https://github.com/isair/jarvis/issues/new?{params}"
+
+        webbrowser.open(url)
 
 
 class MemoryViewerWindow(QMainWindow):
@@ -1543,15 +1631,26 @@ class JarvisSystemTray:
 
                 self.daemon_thread = None
             elif self.daemon_process:
-                # For subprocess mode, show diary dialog too
+                # For subprocess mode, show diary dialog with IPC-based updates
+                log_connection = None
+                ipc_received = False  # Track if any IPC events were received
+
                 if show_diary_dialog:
                     diary_dialog = DiaryUpdateDialog()
                     diary_dialog.set_subprocess_mode()
-                    diary_dialog.set_status("Saving diary (this may take a moment)...")
+                    diary_dialog.set_status("Shutting down...")
                     diary_dialog.show()
                     diary_dialog.raise_()
                     diary_dialog.activateWindow()
                     self.app.processEvents()
+
+                    # Connect log signals to diary dialog for IPC event processing
+                    # The log reader thread emits lines that may contain diary IPC events
+                    def process_log_for_diary(line: str):
+                        nonlocal ipc_received
+                        if diary_dialog.process_log_line(line):
+                            ipc_received = True
+                    log_connection = self.log_signals.new_log.connect(process_log_for_diary)
 
                     # Hide other windows
                     if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
@@ -1576,9 +1675,15 @@ class JarvisSystemTray:
                         break
                     time.sleep(0.05)
 
+                # Disconnect log processing
+                if log_connection is not None:
+                    self.log_signals.new_log.disconnect(process_log_for_diary)
+
                 # Close diary dialog
                 if diary_dialog:
-                    diary_dialog.mark_completed(True)
+                    # If no IPC events received (older daemon?), mark complete manually
+                    if not ipc_received:
+                        diary_dialog.mark_completed(True)
                     self.app.processEvents()
                     time.sleep(0.5)
                     diary_dialog.close()

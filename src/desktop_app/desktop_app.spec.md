@@ -77,10 +77,20 @@ The central controller that manages:
 
 | Window | Purpose |
 |--------|---------|
-| **LogViewerWindow** | Real-time log output from the daemon |
+| **LogViewerWindow** | Real-time log output from the daemon, with "Report Issue" button |
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
 | **FaceWindow** | Animated face that reacts to speaking state |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
+
+### LogViewerWindow Features
+
+- Real-time log streaming from daemon
+- Monospace font for readability (JetBrains Mono on macOS, Consolas elsewhere)
+- **Report Issue button**: Opens GitHub issue with:
+  - Pre-filled bug report template
+  - Auto-redacted log contents (emails, tokens, JWTs, passwords, etc.)
+  - Logs in collapsible `<details>` section
+  - Version and platform info
 
 ### Splash Screen
 

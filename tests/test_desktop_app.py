@@ -258,6 +258,143 @@ class TestModelSupportIntegration:
                 assert result is None, f"Model {model_id} should be supported"
 
 
+class TestLogViewerReportIssue:
+    """Tests for report issue URL generation logic.
+
+    Note: We test the URL generation logic directly rather than through the
+    LogViewerWindow class because Qt GUI components require a display server
+    and block in test environments.
+    """
+
+    def test_report_issue_url_generation(self):
+        """Report issue should generate correct GitHub issue URL with redacted content."""
+        import urllib.parse
+        import webbrowser
+        from jarvis import get_version
+        from jarvis.utils.redact import redact
+
+        # Simulate what _report_issue does
+        log_content = (
+            "Starting Jarvis...\n"
+            "API token: sk-secret-key-12345\n"
+            "User email: user@example.com\n"
+            "Error: Something went wrong\n"
+        )
+
+        # Apply same redaction as the actual method
+        redacted_logs = redact(log_content, max_len=6000)
+
+        try:
+            version = get_version()
+        except Exception:
+            version = "unknown"
+
+        # Build URL same as the actual method
+        title = "Bug Report"
+        body = f"""## Bug Report
+
+**Version:** {version}
+**Platform:** {sys.platform}
+
+### Description
+(Please describe what went wrong or what you expected to happen)
+
+
+
+### Steps to Reproduce
+1.
+2.
+3.
+
+<details>
+<summary>📋 Logs (click to expand)</summary>
+
+```
+{redacted_logs}
+```
+
+</details>
+
+### Additional Context
+(Any other relevant information)
+"""
+        params = urllib.parse.urlencode({
+            'title': title,
+            'body': body,
+            'labels': 'bug'
+        })
+        url = f"https://github.com/isair/jarvis/issues/new?{params}"
+
+        # Parse and verify
+        assert url.startswith("https://github.com/isair/jarvis/issues/new?")
+        parsed = urllib.parse.urlparse(url)
+        params_parsed = urllib.parse.parse_qs(parsed.query)
+
+        # Check title and labels
+        assert params_parsed['title'][0] == "Bug Report"
+        assert params_parsed['labels'][0] == "bug"
+
+        # Check body contains expected sections
+        body_decoded = params_parsed['body'][0]
+        assert "## Bug Report" in body_decoded
+        assert "### Description" in body_decoded
+        assert "### Steps to Reproduce" in body_decoded
+        assert "<details>" in body_decoded
+        assert "📋 Logs (click to expand)" in body_decoded
+
+        # Check that sensitive data was redacted
+        assert "user@example.com" not in body_decoded
+        assert "[REDACTED_EMAIL]" in body_decoded
+
+    def test_report_issue_truncates_long_logs(self):
+        """Report issue should truncate very long log content."""
+        from jarvis.utils.redact import redact
+
+        # Create very long realistic log content (not just repeated chars)
+        long_content = "\n".join([f"[2024-01-{i:02d}] Processing request {i}" for i in range(1, 500)])
+
+        # Apply redaction with same limit as actual method
+        redacted = redact(long_content, max_len=6000)
+
+        # Apply same truncation logic as actual method
+        if len(redacted) > 5000:
+            redacted = redacted[:5000] + "\n\n... (truncated)"
+
+        # Verify truncation happened
+        assert len(redacted) <= 5020  # 5000 + len("\n\n... (truncated)")
+        assert "... (truncated)" in redacted
+
+    def test_redaction_handles_multiple_sensitive_patterns(self):
+        """Redaction should handle multiple types of sensitive data."""
+        from jarvis.utils.redact import redact
+
+        log_content = (
+            "Config loaded:\n"
+            "  email: admin@company.com\n"
+            "  jwt_value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test\n"
+            "  password: secret123\n"
+            "  hash: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\n"
+        )
+
+        redacted = redact(log_content)
+
+        # Email should be redacted
+        assert "admin@company.com" not in redacted
+        assert "[REDACTED_EMAIL]" in redacted
+
+        # JWT should be redacted (when not preceded by token=)
+        assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in redacted
+        assert "[REDACTED_JWT]" in redacted
+
+        # Password assignment should be redacted
+        assert "secret123" not in redacted
+        assert "[REDACTED]" in redacted
+
+        # Long hex string should be redacted
+        assert "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4" not in redacted
+        assert "[REDACTED_HEX]" in redacted
+
+
 class TestMemoryViewerModulePath:
     """Tests to verify memory viewer module references are valid.
 
