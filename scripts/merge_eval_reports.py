@@ -24,6 +24,7 @@ class TestResult:
     outcome: str  # passed, failed, skipped, xfailed, xpassed, partial
     duration: float
     pass_rate: str = ""  # e.g., "3/3 (100%)" or "2/3 (67%)"
+    class_name: str = ""  # The test class this result belongs to
 
 
 @dataclass
@@ -71,19 +72,84 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
             if match:
                 report.duration = float(match.group(1))
 
-    # Parse individual test results from tables
-    # Support both old format (| Test Case | Status | Duration |)
-    # and new format (| Test Case | Pass Rate | Status | Avg Duration |)
+    # Parse individual test results from:
+    # 1. Table format: | Test Case | Pass Rate | Status | Avg Duration |
+    # 2. Detailed format: #### ✅ test_name (used for judge tests with notes)
+    # Track current class name from section headers like "### ✅ TestClassName"
     in_table = False
     table_format = "old"  # "old" or "new"
-    for line in content.split("\n"):
+    current_class = ""
+    current_detailed_test = None  # Track test name for detailed format parsing
+    lines = content.split("\n")
+
+    for i, line in enumerate(lines):
+        # Detect class section headers (e.g., "### ✅ TestIntentJudgeAccuracy")
+        # Use a more lenient pattern that handles multi-byte emoji characters
+        class_header_match = re.match(r'^###\s+\S+\s+(Test\w+)', line)
+        if class_header_match:
+            current_class = class_header_match.group(1)
+            in_table = False  # Reset table state for new section
+            current_detailed_test = None
+            continue
+
+        # Detect detailed test headers (e.g., "#### ✅ wake_word_simple_question")
+        # Use a more lenient pattern that handles multi-byte emoji characters
+        detailed_test_match = re.match(r'^####\s+(\S+)\s+(.+)$', line)
+        if detailed_test_match:
+            in_table = False
+            emoji_str = detailed_test_match.group(1)
+            test_name = detailed_test_match.group(2).strip()
+
+            # Determine outcome from emoji (check for emoji presence)
+            outcome = "unknown"
+            if "✅" in emoji_str:
+                outcome = "passed"
+            elif "❌" in emoji_str:
+                outcome = "failed"
+            elif "⏭" in emoji_str:  # May be ⏭️ or just ⏭
+                outcome = "skipped"
+            elif "🔸" in emoji_str:
+                outcome = "xfailed"
+            elif "🎉" in emoji_str:
+                outcome = "xpassed"
+            elif "⚠" in emoji_str:  # May be ⚠️ or just ⚠
+                outcome = "partial"
+
+            current_detailed_test = test_name
+            # Initialize with placeholder values, will be updated below
+            report.results[test_name] = TestResult(
+                name=test_name,
+                outcome=outcome,
+                duration=0.0,
+                pass_rate="",
+                class_name=current_class
+            )
+            continue
+
+        # Parse pass rate and duration for detailed format
+        if current_detailed_test and current_detailed_test in report.results:
+            # Parse pass rate line: "**Pass Rate:** 1/1 (100%)" or "**Pass Rate:** 1/1 XFAIL"
+            if line.startswith("**Pass Rate:**"):
+                pass_rate_match = re.search(r'\*\*Pass Rate:\*\*\s*(.+)', line)
+                if pass_rate_match:
+                    report.results[current_detailed_test].pass_rate = pass_rate_match.group(1).strip()
+            # Parse duration line: "*Avg Duration: 1.23s*"
+            elif line.startswith("*Avg Duration:"):
+                duration_match = re.search(r'([\d.]+)s', line)
+                if duration_match:
+                    report.results[current_detailed_test].duration = float(duration_match.group(1))
+                current_detailed_test = None  # Done parsing this test
+
+        # Table format parsing
         if "| Test Case | Pass Rate | Status | Avg Duration |" in line:
             in_table = True
             table_format = "new"
+            current_detailed_test = None
             continue
         if "| Test Case | Status | Duration |" in line:
             in_table = True
             table_format = "old"
+            current_detailed_test = None
             continue
         if in_table and line.startswith("|") and "---" not in line:
             parts = [p.strip() for p in line.split("|")[1:-1]]
@@ -126,7 +192,8 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
                 name=test_name,
                 outcome=outcome,
                 duration=duration,
-                pass_rate=pass_rate
+                pass_rate=pass_rate,
+                class_name=current_class
             )
         elif in_table and not line.startswith("|"):
             in_table = False
@@ -134,17 +201,34 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
     return report
 
 
-def is_intent_judge_test(test_name: str) -> bool:
-    """Check if a test is an intent judge test (uses fixed model, not configurable)."""
+def is_intent_judge_test(result: TestResult) -> bool:
+    """Check if a test is an intent judge test (uses fixed model, not configurable).
+
+    Intent judge tests belong to specific test classes that use a fixed model
+    (llama3.2:3b) for the intent classification system. These shouldn't be
+    compared across models since they always use the same model.
+    """
+    # Classes that contain intent judge tests
+    intent_judge_classes = [
+        "IntentJudge",  # Matches TestIntentJudgeAccuracy, TestIntentJudgeMultiSegment, etc.
+        "ProcessedSegmentFiltering",  # Tests intent judge processed segment filtering
+    ]
+
+    # Check class name for intent judge classes
+    if result.class_name:
+        for class_pattern in intent_judge_classes:
+            if class_pattern in result.class_name:
+                return True
+
+    # Fallback: check test name patterns for non-parametrized tests
+    # (these have the full test function name as their name)
     intent_judge_patterns = [
         "test_hot_window_mode_indicated_in_prompt",
         "test_tts_text_included_for_echo_detection",
         "test_system_prompt_has_echo_guidance",
         "test_returns_none_when_ollama_unavailable",
-        "test_intent_judge_case",
-        "test_multi_segment_case",
     ]
-    return any(pattern in test_name for pattern in intent_judge_patterns)
+    return any(pattern in result.name for pattern in intent_judge_patterns)
 
 
 def generate_combined_report(reports: List[ModelReport]) -> str:
@@ -159,7 +243,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
 
     for report in reports:
         for test_name, result in report.results.items():
-            if is_intent_judge_test(test_name):
+            if is_intent_judge_test(result):
                 # Only keep one result for intent judge tests (they're identical across runs)
                 if test_name not in intent_judge_results:
                     intent_judge_results[test_name] = result
@@ -184,7 +268,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         passed = failed = skipped = xfailed = partial = 0
         duration = 0.0
         for test_name, result in report.results.items():
-            if not is_intent_judge_test(test_name):
+            if not is_intent_judge_test(result):
                 if result.outcome == "passed":
                     passed += 1
                 elif result.outcome == "failed":
