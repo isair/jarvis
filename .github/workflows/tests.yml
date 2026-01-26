@@ -14,8 +14,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install PortAudio
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libegl1 libxkbcommon0
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
