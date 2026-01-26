@@ -1010,17 +1010,17 @@ class JarvisSystemTray:
 
         # View logs action
         self.logs_action = QAction("📝 View Logs")
-        self.logs_action.triggered.connect(self.toggle_log_viewer)
+        self.logs_action.triggered.connect(self.show_log_viewer)
         self.menu.addAction(self.logs_action)
 
         # Memory viewer action
         self.memory_action = QAction("🧠 Memory Viewer")
-        self.memory_action.triggered.connect(self.toggle_memory_viewer)
+        self.memory_action.triggered.connect(self.show_memory_viewer)
         self.menu.addAction(self.memory_action)
 
         # Face window action
         self.face_action = QAction("👤 Show Face")
-        self.face_action.triggered.connect(self.toggle_face_window)
+        self.face_action.triggered.connect(self.show_face_window)
         self.menu.addAction(self.face_action)
 
         # Setup wizard action
@@ -1148,32 +1148,23 @@ class JarvisSystemTray:
             if show_no_update_dialog:
                 show_update_error_dialog(str(e))
 
-    def toggle_log_viewer(self) -> None:
-        """Toggle the log viewer window visibility."""
-        if self.log_viewer.isVisible():
-            self.log_viewer.hide()
-        else:
-            self.log_viewer.show()
-            self.log_viewer.raise_()
-            self.log_viewer.activateWindow()
+    def show_log_viewer(self) -> None:
+        """Show the log viewer window and bring it to front."""
+        self.log_viewer.show()
+        self.log_viewer.raise_()
+        self.log_viewer.activateWindow()
 
-    def toggle_memory_viewer(self) -> None:
-        """Toggle the memory viewer window visibility."""
-        if self.memory_viewer.isVisible():
-            self.memory_viewer.hide()
-        else:
-            self.memory_viewer.show()
-            self.memory_viewer.raise_()
-            self.memory_viewer.activateWindow()
+    def show_memory_viewer(self) -> None:
+        """Show the memory viewer window and bring it to front."""
+        self.memory_viewer.show()
+        self.memory_viewer.raise_()
+        self.memory_viewer.activateWindow()
 
-    def toggle_face_window(self) -> None:
-        """Toggle the face window visibility."""
-        if self.face_window.isVisible():
-            self.face_window.hide()
-        else:
-            self.face_window.show()
-            self.face_window.raise_()
-            self.face_window.activateWindow()
+    def show_face_window(self) -> None:
+        """Show the face window and bring it to front."""
+        self.face_window.show()
+        self.face_window.raise_()
+        self.face_window.activateWindow()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""
