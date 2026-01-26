@@ -1,6 +1,6 @@
 # Jarvis
 
-Your AI assistant that never forgets and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers (e.g. home automation). No subscriptions, no cloud, just say "Jarvis" and talk naturally - it can even chime into ongoing conversations when you ask.
+Your AI assistant that never forgets and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers (e.g. home automation). No subscriptions, no cloud, just say "Jarvis" anywhere in your sentence and talk naturally.
 
 ---
 
@@ -32,6 +32,16 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 
 <details>
 <summary><strong>See it in action</strong> (example conversations)</summary>
+
+**Natural wake word placement** (say "Jarvis" anywhere):
+```
+🎙️  Listening for 'jarvis' - say hello!
+👂 Heard: give me a random topic to discuss jarvis
+✨ Working on it: give me a random topic to discuss
+
+🤖 Jarvis (life)
+How about the Fermi Paradox? Given the vast number of stars...
+```
 
 **Personalized news search:**
 ```
@@ -118,7 +128,7 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 - **Unlimited Memory** - Never forgets. Search across all history. Memory Viewer GUI included.
 - **Smart Personalities** - Developer (debugging), Business (planning), Life Coach (health tracking)
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
-- **Voice Interface** - Wake word ("Jarvis"), interruptible ("stop"), natural follow-ups, can chime into ongoing conversations
+- **Voice Interface** - Wake word anywhere in sentence ("give me a random topic Jarvis"), interruptible ("stop"), natural follow-ups, can chime into ongoing conversations
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
