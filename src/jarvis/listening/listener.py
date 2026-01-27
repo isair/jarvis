@@ -568,6 +568,8 @@ class VoiceListener(threading.Thread):
                     else:
                         # Trust other rejection reasons (narrative mention, etc.)
                         debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
+                        # Stop any early-started beep since we're rejecting this input
+                        self._stop_thinking_tune()
                         return
                 else:
                     # For inconclusive results, fall through to wake word detection
@@ -612,6 +614,9 @@ class VoiceListener(threading.Thread):
         intent_info = ""
         if intent_judgment is not None:
             intent_info = f", intent={intent_judgment.directed}/{intent_judgment.confidence}"
+
+        # Stop any early-started beep since we're not processing this input
+        self._stop_thinking_tune()
 
         if received_during_tts:
             # User spoke during TTS but it wasn't a stop command - this is likely a response
@@ -723,6 +728,8 @@ class VoiceListener(threading.Thread):
 
         This is called from the WakeWordDetector when "hey jarvis" is
         detected. We record the timestamp for use by the intent judge.
+        The thinking tune will be started in _finalize_utterance when
+        the user finishes speaking.
         """
         debug_log(f"audio wake detected at {timestamp:.3f}", "voice")
         self._wake_timestamp = timestamp
@@ -1353,6 +1360,13 @@ class VoiceListener(threading.Thread):
             debug_log(f"audio too short ({audio_duration:.2f}s < {min_duration}s), ignoring", "voice")
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
+
+        # If audio-level wake word was detected during this utterance, start beep now
+        # This provides immediate feedback as soon as the user finishes speaking
+        # For users without openWakeWord, the beep starts after text-based detection
+        if self._wake_timestamp is not None:
+            if self.tts is None or not self.tts.is_speaking():
+                self._start_thinking_tune()
 
         # Speech recognition with appropriate backend
         try:

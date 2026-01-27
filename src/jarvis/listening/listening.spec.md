@@ -99,14 +99,17 @@ The intent judge receives full context and makes intelligent decisions:
 System is waiting for wake word activation.
 
 **Triggers:**
-- openWakeWord detects "hey jarvis" at audio level
-- Text-based detection finds "jarvis" (or aliases) in transcript
+- openWakeWord detects "hey jarvis" at audio level (optional, requires jarvis wake word)
+- Text-based detection finds "jarvis" (or aliases) in transcript (always available)
 
 **On trigger:**
-1. Start "thinking" beep immediately
-2. Wait briefly for utterance to complete (query may follow wake word)
+1. Wait for utterance to complete (user finishes speaking)
+2. Start "thinking" beep immediately after utterance ends (if openWakeWord fired)
 3. Send transcript buffer + wake timestamp to intent judge
 4. If `directed=true` and `query` exists, dispatch to reply engine
+5. If rejected, stop the beep
+
+**Note:** If openWakeWord is not available (custom wake words, missing dependencies), the beep starts after text-based wake word detection during transcript processing.
 
 ### 2. Hot Window Mode
 
