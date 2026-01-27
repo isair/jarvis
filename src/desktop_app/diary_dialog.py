@@ -10,6 +10,9 @@ from PyQt6.QtGui import QFont
 
 from .themes import JARVIS_THEME_STYLESHEET, COLORS
 
+# IPC protocol prefix - must match daemon.py
+DIARY_IPC_PREFIX = "__DIARY__:"
+
 
 class DiarySignals(QObject):
     """Signals for diary update progress."""
@@ -177,17 +180,49 @@ class DiaryUpdateDialog(QDialog):
         """Mark the update as completed."""
         self.signals.completed.emit(success)
 
+    def process_log_line(self, line: str) -> bool:
+        """
+        Process a log line, checking if it contains an IPC event.
+
+        Used in subprocess mode where the daemon emits diary events via stdout.
+
+        Args:
+            line: A log line from the daemon
+
+        Returns:
+            True if the line was an IPC event and was processed, False otherwise
+        """
+        line = line.strip()
+        if not line.startswith(DIARY_IPC_PREFIX):
+            return False
+
+        try:
+            import json
+            json_str = line[len(DIARY_IPC_PREFIX):]
+            event = json.loads(json_str)
+            event_type = event.get("type")
+            data = event.get("data")
+
+            if event_type == "chunks":
+                self.signals.chunks_received.emit(data)
+            elif event_type == "token":
+                self.signals.token_received.emit(data)
+            elif event_type == "status":
+                self.signals.status_changed.emit(data)
+            elif event_type == "complete":
+                self.signals.completed.emit(data)
+
+            return True
+        except Exception:
+            return False
+
     def set_subprocess_mode(self):
         """
-        Configure dialog for subprocess mode where streaming isn't available.
+        Configure dialog for subprocess mode.
 
-        In subprocess mode, the daemon runs as a separate process without IPC,
-        so we can't receive streaming tokens or chunk data.
+        In subprocess mode, the daemon emits IPC events via stdout which are
+        intercepted and forwarded to this dialog via process_log_line().
         """
-        self.conversations_text.setPlainText(
-            "(Running in subprocess mode - detailed progress not available)"
-        )
-        self.diary_text.setPlainText(
-            "Your diary is being updated in the background.\n\n"
-            "This may take a moment while the AI summarizes today's conversations..."
-        )
+        # Initial state - will be updated when IPC events arrive
+        self.conversations_text.setPlaceholderText("Waiting for daemon...")
+        self.diary_text.setPlaceholderText("Waiting for diary generation...")

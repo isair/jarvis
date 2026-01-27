@@ -132,6 +132,22 @@ The desktop app registers callbacks with the daemon for:
 - **Diary updates**: Shows DiaryUpdateDialog when session ends
 - **Clean shutdown**: Ensures graceful exit with diary save
 
+#### Bundled Mode (QThread)
+
+In bundled mode, the daemon runs in the same process, so callbacks can be set directly via `set_diary_update_callbacks()`. The DiaryUpdateDialog receives:
+- `on_chunks`: List of conversation chunks being summarized
+- `on_token`: Streaming tokens as the diary is generated
+- `on_status`: Status messages ("Writing diary entry...")
+- `on_complete`: Completion signal (success/failure)
+
+#### Subprocess Mode (Development)
+
+In subprocess mode, the daemon runs as a separate process. IPC is achieved via stdout:
+- Daemon emits JSON events prefixed with `__DIARY__:` (e.g., `__DIARY__:{"type":"token","data":"Hello"}`)
+- Desktop app intercepts these lines from the log stream
+- DiaryUpdateDialog's `process_log_line()` parses and emits signals
+- Same UI experience as bundled mode
+
 ## Theme System
 
 All UI components use a consistent dark theme defined in `themes.py`:

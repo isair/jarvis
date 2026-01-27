@@ -1444,9 +1444,10 @@ class JarvisSystemTray:
                     env["PYTHONPATH"] = str(src_path)
 
                 # Use creationflags to prevent console window popup on Windows
+                # CREATE_NEW_PROCESS_GROUP is needed for CTRL_BREAK_EVENT to work
                 creationflags = 0
                 if sys.platform == 'win32':
-                    creationflags = subprocess.CREATE_NO_WINDOW
+                    creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
                 self.daemon_process = subprocess.Popen(
                     [python_exe, "-m", "jarvis.main"],
@@ -1522,7 +1523,11 @@ class JarvisSystemTray:
                 line = self.daemon_process.stdout.readline()
                 if not line:
                     # EOF - process has ended
+                    debug_log("log reader: EOF reached, daemon stdout closed", "desktop")
                     break
+                # Debug: log IPC events specifically
+                if "__DIARY__:" in line:
+                    debug_log(f"log reader: IPC event read: {line[:80]}...", "desktop")
                 self.log_signals.new_log.emit(line)
         except Exception as e:
             debug_log(f"log reader error: {e}", "desktop")
@@ -1632,25 +1637,27 @@ class JarvisSystemTray:
                 self.daemon_thread = None
             elif self.daemon_process:
                 # For subprocess mode, show diary dialog with IPC-based updates
-                log_connection = None
-                ipc_received = False  # Track if any IPC events were received
+                # The existing log reader thread emits signals; we use a queue to collect lines
+                # and process them in the main loop to avoid cross-thread Qt signal issues
+                from desktop_app.diary_dialog import DIARY_IPC_PREFIX
+                import queue
+
+                log_queue = queue.Queue()
+                ipc_received = False
+
+                # Connect to log signals and put lines into queue for main loop processing
+                def queue_log_line(line: str):
+                    log_queue.put(line)
+
+                log_connection = self.log_signals.new_log.connect(queue_log_line)
 
                 if show_diary_dialog:
                     diary_dialog = DiaryUpdateDialog()
-                    diary_dialog.set_subprocess_mode()
                     diary_dialog.set_status("Shutting down...")
                     diary_dialog.show()
                     diary_dialog.raise_()
                     diary_dialog.activateWindow()
                     self.app.processEvents()
-
-                    # Connect log signals to diary dialog for IPC event processing
-                    # The log reader thread emits lines that may contain diary IPC events
-                    def process_log_for_diary(line: str):
-                        nonlocal ipc_received
-                        if diary_dialog.process_log_line(line):
-                            ipc_received = True
-                    log_connection = self.log_signals.new_log.connect(process_log_for_diary)
 
                     # Hide other windows
                     if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
@@ -1658,26 +1665,86 @@ class JarvisSystemTray:
                     if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
                         self.log_viewer.hide()
 
-                # Send SIGINT for graceful shutdown
+                # Send signal for graceful shutdown
                 if sys.platform == "win32":
-                    self.daemon_process.send_signal(signal.CTRL_C_EVENT)
+                    # On Windows, signals don't work reliably with CREATE_NO_WINDOW
+                    # Close stdin to trigger graceful shutdown in daemon
+                    try:
+                        if self.daemon_process.stdin:
+                            self.daemon_process.stdin.close()
+                    except Exception:
+                        pass
+                    # Also try signal as backup
+                    try:
+                        self.daemon_process.send_signal(signal.CTRL_BREAK_EVENT)
+                    except Exception:
+                        pass
                 else:
                     self.daemon_process.send_signal(signal.SIGINT)
 
-                # Wait for process to terminate while keeping UI responsive
+                # Wait for process to terminate while processing queued log lines
                 start_time = time.time()
-                while self.daemon_process.poll() is None:
+                last_status_update = 0
+
+                while True:
+                    # Process Qt events to receive signals from log reader thread
                     self.app.processEvents()
                     elapsed = time.time() - start_time
+
+                    # Process all available log lines from queue
+                    lines_processed = 0
+                    while True:
+                        try:
+                            line = log_queue.get_nowait()
+                            lines_processed += 1
+                            # Process IPC events for diary dialog
+                            if diary_dialog and DIARY_IPC_PREFIX in line:
+                                debug_log(f"IPC event found: {line[:80]}", "desktop")
+                                if diary_dialog.process_log_line(line):
+                                    ipc_received = True
+                        except queue.Empty:
+                            break
+
+                    # Check if process has exited
+                    if self.daemon_process.poll() is not None:
+                        # Process exited - drain remaining queue items
+                        self.app.processEvents()
+                        time.sleep(0.1)  # Brief wait for any final signals
+                        self.app.processEvents()
+                        while True:
+                            try:
+                                line = log_queue.get_nowait()
+                                if diary_dialog and DIARY_IPC_PREFIX in line:
+                                    if diary_dialog.process_log_line(line):
+                                        ipc_received = True
+                            except queue.Empty:
+                                break
+                        break
+
+                    # Update status periodically if no IPC events received
+                    if diary_dialog and not ipc_received and int(elapsed) > last_status_update:
+                        last_status_update = int(elapsed)
+                        if elapsed < 10:
+                            diary_dialog.set_status("Saving diary...")
+                        elif elapsed < 30:
+                            diary_dialog.set_status("Still saving... (AI is thinking)")
+                        else:
+                            diary_dialog.set_status(f"Taking longer than expected ({int(elapsed)}s)...")
+
+                    # Check timeout
                     if elapsed > shutdown_wait_timeout_sec:
+                        debug_log("subprocess shutdown timeout - killing process", "desktop")
                         self.daemon_process.kill()
                         self.daemon_process.wait()
                         break
-                    time.sleep(0.05)
 
-                # Disconnect log processing
-                if log_connection is not None:
-                    self.log_signals.new_log.disconnect(process_log_for_diary)
+                    time.sleep(0.02)
+
+                # Disconnect queue handler
+                try:
+                    self.log_signals.new_log.disconnect(queue_log_line)
+                except Exception:
+                    pass
 
                 # Close diary dialog
                 if diary_dialog:

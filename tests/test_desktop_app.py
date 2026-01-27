@@ -395,6 +395,62 @@ class TestLogViewerReportIssue:
         assert "[REDACTED_HEX]" in redacted
 
 
+class TestDiaryIPCProtocol:
+    """Tests for diary dialog IPC protocol parsing.
+
+    Note: Qt tests require a QApplication which may conflict with pytest fixtures.
+    These tests focus on the IPC protocol parsing logic.
+    """
+
+    def test_diary_ipc_prefix_constant(self):
+        """Diary IPC prefix should be a valid string constant."""
+        from desktop_app.diary_dialog import DIARY_IPC_PREFIX
+
+        assert isinstance(DIARY_IPC_PREFIX, str)
+        assert len(DIARY_IPC_PREFIX) > 0
+        # Prefix should be unique enough to not conflict with normal log lines
+        assert DIARY_IPC_PREFIX == "__DIARY__:"
+
+    def test_ipc_event_format_is_parseable(self):
+        """IPC event format should be valid JSON after prefix."""
+        import json
+        from desktop_app.diary_dialog import DIARY_IPC_PREFIX
+
+        # Test various event types
+        events = [
+            {"type": "chunks", "data": ["chunk1", "chunk2"]},
+            {"type": "token", "data": "hello"},
+            {"type": "status", "data": "Writing..."},
+            {"type": "complete", "data": True},
+        ]
+
+        for event in events:
+            line = f"{DIARY_IPC_PREFIX}{json.dumps(event)}"
+            # Should be parseable
+            assert line.startswith(DIARY_IPC_PREFIX)
+            json_str = line[len(DIARY_IPC_PREFIX):]
+            parsed = json.loads(json_str)
+            assert parsed == event
+
+    def test_normal_log_lines_dont_match_prefix(self):
+        """Normal daemon log lines should not start with IPC prefix."""
+        from desktop_app.diary_dialog import DIARY_IPC_PREFIX
+
+        # Common log patterns that should NOT be intercepted
+        normal_logs = [
+            "Starting Jarvis daemon...",
+            "✓ Daemon started",
+            "📝 Updating diary...",
+            "🔄 Daemon shutting down...",
+            "✅ Diary update complete",
+            "",
+            "DEBUG: some message",
+        ]
+
+        for log in normal_logs:
+            assert not log.startswith(DIARY_IPC_PREFIX), f"Log line should not match prefix: {log}"
+
+
 class TestMemoryViewerModulePath:
     """Tests to verify memory viewer module references are valid.
 

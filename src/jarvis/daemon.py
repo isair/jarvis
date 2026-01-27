@@ -98,6 +98,33 @@ def get_pending_diary_chunks() -> list:
     return _global_dialogue_memory.get_pending_chunks()
 
 
+# Diary IPC protocol prefix - desktop app intercepts lines starting with this
+DIARY_IPC_PREFIX = "__DIARY__:"
+
+
+def _emit_diary_event(event_type: str, data) -> None:
+    """
+    Emit a diary update event to stdout for IPC with desktop app.
+
+    Used in subprocess mode where callbacks aren't available.
+    Desktop app intercepts these lines and forwards to diary dialog.
+
+    Args:
+        event_type: One of "chunks", "token", "status", "complete"
+        data: Event payload (list for chunks, str for token/status, bool for complete)
+    """
+    import json
+    try:
+        event = {"type": event_type, "data": data}
+        line = f"{DIARY_IPC_PREFIX}{json.dumps(event)}"
+        print(line, flush=True)
+        # Debug: also print to stderr so we can verify it's being called
+        if event_type != "token":  # Don't spam for tokens
+            debug_log(f"IPC event emitted: {event_type}", "diary_ipc")
+    except Exception as e:
+        debug_log(f"IPC emit error: {e}", "diary_ipc")
+
+
 def is_stop_requested() -> bool:
     """Check if a stop has been requested."""
     return _global_stop_requested
@@ -124,7 +151,7 @@ def _install_signal_handlers() -> None:
 
 def _check_and_update_diary(
     db: Database, cfg, verbose: bool = False, force: bool = False, timeout_sec: Optional[float] = None,
-    use_callbacks: bool = False
+    use_callbacks: bool = False, use_ipc: bool = False
 ) -> None:
     """Check if diary should be updated and perform batch update if needed.
 
@@ -132,22 +159,32 @@ def _check_and_update_diary(
         timeout_sec: Optional override for LLM timeout. If None, uses cfg.llm_chat_timeout_sec.
                     During shutdown, a shorter timeout is used to allow graceful quit.
         use_callbacks: If True, uses the global diary update callbacks for UI updates.
+        use_ipc: If True, emits diary events to stdout for IPC with desktop app (subprocess mode).
     """
     global _global_dialogue_memory, _diary_update_callbacks
 
     debug_log(f"diary update check: force={force}, verbose={verbose}", "memory")
 
-    # Helper to safely call callbacks
-    def _call_callback(name, *args):
-        if use_callbacks and _diary_update_callbacks.get(name):
+    # Helper to safely call callbacks and/or emit IPC events
+    def _notify(event_type: str, data):
+        # Map event types to callback names
+        callback_map = {"chunks": "on_chunks", "status": "on_status", "token": "on_token", "complete": "on_complete"}
+        callback_name = callback_map.get(event_type)
+
+        # Call callback if set (bundled mode)
+        if use_callbacks and callback_name and _diary_update_callbacks.get(callback_name):
             try:
-                _diary_update_callbacks[name](*args)
+                _diary_update_callbacks[callback_name](data)
             except Exception:
                 pass
 
+        # Emit IPC event (subprocess mode)
+        if use_ipc:
+            _emit_diary_event(event_type, data)
+
     if _global_dialogue_memory is None:
         debug_log("diary update skipped: dialogue_memory is None", "memory")
-        _call_callback("on_complete", False)
+        _notify("complete", False)
         return
 
     try:
@@ -160,12 +197,12 @@ def _check_and_update_diary(
 
             if not pending_chunks:
                 debug_log("diary update skipped: no pending chunks", "memory")
-                _call_callback("on_complete", False)
+                _notify("complete", False)
                 return
 
-            # Notify callbacks about chunks and status
-            _call_callback("on_chunks", pending_chunks)
-            _call_callback("on_status", "Writing diary entry...")
+            # Notify about chunks and status
+            _notify("chunks", pending_chunks)
+            _notify("status", "Writing diary entry...")
 
             if verbose:
                 try:
@@ -176,8 +213,28 @@ def _check_and_update_diary(
             source_app = "stdin" if cfg.use_stdin else "voice"
             effective_timeout = timeout_sec if timeout_sec is not None else cfg.llm_chat_timeout_sec
 
-            # Get on_token callback if using callbacks
-            on_token = _diary_update_callbacks.get("on_token") if use_callbacks else None
+            # Create token handler that notifies via callback and/or IPC
+            # For IPC mode, batch tokens to avoid overwhelming the receiver
+            token_buffer = []
+            last_flush_time = [time.time()]  # Use list for closure mutability
+            TOKEN_FLUSH_INTERVAL = 0.1  # Flush every 100ms
+
+            def on_token_handler(token: str):
+                if use_callbacks:
+                    # Callbacks can handle individual tokens (same process)
+                    _notify("token", token)
+                elif use_ipc:
+                    # IPC mode: batch tokens to reduce event frequency
+                    token_buffer.append(token)
+                    now = time.time()
+                    if now - last_flush_time[0] >= TOKEN_FLUSH_INTERVAL:
+                        if token_buffer:
+                            _emit_diary_event("token", "".join(token_buffer))
+                            token_buffer.clear()
+                        last_flush_time[0] = now
+
+            # Only use token handler if we have callbacks or IPC enabled
+            on_token = on_token_handler if (use_callbacks or use_ipc) else None
 
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
@@ -192,12 +249,17 @@ def _check_and_update_diary(
                 on_token=on_token,
             )
 
+            # Flush any remaining tokens in IPC mode
+            if use_ipc and token_buffer:
+                _emit_diary_event("token", "".join(token_buffer))
+                token_buffer.clear()
+
             if summary_id:
                 debug_log(f"diary updated from dialogue memory: id={summary_id}", "memory")
-                _call_callback("on_complete", True)
+                _notify("complete", True)
             else:
                 debug_log("diary update from dialogue memory failed", "memory")
-                _call_callback("on_complete", False)
+                _notify("complete", False)
 
             if verbose:
                 try:
@@ -209,10 +271,10 @@ def _check_and_update_diary(
                     pass
         else:
             # No update needed
-            _call_callback("on_complete", False)
+            _notify("complete", False)
     except Exception as e:
         debug_log(f"diary update check error: {e}", "memory")
-        _call_callback("on_complete", False)
+        _notify("complete", False)
 
 
 def main() -> None:
@@ -321,6 +383,31 @@ def main() -> None:
     last_diary_check = time.time()
     diary_check_interval = 60.0
 
+    # Start stdin monitor thread for Windows shutdown signal
+    # On Windows, CTRL_BREAK_EVENT doesn't work reliably with CREATE_NO_WINDOW
+    # So we also check for stdin being closed as a shutdown signal
+    def stdin_monitor():
+        global _global_stop_requested
+        try:
+            # When parent closes our stdin, readline returns empty
+            while True:
+                line = sys.stdin.readline()
+                if not line:  # EOF - stdin closed
+                    debug_log("stdin closed, requesting stop", "jarvis")
+                    _global_stop_requested = True
+                    break
+                line = line.strip()
+                if line == "SHUTDOWN":
+                    debug_log("SHUTDOWN command received, requesting stop", "jarvis")
+                    _global_stop_requested = True
+                    break
+        except Exception:
+            pass  # stdin might not be available
+
+    if sys.platform == "win32":
+        stdin_thread = threading.Thread(target=stdin_monitor, daemon=True)
+        stdin_thread.start()
+
     try:
         # Main daemon loop
         while not _global_stop_requested:
@@ -365,9 +452,11 @@ def main() -> None:
             pending = _global_dialogue_memory.get_pending_chunks()
             print(f"💬 Found {len(pending)} pending conversation chunks", flush=True)
 
-        # Use callbacks if they were set by desktop app (for live UI updates)
+        # Use callbacks if they were set by desktop app (for live UI updates in bundled mode)
+        # Use IPC (stdout events) if callbacks not set (subprocess mode)
         use_callbacks = any(_diary_update_callbacks.values())
-        _check_and_update_diary(db, cfg, verbose=True, force=True, timeout_sec=SHUTDOWN_DIARY_TIMEOUT_SEC, use_callbacks=use_callbacks)
+        use_ipc = not use_callbacks  # Subprocess mode - emit events to stdout
+        _check_and_update_diary(db, cfg, verbose=True, force=True, timeout_sec=SHUTDOWN_DIARY_TIMEOUT_SEC, use_callbacks=use_callbacks, use_ipc=use_ipc)
         print("✅ Diary update complete", flush=True)
         debug_log("diary update complete", "jarvis")
 
