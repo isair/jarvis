@@ -479,45 +479,93 @@ class VoiceListener(threading.Thread):
 
                 # If directed with query, process it
                 if intent_judgment.directed and intent_judgment.query:
-                    debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{intent_judgment.query}\"", "voice")
-                    # Cancel any pending hot window activation
-                    self.state_manager.cancel_hot_window_activation()
+                    # In wake word mode, verify the wake word is actually present
+                    # The LLM sometimes hallucinates wake words that don't exist
+                    if not could_be_hot_window:
+                        wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                        aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+                        has_wake_word = self._wake_timestamp is not None or is_wake_word_detected(
+                            text_lower, wake_word, aliases
+                        )
+                        if not has_wake_word:
+                            debug_log(
+                                f"⚠️ Intent judge said directed but no wake word found in '{text_lower[:50]}...' "
+                                f"(reasoning: {intent_judgment.reasoning})",
+                                "voice"
+                            )
+                            # Don't accept - fall through to wake word check
+                        else:
+                            debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{intent_judgment.query}\"", "voice")
+                            self.state_manager.cancel_hot_window_activation()
+                            self._transcript_buffer.mark_segment_processed(text_lower)
+                            self._clear_audio_buffers()
+                            self.state_manager.start_collection(intent_judgment.query)
+                            self._start_thinking_tune()
+                            try:
+                                print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                            except Exception:
+                                pass
+                            return
+                    else:
+                        # Hot window mode - no wake word needed
+                        debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{intent_judgment.query}\"", "voice")
+                        self.state_manager.cancel_hot_window_activation()
+                        self._transcript_buffer.mark_segment_processed(text_lower)
+                        self._clear_audio_buffers()
 
-                    # Mark the current segment as processed to prevent re-extraction
-                    # This is critical: without this, the LLM may re-extract old queries
-                    # from the rolling buffer when new queries come in
-                    self._transcript_buffer.mark_segment_processed(text_lower)
+                        # Use the extracted query (cleaned of pre-wake-word chatter)
+                        self.state_manager.start_collection(intent_judgment.query)
 
-                    # Clear audio buffers (also clears wake timestamp)
-                    self._clear_audio_buffers()
-
-                    # Use the extracted query (cleaned of pre-wake-word chatter)
-                    self.state_manager.start_collection(intent_judgment.query)
-
-                    # Start thinking tune and show processing message
-                    self._start_thinking_tune()
-                    try:
-                        print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
-                    except Exception:
-                        pass
-                    return
+                        # Start thinking tune and show processing message
+                        self._start_thinking_tune()
+                        try:
+                            print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                        except Exception:
+                            pass
+                        return
 
                 # If directed with high confidence but no extracted query, use actual text
                 # Per spec: "Hot window input should reflect what the user actually said"
                 # This handles cases where intent judge correctly identifies directed speech
                 # but fails to extract/synthesize a query (e.g., conversational follow-ups)
                 if intent_judgment.directed and intent_judgment.confidence == "high":
-                    debug_log(f"✅ Intent judge accepted (directed, high confidence, using actual text): \"{text_lower}\"", "voice")
-                    self.state_manager.cancel_hot_window_activation()
-                    self._transcript_buffer.mark_segment_processed(text_lower)
-                    self._clear_audio_buffers()
-                    self.state_manager.start_collection(text_lower)
-                    self._start_thinking_tune()
-                    try:
-                        print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
-                    except Exception:
-                        pass
-                    return
+                    # In wake word mode, verify the wake word is actually present
+                    if not could_be_hot_window:
+                        wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                        aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+                        has_wake_word = self._wake_timestamp is not None or is_wake_word_detected(
+                            text_lower, wake_word, aliases
+                        )
+                        if not has_wake_word:
+                            debug_log(
+                                f"⚠️ Intent judge said directed (no query) but no wake word in '{text_lower[:50]}...'",
+                                "voice"
+                            )
+                            # Fall through to wake word check
+                        else:
+                            debug_log(f"✅ Intent judge accepted (directed, high confidence, using actual text): \"{text_lower}\"", "voice")
+                            self.state_manager.cancel_hot_window_activation()
+                            self._transcript_buffer.mark_segment_processed(text_lower)
+                            self._clear_audio_buffers()
+                            self.state_manager.start_collection(text_lower)
+                            self._start_thinking_tune()
+                            try:
+                                print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                            except Exception:
+                                pass
+                            return
+                    else:
+                        debug_log(f"✅ Intent judge accepted (directed, high confidence, using actual text): \"{text_lower}\"", "voice")
+                        self.state_manager.cancel_hot_window_activation()
+                        self._transcript_buffer.mark_segment_processed(text_lower)
+                        self._clear_audio_buffers()
+                        self.state_manager.start_collection(text_lower)
+                        self._start_thinking_tune()
+                        try:
+                            print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                        except Exception:
+                            pass
+                        return
 
                 # If not directed with high confidence, check reasoning before rejecting
                 if not intent_judgment.directed and intent_judgment.confidence == "high":
