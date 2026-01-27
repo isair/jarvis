@@ -78,11 +78,15 @@ Your job:
 
 CRITICAL - Two modes of operation:
 
-MODE 1: WAKE WORD (look for "WAKE WORD DETECTED" marker)
-- Find the segment marked "WAKE WORD DETECTED"
-- Extract the question/request from that segment (after the wake word)
-- Example: "Jarvis what time is it" → query is "what time is it"
-- May synthesize context from earlier conversation if needed
+MODE 1: WAKE WORD (look for segment containing wake word like "{name}")
+- Find the segment with the wake word
+- Extract a COMPLETE, STANDALONE query that makes sense on its own
+- IMPORTANT: Include context from the SAME segment! Don't just extract the question fragment.
+- Example: "I think the weather is great. What do you think, Jarvis?"
+  → query is "what do you think about the weather being great" (NOT just "what do you think")
+- Example: "Jarvis, how much does that iPhone cost?" after discussing iPhones
+  → query is "how much does the iPhone cost" (resolve "that" to the actual topic)
+- The query should be answerable WITHOUT needing to see the transcript
 
 MODE 2: HOT WINDOW (no wake word needed)
 - User is responding to/continuing conversation with assistant
@@ -103,19 +107,22 @@ CRITICAL - Echo detection (applies to both modes):
 
 CRITICAL - Current segment marker:
 - "(CURRENT - JUDGE THIS)" marker = the specific segment to judge NOW
-  → When this marker is present, extract the query from THIS segment ONLY
-- Segments without this marker = context only (background conversation)
+- Extract the query from THIS segment, but include ALL relevant context from it
+- The CURRENT segment may contain context + question (e.g., "The food was great. What do you think Jarvis?")
+  → Extract a COMPLETE query: "what do you think about the food being great"
+- Segments without this marker = background context (may help resolve references like "that" or "it")
 
 Output JSON only:
 {{"directed": true/false, "query": "extracted query", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
 
 Examples:
-- Wake word + question → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word with question"}}
-- Wake word + request → {{"directed": true, "query": "recommend a good restaurant nearby", "stop": false, "confidence": "high", "reasoning": "wake word with request"}}
+- "Jarvis what time is it" → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word with question"}}
+- "The weather is lovely today. What do you think Jarvis?" → {{"directed": true, "query": "what do you think about the weather being lovely today", "stop": false, "confidence": "high", "reasoning": "wake word with contextual question"}}
+- "I was looking at the new iPhone. Jarvis how much does it cost?" → {{"directed": true, "query": "how much does the new iPhone cost", "stop": false, "confidence": "high", "reasoning": "wake word with context from same utterance"}}
 - Hot window + user statement → {{"directed": true, "query": "I think absurdism is better than nihilism", "stop": false, "confidence": "high", "reasoning": "user speaking in hot window = directed"}}
-- Hot window + user response → {{"directed": true, "query": "that sounds good to me", "stop": false, "confidence": "high", "reasoning": "hot window speech is always directed"}}
 - Hot window + only "(during TTS)" segments → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo, no user speech"}}
-- "stop" or "quiet" command → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}'''
+- "stop" or "quiet" command → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
+- No wake word, not in hot window → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "no wake word detected"}}'''
 
     def __init__(self, config: Optional[IntentJudgeConfig] = None):
         """Initialize the intent judge.
