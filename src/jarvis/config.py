@@ -67,13 +67,21 @@ class Settings:
 
     # Text-to-Speech
     tts_enabled: bool
-    tts_engine: str  # "system" (default) or "chatterbox" (experimental)
+    tts_engine: str  # "piper" (default) or "chatterbox"
     tts_voice: str | None
     tts_rate: int | None  # Words per minute (WPM), 200=normal
     tts_chatterbox_device: str  # "cuda", "auto", or "cpu" for Chatterbox
     tts_chatterbox_audio_prompt: str | None  # Path to audio file for voice cloning with Chatterbox
     tts_chatterbox_exaggeration: float  # Emotion exaggeration control (0.0-1.0+)
     tts_chatterbox_cfg_weight: float  # CFG weight for quality/speed trade-off
+
+    # Piper TTS
+    tts_piper_model_path: str | None  # Path to .onnx voice model
+    tts_piper_speaker: int | None  # Speaker ID for multi-speaker models
+    tts_piper_length_scale: float  # Speed: <1.0 faster, >1.0 slower
+    tts_piper_noise_scale: float  # Audio variation
+    tts_piper_noise_w: float  # Phoneme width variation
+    tts_piper_sentence_silence: float  # Post-sentence silence in seconds
 
     # Voice Input & Audio
     voice_device: str | None
@@ -172,6 +180,48 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return {}
 
 
+def _save_json(path: Path, data: Dict[str, Any]) -> bool:
+    """Save config data to JSON file. Returns True on success."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply config migrations for version upgrades.
+
+    Returns the (possibly modified) config dict.
+    """
+    modified = False
+
+    # Get current migration version (0 if not set = pre-migration config)
+    migration_version = cfg_json.get("_config_version", 0)
+
+    # Migration v1: tts_engine "system" -> "piper"
+    # Piper is now the default TTS with auto-download support.
+    if migration_version < 1:
+        if cfg_json.get("tts_engine") == "system":
+            cfg_json["tts_engine"] = "piper"
+            print("📢 Upgraded TTS engine: system → piper (neural voice with auto-download)", flush=True)
+            print("   To revert: set \"tts_engine\": \"system\" in config.json", flush=True)
+        cfg_json["_config_version"] = 1
+        modified = True
+
+    # Save migrated config
+    if modified:
+        if _save_json(cfg_path, cfg_json):
+            pass  # Silent success
+        else:
+            print("   ⚠️ Could not save config migration (using new settings in memory).", flush=True)
+
+    return cfg_json
+
+
 def load_config() -> Dict[str, Any]:
     """
     Load and return the merged configuration dictionary.
@@ -182,6 +232,11 @@ def load_config() -> Dict[str, Any]:
     cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
     cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else _default_config_path()
     cfg_json = _load_json(cfg_path)
+
+    # Apply config migrations for version upgrades
+    if cfg_json:
+        cfg_json = _migrate_config(cfg_path, cfg_json)
+
     defaults = get_default_config()
     return {**defaults, **cfg_json}
 
@@ -246,13 +301,21 @@ def get_default_config() -> Dict[str, Any]:
 
         # Text-to-Speech
         "tts_enabled": True,
-        "tts_engine": "system",  # "system" (default) or "chatterbox" (experimental)
+        "tts_engine": "piper",  # "piper" (default) or "chatterbox"
         "tts_voice": None,
         "tts_rate": 200,  # Words per minute (WPM), 200=normal
         "tts_chatterbox_device": "cuda",  # "cuda" (recommended), "auto", or "cpu"
         "tts_chatterbox_audio_prompt": None,  # Path to audio file for voice cloning
         "tts_chatterbox_exaggeration": 0.5,  # Emotion exaggeration (0.0-1.0+)
         "tts_chatterbox_cfg_weight": 0.5,  # CFG weight for quality/speed trade-off
+
+        # Piper TTS
+        "tts_piper_model_path": None,  # Path to .onnx voice model
+        "tts_piper_speaker": None,  # Speaker ID for multi-speaker models
+        "tts_piper_length_scale": 0.65,  # Speed: <1.0 faster, >1.0 slower (0.65 = ~30% faster)
+        "tts_piper_noise_scale": 0.8,  # Audio variation (higher = more expressive)
+        "tts_piper_noise_w": 1.0,  # Phoneme width variation (higher = more lively)
+        "tts_piper_sentence_silence": 0.2,  # Post-sentence silence in seconds
 
         # Voice Input & Audio
         "voice_device": None,
@@ -362,6 +425,10 @@ def load_settings() -> Settings:
     # Load JSON configuration (non-debug settings)
     cfg_json = _load_json(cfg_path)
 
+    # Apply config migrations for version upgrades
+    if cfg_json:
+        cfg_json = _migrate_config(cfg_path, cfg_json)
+
     # Get defaults and merge with JSON (JSON wins)
     defaults = get_default_config()
     merged: Dict[str, Any] = {**defaults, **cfg_json}
@@ -381,9 +448,9 @@ def load_settings() -> Settings:
     use_stdin = bool(merged.get("use_stdin", False))
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
-    tts_engine = str(merged.get("tts_engine", "system")).lower()
-    if tts_engine not in ("system", "chatterbox"):
-        tts_engine = "system"  # Default to system if invalid value
+    tts_engine = str(merged.get("tts_engine", "piper")).lower()
+    if tts_engine not in ("piper", "chatterbox"):
+        tts_engine = "piper"  # Default to piper if invalid value
     tts_voice_val = merged.get("tts_voice")
     tts_voice = None if tts_voice_val in (None, "", "null") else str(tts_voice_val)
     tts_rate_val = merged.get("tts_rate")
@@ -398,6 +465,20 @@ def load_settings() -> Settings:
     tts_chatterbox_audio_prompt = None if tts_chatterbox_audio_prompt_val in (None, "", "null") else str(tts_chatterbox_audio_prompt_val)
     tts_chatterbox_exaggeration = float(merged.get("tts_chatterbox_exaggeration", 0.5))
     tts_chatterbox_cfg_weight = float(merged.get("tts_chatterbox_cfg_weight", 0.5))
+
+    # Piper TTS settings
+    tts_piper_model_path_val = merged.get("tts_piper_model_path")
+    tts_piper_model_path = None if tts_piper_model_path_val in (None, "", "null") else str(tts_piper_model_path_val)
+    tts_piper_speaker_val = merged.get("tts_piper_speaker")
+    try:
+        tts_piper_speaker = None if tts_piper_speaker_val in (None, "", "null") else int(tts_piper_speaker_val)
+    except Exception:
+        tts_piper_speaker = None
+    tts_piper_length_scale = float(merged.get("tts_piper_length_scale", 0.65))
+    tts_piper_noise_scale = float(merged.get("tts_piper_noise_scale", 0.8))
+    tts_piper_noise_w = float(merged.get("tts_piper_noise_w", 1.0))
+    tts_piper_sentence_silence = float(merged.get("tts_piper_sentence_silence", 0.2))
+
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
     voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
@@ -491,6 +572,14 @@ def load_settings() -> Settings:
         tts_chatterbox_audio_prompt=tts_chatterbox_audio_prompt,
         tts_chatterbox_exaggeration=tts_chatterbox_exaggeration,
         tts_chatterbox_cfg_weight=tts_chatterbox_cfg_weight,
+
+        # Piper TTS
+        tts_piper_model_path=tts_piper_model_path,
+        tts_piper_speaker=tts_piper_speaker,
+        tts_piper_length_scale=tts_piper_length_scale,
+        tts_piper_noise_scale=tts_piper_noise_scale,
+        tts_piper_noise_w=tts_piper_noise_w,
+        tts_piper_sentence_silence=tts_piper_sentence_silence,
 
         # Voice Input & Audio
         voice_device=voice_device,

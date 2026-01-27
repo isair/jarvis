@@ -25,7 +25,6 @@ from ..debug import debug_log
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
-    from ..output.tts import TextToSpeech
 
 # Audio processing imports (optional)
 try:
@@ -98,7 +97,7 @@ def _get_mlx_model_repo(model_name: str) -> str:
 class VoiceListener(threading.Thread):
     """Main voice listening thread that orchestrates all voice processing."""
 
-    def __init__(self, db: "Database", cfg, tts: Optional["TextToSpeech"],
+    def __init__(self, db: "Database", cfg, tts: Optional[Any],
                  dialogue_memory: "DialogueMemory"):
         """
         Initialize voice listener.
@@ -677,11 +676,18 @@ class VoiceListener(threading.Thread):
                 debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
                 self.activate_hot_window()
 
+            # Duration callback to update echo detector with exact timing (Piper only)
+            def _on_duration_known(duration: float):
+                debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
+                if self.echo_detector:
+                    self.echo_detector._tts_exact_duration = duration
+
             # Track TTS start for echo detection with actual text
             self.track_tts_start(reply)
             debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
 
-            self.tts.speak(reply, completion_callback=_on_tts_complete)
+            self.tts.speak(reply, completion_callback=_on_tts_complete,
+                          duration_callback=_on_duration_known)
         else:
             debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response

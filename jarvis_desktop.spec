@@ -30,6 +30,23 @@ datas = [
     (str(src_path / 'desktop_app' / 'desktop_assets' / '*.png'), 'desktop_app/desktop_assets'),
 ]
 
+# Collect Piper TTS data files (espeak-ng-data is required for phonemization)
+try:
+    import piper
+    piper_path = Path(piper.__file__).parent
+    # espeak-ng-data contains phoneme data needed for TTS
+    espeak_data = piper_path / 'espeak-ng-data'
+    if espeak_data.exists():
+        datas.append((str(espeak_data), 'piper/espeak-ng-data'))
+        print(f"Bundling Piper espeak-ng-data from {espeak_data}")
+    # tashkeel contains Arabic diacritization data
+    tashkeel_data = piper_path / 'tashkeel'
+    if tashkeel_data.exists():
+        datas.append((str(tashkeel_data), 'piper/tashkeel'))
+        print(f"Bundling Piper tashkeel from {tashkeel_data}")
+except ImportError:
+    print("Warning: piper not installed, TTS may not work in bundle")
+
 # Add qt.conf for macOS
 if sys.platform == 'darwin':
     datas.append((str(project_root / 'qt.conf'), '.'))
@@ -98,6 +115,18 @@ hiddenimports = [
     'jarvis.output',
     'jarvis.output.tts',
     'jarvis.output.tune_player',
+    # Piper TTS (local neural TTS)
+    'piper',
+    'piper.voice',
+    'piper.config',
+    'piper.download',
+    'piper.download_voices',
+    'piper.phonemize_espeak',
+    'piper.phoneme_ids',
+    # ONNX Runtime (required by Piper for model inference)
+    'onnxruntime',
+    'onnxruntime.capi',
+    'onnxruntime.capi._pybind_state',
     # Profile modules
     'jarvis.profile',
     'jarvis.profile.profiles',

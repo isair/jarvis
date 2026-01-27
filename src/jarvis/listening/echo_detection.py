@@ -33,6 +33,7 @@ class EchoDetector:
         self._last_tts_finish_time: float = 0.0
         self._last_tts_text: str = ""
         self._tts_energy_baseline: float = 0.0
+        self._tts_exact_duration: Optional[float] = None  # Exact audio duration from Piper
         # Acceptance policy
         self._min_overlap_accept_words: int = 3  # require at least this many words to overlap
         
@@ -40,19 +41,23 @@ class EchoDetector:
         self._utterance_start_time: float = 0.0
         self._utterance_end_time: float = 0.0
     
-    def track_tts_start(self, tts_text: str, baseline_energy: float = 0.0045) -> None:
+    def track_tts_start(self, tts_text: str, baseline_energy: float = 0.0045,
+                        exact_duration: Optional[float] = None) -> None:
         """
         Track when TTS starts speaking.
-        
+
         Args:
             tts_text: Text being spoken by TTS
             baseline_energy: Current audio energy baseline
+            exact_duration: Exact audio duration in seconds (from Piper synthesis)
         """
         self._tts_start_time = time.time()
         self._last_tts_text = tts_text.lower().strip()
         self._tts_energy_baseline = baseline_energy
-        
-        debug_log(f"TTS started, text_len={len(tts_text)}, baseline_energy={baseline_energy:.4f}", "echo")
+        self._tts_exact_duration = exact_duration
+
+        duration_info = f", exact_duration={exact_duration:.2f}s" if exact_duration else ""
+        debug_log(f"TTS started, text_len={len(tts_text)}, baseline_energy={baseline_energy:.4f}{duration_info}", "echo")
     
     def track_tts_finish(self) -> None:
         """Track when TTS finishes speaking."""
@@ -152,19 +157,24 @@ class EchoDetector:
         time_offset = utterance_start_time - self._tts_start_time
         time_offset_with_tolerance = max(0, time_offset - self.echo_tolerance)
 
-        estimated_words_per_sec = tts_rate / 60.0
         tts_words = self._last_tts_text.split()
 
         if not tts_words:
             return False
 
-        estimated_word_index = int(time_offset_with_tolerance * estimated_words_per_sec)
+        # Use exact duration from Piper if available, otherwise estimate from WPM
+        if self._tts_exact_duration and self._tts_exact_duration > 0:
+            words_per_sec = len(tts_words) / self._tts_exact_duration
+        else:
+            words_per_sec = tts_rate / 60.0
+
+        estimated_word_index = int(time_offset_with_tolerance * words_per_sec)
 
         # The window for checking the echo must be large enough to account for transcription errors
         # and the length of the heard text itself.
         heard_word_count = len(heard_text.split())
         # Use round() instead of int() for better accuracy and add a base tolerance.
-        tolerance_words = round(self.echo_tolerance * estimated_words_per_sec) + 5
+        tolerance_words = round(self.echo_tolerance * words_per_sec) + 5
 
         start_idx = max(0, estimated_word_index - tolerance_words)
         # The end of the window should be far enough out to contain all the words we heard.
@@ -181,7 +191,7 @@ class EchoDetector:
         # TTS often runs ahead of calculated position due to variable speech rate and buffering
         # Extend search forward by up to 8 seconds worth of text (conservative to avoid false positives)
         drift_seconds = 8.0
-        drift_words = int(drift_seconds * estimated_words_per_sec)
+        drift_words = int(drift_seconds * words_per_sec)
         extended_start = end_idx  # Start where phase 1 ended
         extended_end = min(len(tts_words), end_idx + drift_words)
 
@@ -227,9 +237,13 @@ class EchoDetector:
         # Phase 1: Try timing-based segment first (faster for typical cases)
         time_offset = utterance_start_time - self._tts_start_time
         time_offset_with_tolerance = max(0, time_offset - self.echo_tolerance)
-        estimated_words_per_sec = tts_rate / 60.0
-        estimated_word_index = int(time_offset_with_tolerance * estimated_words_per_sec)
-        tolerance_words = round(self.echo_tolerance * estimated_words_per_sec) + 5
+        # Use exact duration from Piper if available, otherwise estimate from WPM
+        if self._tts_exact_duration and self._tts_exact_duration > 0:
+            words_per_sec = len(tts_words) / self._tts_exact_duration
+        else:
+            words_per_sec = tts_rate / 60.0
+        estimated_word_index = int(time_offset_with_tolerance * words_per_sec)
+        tolerance_words = round(self.echo_tolerance * words_per_sec) + 5
         start_idx = max(0, estimated_word_index - tolerance_words)
         end_idx = min(len(tts_words), estimated_word_index + len(heard_words) + tolerance_words)
         segment_clean = tts_clean[start_idx:end_idx]

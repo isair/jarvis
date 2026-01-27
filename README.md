@@ -183,22 +183,30 @@ Requires openWakeWord library. Falls back to text detection if unavailable.
 <details>
 <summary><strong>Text-to-Speech</strong></summary>
 
-System TTS works out of the box (Siri voices on macOS, Microsoft on Windows).
+**Piper TTS (default)** - Neural TTS that auto-downloads on first use (~60MB):
+- Works out of the box - no setup required
+- High-quality British English male voice (en_GB-alan-medium)
+- Fast local synthesis with exact duration tracking
 
-**AI Voice with Chatterbox** (requires running from source):
+To use different Piper voices, download from [HuggingFace](https://huggingface.co/rhasspy/piper-voices) and set:
+```json
+{
+  "tts_piper_model_path": "~/.local/share/jarvis/models/piper/en_GB-alan-medium.onnx"
+}
+```
+
+**Chatterbox** - AI voice with emotion control (requires running from source):
 ```json
 { "tts_engine": "chatterbox" }
 ```
 
-**Voice Cloning** - Add a 3-10 second .wav sample:
+Voice cloning with Chatterbox - add a 3-10 second .wav sample:
 ```json
 {
   "tts_engine": "chatterbox",
   "tts_chatterbox_audio_prompt": "/path/to/voice.wav"
 }
 ```
-
-Fine-tuning: `tts_chatterbox_exaggeration` (emotion), `tts_chatterbox_cfg_weight` (quality vs speed)
 
 </details>
 
@@ -372,7 +380,7 @@ pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 bash scripts/run_linux.sh
 ```
 
-Running from source enables Chatterbox TTS (AI voice with emotion/cloning).
+Running from source enables Chatterbox TTS (AI voice with emotion/cloning). Piper TTS works in both bundled and source modes.
 
 </details>
 

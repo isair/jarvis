@@ -19,6 +19,7 @@ pytest==8.3.2
 pytest-repeat==0.9.3
 mcp==1.13.1
 chatterbox-tts==0.1.2
+piper-tts>=1.3.0
 pygame>=2.1.0
 faiss-cpu>=1.7.4
 

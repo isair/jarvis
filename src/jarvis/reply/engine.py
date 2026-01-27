@@ -23,10 +23,9 @@ from ..utils.location import get_location_context
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
-    from ..output.tts import TextToSpeech
 
 
-def run_reply_engine(db: "Database", cfg, tts: Optional["TextToSpeech"],
+def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory") -> Optional[str]:
     """
     Main entry point for reply generation.
