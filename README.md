@@ -1,6 +1,8 @@
 # Jarvis
 
-Your AI assistant that never forgets and runs 100% privately on your computer. Leave it on 24/7 - it learns your preferences, helps with code, manages your health goals, searches the web, and connects to any tool via MCP servers (e.g. home automation). No subscriptions, no cloud, just say "Jarvis" anywhere in your sentence and talk naturally.
+**A private AI voice assistant that lives on your computer** - not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence ("what do you think, Jarvis?" or "Jarvis, look at this error") and get thoughtful, contextual responses. It remembers your preferences, helps with code, tracks your health goals, searches the web, and connects to 500+ tools via MCP.
+
+🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info.
 
 ---
 
@@ -21,7 +23,11 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 
 **🔒 Your data stays yours** - 100% local AI processing. No cloud, no subscriptions, no data harvesting. Automatic redaction of sensitive info. This is non-negotiable.
 
-**🎯 The vision** - A voice assistant that actually remembers you. Unlimited memory across conversations. Context-aware personalities (developer/business/life coach). MCP integration for smart home and 500+ tools.
+**🗣️ A third person in the room** - Unlike voice assistants that only respond to rigid commands, Jarvis understands conversations. It maintains a short temporary rolling context of what's being discussed, so when you ask "Jarvis, what do you think?" it knows exactly what you're talking about. Have it chime into discussions with friends, help debug code while you talk through problems, or weigh in on decisions.
+
+**🧠 Never forgets** - Unlimited memory across conversations. Context-aware personalities (developer/business/life coach). Learns your preferences over time.
+
+**🔌 Extensible** - MCP integration connects Jarvis to 500+ tools: smart home, GitHub, Slack, databases, and more.
 
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
 
@@ -33,25 +39,29 @@ Your AI assistant that never forgets and runs 100% privately on your computer. L
 <details>
 <summary><strong>See it in action</strong> (example conversations)</summary>
 
-**Natural wake word placement** (say "Jarvis" anywhere):
+**Chiming into conversations** (the magic moment):
 ```
-🎙️  Listening for 'jarvis' - say hello!
-👂 Heard: give me a random topic to discuss jarvis
-✨ Working on it: give me a random topic to discuss
+👤 Alice: I wonder what the weather will be like tomorrow
+👤 Bob: Yeah, we should check before planning the picnic
+👤 Alice: Jarvis, what do you think?
+
+✨ Working on it: what do you think about the weather tomorrow for the picnic
+🧰 Tool: getWeather…
 
 🤖 Jarvis (life)
-How about the Fermi Paradox? Given the vast number of stars...
+Tomorrow looks great for a picnic! Sunny with highs around 72°F...
 ```
+Jarvis understood the entire conversation and gave a contextual answer - no need to repeat the question.
 
-**Personalized news search:**
+**Debugging with screen analysis:**
 ```
-🎙️  Listening for 'jarvis' - say hello!
-✨ Working on it: what are some news from today that might interest me?
-  🧠 Looking back at our past conversations…
-  🌐 Searching the web…
+✨ Working on it: i'm getting this weird graphql error
+🧰 Tool: screenshot…
+🧰 MCP: vscode:findReferences…
 
-🤖 Jarvis (business)
-Here's a quick snapshot of today's headlines...
+🤖 Jarvis (developer)
+I can see the error on your screen - "Cannot return null for non-nullable field".
+Your User type has `email: String!` but the resolver is returning null...
 ```
 
 **Health-aware advice:**
@@ -65,28 +75,23 @@ Today you've had about 860 calories so far. Given your 1,800 calorie target,
 you've got room for pizza! But maybe consider thin crust to save calories.
 ```
 
-**Debugging with screen analysis:**
+**Personalized news search:**
 ```
-✨ Working on it: i'm getting this weird graphql error
-🧰 Tool: screenshot…
-🧰 MCP: vscode:findReferences…
+✨ Working on it: what are some news from today that might interest me?
+  🧠 Looking back at our past conversations…
+  🌐 Searching the web…
 
-🤖 Jarvis (developer)
-I can see the error on your screen - "Cannot return null for non-nullable field".
-Your User type has `email: String!` but the resolver is returning null...
+🤖 Jarvis (business)
+Here's a quick snapshot of today's headlines...
 ```
 
-**Chiming into conversations:**
+**Natural wake word placement** (say "Jarvis" anywhere):
 ```
-👤 Person A: I wonder what the weather will be like tomorrow
-👤 Person B: Yeah, we should check before planning the picnic
-👤 Person A: Jarvis, what do you think?
-
-✨ Working on it: what do you think about the weather tomorrow for the picnic
-🧰 Tool: getWeather…
+👂 Heard: give me a random topic to discuss jarvis
+✨ Working on it: give me a random topic to discuss
 
 🤖 Jarvis (life)
-Tomorrow looks great for a picnic! Sunny with highs around 72°F...
+How about the Fermi Paradox? Given the vast number of stars...
 ```
 
 </details>
@@ -125,10 +130,11 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 
 ## Features
 
-- **Unlimited Memory** - Never forgets. Search across all history. Memory Viewer GUI included.
-- **Smart Personalities** - Developer (debugging), Business (planning), Life Coach (health tracking)
+- **Conversational Awareness** - Understands ongoing discussions. Ask "Jarvis, what do you think?" and it knows what you're talking about. Works naturally in multi-person conversations.
+- **Unlimited Memory** - Never forgets. Searches across all your conversation history. Memory Viewer GUI included.
+- **Smart Personalities** - Adapts tone: Developer (debugging), Business (planning), Life Coach (health/wellness)
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
-- **Voice Interface** - Wake word anywhere in sentence ("give me a random topic Jarvis"), interruptible ("stop"), natural follow-ups, can chime into ongoing conversations
+- **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
