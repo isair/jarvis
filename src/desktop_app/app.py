@@ -451,6 +451,96 @@ def show_unsupported_model_dialog(model_name: str) -> bool:
         return False
 
 
+def get_lock_file_path() -> Path:
+    """Get the path to the single-instance lock file."""
+    if sys.platform == "darwin":
+        lock_dir = Path.home() / "Library" / "Application Support" / "Jarvis"
+    elif sys.platform == "win32":
+        lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
+    else:
+        lock_dir = Path.home() / ".jarvis"
+
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / "jarvis_desktop.lock"
+
+
+def get_existing_instance_pid() -> Optional[int]:
+    """Read the PID of the existing Jarvis instance from the lock file."""
+    lock_file = get_lock_file_path()
+    try:
+        if lock_file.exists():
+            content = lock_file.read_text().strip()
+            if content.isdigit():
+                return int(content)
+    except Exception:
+        pass
+    return None
+
+
+def kill_existing_instance(pid: int) -> bool:
+    """
+    Terminate an existing Jarvis instance by PID.
+
+    Returns True if the process was terminated, False otherwise.
+    """
+    try:
+        process = psutil.Process(pid)
+        # Verify it's actually a Jarvis process (safety check)
+        proc_name = process.name().lower()
+        if "jarvis" not in proc_name and "python" not in proc_name:
+            debug_log(f"PID {pid} doesn't look like Jarvis (name: {proc_name}), not killing", "desktop")
+            return False
+
+        debug_log(f"Terminating existing Jarvis instance (PID {pid})", "desktop")
+        process.terminate()
+
+        # Wait up to 5 seconds for graceful shutdown
+        try:
+            process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            debug_log(f"Process {pid} didn't terminate gracefully, force killing", "desktop")
+            process.kill()
+            process.wait(timeout=2)
+
+        return True
+    except psutil.NoSuchProcess:
+        # Process already gone
+        return True
+    except Exception as e:
+        debug_log(f"Failed to kill process {pid}: {e}", "desktop")
+        return False
+
+
+def show_instance_conflict_dialog() -> bool:
+    """
+    Show a dialog asking the user if they want to kill the existing instance.
+
+    Returns True if the user chose to kill, False to exit.
+    Must be called after QApplication is created.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+    from PyQt6.QtGui import QIcon
+
+    msg = QMessageBox()
+    msg.setWindowTitle("Jarvis Already Running")
+    msg.setText("Another instance of Jarvis is already running.")
+    msg.setInformativeText("Would you like to close the existing instance and start a new one?")
+    msg.setIcon(QMessageBox.Icon.Question)
+
+    # Add custom buttons
+    kill_btn = msg.addButton("Close Existing && Start New", QMessageBox.ButtonRole.AcceptRole)
+    exit_btn = msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
+    msg.setDefaultButton(kill_btn)
+
+    # Apply theme
+    from desktop_app.themes import JARVIS_THEME_STYLESHEET
+    msg.setStyleSheet(JARVIS_THEME_STYLESHEET)
+
+    msg.exec()
+
+    return msg.clickedButton() == kill_btn
+
+
 def acquire_single_instance_lock() -> bool:
     """
     Acquire a lock to ensure only one instance of the desktop app runs.
@@ -460,16 +550,7 @@ def acquire_single_instance_lock() -> bool:
     """
     global _lock_file_handle
 
-    # Use a predictable lock file location
-    if sys.platform == "darwin":
-        lock_dir = Path.home() / "Library" / "Application Support" / "Jarvis"
-    elif sys.platform == "win32":
-        lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
-    else:
-        lock_dir = Path.home() / ".jarvis"
-
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_dir / "jarvis_desktop.lock"
+    lock_file = get_lock_file_path()
 
     try:
         # Open lock file (create if doesn't exist)
@@ -1855,11 +1936,44 @@ def main() -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
-    # Single-instance check - must be done BEFORE any GUI is created
+    # Single-instance check
     # This prevents multiple tray icons and log windows from spawning
     if not acquire_single_instance_lock():
-        print("⚠️ Another instance of Jarvis Desktop is already running. Exiting.")
-        return 0
+        print("⚠️ Another instance of Jarvis Desktop is already running.", flush=True)
+
+        # Create a minimal QApplication for the dialog
+        from PyQt6.QtWidgets import QApplication
+        temp_app = QApplication(sys.argv)
+
+        if show_instance_conflict_dialog():
+            # User wants to kill the existing instance
+            existing_pid = get_existing_instance_pid()
+            if existing_pid:
+                print(f"🔄 Closing existing instance (PID {existing_pid})...", flush=True)
+                if kill_existing_instance(existing_pid):
+                    # Wait a moment for the lock file to be released
+                    import time
+                    time.sleep(0.5)
+
+                    # Try to acquire the lock again
+                    if acquire_single_instance_lock():
+                        print("✅ Lock acquired, starting new instance...", flush=True)
+                        # Clean up temp app - we'll create the real one below
+                        temp_app.quit()
+                        del temp_app
+                    else:
+                        print("❌ Failed to acquire lock after killing existing instance.", flush=True)
+                        return 1
+                else:
+                    print("❌ Failed to close existing instance.", flush=True)
+                    return 1
+            else:
+                print("❌ Could not find existing instance PID.", flush=True)
+                return 1
+        else:
+            # User chose to exit
+            print("👋 Exiting.", flush=True)
+            return 0
 
     # Check for previous crash BEFORE setting up new crash logging
     # This way we can read the old crash log before it's overwritten
