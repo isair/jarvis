@@ -13,6 +13,9 @@ for arg in "$@"; do
     esac
 done
 
+# Navigate to project root first
+cd "$(dirname "$0")/.." || exit
+
 echo "🔧 Testing Jarvis Desktop App locally..."
 if [ "$VOICE_DEBUG" = "1" ]; then
     echo "   📋 Voice debug: ENABLED"
@@ -24,14 +27,13 @@ echo "📋 Checking Python version..."
 python --version || python3 --version
 echo ""
 
-# Install desktop dependencies if needed
-echo "📦 Installing desktop app dependencies..."
-pip install PyQt6 psutil pillow || pip3 install PyQt6 psutil pillow
+# Install dependencies from requirements.txt
+echo "📦 Installing dependencies..."
+pip install -q -r requirements.txt || pip3 install -q -r requirements.txt
 echo ""
 
 # Generate icons
 echo "🎨 Generating icons..."
-cd "$(dirname "$0")/.." || exit
 python src/desktop_app/desktop_assets/generate_icons.py
 echo ""
 
@@ -42,10 +44,8 @@ echo "   Select 'Start Listening' from menu to begin"
 echo "   Or press Ctrl+C to quit"
 echo ""
 
-# Set PYTHONPATH to include src directory
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-export PYTHONPATH="$PROJECT_ROOT/src:$PYTHONPATH"
+# Set PYTHONPATH to include src directory (already at project root)
+export PYTHONPATH="$(pwd)/src:$PYTHONPATH"
 
 # Set voice debug environment variable if requested
 if [ "$VOICE_DEBUG" = "1" ]; then
