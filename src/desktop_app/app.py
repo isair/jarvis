@@ -648,6 +648,26 @@ class LogViewerWindow(QMainWindow):
         header_row_layout.addWidget(title_section)
         header_row_layout.addStretch()
 
+        # Clear button
+        clear_btn = QPushButton("🗑️ Clear")
+        clear_btn.setToolTip("Clear all logs")
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27272a;
+                color: #fafafa;
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #3f3f46;
+                border-color: #f59e0b;
+            }
+        """)
+        clear_btn.clicked.connect(self.clear_logs)
+        header_row_layout.addWidget(clear_btn)
+
         # Report button on the right
         report_btn = QPushButton("🐛 Report Issue")
         report_btn.setToolTip("Report a bug or unexpected behavior on GitHub")
@@ -690,7 +710,7 @@ class LogViewerWindow(QMainWindow):
     def clear_logs(self) -> None:
         """Clear all logs."""
         self.log_display.clear()
-        self.append_log("📝 Jarvis Logs\n" + "="*60 + "\n")
+        self.append_log("🗑️ Logs Cleared\n" + "─"*50 + "\n\n")
 
     def _report_issue(self) -> None:
         """Open GitHub issue with redacted log contents."""
