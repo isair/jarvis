@@ -307,14 +307,15 @@ class VoiceListener(threading.Thread):
                     getattr(self.cfg, 'tts_rate', 200), utterance_start_time,
                     in_hot_window=True
                 ):
-                    # Pure echo (no salvageable user speech) - reject
+                    # Pure echo (no salvageable user speech) - reject this utterance
+                    # but DON'T expire hot window - user might have real follow-up coming
                     debug_log(f"rejected as echo during hot window (no salvage possible): '{text_lower}'", "echo")
                     if not self.cfg.voice_debug:
                         try:
                             print("🔇 Ignoring echo from previous response")
                         except Exception:
                             pass
-                    self.state_manager.expire_hot_window(self.cfg.voice_debug)
+                    # Clear voice state for this echo but keep hot window active
                     self.state_manager.clear_hot_window_voice_state()
                     return
             else:
@@ -324,13 +325,15 @@ class VoiceListener(threading.Thread):
                 word_count = len(text_lower.split())
                 if word_count > 4:
                     if self.echo_detector._check_text_similarity(text_lower, self.echo_detector._last_tts_text, threshold=70):
+                        # Delayed echo - reject this utterance but DON'T expire hot window
+                        # User might have real follow-up coming
                         debug_log(f"rejected as delayed echo during hot window (>4 words, similarity >= 70): '{text_lower}'", "echo")
                         if not self.cfg.voice_debug:
                             try:
                                 print("🔇 Ignoring echo from previous response")
                             except Exception:
                                 pass
-                        self.state_manager.expire_hot_window(self.cfg.voice_debug)
+                        # Clear voice state for this echo but keep hot window active
                         self.state_manager.clear_hot_window_voice_state()
                         return
 

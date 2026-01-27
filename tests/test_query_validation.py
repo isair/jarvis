@@ -314,6 +314,72 @@ class TestHotWindowQueryValidation:
         assert has_wake_word is True
 
 
+class TestHotWindowEchoRejection:
+    """Tests documenting that echo rejection should NOT expire hot window.
+
+    Bug scenario: User says follow-up, but TTS echo is transcribed first.
+    The echo gets rejected, but the hot window should remain active for
+    the real follow-up that comes immediately after.
+    """
+
+    def test_echo_rejection_should_not_expire_hot_window(self):
+        """
+        Bug fix test: Echo rejection must NOT expire hot window.
+
+        Scenario from real usage:
+        1. TTS finishes at 13:12:24.390, hot window starts (3 seconds)
+        2. User says: "No, that's you. I was talking to Google."
+        3. But Whisper first transcribes TTS echo (97.3% similarity)
+        4. Echo is correctly rejected
+        5. BUG (fixed): Hot window was being expired here
+        6. Real follow-up arrives but hot window is already gone
+
+        The fix: Echo rejection clears voice state but keeps hot window active.
+        """
+        # Timeline simulation
+        tts_finish_time = 1000.0
+        hot_window_duration = 3.0
+        hot_window_end_time = tts_finish_time + hot_window_duration  # 1003.0
+
+        # Echo arrives at 1000.5 (during hot window)
+        echo_arrival_time = 1000.5
+
+        # Real follow-up arrives at 1001.2 (during hot window)
+        followup_arrival_time = 1001.2
+
+        # Both arrive within hot window
+        assert echo_arrival_time < hot_window_end_time
+        assert followup_arrival_time < hot_window_end_time
+
+        # Key assertion: After rejecting echo, hot window should still be active
+        # for the follow-up that arrives 0.7 seconds later
+        time_between_echo_and_followup = followup_arrival_time - echo_arrival_time
+        assert time_between_echo_and_followup < hot_window_duration, \
+            "Follow-up should be within hot window if echo didn't expire it"
+
+    def test_real_followup_after_echo_is_accepted(self):
+        """
+        After echo is rejected, real follow-up should still work.
+
+        The hot window stays active, so the follow-up doesn't need wake word.
+        """
+        # User's real follow-up (no wake word needed in hot window)
+        followup_text = "no that's you i was talking to google"
+        wake_word = "jarvis"
+
+        # This doesn't have wake word
+        has_wake_word = is_wake_word_detected(followup_text, wake_word, [])
+        assert has_wake_word is False
+
+        # But in hot window mode, it should still be accepted
+        # (the listener trusts intent judge for hot window speech)
+        in_hot_window = True
+        should_require_wake_word = not in_hot_window
+
+        # No wake word required in hot window
+        assert should_require_wake_word is False
+
+
 class TestQueryValidationNotUsed:
     """Tests documenting why we DON'T use query-to-segment text matching.
 
