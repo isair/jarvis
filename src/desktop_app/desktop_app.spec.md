@@ -34,7 +34,12 @@ The startup sequence ensures a smooth user experience even when dependencies (li
 ```mermaid
 flowchart TD
     A[Launch App] --> B[Single Instance Check]
-    B -->|Already Running| Z[Exit]
+    B -->|Already Running| B2[Show Conflict Dialog]
+    B2 -->|User: Exit| Z[Exit]
+    B2 -->|User: Kill Existing| B3[Terminate Old Instance]
+    B3 --> B4[Retry Lock]
+    B4 -->|Failed| Z
+    B4 -->|OK| C
     B -->|OK| C[Show Splash Screen]
     C --> D{Setup Completed Before?}
     D -->|No| E[Show Setup Wizard]
@@ -59,7 +64,7 @@ flowchart TD
 
 1. **Splash Screen**: Shows immediately to provide visual feedback while loading
 2. **Ollama Auto-Start**: If Ollama isn't running, automatically starts it (up to 15s wait)
-3. **Single Instance Lock**: Prevents multiple copies from running simultaneously
+3. **Single Instance Lock**: Prevents multiple copies from running simultaneously. If another instance is detected, shows a dialog offering to close the existing instance and start fresh.
 4. **Crash Detection**: Detects previous crashes and offers to submit bug reports
 
 ## Main Components
