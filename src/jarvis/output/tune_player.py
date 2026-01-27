@@ -1,10 +1,97 @@
 from __future__ import annotations
+import io
+import math
+import struct
 import threading
 import time
 import platform
 import subprocess
 import shutil
+import tempfile
 from typing import Optional
+
+
+def _generate_sonar_ping_wav() -> bytes:
+    """Generate a pleasant pop sound as WAV bytes.
+
+    Creates a sound similar to macOS Pop.aiff:
+    - Clean sine tone
+    - Quick decay
+    - Subtle tremolo flutter for "shake" character
+    """
+    sample_rate = 44100
+    duration = 0.12  # 120ms - short and clean
+
+    freq = 520  # C5 area - clean mid-range tone
+
+    # Generate samples
+    num_samples = int(sample_rate * duration)
+    samples = []
+
+    for i in range(num_samples):
+        t = i / sample_rate
+
+        # Smooth envelope - quick attack, clean decay
+        attack = 1 - math.exp(-t * 600)
+        decay = math.exp(-t * 22)
+        envelope = attack * decay
+
+        # Tremolo flutter - fast amplitude wobble that fades
+        tremolo_rate = 55  # Hz
+        tremolo_depth = 0.25 * math.exp(-t * 30)  # Fades quickly
+        tremolo = 1 + tremolo_depth * math.sin(2 * math.pi * tremolo_rate * t)
+
+        # Clean sine tone
+        sample = envelope * tremolo * math.sin(2 * math.pi * freq * t)
+
+        # Convert to 16-bit PCM
+        sample_int = int(sample * 32767 * 0.7)
+        samples.append(max(-32768, min(32767, sample_int)))
+
+    # Build WAV file in memory
+    wav_buffer = io.BytesIO()
+
+    # WAV header
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = num_samples * block_align
+
+    # RIFF header
+    wav_buffer.write(b'RIFF')
+    wav_buffer.write(struct.pack('<I', 36 + data_size))
+    wav_buffer.write(b'WAVE')
+
+    # fmt chunk
+    wav_buffer.write(b'fmt ')
+    wav_buffer.write(struct.pack('<I', 16))  # chunk size
+    wav_buffer.write(struct.pack('<H', 1))   # PCM format
+    wav_buffer.write(struct.pack('<H', num_channels))
+    wav_buffer.write(struct.pack('<I', sample_rate))
+    wav_buffer.write(struct.pack('<I', byte_rate))
+    wav_buffer.write(struct.pack('<H', block_align))
+    wav_buffer.write(struct.pack('<H', bits_per_sample))
+
+    # data chunk
+    wav_buffer.write(b'data')
+    wav_buffer.write(struct.pack('<I', data_size))
+    for sample in samples:
+        wav_buffer.write(struct.pack('<h', sample))
+
+    return wav_buffer.getvalue()
+
+
+# Cache the generated WAV data
+_SONAR_PING_WAV: Optional[bytes] = None
+
+
+def _get_sonar_ping_wav() -> bytes:
+    """Get cached sonar ping WAV data, generating if needed."""
+    global _SONAR_PING_WAV
+    if _SONAR_PING_WAV is None:
+        _SONAR_PING_WAV = _generate_sonar_ping_wav()
+    return _SONAR_PING_WAV
 
 
 class TunePlayer:
@@ -59,114 +146,113 @@ class TunePlayer:
             self._is_playing.clear()
             
     def _play_macos_tune(self) -> None:
-        """Play tune on macOS using afplay or say with tones."""
-        # Try to use afplay with system sounds first
+        """Play tune on macOS using afplay with generated pop sound."""
+        import os
+
         afplay = shutil.which("afplay")
-        if afplay:
-            # Use a subtle system sound that loops
-            sounds = [
-                "/System/Library/Sounds/Pop.aiff"
-            ]
-            
-            while not self._stop_event.is_set():
-                for sound in sounds:
-                    if self._stop_event.is_set():
-                        break
-                    try:
-                        # Play sound quietly in background
-                        subprocess.run([afplay, sound], 
-                                     stdout=subprocess.DEVNULL, 
-                                     stderr=subprocess.DEVNULL,
-                                     timeout=2.0)
-                        time.sleep(0.8)  # Gentle spacing
-                    except Exception:
-                        continue
-        else:
-            # Fallback to say command with musical notes
-            say = shutil.which("say")
-            if say:
-                notes = ["[[rate 200]][[pbas 40]]♪", "[[rate 200]][[pbas 45]]♫", "[[rate 200]][[pbas 40]]♪"]
-                while not self._stop_event.is_set():
-                    for note in notes:
-                        if self._stop_event.is_set():
-                            break
-                        try:
-                            subprocess.run([say, note], 
-                                         stdout=subprocess.DEVNULL, 
-                                         stderr=subprocess.DEVNULL,
-                                         timeout=1.0)
-                            time.sleep(0.5)
-                        except Exception:
-                            continue
-                            
-    def _play_linux_tune(self) -> None:
-        """Play tune on Linux using aplay, paplay, or beep."""
-        # Try paplay (PulseAudio) first
-        paplay = shutil.which("paplay")
-        if paplay:
-            # Simple tone generation (if we had audio files)
-            pass
-            
-        # Try beep command
-        beep = shutil.which("beep")
-        if beep:
+        if not afplay:
+            self._play_fallback_tune()
+            return
+
+        # Write WAV to temp file
+        wav_data = _get_sonar_ping_wav()
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False
+            ) as tmp_file:
+                tmp_file.write(wav_data)
+                tmp_path = tmp_file.name
+
             while not self._stop_event.is_set():
                 try:
-                    # Soft, low tone pattern (E4, G4, E4, D4 - mellower than A4, C5)
-                    frequencies = [330, 392, 330, 294]
-                    for freq in frequencies:
-                        if self._stop_event.is_set():
-                            break
-                        subprocess.run([beep, "-f", str(freq), "-l", "150"], 
-                                     stdout=subprocess.DEVNULL, 
-                                     stderr=subprocess.DEVNULL,
-                                     timeout=0.5)
-                        time.sleep(0.3)
+                    subprocess.run(
+                        [afplay, tmp_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2.0
+                    )
+                    time.sleep(0.8)  # Gentle spacing
                 except Exception:
                     break
-        else:
-            # Fallback to speaker-beep
+        except Exception:
             self._play_fallback_tune()
-            
-    def _play_windows_tune(self) -> None:
-        """Play tune on Windows using winsound module (no console window)."""
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                            
+    def _play_linux_tune(self) -> None:
+        """Play tune on Linux using paplay, aplay, or ffplay with generated sonar ping."""
+        import os
+
+        # Find a suitable audio player
+        paplay = shutil.which("paplay")  # PulseAudio
+        aplay = shutil.which("aplay")    # ALSA
+        ffplay = shutil.which("ffplay")  # FFmpeg
+
+        player = paplay or aplay or ffplay
+        if not player:
+            self._play_fallback_tune()
+            return
+
+        # Write WAV to temp file (these players need a file)
+        wav_data = _get_sonar_ping_wav()
+        tmp_path = None
         try:
-            import winsound
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False
+            ) as tmp_file:
+                tmp_file.write(wav_data)
+                tmp_path = tmp_file.name
+
+            # Build command based on player
+            if player == ffplay:
+                cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path]
+            else:
+                cmd = [player, tmp_path]
+
             while not self._stop_event.is_set():
                 try:
-                    # Soft, low tone pattern (E4, G4, E4, D4 - mellower than A4, C5)
-                    frequencies = [330, 392, 330, 294]
-                    for freq in frequencies:
-                        if self._stop_event.is_set():
-                            break
-                        winsound.Beep(freq, 150)
-                        time.sleep(0.3)
+                    subprocess.run(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2.0
+                    )
+                    time.sleep(0.8)  # Gentle spacing like macOS
+                except Exception:
+                    break
+        except Exception:
+            self._play_fallback_tune()
+        finally:
+            # Clean up temp file
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            
+    def _play_windows_tune(self) -> None:
+        """Play tune on Windows using winsound with generated sonar ping."""
+        try:
+            import winsound
+            wav_data = _get_sonar_ping_wav()
+            while not self._stop_event.is_set():
+                try:
+                    # Play the sonar ping from memory
+                    winsound.PlaySound(
+                        wav_data,
+                        winsound.SND_MEMORY | winsound.SND_NODEFAULT
+                    )
+                    time.sleep(0.8)  # Gentle spacing like macOS
                 except Exception:
                     break
         except ImportError:
-            # winsound not available, try PowerShell with hidden window
-            pwsh = shutil.which("powershell") or shutil.which("pwsh")
-            if pwsh:
-                # CREATE_NO_WINDOW flag to prevent console window popup
-                creationflags = subprocess.CREATE_NO_WINDOW
-                while not self._stop_event.is_set():
-                    try:
-                        # Soft, low tone pattern (E4, G4, E4, D4)
-                        frequencies = [330, 392, 330, 294]
-                        for freq in frequencies:
-                            if self._stop_event.is_set():
-                                break
-                            script = f"[Console]::Beep({freq}, 150)"
-                            subprocess.run([pwsh, "-NoProfile", "-Command", script],
-                                         stdout=subprocess.DEVNULL,
-                                         stderr=subprocess.DEVNULL,
-                                         creationflags=creationflags,
-                                         timeout=0.5)
-                            time.sleep(0.3)
-                    except Exception:
-                        break
-            else:
-                self._play_fallback_tune()
+            # winsound not available, fallback to visual indicator
+            self._play_fallback_tune()
             
     def _play_fallback_tune(self) -> None:
         """Fallback tune using print statements (silent but indicates activity)."""
