@@ -1467,6 +1467,7 @@ class WhisperSetupPage(QWizardPage):
         super().__init__(parent)
         self.setTitle("")
         self._is_apple_silicon = is_apple_silicon()
+        self._is_bundled = getattr(sys, 'frozen', False)
         self._is_english_only = True  # Default to English-only for better accuracy
 
         # Main layout with scroll area for overflow
@@ -1956,14 +1957,24 @@ class WhisperSetupPage(QWizardPage):
             self._update_status_row(self.mlx_status, "✅ Installed", True)
             self.install_mlx_btn.setEnabled(False)
             self.install_mlx_btn.setText("✅ MLX Whisper Installed")
+            self.install_mlx_btn.setVisible(True)
+        elif self._is_bundled:
+            # In bundled mode, can't pip install - hide the button
+            self._update_status_row(self.mlx_status, "⚡ Using faster-whisper", True)
+            self.install_mlx_btn.setVisible(False)
         else:
             self._update_status_row(self.mlx_status, "❌ Not installed", False)
             self.install_mlx_btn.setEnabled(True)
             self.install_mlx_btn.setText("🧠 Install MLX Whisper")
+            self.install_mlx_btn.setVisible(True)
 
         # Update status message based on setup state
         if status.is_fully_setup:
             self.status_label.setText("✅ MLX Whisper is ready! GPU-accelerated speech recognition enabled.")
+            self.status_label.setStyleSheet("color: #4ade80;")
+        elif self._is_bundled and not status.is_mlx_whisper_installed:
+            # In bundled mode without MLX, faster-whisper is used automatically
+            self.status_label.setText("✅ Speech recognition ready using faster-whisper.")
             self.status_label.setStyleSheet("color: #4ade80;")
         else:
             if not status.is_ffmpeg_installed:
