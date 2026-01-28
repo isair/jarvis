@@ -6,12 +6,13 @@ Features:
 - State-specific visual indicators:
   * LISTENING: Expanding ring echoes of face outline (bell chime effect)
   * THINKING: Animated spinner pupils (3 rotating arcs)
-  * SPEAKING: Smooth continuous waveform mouth
-- Smooth continuous waveform mouth visualization:
-  * Uses multiple layered sine waves for natural audio-like appearance
-  * Amplitude and frequency vary to simulate speech patterns
-  * Edge tapering for organic look
-  * 60-point smooth curve with glow effect
+  * SPEAKING: Animated hexagonal mouth
+- Hexagonal mouth visualization:
+  * Displays as a flat horizontal line when idle
+  * Morphs into a 6-vertex hexagon when speaking starts
+  * Each vertex animates independently based on simulated audio patterns
+  * Smoothly transitions back to line when speaking ends
+  * Semi-transparent fill with glowing edges for futuristic look
 - Comprehensive state system (ASLEEP, IDLE, LISTENING, THINKING, SPEAKING)
 - Smooth wake/sleep transitions with opacity-based activation
 - Intelligent idle activity system (only active in IDLE state) that alternates between behaviors:
@@ -34,7 +35,7 @@ import threading
 from typing import Optional, List, Tuple
 from enum import Enum
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
-from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
+from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient, QPolygonF
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
 
@@ -174,11 +175,13 @@ class LowPolyFaceWidget(QWidget):
         self._is_blinking = False
         self._blink_progress = 0.0
 
-        # Soundwave visualization (for mouth) - continuous line waveform
-        self._waveform_time = 0.0  # Time parameter for waveform animation
-        self._waveform_amplitude = 0.0  # Overall amplitude (smoothly changes)
-        self._waveform_frequency_base = 0.15  # Base frequency for wave oscillation
-        self._waveform_detail_offset = 0.0  # Offset for detail variations
+        # Hexagonal mouth animation
+        self._mouth_hex_openness = 0.0  # 0.0 = flat line, 1.0 = fully open hexagon
+        self._mouth_time = 0.0  # Time parameter for smooth animation
+        self._mouth_intensity = 0.7  # Target intensity (changes occasionally)
+        self._vertex_phases = [0.0] * 6  # Individual phase offsets for each vertex
+        # Slightly different frequencies for each vertex for organic wobble
+        self._vertex_frequencies = [0.08, 0.11, 0.09, 0.10, 0.12, 0.07]
 
         # Expression state
         self._expression = Expression.NEUTRAL
@@ -504,23 +507,34 @@ class LowPolyFaceWidget(QWidget):
             if self._spinner_angle >= 360:
                 self._spinner_angle -= 360
 
-        # Soundwave animation (when speaking)
+        # Hexagonal mouth animation (when speaking)
         if self._jarvis_state == JarvisState.SPEAKING:
-            # Animate waveform parameters for natural audio-like movement
-            self._waveform_time += 0.12  # Speed of wave movement
-            self._waveform_detail_offset += 0.08  # Speed of detail variations
+            # Advance time for smooth pulsing animation
+            self._mouth_time += 0.15
 
-            # Vary amplitude smoothly (simulates volume changes in speech)
-            target_amplitude = 0.6 + random.random() * 0.4  # 0.6 to 1.0
-            self._waveform_amplitude += (target_amplitude - self._waveform_amplitude) * 0.15
+            # Occasionally change target intensity to simulate speech patterns
+            if random.random() < 0.03:  # ~3% chance per frame
+                self._mouth_intensity = 0.5 + random.random() * 0.5  # 0.5 to 1.0
 
-            # Occasionally change base frequency (simulates pitch changes in speech)
-            if random.random() < 0.02:  # 2% chance per frame
-                self._waveform_frequency_base = 0.1 + random.random() * 0.15  # 0.1 to 0.25
+            # Calculate target openness using sine wave for smooth pulsing
+            # Base openness + pulsing variation based on intensity
+            pulse = math.sin(self._mouth_time * 2.5) * 0.15 + math.sin(self._mouth_time * 4.1) * 0.08
+            target_openness = 0.4 + self._mouth_intensity * 0.4 + pulse * self._mouth_intensity
+
+            # Smoothly interpolate toward target
+            self._mouth_hex_openness += (target_openness - self._mouth_hex_openness) * 0.12
+
+            # Animate vertex phases for organic wobble
+            for i in range(6):
+                self._vertex_phases[i] += self._vertex_frequencies[i]
         else:
-            # Decay waveform to flat line when not speaking
-            self._waveform_amplitude *= 0.85
-            self._waveform_time += 0.03  # Slower drift when not speaking
+            # Smoothly close back to flat line when not speaking
+            self._mouth_hex_openness *= 0.88
+            self._mouth_time *= 0.95  # Slow down time
+
+            # Slow down vertex phases when not speaking
+            for i in range(6):
+                self._vertex_phases[i] += self._vertex_frequencies[i] * 0.2
 
         # Blink animation (only when awake)
         if self._activation_level > 0.5:
@@ -836,69 +850,106 @@ class LowPolyFaceWidget(QWidget):
     
     def _draw_mouth(self, painter: QPainter, cx: float, cy: float,
                     face_width: float, face_height: float):
-        """Draw smooth continuous waveform mouth with speaking animation."""
+        """Draw hexagonal mouth that morphs from flat line to hexagon when speaking.
+
+        Hexagon vertex layout when fully open:
+                [1]      [2]
+                 *--------*
+                /          \\
+           [0] *            * [3]
+                \\          /
+                 *--------*
+                [4]      [5]
+
+        When idle (openness = 0), all vertices collapse to a horizontal line.
+        """
         mouth_y = cy + face_height * 0.25
         mouth_width = face_width * 0.35
-        max_wave_height = face_height * 0.08  # Maximum amplitude of waveform
+        max_hex_height = face_height * 0.06  # Maximum vertical extent of hexagon
 
         # Apply activation level to mouth opacity
         mouth_opacity = 0.3 + (0.7 * self._activation_level)
+        openness = self._mouth_hex_openness
 
-        # Generate waveform path using multiple sine waves for natural audio appearance
-        wave_path = QPainterPath()
-        num_points = 60  # Number of points for smooth curve
+        # Define hexagon vertices at full openness (relative to mouth center)
+        # Format: (x_offset, y_offset_at_full_open)
+        hex_full = [
+            (-mouth_width, 0),                      # [0] Left corner
+            (-mouth_width * 0.5, -max_hex_height),  # [1] Top left
+            (mouth_width * 0.5, -max_hex_height),   # [2] Top right
+            (mouth_width, 0),                       # [3] Right corner
+            (mouth_width * 0.5, max_hex_height),    # [4] Bottom right
+            (-mouth_width * 0.5, max_hex_height),   # [5] Bottom left
+        ]
 
-        # Start at left edge
-        start_x = cx - mouth_width
-        wave_path.moveTo(start_x, mouth_y)
+        # Line positions (all on center y-line, evenly spaced)
+        hex_line = [
+            (-mouth_width, 0),                      # [0] Left corner
+            (-mouth_width * 0.5, 0),                # [1] Top left (on line)
+            (mouth_width * 0.5, 0),                 # [2] Top right (on line)
+            (mouth_width, 0),                       # [3] Right corner
+            (mouth_width * 0.5, 0),                 # [4] Bottom right (on line)
+            (-mouth_width * 0.5, 0),                # [5] Bottom left (on line)
+        ]
 
-        # Generate points along the waveform
-        for i in range(num_points + 1):
-            # Position along the mouth
-            t = i / num_points
-            x = start_x + (mouth_width * 2 * t)
+        # Interpolate between line and hexagon based on openness, then add per-vertex wobble
+        vertices = []
+        for i in range(6):
+            # Get line and full hex positions
+            lx, ly = hex_line[i]
+            fx, fy = hex_full[i]
 
-            # Calculate waveform height using multiple sine waves for complexity
-            # Main wave (low frequency, large amplitude)
-            wave1 = math.sin((t * 3.0 + self._waveform_time) * self._waveform_frequency_base * 20)
+            # Interpolate based on openness
+            vx = lx + (fx - lx) * openness
+            vy = ly + (fy - ly) * openness
 
-            # Detail wave 1 (medium frequency)
-            wave2 = math.sin((t * 8.0 + self._waveform_detail_offset) * 0.5) * 0.4
+            # Add per-vertex oscillation for organic movement (scaled by openness)
+            wobble_x = math.sin(self._vertex_phases[i]) * 1.2 * openness
+            wobble_y = math.cos(self._vertex_phases[i] * 1.3) * 1.0 * openness
 
-            # Detail wave 2 (high frequency, small amplitude for texture)
-            wave3 = math.sin((t * 15.0 + self._waveform_time * 2) * 0.3) * 0.2
+            # Corners (0 and 3) wobble more horizontally
+            if i in [0, 3]:
+                wobble_x *= 1.3
+                wobble_y *= 0.4
 
-            # Combine waves with weighted sum
-            combined_wave = (wave1 + wave2 + wave3) / 1.6
+            # Add subtle jitter for organic feel
+            jx, jy = self._get_jitter(110 + i, 0.5 * openness)
 
-            # Apply amplitude envelope (less amplitude at edges)
-            edge_factor = 1.0 - abs(t - 0.5) * 0.5  # Tapers at edges
-            y = mouth_y + (combined_wave * max_wave_height * self._waveform_amplitude * edge_factor)
+            vertices.append((cx + vx + wobble_x + jx, mouth_y + vy + wobble_y + jy))
 
-            wave_path.lineTo(x, y)
+        # Create polygon from vertices
+        polygon = QPolygonF([QPointF(vx, vy) for vx, vy in vertices])
 
-        # Draw glow effect
-        painter.setOpacity(mouth_opacity * 0.25)
+        # Draw filled hexagon with semi-transparent fill (only when open enough)
+        if openness > 0.05:
+            fill_color = QColor(self.PRIMARY_COLOR)
+            fill_color.setAlpha(int(60 * openness * self._activation_level))
+            painter.setBrush(QBrush(fill_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setOpacity(0.7 * openness)
+            painter.drawPolygon(polygon)
+
+        # Draw glow outline
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setOpacity(mouth_opacity * 0.4)
         glow_pen = QPen(self.GLOW_COLOR, 4)
         glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         glow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(glow_pen)
-        painter.drawPath(wave_path)
+        painter.drawPolygon(polygon)
 
-        # Draw main waveform line
+        # Draw main outline
         painter.setOpacity(mouth_opacity)
-        main_pen = QPen(self.PRIMARY_COLOR, 2.5)
+        main_pen = QPen(self.PRIMARY_COLOR, 2)
         main_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         main_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(main_pen)
-        painter.drawPath(wave_path)
+        painter.drawPolygon(polygon)
 
-        # Draw endpoint vertices
+        # Draw vertex glows at corners (vertices 0 and 3)
         painter.setOpacity(1.0)
-        jx1, jy1 = self._get_jitter(100, 1.5)
-        jx2, jy2 = self._get_jitter(101, 1.5)
-        self._draw_vertex_glow(painter, cx - mouth_width + jx1, mouth_y + jy1, self._activation_level)
-        self._draw_vertex_glow(painter, cx + mouth_width + jx2, mouth_y + jy2, self._activation_level)
+        self._draw_vertex_glow(painter, vertices[0][0], vertices[0][1], self._activation_level)
+        self._draw_vertex_glow(painter, vertices[3][0], vertices[3][1], self._activation_level)
     
     def _draw_accent_lines(self, painter: QPainter, cx: float, cy: float,
                            face_width: float, face_height: float):
