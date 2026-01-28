@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "llama3.2:3b": {
         "name": "Llama 3.2 3B (Recommended)",
-        "description": "Fast, concise responses, ~2GB download",
+        "description": "Fast, limited reasoning, ~2GB download",
         "size": "~2GB",
         "ram": "8GB+",
     },
