@@ -6,7 +6,7 @@ lxml>=4.9.0
 html2text>=2020.1.16
 playwright>=1.40.0
 numpy<2.0.0
-faster-whisper==1.0.3
+faster-whisper==1.1.1
 sounddevice==0.4.7
 pytesseract==0.3.13
 Pillow==10.4.0
