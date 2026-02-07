@@ -37,10 +37,16 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 _lock_file_handle = None
 
 # Try to import WebEngine (optional dependency for embedded memory viewer)
-try:
-    from PyQt6.QtWebEngineWidgets import QWebEngineView
-    HAS_WEBENGINE = True
-except ImportError:
+# Skip WebEngine entirely on macOS bundled apps — it crashes due to sandbox/bundling issues
+_is_macos_bundle = sys.platform == 'darwin' and getattr(sys, 'frozen', False)
+if not _is_macos_bundle:
+    try:
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
+        HAS_WEBENGINE = True
+    except ImportError:
+        HAS_WEBENGINE = False
+        QWebEngineView = None
+else:
     HAS_WEBENGINE = False
     QWebEngineView = None
 
@@ -2104,18 +2110,23 @@ def main() -> int:
             # Hide splash while wizard is shown
             splash.hide()
             print("🔧 Setup required - launching setup wizard...", flush=True)
-            wizard = SetupWizard()
-            # Ensure wizard is visible and has focus (prevents window manager issues)
-            wizard.show()
-            wizard.raise_()
-            wizard.activateWindow()
-            result = wizard.exec()
+            try:
+                wizard = SetupWizard()
+                # Ensure wizard is visible and has focus (prevents window manager issues)
+                wizard.show()
+                wizard.raise_()
+                wizard.activateWindow()
+                result = wizard.exec()
 
-            if result != wizard.DialogCode.Accepted:
-                print("Setup wizard cancelled - exiting", flush=True)
-                return 0
+                if result != wizard.DialogCode.Accepted:
+                    print("Setup wizard cancelled - exiting", flush=True)
+                    return 0
 
-            print("✅ Setup wizard completed successfully", flush=True)
+                print("✅ Setup wizard completed successfully", flush=True)
+            except Exception as e:
+                debug_log(f"Setup wizard crashed: {e}", "app")
+                print(f"  ❌ Setup wizard crashed: {e}", flush=True)
+                print("  ⚠️  Continuing without setup — you can configure Jarvis later", flush=True)
             # Show splash again after wizard
             splash.show()
             splash.set_status("Setup complete!")

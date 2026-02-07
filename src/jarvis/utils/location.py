@@ -451,8 +451,11 @@ def get_location_info(
         if not _download_geolite2_database():
             return {"error": "GeoLite2 database not available"}
 
+    # Use pure-Python MMAP mode in frozen environments to avoid C extension crashes
+    _reader_mode = 2 if getattr(sys, 'frozen', False) else 0  # 2=MODE_MMAP, 0=MODE_AUTO
+
     try:
-        with geoip2.database.Reader(str(db_path)) as reader:
+        with geoip2.database.Reader(str(db_path), mode=_reader_mode) as reader:
             response = reader.city(ip_address)
 
             location_info = {

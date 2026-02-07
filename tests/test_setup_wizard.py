@@ -319,6 +319,82 @@ class TestOllamaStatusDataclass:
         assert status.missing_models == []
 
 
+class TestStatusCheckWorkerSignal:
+    """Tests for StatusCheckWorker emitting location context alongside Ollama status."""
+
+    def test_worker_emits_location_context_when_available(self):
+        """Worker includes location context string in signal when location is available."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.1.23",
+            installed_models=["llama3.2:3b"],
+            missing_models=[],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            with patch("desktop_app.setup_wizard.is_location_available", return_value=True):
+                with patch("desktop_app.setup_wizard.get_location_context", return_value="Location: London, England, United Kingdom (Europe/London)"):
+                    from desktop_app.setup_wizard import StatusCheckWorker
+                    worker = StatusCheckWorker()
+                    results = []
+                    worker.finished.connect(lambda s, l: results.append((s, l)))
+                    worker.run()  # Run synchronously for testing
+
+                    assert len(results) == 1
+                    status, location = results[0]
+                    assert status.is_fully_setup is True
+                    assert "London" in location
+
+    def test_worker_emits_empty_location_when_unavailable(self):
+        """Worker returns empty location context when location DB is missing."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.1.23",
+            installed_models=[],
+            missing_models=["llama3.2:3b"],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            with patch("desktop_app.setup_wizard.is_location_available", return_value=False):
+                from desktop_app.setup_wizard import StatusCheckWorker
+                worker = StatusCheckWorker()
+                results = []
+                worker.finished.connect(lambda s, l: results.append((s, l)))
+                worker.run()
+
+                assert len(results) == 1
+                _, location = results[0]
+                assert location == ""
+
+    def test_worker_handles_location_exception_gracefully(self):
+        """Worker returns empty string if location check raises an exception."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.1.23",
+            installed_models=[],
+            missing_models=[],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            with patch("desktop_app.setup_wizard.is_location_available", return_value=True):
+                with patch("desktop_app.setup_wizard.get_location_context", side_effect=RuntimeError("C extension crash")):
+                    from desktop_app.setup_wizard import StatusCheckWorker
+                    worker = StatusCheckWorker()
+                    results = []
+                    worker.finished.connect(lambda s, l: results.append((s, l)))
+                    worker.run()
+
+                    assert len(results) == 1
+                    _, location = results[0]
+                    assert location == ""
+
+
 class TestLocationDetectionForWizard:
     """Tests for location detection utilities used in setup wizard."""
 

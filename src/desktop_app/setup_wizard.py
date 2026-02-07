@@ -386,12 +386,20 @@ except ImportError:
 
 
 class StatusCheckWorker(QThread):
-    """Worker thread for checking Ollama status."""
-    finished = pyqtSignal(OllamaStatus)
+    """Worker thread for checking Ollama status and location detection."""
+    finished = pyqtSignal(OllamaStatus, str)
 
     def run(self):
         status = check_ollama_status()
-        self.finished.emit(status)
+        # Check location in background thread to avoid C extension operations on UI thread
+        try:
+            if is_location_available():
+                location_context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
+            else:
+                location_context = ""
+        except Exception:
+            location_context = ""
+        self.finished.emit(status, location_context)
 
 
 class CommandWorker(QThread):
@@ -672,7 +680,7 @@ class WelcomePage(QWizardPage):
         self.worker.finished.connect(self._on_status_checked)
         self.worker.start()
 
-    def _on_status_checked(self, status: OllamaStatus):
+    def _on_status_checked(self, status: OllamaStatus, location_context: str):
         """Handle status check completion."""
         self.refresh_btn.setEnabled(True)
         self.refresh_btn.setText("🔄 Refresh Status")
@@ -681,6 +689,10 @@ class WelcomePage(QWizardPage):
         wizard = self.wizard()
         if isinstance(wizard, SetupWizard):
             wizard.ollama_status = status
+            # Cache location result so is_location_working() doesn't re-run on the UI thread
+            wizard._location_working = (
+                bool(location_context) and location_context != "Location: Unknown"
+            )
 
         # Update CLI status
         if status.is_cli_installed:
@@ -700,17 +712,15 @@ class WelcomePage(QWizardPage):
         else:
             self._update_status_row(self.models_status, f"⚠️ Missing: {', '.join(status.missing_models)}", False)
 
-        # Update location status
-        if not is_location_available():
+        # Update location status (pre-computed in background thread)
+        if not location_context:
             self._update_status_row(self.location_status, "⚠️ Database not installed", False)
+        elif location_context == "Location: Unknown":
+            self._update_status_row(self.location_status, "⚠️ Not configured", False)
         else:
-            location_context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
-            if location_context == "Location: Unknown":
-                self._update_status_row(self.location_status, "⚠️ Not configured", False)
-            else:
-                # Extract just the location part after "Location: "
-                loc_text = location_context.replace("Location: ", "")
-                self._update_status_row(self.location_status, f"✅ {loc_text}", True)
+            # Extract just the location part after "Location: "
+            loc_text = location_context.replace("Location: ", "")
+            self._update_status_row(self.location_status, f"✅ {loc_text}", True)
 
         # Update MLX Whisper status (Apple Silicon only)
         if self._is_apple_silicon:
