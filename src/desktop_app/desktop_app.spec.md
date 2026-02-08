@@ -66,6 +66,16 @@ flowchart TD
 2. **Ollama Auto-Start**: If Ollama isn't running, automatically starts it (up to 15s wait)
 3. **Single Instance Lock**: Prevents multiple copies from running simultaneously. If another instance is detected, shows a dialog offering to close the existing instance and start fresh.
 4. **Crash Detection**: Detects previous crashes and offers to submit bug reports
+5. **Single QApplication**: The QApplication is created **once** at the very start of `main()`, before the instance lock check. This is critical because Qt only allows one QApplication per process lifetime — creating a temporary one for a dialog and then another for the main app causes undefined behaviour.
+
+### Windows DLL Handling
+
+On Windows, bundled (PyInstaller) apps must ensure the correct native DLLs are loaded. Two mechanisms work together:
+
+1. **PyInstaller runtime hook** (`pyinstaller_runtime_hook.py`): Runs before *any* user Python code. Calls `os.add_dll_directory()` for `_MEIPASS` root and `onnxruntime/capi/` so the bundled `onnxruntime.dll` is found before the system-wide copy in `C:\Windows\System32`.
+2. **`jarvis/__init__.py` guard**: A second line of defence that registers the same DLL directories when the `jarvis` package is first imported. This covers edge cases where the runtime hook hasn't run (e.g. running the daemon via `python -m jarvis` in a frozen-like environment).
+
+Without these, Windows loads `C:\Windows\System32\onnxruntime.dll` (an older, smaller build) instead of the pip-installed version, causing an API mismatch crash in faster-whisper's Silero VAD.
 
 ## Main Components
 

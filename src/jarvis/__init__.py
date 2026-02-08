@@ -32,6 +32,12 @@ if getattr(_sys, 'frozen', False) and _sys.platform == 'win32':
                 _portaudio_path = _os.path.join(_meipass, '_sounddevice_data', 'portaudio-binaries')
                 if _os.path.isdir(_portaudio_path):
                     _os.add_dll_directory(_portaudio_path)
+                # Add onnxruntime/capi for bundled onnxruntime.dll — prevents
+                # C:\Windows\System32\onnxruntime.dll (old version) from being
+                # loaded instead of the pip-installed one.
+                _ort_capi = _os.path.join(_meipass, 'onnxruntime', 'capi')
+                if _os.path.isdir(_ort_capi):
+                    _os.add_dll_directory(_ort_capi)
             except Exception:
                 pass
 

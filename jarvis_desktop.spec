@@ -227,7 +227,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['src/desktop_app/pyinstaller_runtime_hook.py'],
     excludes=[
         # Exclude heavy packages to keep bundle size reasonable
         'psycopg2',  # Not used and causes OpenSSL conflicts

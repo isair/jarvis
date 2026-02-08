@@ -1962,14 +1962,19 @@ def main() -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
+    # Create QApplication ONCE, before anything that might need it (e.g. dialogs).
+    # Qt only allows one QApplication per process lifetime — creating a second
+    # one causes undefined behaviour / crashes.
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
     # Single-instance check
     # This prevents multiple tray icons and log windows from spawning
     if not acquire_single_instance_lock():
         print("⚠️ Another instance of Jarvis Desktop is already running.", flush=True)
-
-        # Create a minimal QApplication for the dialog
-        from PyQt6.QtWidgets import QApplication
-        temp_app = QApplication(sys.argv)
 
         if show_instance_conflict_dialog():
             # User wants to kill the existing instance
@@ -1984,9 +1989,6 @@ def main() -> int:
                     # Try to acquire the lock again
                     if acquire_single_instance_lock():
                         print("✅ Lock acquired, starting new instance...", flush=True)
-                        # Clean up temp app - we'll create the real one below
-                        temp_app.quit()
-                        del temp_app
                     else:
                         print("❌ Failed to acquire lock after killing existing instance.", flush=True)
                         return 1
@@ -2035,16 +2037,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        print("Creating QApplication...", flush=True)
-        from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import QTimer
-        print("QApplication imported successfully", flush=True)
-
-        # Create QApplication first (needed for wizard and splash)
-        app = QApplication.instance()
-        if app is None:
-            app = QApplication(sys.argv)
-        app.setQuitOnLastWindowClosed(False)
 
         # Show crash report dialog if previous session crashed
         if previous_crash:

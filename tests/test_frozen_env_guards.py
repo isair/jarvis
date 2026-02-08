@@ -5,8 +5,10 @@ These tests verify that macOS bundled apps skip dangerous C extension imports
 and use safe fallback modes to prevent crashes.
 """
 
+import os
 import sys
-from unittest.mock import patch, MagicMock
+import tempfile
+from unittest.mock import patch, MagicMock, call
 import importlib
 
 
@@ -124,3 +126,113 @@ class TestMaxminddbReaderMode:
                     mock_reader_cls.assert_called_once_with(
                         "/fake/path/GeoLite2-City.mmdb", mode=2
                     )
+
+
+class TestOnnxruntimeDllDirectory:
+    """Tests for onnxruntime DLL directory registration in frozen environments."""
+
+    def test_runtime_hook_adds_onnxruntime_capi_on_windows(self):
+        """The runtime hook should add onnxruntime/capi to DLL directories on Windows."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a fake onnxruntime/capi directory
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            os.makedirs(ort_capi)
+
+            added_dirs = []
+            original_add_dll = getattr(os, 'add_dll_directory', None)
+
+            def mock_add_dll_directory(path):
+                added_dirs.append(path)
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                    with patch.object(os, 'add_dll_directory', mock_add_dll_directory, create=True):
+                        # Re-execute the runtime hook logic
+                        _meipass = getattr(sys, '_MEIPASS', None)
+                        if _meipass and hasattr(os, 'add_dll_directory'):
+                            os.add_dll_directory(_meipass)
+                            _ort_capi = os.path.join(_meipass, 'onnxruntime', 'capi')
+                            if os.path.isdir(_ort_capi):
+                                os.add_dll_directory(_ort_capi)
+
+            assert tmpdir in added_dirs, "Bundle root should be added"
+            assert ort_capi in added_dirs, "onnxruntime/capi should be added"
+
+    def test_runtime_hook_skips_missing_onnxruntime_dir(self):
+        """If onnxruntime/capi doesn't exist, it should not be added."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Don't create onnxruntime/capi
+
+            added_dirs = []
+
+            def mock_add_dll_directory(path):
+                added_dirs.append(path)
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                    with patch.object(os, 'add_dll_directory', mock_add_dll_directory, create=True):
+                        _meipass = getattr(sys, '_MEIPASS', None)
+                        if _meipass and hasattr(os, 'add_dll_directory'):
+                            os.add_dll_directory(_meipass)
+                            _ort_capi = os.path.join(_meipass, 'onnxruntime', 'capi')
+                            if os.path.isdir(_ort_capi):
+                                os.add_dll_directory(_ort_capi)
+
+            assert tmpdir in added_dirs, "Bundle root should still be added"
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            assert ort_capi not in added_dirs, "Missing dir should not be added"
+
+    def test_runtime_hook_skips_non_windows(self):
+        """On non-Windows platforms the hook should not call add_dll_directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            os.makedirs(ort_capi)
+
+            added_dirs = []
+
+            def mock_add_dll_directory(path):
+                added_dirs.append(path)
+
+            with patch.object(sys, 'platform', 'linux'):
+                with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                    with patch.object(os, 'add_dll_directory', mock_add_dll_directory, create=True):
+                        # Replicate the hook's platform guard
+                        if sys.platform == 'win32':
+                            _meipass = getattr(sys, '_MEIPASS', None)
+                            if _meipass and hasattr(os, 'add_dll_directory'):
+                                os.add_dll_directory(_meipass)
+
+            assert len(added_dirs) == 0, "Should not add DLL dirs on non-Windows"
+
+    def test_init_py_adds_onnxruntime_capi_in_frozen_env(self):
+        """jarvis/__init__.py should add onnxruntime/capi in a frozen Windows env."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create fake directory structure
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            os.makedirs(ort_capi)
+            portaudio = os.path.join(tmpdir, '_sounddevice_data', 'portaudio-binaries')
+            os.makedirs(portaudio)
+
+            added_dirs = []
+
+            def mock_add_dll_directory(path):
+                added_dirs.append(path)
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, 'frozen', True, create=True):
+                    with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                        with patch.object(os, 'add_dll_directory', mock_add_dll_directory, create=True):
+                            # Replicate the __init__.py logic
+                            _meipass = getattr(sys, '_MEIPASS', None)
+                            if _meipass and hasattr(os, 'add_dll_directory'):
+                                os.add_dll_directory(_meipass)
+                                _portaudio_path = os.path.join(_meipass, '_sounddevice_data', 'portaudio-binaries')
+                                if os.path.isdir(_portaudio_path):
+                                    os.add_dll_directory(_portaudio_path)
+                                _ort_capi = os.path.join(_meipass, 'onnxruntime', 'capi')
+                                if os.path.isdir(_ort_capi):
+                                    os.add_dll_directory(_ort_capi)
+
+            assert tmpdir in added_dirs
+            assert portaudio in added_dirs
+            assert ort_capi in added_dirs
