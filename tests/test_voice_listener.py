@@ -5,6 +5,7 @@ These tests verify the Whisper model loading and fallback logic.
 """
 
 from unittest.mock import patch, MagicMock, call
+import time
 import pytest
 
 
@@ -385,3 +386,231 @@ class TestRepetitiveHallucinationDetection:
         listener = self._create_mock_listener()
         text = "hello hello world this is a normal sentence"
         assert listener._is_repetitive_hallucination(text) is False
+
+
+class TestMicPermissionHint:
+    """Tests for platform-aware microphone permission hint."""
+
+    def test_windows_hint(self):
+        """Returns Windows-specific hint on win32."""
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            from jarvis.listening.listener import _get_mic_permission_hint
+            # Re-import won't re-evaluate, so call with patched sys
+            # Need to call the function while sys is patched
+        # The function reads sys.platform at call time
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            from jarvis.listening.listener import _get_mic_permission_hint
+            result = _get_mic_permission_hint()
+            assert "Windows Settings" in result
+
+    def test_macos_hint(self):
+        """Returns macOS-specific hint on darwin."""
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "darwin"
+            from jarvis.listening.listener import _get_mic_permission_hint
+            result = _get_mic_permission_hint()
+            assert "System Settings" in result
+
+    def test_linux_hint(self):
+        """Returns Linux-specific hint on linux."""
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            from jarvis.listening.listener import _get_mic_permission_hint
+            result = _get_mic_permission_hint()
+            assert "pactl" in result
+
+
+class TestCrossPlatformDeviceLogging:
+    """Tests for cross-platform audio device name logging."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 6.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_device_name_printed_on_linux(self, capsys):
+        """Device name is printed on Linux, not just Windows."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [
+                                {"name": "Linux PulseAudio Mic", "max_input_channels": 1}
+                            ]
+                            mock_default = MagicMock()
+                            mock_default.device = (0, 0)
+                            mock_sd.default = mock_default
+                            # query_devices with index returns specific device
+                            mock_sd.query_devices.side_effect = lambda *args: (
+                                {"name": "Linux PulseAudio Mic", "max_input_channels": 1}
+                                if args else [{"name": "Linux PulseAudio Mic", "max_input_channels": 1}]
+                            )
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            captured = capsys.readouterr()
+                            assert "🎤" in captured.out
+                            assert "Linux PulseAudio Mic" in captured.out
+
+    def test_device_name_printed_on_macos(self, capsys):
+        """Device name is printed on macOS, not just Windows."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "darwin"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [
+                                {"name": "MacBook Pro Microphone", "max_input_channels": 1}
+                            ]
+                            mock_default = MagicMock()
+                            mock_default.device = (0, 0)
+                            mock_sd.default = mock_default
+                            mock_sd.query_devices.side_effect = lambda *args: (
+                                {"name": "MacBook Pro Microphone", "max_input_channels": 1}
+                                if args else [{"name": "MacBook Pro Microphone", "max_input_channels": 1}]
+                            )
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            captured = capsys.readouterr()
+                            assert "🎤" in captured.out
+                            assert "MacBook Pro Microphone" in captured.out
+
+
+class TestCrossPlatformAudioHealthWarning:
+    """Tests for cross-platform audio health monitoring."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 6.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_health_warning_fires_on_linux(self, capsys):
+        """Audio health warning fires on Linux when no audio received after 5s."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [
+                                {"name": "Test Mic", "max_input_channels": 1}
+                            ]
+                            mock_default = MagicMock()
+                            mock_default.device = (0, 0)
+                            mock_sd.default = mock_default
+                            mock_sd.query_devices.side_effect = lambda *args: (
+                                {"name": "Test Mic", "max_input_channels": 1}
+                                if args else [{"name": "Test Mic", "max_input_channels": 1}]
+                            )
+
+                            # Create a mock stream that is active
+                            mock_stream = MagicMock()
+                            mock_stream.active = True
+                            mock_stream.__enter__ = MagicMock(return_value=mock_stream)
+                            mock_stream.__exit__ = MagicMock(return_value=False)
+                            mock_sd.InputStream.return_value = mock_stream
+
+                            from jarvis.listening.listener import VoiceListener
+                            import queue as q
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+
+                            # Make _audio_q.get raise Empty then stop the loop
+                            get_calls = [0]
+                            def fake_get(timeout=0.2):
+                                get_calls[0] += 1
+                                if get_calls[0] >= 3:
+                                    listener._should_stop = True
+                                raise q.Empty()
+
+                            listener._audio_q = MagicMock()
+                            listener._audio_q.get = fake_get
+                            listener._callback_count = 0
+
+                            # time.time() is called first for _audio_start_time (baseline),
+                            # then in the loop for the health check (needs to be 6s later)
+                            _base = time.time()
+                            time_calls = [0]
+
+                            def advancing_time():
+                                time_calls[0] += 1
+                                # First call sets _audio_start_time baseline
+                                if time_calls[0] == 1:
+                                    return _base
+                                # Subsequent calls return 6s later
+                                return _base + 6
+
+                            with patch("jarvis.listening.listener.time") as mock_time:
+                                mock_time.time.side_effect = advancing_time
+                                mock_time.sleep = time.sleep
+
+                                listener.run()
+
+                            captured = capsys.readouterr()
+                            assert "No audio received after 5 seconds" in captured.out
+                            assert "pactl" in captured.out

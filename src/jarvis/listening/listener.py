@@ -35,21 +35,23 @@ except ImportError as e:
     sd = None
     webrtcvad = None
     np = None
-    # Log import error for debugging (especially important for Windows PortAudio issues)
+    # Log import error for debugging
+    print(f"  ⚠️  Audio import error: {e}", flush=True)
+    print("     This may indicate PortAudio is not found", flush=True)
     import sys as _sys
-    if _sys.platform == 'win32':
-        print(f"  ⚠️  Audio import error: {e}", flush=True)
-        print("     This may indicate PortAudio DLL is not found", flush=True)
+    if _sys.platform == 'linux':
+        print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
     del _sys
 except OSError as e:
-    # PortAudio DLL loading errors appear as OSError on Windows
+    # PortAudio loading errors appear as OSError
     sd = None
     webrtcvad = None
     np = None
+    print(f"  ❌ PortAudio initialisation failed: {e}", flush=True)
+    print("     Please reinstall the application or check audio drivers", flush=True)
     import sys as _sys
-    if _sys.platform == 'win32':
-        print(f"  ❌ PortAudio initialization failed: {e}", flush=True)
-        print("     Please reinstall the application or check audio drivers", flush=True)
+    if _sys.platform == 'linux':
+        print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
     del _sys
 
 # Whisper backend imports - try MLX first on Apple Silicon, fall back to faster-whisper
@@ -59,6 +61,16 @@ FASTER_WHISPER_AVAILABLE = False
 def _is_apple_silicon() -> bool:
     """Check if running on Apple Silicon Mac."""
     return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def _get_mic_permission_hint() -> str:
+    """Return platform-appropriate microphone permission guidance."""
+    if sys.platform == 'win32':
+        return "Windows Settings > Privacy > Microphone > Allow apps to access"
+    elif sys.platform == 'darwin':
+        return "System Settings > Privacy & Security > Microphone"
+    else:
+        return "`pactl list sources` or audio settings for your desktop environment"
 
 try:
     if _is_apple_silicon():
@@ -988,8 +1000,9 @@ class VoiceListener(threading.Thread):
         except Exception as e:
             debug_log(f"PortAudio device query failed: {e}", "voice")
             print(f"  ❌ Audio system error: {e}", flush=True)
-            if sys.platform == 'win32':
-                print("     PortAudio may not be properly installed", flush=True)
+            print("     PortAudio may not be properly installed", flush=True)
+            if sys.platform == 'linux':
+                print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
             return
 
         # Windows 11: Test microphone permission by attempting a brief recording
@@ -1204,16 +1217,14 @@ class VoiceListener(threading.Thread):
                 dev = sd.query_devices(stream_kwargs["device"])
                 device_name = dev.get('name', 'Unknown')
                 debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
-                if sys.platform == 'win32':
-                    print(f"  🎤 Using audio device: {device_name}", flush=True)
+                print(f"  🎤 Using audio device: {device_name}", flush=True)
             else:
                 debug_log("using system default input device", "voice")
-                if sys.platform == 'win32':
-                    try:
-                        default_dev = sd.query_devices(sd.default.device[0])
-                        print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
-                    except Exception:
-                        print("  🎤 Using system default input device", flush=True)
+                try:
+                    default_dev = sd.query_devices(sd.default.device[0])
+                    print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
+                except Exception:
+                    print("  🎤 Using system default input device", flush=True)
         except Exception:
             pass
 
@@ -1231,9 +1242,9 @@ class VoiceListener(threading.Thread):
             error_msg = str(e).lower()
             debug_log(f"failed to open input stream: {e}", "voice")
 
-            # Provide helpful error messages for common Windows issues
+            # Provide helpful error messages for common issues
             if "access" in error_msg or "permission" in error_msg:
-                print("  ❌ Microphone access denied. Please check Windows Settings > Privacy > Microphone", flush=True)
+                print(f"  ❌ Microphone access denied. Please check: {_get_mic_permission_hint()}", flush=True)
             elif "device" in error_msg and ("use" in error_msg or "busy" in error_msg):
                 print("  ❌ Microphone is being used by another application", flush=True)
             elif "device" in error_msg:
@@ -1245,7 +1256,7 @@ class VoiceListener(threading.Thread):
 
         # Main audio processing loop
         with stream:
-            # Verify stream is actually recording (helps catch Windows permission issues)
+            # Verify stream is actually recording (helps catch permission issues)
             if not stream.active:
                 try:
                     stream.start()
@@ -1253,7 +1264,7 @@ class VoiceListener(threading.Thread):
                     error_msg = str(e).lower()
                     debug_log(f"failed to start audio stream: {e}", "voice")
                     if "access" in error_msg or "permission" in error_msg:
-                        print("  ❌ Microphone access denied. Please check Windows Settings > Privacy > Microphone", flush=True)
+                        print(f"  ❌ Microphone access denied. Please check: {_get_mic_permission_hint()}", flush=True)
                     else:
                         print(f"  ❌ Failed to start recording: {e}", flush=True)
                     return
@@ -1270,17 +1281,17 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-            # Track start time for audio health monitoring (Windows only)
+            # Track start time for audio health monitoring
             _audio_start_time = time.time()
             _audio_health_logged = False
 
             while not self._should_stop:
-                # One-time audio health check after 5 seconds (Windows only)
-                if sys.platform == 'win32' and not _audio_health_logged and time.time() - _audio_start_time > 5:
+                # One-time audio health check after 5 seconds
+                if not _audio_health_logged and time.time() - _audio_start_time > 5:
                     _audio_health_logged = True
                     if self._callback_count == 0:
                         print("  ⚠️  No audio received after 5 seconds!", flush=True)
-                        print("     Check: Windows Settings > Privacy > Microphone > Allow apps to access", flush=True)
+                        print(f"     Check: {_get_mic_permission_hint()}", flush=True)
                         print("     Also check that your microphone is not muted", flush=True)
 
                 try:
