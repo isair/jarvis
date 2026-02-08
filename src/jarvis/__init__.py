@@ -23,6 +23,8 @@ import sys as _sys
 if getattr(_sys, 'frozen', False) and _sys.platform == 'win32':
     _meipass = getattr(_sys, '_MEIPASS', None)
     if _meipass:
+        _ort_capi = _os.path.join(_meipass, 'onnxruntime', 'capi')
+
         # Method 1: os.add_dll_directory (Python 3.8+, the proper solution)
         # This explicitly adds the directory to the DLL search path for ctypes
         if hasattr(_os, 'add_dll_directory'):
@@ -32,20 +34,40 @@ if getattr(_sys, 'frozen', False) and _sys.platform == 'win32':
                 _portaudio_path = _os.path.join(_meipass, '_sounddevice_data', 'portaudio-binaries')
                 if _os.path.isdir(_portaudio_path):
                     _os.add_dll_directory(_portaudio_path)
-                # Add onnxruntime/capi for bundled onnxruntime.dll — prevents
-                # C:\Windows\System32\onnxruntime.dll (old version) from being
-                # loaded instead of the pip-installed one.
-                _ort_capi = _os.path.join(_meipass, 'onnxruntime', 'capi')
+                # Add onnxruntime/capi for bundled onnxruntime.dll
                 if _os.path.isdir(_ort_capi):
                     _os.add_dll_directory(_ort_capi)
             except Exception:
                 pass
 
-        # Method 2: Modify PATH (legacy fallback, helps with subprocess spawning)
+        # Method 2: Modify PATH (legacy fallback, helps with subprocess spawning
+        # and bare LoadLibrary calls that don't use safe search flags)
         _path = _os.environ.get('PATH', '')
+        _prepend = []
+        if _os.path.isdir(_ort_capi) and _ort_capi not in _path:
+            _prepend.append(_ort_capi)
         if _meipass not in _path:
-            _os.environ['PATH'] = _meipass + _os.pathsep + _path
-        del _path
+            _prepend.append(_meipass)
+        if _prepend:
+            _os.environ['PATH'] = _os.pathsep.join(_prepend) + _os.pathsep + _path
+        del _path, _prepend
+
+        # Method 3: Pre-load bundled onnxruntime.dll by absolute path
+        # Once loaded, Windows reuses it by module name — preventing
+        # C:\Windows\System32\onnxruntime.dll (old version) from being
+        # picked up via DLL search order.
+        import ctypes as _ctypes
+        for _subdir in ('onnxruntime\\capi', '.'):
+            _dll = _os.path.join(_meipass, _subdir, 'onnxruntime.dll')
+            if _os.path.isfile(_dll):
+                try:
+                    _ctypes.WinDLL(_dll)
+                except OSError:
+                    pass
+                break
+        del _ctypes, _dll, _subdir
+
+        del _ort_capi
     del _meipass
 del _os, _sys
 # =============================================================================

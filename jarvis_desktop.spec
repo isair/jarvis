@@ -290,6 +290,28 @@ a.binaries = filtered_binaries
 # Note: VC++ runtime DLL handling on Windows is managed by PyInstaller 6.13.0+
 # which has built-in pre-loading of system VC runtime DLLs
 
+# On Windows, filter out C:\Windows\System32\onnxruntime.dll.
+# PyInstaller's dependency scanner resolves onnxruntime_pybind11_state.pyd's
+# dependency on onnxruntime.dll and may pick up the System32 copy (an older,
+# smaller DirectML/Windows ML build).  The correct pip-installed version is
+# collected by hook-onnxruntime.py via collect_dynamic_libs("onnxruntime").
+# If both end up in the bundle, the System32 copy lands at _MEIPASS root and
+# is found first by LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, causing an API-mismatch
+# access violation crash.
+if sys.platform == 'win32':
+    _pre = len(a.binaries)
+    a.binaries = [
+        b for b in a.binaries
+        if not (
+            'onnxruntime' in b[0].lower()
+            and len(b) > 1
+            and 'system32' in str(b[1]).lower()
+        )
+    ]
+    _removed = _pre - len(a.binaries)
+    if _removed:
+        print(f"Excluded {_removed} System32 onnxruntime binary(ies) to prevent DLL shadowing")
+
 # On macOS, ensure OpenSSL libraries are bundled properly
 if sys.platform == 'darwin':
     # Remove any psycopg2 binaries and OpenCV's bundled OpenSSL (should be excluded already, but be safe)

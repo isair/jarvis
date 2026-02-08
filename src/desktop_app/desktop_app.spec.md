@@ -70,12 +70,16 @@ flowchart TD
 
 ### Windows DLL Handling
 
-On Windows, bundled (PyInstaller) apps must ensure the correct native DLLs are loaded. Two mechanisms work together:
+On Windows, `C:\Windows\System32\onnxruntime.dll` (an older, smaller DirectML/Windows ML build) can shadow the pip-installed version. If the wrong DLL is loaded, the `onnxruntime_pybind11_state.pyd` extension crashes with an access violation due to an API mismatch. Three layers of defence prevent this:
 
-1. **PyInstaller runtime hook** (`pyinstaller_runtime_hook.py`): Runs before *any* user Python code. Calls `os.add_dll_directory()` for `_MEIPASS` root and `onnxruntime/capi/` so the bundled `onnxruntime.dll` is found before the system-wide copy in `C:\Windows\System32`.
-2. **`jarvis/__init__.py` guard**: A second line of defence that registers the same DLL directories when the `jarvis` package is first imported. This covers edge cases where the runtime hook hasn't run (e.g. running the daemon via `python -m jarvis` in a frozen-like environment).
+**Build-time** (`jarvis_desktop.spec`): Filters out any `onnxruntime.dll` whose source path contains `System32` from the PyInstaller binaries list. PyInstaller's dependency scanner may pick up the System32 copy when resolving `.pyd` dependencies; the correct version is collected by `hook-onnxruntime.py` via `collect_dynamic_libs("onnxruntime")`.
 
-Without these, Windows loads `C:\Windows\System32\onnxruntime.dll` (an older, smaller build) instead of the pip-installed version, causing an API mismatch crash in faster-whisper's Silero VAD.
+**Runtime — PyInstaller hook** (`pyinstaller_runtime_hook.py`): Runs before *any* user Python code. Three sub-layers:
+1. `os.add_dll_directory()` — registers `_MEIPASS` and `onnxruntime/capi/` for the safe DLL search used by `LoadLibraryExW`
+2. `PATH` prepend — legacy fallback for bare `LoadLibrary` calls
+3. `ctypes.WinDLL` pre-load — loads the correct `onnxruntime.dll` by absolute path so Windows never searches for it (already-loaded DLLs are reused by module name)
+
+**Runtime — `jarvis/__init__.py` guard**: Repeats the same three sub-layers when the `jarvis` package is first imported. This covers edge cases where the runtime hook hasn't run (e.g. running the daemon via `python -m jarvis` in a frozen-like environment).
 
 ## Main Components
 

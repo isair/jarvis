@@ -139,7 +139,6 @@ class TestOnnxruntimeDllDirectory:
             os.makedirs(ort_capi)
 
             added_dirs = []
-            original_add_dll = getattr(os, 'add_dll_directory', None)
 
             def mock_add_dll_directory(path):
                 added_dirs.append(path)
@@ -147,13 +146,12 @@ class TestOnnxruntimeDllDirectory:
             with patch.object(sys, 'platform', 'win32'):
                 with patch.object(sys, '_MEIPASS', tmpdir, create=True):
                     with patch.object(os, 'add_dll_directory', mock_add_dll_directory, create=True):
-                        # Re-execute the runtime hook logic
+                        # Re-execute the runtime hook Layer 1 logic
                         _meipass = getattr(sys, '_MEIPASS', None)
                         if _meipass and hasattr(os, 'add_dll_directory'):
-                            os.add_dll_directory(_meipass)
-                            _ort_capi = os.path.join(_meipass, 'onnxruntime', 'capi')
-                            if os.path.isdir(_ort_capi):
-                                os.add_dll_directory(_ort_capi)
+                            for _dir in (_meipass, os.path.join(_meipass, 'onnxruntime', 'capi')):
+                                if os.path.isdir(_dir):
+                                    os.add_dll_directory(_dir)
 
             assert tmpdir in added_dirs, "Bundle root should be added"
             assert ort_capi in added_dirs, "onnxruntime/capi should be added"
@@ -173,10 +171,9 @@ class TestOnnxruntimeDllDirectory:
                     with patch.object(os, 'add_dll_directory', mock_add_dll_directory, create=True):
                         _meipass = getattr(sys, '_MEIPASS', None)
                         if _meipass and hasattr(os, 'add_dll_directory'):
-                            os.add_dll_directory(_meipass)
-                            _ort_capi = os.path.join(_meipass, 'onnxruntime', 'capi')
-                            if os.path.isdir(_ort_capi):
-                                os.add_dll_directory(_ort_capi)
+                            for _dir in (_meipass, os.path.join(_meipass, 'onnxruntime', 'capi')):
+                                if os.path.isdir(_dir):
+                                    os.add_dll_directory(_dir)
 
             assert tmpdir in added_dirs, "Bundle root should still be added"
             ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
@@ -203,6 +200,90 @@ class TestOnnxruntimeDllDirectory:
                                 os.add_dll_directory(_meipass)
 
             assert len(added_dirs) == 0, "Should not add DLL dirs on non-Windows"
+
+    def test_runtime_hook_preloads_onnxruntime_dll(self):
+        """The runtime hook should pre-load onnxruntime.dll from the bundle."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create fake DLL in onnxruntime/capi/
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            os.makedirs(ort_capi)
+            dll_path = os.path.join(ort_capi, 'onnxruntime.dll')
+            with open(dll_path, 'w') as f:
+                f.write('fake')
+
+            loaded_dlls = []
+
+            mock_windll_cls = MagicMock(side_effect=lambda path: loaded_dlls.append(path))
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                    with patch('ctypes.WinDLL', mock_windll_cls):
+                        # Replicate Layer 3 logic
+                        _meipass = getattr(sys, '_MEIPASS', None)
+                        for _subdir in ('onnxruntime\\capi', '.'):
+                            _dll = os.path.join(_meipass, _subdir, 'onnxruntime.dll')
+                            if os.path.isfile(_dll):
+                                import ctypes
+                                ctypes.WinDLL(_dll)
+                                break
+
+            assert len(loaded_dlls) == 1
+            assert loaded_dlls[0] == dll_path
+
+    def test_runtime_hook_preload_falls_back_to_root(self):
+        """If onnxruntime.dll is only at _MEIPASS root, pre-load from there."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # DLL at root only, not in onnxruntime/capi/
+            dll_path = os.path.join(tmpdir, 'onnxruntime.dll')
+            with open(dll_path, 'w') as f:
+                f.write('fake')
+
+            loaded_dlls = []
+            mock_windll_cls = MagicMock(side_effect=lambda path: loaded_dlls.append(path))
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                    with patch('ctypes.WinDLL', mock_windll_cls):
+                        _meipass = getattr(sys, '_MEIPASS', None)
+                        for _subdir in ('onnxruntime\\capi', '.'):
+                            _dll = os.path.join(_meipass, _subdir, 'onnxruntime.dll')
+                            if os.path.isfile(_dll):
+                                import ctypes
+                                ctypes.WinDLL(_dll)
+                                break
+
+            assert len(loaded_dlls) == 1
+            # os.path.join(tmpdir, '.', 'onnxruntime.dll') keeps the '.' segment;
+            # normalise both sides so the assertion is path-equivalent.
+            assert os.path.normpath(loaded_dlls[0]) == os.path.normpath(dll_path)
+
+    def test_runtime_hook_prepends_ort_capi_to_path(self):
+        """The runtime hook should prepend onnxruntime/capi to PATH."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            os.makedirs(ort_capi)
+
+            original_path = "C:\\existing"
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                    with patch.dict(os.environ, {'PATH': original_path}):
+                        # Replicate Layer 2 logic
+                        _meipass = getattr(sys, '_MEIPASS', None)
+                        _ort_capi = os.path.join(_meipass, 'onnxruntime', 'capi')
+                        _path = os.environ.get('PATH', '')
+                        _prepend = []
+                        for _dir in (_ort_capi, _meipass):
+                            if os.path.isdir(_dir) and _dir not in _path:
+                                _prepend.append(_dir)
+                        if _prepend:
+                            os.environ['PATH'] = os.pathsep.join(_prepend) + os.pathsep + _path
+
+                        new_path = os.environ['PATH']
+
+            # ort_capi should appear before the original path
+            assert new_path.startswith(ort_capi)
+            assert original_path in new_path
 
     def test_init_py_adds_onnxruntime_capi_in_frozen_env(self):
         """jarvis/__init__.py should add onnxruntime/capi in a frozen Windows env."""
@@ -236,3 +317,32 @@ class TestOnnxruntimeDllDirectory:
             assert tmpdir in added_dirs
             assert portaudio in added_dirs
             assert ort_capi in added_dirs
+
+    def test_init_py_preloads_onnxruntime_dll(self):
+        """jarvis/__init__.py should pre-load onnxruntime.dll in frozen Windows env."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create fake DLL
+            ort_capi = os.path.join(tmpdir, 'onnxruntime', 'capi')
+            os.makedirs(ort_capi)
+            dll_path = os.path.join(ort_capi, 'onnxruntime.dll')
+            with open(dll_path, 'w') as f:
+                f.write('fake')
+
+            loaded_dlls = []
+            mock_windll_cls = MagicMock(side_effect=lambda path: loaded_dlls.append(path))
+
+            with patch.object(sys, 'platform', 'win32'):
+                with patch.object(sys, 'frozen', True, create=True):
+                    with patch.object(sys, '_MEIPASS', tmpdir, create=True):
+                        with patch('ctypes.WinDLL', mock_windll_cls):
+                            # Replicate __init__.py Method 3 logic
+                            _meipass = getattr(sys, '_MEIPASS', None)
+                            for _subdir in ('onnxruntime\\capi', '.'):
+                                _dll = os.path.join(_meipass, _subdir, 'onnxruntime.dll')
+                                if os.path.isfile(_dll):
+                                    import ctypes
+                                    ctypes.WinDLL(_dll)
+                                    break
+
+            assert len(loaded_dlls) == 1
+            assert loaded_dlls[0] == dll_path
