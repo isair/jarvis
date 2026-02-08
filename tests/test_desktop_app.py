@@ -347,22 +347,86 @@ class TestLogViewerReportIssue:
         assert "[REDACTED_EMAIL]" in body_decoded
 
     def test_report_issue_truncates_long_logs(self):
-        """Report issue should truncate very long log content."""
-        from jarvis.utils.redact import redact
+        """Report issue should truncate long logs, keeping init section + tail."""
+        from desktop_app.app import _truncate_logs_for_report, _LOG_SEPARATOR
 
-        # Create very long realistic log content (not just repeated chars)
-        long_content = "\n".join([f"[2024-01-{i:02d}] Processing request {i}" for i in range(1, 500)])
+        # Simulate realistic log: header + separator + init + separator + operational logs
+        init_block = (
+            "🚀 Jarvis Log Viewer Ready\n"
+            f"{_LOG_SEPARATOR}\n"
+            "\n"
+            "✓ Daemon started\n"
+            "🧠 Using chat model: llama3.2\n"
+            "🎤 Using whisper model: large-v3-turbo\n"
+            "📡 No MCP servers configured\n"
+            "💾 Initializing dialogue memory...\n"
+            "✓ Dialogue memory initialized\n"
+            "📍 Location services disabled\n"
+            "🔊 Initializing TTS engine (piper)...\n"
+            "✓ TTS engine started\n"
+            "🎤 Initializing voice listener...\n"
+            "✓ Voice listener thread started\n"
+            f"{_LOG_SEPARATOR}\n"
+        )
+        operational = "\n".join([f"[2024-01-{i:02d}] Processing request {i}" for i in range(1, 500)])
+        long_content = init_block + operational
 
-        # Apply redaction with same limit as actual method
-        redacted = redact(long_content, max_len=6000)
+        result = _truncate_logs_for_report(long_content, 5000)
 
-        # Apply same truncation logic as actual method
-        if len(redacted) > 5000:
-            redacted = redacted[:5000] + "\n\n... (truncated)"
+        # Verify truncation happened and fits within budget
+        assert len(result) <= 5000
+        assert "... (truncated) ..." in result
 
-        # Verify truncation happened
-        assert len(redacted) <= 5020  # 5000 + len("\n\n... (truncated)")
-        assert "... (truncated)" in redacted
+        # Verify init section is preserved (up to last separator)
+        assert "Jarvis Log Viewer Ready" in result
+        assert "Using chat model" in result
+        assert "Voice listener thread started" in result
+
+        # Verify recent/tail lines are preserved (end of log)
+        assert "Processing request 499" in result
+
+    def test_report_issue_truncation_preserves_tail(self):
+        """Truncation should keep recent logs, not early logs."""
+        from desktop_app.app import _truncate_logs_for_report, _LOG_SEPARATOR
+
+        init_block = f"Header\n{_LOG_SEPARATOR}\n"
+        lines = [f"line {i}: {'x' * 40}" for i in range(200)]
+        long_content = init_block + "\n".join(lines)
+
+        result = _truncate_logs_for_report(long_content, 3000)
+
+        # Last line should be preserved (most recent)
+        assert "line 199" in result
+        # Init section should be preserved
+        assert "Header" in result
+        assert _LOG_SEPARATOR in result
+        # Middle lines should be truncated
+        assert "line 50" not in result
+
+    def test_report_issue_no_truncation_when_short(self):
+        """Short logs should not be truncated."""
+        from desktop_app.app import _truncate_logs_for_report
+
+        short_content = "line 1\nline 2\nline 3"
+        result = _truncate_logs_for_report(short_content, 5000)
+        assert result == short_content
+        assert "truncated" not in result
+
+    def test_report_issue_truncation_no_separator(self):
+        """Without a separator, truncation should just keep the tail."""
+        from desktop_app.app import _truncate_logs_for_report
+
+        # No separator (e.g. crash logs)
+        lines = [f"line {i}: content" for i in range(500)]
+        long_content = "\n".join(lines)
+
+        result = _truncate_logs_for_report(long_content, 3000)
+
+        assert len(result) <= 3000
+        # Tail (recent lines) should be preserved
+        assert "line 499" in result
+        # Early lines should be truncated
+        assert "line 0:" not in result
 
     def test_redaction_handles_multiple_sensitive_patterns(self):
         """Redaction should handle multiple types of sensitive data."""
