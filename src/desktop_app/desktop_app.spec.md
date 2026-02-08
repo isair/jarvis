@@ -110,6 +110,7 @@ The central controller that manages:
   - Auto-redacted log contents (emails, tokens, JWTs, passwords, etc.)
   - Logs in collapsible `<details>` section
   - Version and platform info
+  - Log truncation preserves the init section (everything up to the last `─`×50 separator) + recent tail (most useful for debugging); middle lines are truncated
 
 ### Splash Screen
 

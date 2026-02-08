@@ -57,6 +57,52 @@ from desktop_app.themes import JARVIS_THEME_STYLESHEET
 from desktop_app.face_widget import FaceWindow
 
 
+_LOG_SEPARATOR = "─" * 50
+
+
+def _truncate_logs_for_report(logs: str, max_len: int) -> str:
+    """Truncate logs keeping init section + recent tail.
+
+    Recent logs are more valuable for debugging, so we preserve the tail.
+    The init section (everything up to the last separator line) is kept
+    for context (version, platform, configuration info).
+    """
+    if len(logs) <= max_len:
+        return logs
+
+    marker = "\n\n... (truncated) ...\n\n"
+
+    # Find the init section: everything up to and including the last separator line
+    last_sep = logs.rfind(_LOG_SEPARATOR)
+    if last_sep != -1:
+        init_end = logs.find('\n', last_sep)
+        if init_end == -1:
+            init_end = last_sep + len(_LOG_SEPARATOR)
+        else:
+            init_end += 1  # Include the newline
+        init_section = logs[:init_end]
+    else:
+        # No separator found (e.g. crash logs); skip init preservation
+        init_section = ""
+
+    if len(init_section) + len(marker) >= max_len:
+        # Init section alone exceeds budget; just keep the tail
+        tail_part = logs[-(max_len - len(marker)):]
+        newline_idx = tail_part.find('\n')
+        if newline_idx != -1 and newline_idx < 200:
+            tail_part = tail_part[newline_idx + 1:]
+        return marker.lstrip() + tail_part
+
+    tail_budget = max_len - len(init_section) - len(marker)
+    tail_part = logs[-tail_budget:]
+    # Snap to line boundary to avoid a partial first line
+    newline_idx = tail_part.find('\n')
+    if newline_idx != -1 and newline_idx < 200:
+        tail_part = tail_part[newline_idx + 1:]
+
+    return init_section + marker + tail_part
+
+
 def setup_crash_logging():
     """Set up crash logging for the bundled app to capture startup errors."""
     if getattr(sys, 'frozen', False):
@@ -288,9 +334,8 @@ def show_crash_report_dialog(crash_content: str) -> None:
                     version = "unknown"
 
                 # Truncate crash info for URL (GitHub has limits)
-                truncated = self.crash_info[:4000]
-                if len(self.crash_info) > 4000:
-                    truncated += "\n\n... (truncated, full log in comment)"
+                # Keep init lines + recent tail (recent logs are most useful for debugging)
+                truncated = _truncate_logs_for_report(self.crash_info, 4000)
 
                 title = "Crash Report"
                 body = f"""## Crash Report
@@ -705,7 +750,7 @@ class LogViewerWindow(QMainWindow):
         layout.addWidget(self.log_display)
 
         # Initial message
-        self.append_log("🚀 Jarvis Log Viewer Ready\n" + "─"*50 + "\n\n")
+        self.append_log("🚀 Jarvis Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
 
     def append_log(self, text: str) -> None:
         """Append text to the log display."""
@@ -716,7 +761,7 @@ class LogViewerWindow(QMainWindow):
     def clear_logs(self) -> None:
         """Clear all logs."""
         self.log_display.clear()
-        self.append_log("🗑️ Logs Cleared\n" + "─"*50 + "\n\n")
+        self.append_log("🗑️ Logs Cleared\n" + _LOG_SEPARATOR + "\n\n")
 
     def _report_issue(self) -> None:
         """Open GitHub issue with redacted log contents."""
@@ -735,8 +780,8 @@ class LogViewerWindow(QMainWindow):
             redacted_logs = pattern.sub(repl, redacted_logs)
 
         # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
-        if len(redacted_logs) > 5000:
-            redacted_logs = redacted_logs[:5000] + "\n\n... (truncated)"
+        # Keep init lines + recent tail (recent logs are most useful for debugging)
+        redacted_logs = _truncate_logs_for_report(redacted_logs, 5000)
 
         title = "Bug Report"
         body = f"""## Bug Report

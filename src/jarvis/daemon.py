@@ -386,6 +386,7 @@ def main() -> None:
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+    print("─" * 50, flush=True)
 
     # Periodic diary update checking
     last_diary_check = time.time()
