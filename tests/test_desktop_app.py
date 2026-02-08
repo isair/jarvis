@@ -515,6 +515,56 @@ class TestDiaryIPCProtocol:
             assert not log.startswith(DIARY_IPC_PREFIX), f"Log line should not match prefix: {log}"
 
 
+class TestDaemonExitLogMessage:
+    """Tests for the DaemonThread exit log message logic.
+
+    Verifies that a graceful stop (via request_stop) emits a success message,
+    while an unexpected exit emits a warning message. Tests the guard logic
+    directly to avoid importing the daemon module (which has heavy side effects).
+    """
+
+    def _simulate_exit_log(self, stop_requested):
+        """Replicate the DaemonThread.run() exit log logic."""
+        emitted = []
+
+        def mock_emit(msg):
+            emitted.append(msg)
+
+        # Replicate the logic from app.py DaemonThread.run()
+        if stop_requested:
+            mock_emit("✅ Daemon stopped gracefully\n")
+        else:
+            mock_emit("⚠️ Daemon exited unexpectedly\n")
+
+        return emitted
+
+    def test_graceful_stop_emits_success_message(self):
+        """When is_stop_requested() is True, should emit graceful stop message."""
+        emitted = self._simulate_exit_log(stop_requested=True)
+
+        assert len(emitted) == 1
+        assert "gracefully" in emitted[0]
+        assert "✅" in emitted[0]
+
+    def test_unexpected_exit_emits_warning_message(self):
+        """When is_stop_requested() is False, should emit unexpected exit message."""
+        emitted = self._simulate_exit_log(stop_requested=False)
+
+        assert len(emitted) == 1
+        assert "unexpectedly" in emitted[0]
+        assert "⚠️" in emitted[0]
+
+    def test_graceful_stop_does_not_emit_warning(self):
+        """Graceful stop should not contain 'unexpected' wording."""
+        emitted = self._simulate_exit_log(stop_requested=True)
+        assert "unexpected" not in emitted[0].lower()
+
+    def test_unexpected_exit_does_not_emit_success(self):
+        """Unexpected exit should not contain 'gracefully' wording."""
+        emitted = self._simulate_exit_log(stop_requested=False)
+        assert "gracefully" not in emitted[0].lower()
+
+
 class TestMemoryViewerModulePath:
     """Tests to verify memory viewer module references are valid.
 

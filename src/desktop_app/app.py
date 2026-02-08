@@ -1556,7 +1556,11 @@ class JarvisSystemTray:
                                 # Run daemon - this should run the main loop
                                 daemon_main()
 
-                                self.log_signals.new_log.emit("⏸️ Daemon main() returned (unexpected)\n")
+                                from jarvis.daemon import is_stop_requested
+                                if is_stop_requested():
+                                    self.log_signals.new_log.emit("✅ Daemon stopped gracefully\n")
+                                else:
+                                    self.log_signals.new_log.emit("⚠️ Daemon exited unexpectedly\n")
                             except KeyboardInterrupt:
                                 self.log_signals.new_log.emit("⏸️ Daemon interrupted\n")
                             except Exception as e:
