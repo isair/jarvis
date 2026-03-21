@@ -257,6 +257,79 @@ class TestWhisperComputeTypeFallback:
                             assert listener.model is None
 
 
+class TestLargeV3TurboFallback:
+    """Tests for large-v3-turbo runtime fallback when faster-whisper is too old."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 6.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_turbo_falls_back_to_large_v3_when_unsupported(self, capsys):
+        """large-v3-turbo config falls back to large-v3 when faster-whisper < 1.1.0."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=False):
+                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                                mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_cfg = self._create_mock_config(whisper_model="large-v3-turbo")
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener.run()
+
+                                # Should load large-v3 instead of large-v3-turbo
+                                mock_class.assert_called_once_with("large-v3", device="auto", compute_type="int8")
+
+        captured = capsys.readouterr()
+        assert "large-v3-turbo is not supported" in captured.out
+
+    def test_turbo_kept_when_faster_whisper_supports_it(self):
+        """large-v3-turbo config is kept when faster-whisper >= 1.1.0."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=True):
+                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                                mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_cfg = self._create_mock_config(whisper_model="large-v3-turbo")
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener.run()
+
+                                # Should keep large-v3-turbo
+                                mock_class.assert_called_once_with("large-v3-turbo", device="auto", compute_type="int8")
+
+
 class TestRepetitiveHallucinationDetection:
     """Tests for Whisper hallucination detection."""
 

@@ -449,6 +449,52 @@ class TestWhisperModelOptions:
             # Multilingual models should NOT have .en suffix
             assert not model_id.endswith(".en"), f"Multilingual model should not end with .en: {model_id}"
 
+    def test_turbo_hidden_when_faster_whisper_unsupported(self):
+        """large-v3-turbo is filtered from options when faster-whisper is too old."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = False
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+        assert "small" in model_ids
+
+    def test_turbo_shown_when_faster_whisper_supported(self):
+        """large-v3-turbo is available when faster-whisper supports it."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = False
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" in model_ids
+
+    def test_turbo_always_shown_on_apple_silicon(self):
+        """large-v3-turbo is always available on Apple Silicon (MLX backend)."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" in model_ids
+
     def test_whisper_english_model_options_have_required_fields(self):
         """Each English-only whisper model option has required info fields."""
         from desktop_app.setup_wizard import WhisperSetupPage

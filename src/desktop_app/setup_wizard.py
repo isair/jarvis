@@ -1440,6 +1440,16 @@ class ModelsPage(QWizardPage):
         return super().nextId()
 
 
+def _is_faster_whisper_turbo_supported() -> bool:
+    """Check if the installed faster-whisper supports the large-v3-turbo model."""
+    try:
+        import faster_whisper
+        from packaging.version import Version
+        return Version(faster_whisper.__version__) >= Version("1.1.0")
+    except Exception:
+        return False
+
+
 class WhisperSetupPage(QWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
@@ -1729,8 +1739,19 @@ class WhisperSetupPage(QWizardPage):
         self._worker: Optional[CommandWorker] = None
 
     def _get_current_model_options(self) -> list:
-        """Get the model options list based on current language mode."""
-        return self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+        """Get the model options list based on current language mode.
+
+        Filters out large-v3-turbo on non-Apple-Silicon platforms when the
+        installed faster-whisper version does not support it.
+        """
+        options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+        # Apple Silicon uses MLX Whisper which always supports turbo
+        if self._is_apple_silicon:
+            return options
+        # For faster-whisper backend, only show turbo if the library supports it
+        if not _is_faster_whisper_turbo_supported():
+            options = [opt for opt in options if opt[0] != "large-v3-turbo"]
+        return options
 
     def _on_language_changed(self, is_english: bool):
         """Handle language mode change."""

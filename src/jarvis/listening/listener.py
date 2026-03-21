@@ -86,6 +86,16 @@ except ImportError:
     WhisperModel = None
 
 
+def _is_faster_whisper_turbo_supported() -> bool:
+    """Check if the installed faster-whisper supports the large-v3-turbo model."""
+    try:
+        import faster_whisper
+        from packaging.version import Version
+        return Version(faster_whisper.__version__) >= Version("1.1.0")
+    except Exception:
+        return False
+
+
 def _get_mlx_model_repo(model_name: str) -> str:
     """Get the MLX Community HuggingFace repo for a Whisper model."""
     # Map standard model names to MLX Community repos
@@ -1039,6 +1049,19 @@ class VoiceListener(threading.Thread):
         # Determine and initialize Whisper backend
         self._whisper_backend = self._determine_whisper_backend()
         model_name = getattr(self.cfg, "whisper_model", "small")
+
+        # Validate large-v3-turbo support for faster-whisper backend
+        if model_name == "large-v3-turbo" and self._whisper_backend != "mlx":
+            if not _is_faster_whisper_turbo_supported():
+                debug_log(
+                    "faster-whisper does not support large-v3-turbo, "
+                    "falling back to large-v3", "voice",
+                )
+                print(
+                    "  ⚠️  large-v3-turbo is not supported by the installed Whisper engine, "
+                    "using large-v3 instead", flush=True,
+                )
+                model_name = "large-v3"
 
         if self._whisper_backend == "mlx":
             if not MLX_WHISPER_AVAILABLE:
