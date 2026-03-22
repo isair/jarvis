@@ -115,7 +115,7 @@ Get the latest from [GitHub Releases](https://github.com/isair/jarvis/releases):
 | **macOS** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
 | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
 
-Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
+Jarvis starts listening automatically — just say "Jarvis" and talk!
 
 <p align="center">
   <img src="docs/img/setup-wizard-initial-check.png" alt="Setup - Initial Check" width="200">
