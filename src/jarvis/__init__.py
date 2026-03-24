@@ -44,6 +44,14 @@ if getattr(_sys, 'frozen', False) and _sys.platform == 'win32':
 del _os, _sys
 # =============================================================================
 
+# Suppress HuggingFace symlink cache warning on Windows.
+# Most Windows users don't have Developer Mode enabled, so HF falls back to
+# copying files instead of symlinking. This is fine — just noisier.
+import os as _os
+if not _os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING"):
+    _os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+del _os
+
 from .config import load_settings
 
 
