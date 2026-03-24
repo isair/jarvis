@@ -1084,7 +1084,7 @@ class VoiceListener(threading.Thread):
                     _ = mlx_whisper.transcribe(
                         warmup_audio,
                         path_or_hf_repo=self._mlx_model_repo,
-                        language="en",
+                        language=None,
                     )
                     debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
 
@@ -1470,7 +1470,7 @@ class VoiceListener(threading.Thread):
                 result = mlx_whisper.transcribe(
                     audio,
                     path_or_hf_repo=self._mlx_model_repo,
-                    language="en",
+                    language=None,
                 )
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
@@ -1511,9 +1511,9 @@ class VoiceListener(threading.Thread):
             else:
                 # faster-whisper transcription
                 try:
-                    segments, _info = self.model.transcribe(audio, language="en", vad_filter=False)
+                    segments, _info = self.model.transcribe(audio, language=None, vad_filter=False)
                 except TypeError:
-                    segments, _info = self.model.transcribe(audio, language="en")
+                    segments, _info = self.model.transcribe(audio, language=None)
                 segments_list = list(segments)
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
