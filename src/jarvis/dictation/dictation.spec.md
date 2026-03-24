@@ -8,10 +8,14 @@ assistant pipeline (no wake words, intent judge, profiles, or TTS).
 
 ## Configuration
 
-| Key                | Type   | Default           | Description                        |
-|--------------------|--------|-------------------|------------------------------------|
-| `dictation_enabled`| bool   | `true`            | Master switch for the feature      |
-| `dictation_hotkey` | string | `"ctrl+shift+d"`  | Hold-to-record hotkey combination  |
+| Key                | Type   | Default (per-platform)                         | Description                        |
+|--------------------|--------|------------------------------------------------|------------------------------------|
+| `dictation_enabled`| bool   | `true`                                         | Master switch for the feature      |
+| `dictation_hotkey` | string | Win: `"ctrl+cmd"`, macOS/Linux: `"ctrl+alt"`   | Hold-to-record hotkey combination  |
+
+Defaults are aligned with WisprFlow. Modifier-only combos are supported
+(e.g. `"ctrl+cmd"` activates when both keys are held, with no extra trigger
+key required).
 
 ## Core Flow
 

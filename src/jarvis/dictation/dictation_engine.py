@@ -221,7 +221,9 @@ _MODIFIER_MAP = {
 def parse_hotkey(combo: str):
     """Parse a hotkey string like ``'ctrl+shift+d'`` into pynput key objects.
 
-    Returns a tuple of (frozenset_of_modifiers, trigger_key).
+    Returns a tuple of ``(frozenset_of_modifiers, trigger_key_or_None)``.
+    Modifier-only combos (e.g. ``'ctrl+cmd'``) are valid — *trigger* is
+    ``None`` and the hotkey activates when all modifiers are held.
     """
     if pynput_keyboard is None:
         raise RuntimeError("pynput is not installed")
@@ -250,8 +252,8 @@ def parse_hotkey(combo: str):
                 else:
                     raise ValueError(f"unknown key: {part}")
 
-    if trigger is None:
-        raise ValueError("hotkey must contain a non-modifier key")
+    if not modifiers and trigger is None:
+        raise ValueError("hotkey must contain at least one key")
 
     return frozenset(modifiers), trigger
 
@@ -368,31 +370,49 @@ class DictationEngine:
             return pynput_keyboard.KeyCode.from_char(key.char.lower())
         return key
 
+    def _key_matches(self, key, nkey, target) -> bool:
+        """Check whether *key* (raw) / *nkey* (normalised) matches *target*."""
+        if target is None:
+            return False
+        if nkey == target or key == target:
+            return True
+        if getattr(key, "name", None) == getattr(target, "name", None):
+            return True
+        if hasattr(key, "char") and key.char:
+            if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
+                return True
+        return False
+
+    def _all_modifiers_held(self) -> bool:
+        """Return True when every required modifier is currently pressed."""
+        return all(
+            m in self._pressed_modifiers or any(
+                getattr(p, "name", None) == getattr(m, "name", None)
+                for p in self._pressed_modifiers
+            )
+            for m in self._modifiers
+        )
+
     def _on_key_press(self, key) -> None:
         nkey = self._normalise_key(key)
 
-        # Track modifiers
-        if nkey in self._modifiers or key in self._modifiers:
+        # Track modifiers currently held
+        if any(self._key_matches(key, nkey, m) for m in self._modifiers):
             self._pressed_modifiers.add(nkey if nkey in self._modifiers else key)
 
-        # Check if all modifiers + trigger are pressed
+        # Check activation condition
         if not self._recording:
-            mods_held = all(
-                m in self._pressed_modifiers or any(
-                    getattr(p, "name", None) == getattr(m, "name", None)
-                    for p in self._pressed_modifiers
-                )
-                for m in self._modifiers
-            )
-            trigger_match = (
-                nkey == self._trigger
-                or key == self._trigger
-                or (hasattr(key, "char") and key.char and
-                    pynput_keyboard.KeyCode.from_char(key.char.lower()) == self._trigger)
-            )
+            mods_held = self._all_modifiers_held()
 
-            if mods_held and trigger_match:
-                self._start_recording()
+            if self._trigger is not None:
+                # Modifier + trigger combo: need all mods + the trigger key
+                trigger_match = self._key_matches(key, nkey, self._trigger)
+                if mods_held and trigger_match:
+                    self._start_recording()
+            else:
+                # Modifier-only combo (e.g. ctrl+cmd): activate when all are held
+                if mods_held and len(self._pressed_modifiers) >= len(self._modifiers):
+                    self._start_recording()
 
     def _on_key_release(self, key) -> None:
         nkey = self._normalise_key(key)
@@ -400,23 +420,15 @@ class DictationEngine:
         # Remove from pressed set
         self._pressed_modifiers.discard(nkey)
         self._pressed_modifiers.discard(key)
-        # Also discard by name match
         for m in list(self._pressed_modifiers):
             if getattr(m, "name", None) == getattr(key, "name", None):
                 self._pressed_modifiers.discard(m)
 
-        # If recording and trigger (or any modifier) released → stop
+        # If recording and any required key released → stop
         if self._recording:
-            trigger_released = (
-                nkey == self._trigger
-                or key == self._trigger
-                or (hasattr(key, "char") and key.char and
-                    pynput_keyboard.KeyCode.from_char(key.char.lower()) == self._trigger)
-            )
-            # Also stop if a required modifier was released
+            trigger_released = self._key_matches(key, nkey, self._trigger)
             modifier_released = any(
-                getattr(key, "name", None) == getattr(m, "name", None)
-                for m in self._modifiers
+                self._key_matches(key, nkey, m) for m in self._modifiers
             )
             if trigger_released or modifier_released:
                 self._stop_recording()
