@@ -45,6 +45,7 @@ from .utils.location import get_location_context, is_location_available
 _global_dialogue_memory: Optional[DialogueMemory] = None
 _global_stop_requested: bool = False
 _global_tts_engine = None  # TTS engine reference for face animation polling
+_global_dictation_engine = None  # Dictation engine reference for history UI
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
 # Desktop app's stop_daemon() should wait at least this long + buffer
@@ -133,6 +134,11 @@ def is_stop_requested() -> bool:
 def get_tts_engine():
     """Get the global TTS engine for speaking state polling (used by face widget)."""
     return _global_tts_engine
+
+
+def get_dictation_engine():
+    """Get the global dictation engine (used by desktop app for history window)."""
+    return _global_dictation_engine
 
 
 def _install_signal_handlers() -> None:
@@ -279,7 +285,7 @@ def _check_and_update_diary(
 
 def main() -> None:
     """Main daemon entry point."""
-    global _global_dialogue_memory, _global_stop_requested, _global_tts_engine
+    global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -423,6 +429,7 @@ def main() -> None:
                 transcribe_lock=voice_thread.transcribe_lock,
             )
             dictation.start()
+            _global_dictation_engine = dictation
             hotkey_display = cfg.dictation_hotkey
             print(f"🎙️ Dictation enabled (hold {hotkey_display} to dictate)", flush=True)
         except Exception as e:

@@ -17,6 +17,7 @@ from collections import deque
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
+from .history import DictationHistory
 
 # Optional imports — graceful degradation when dependencies are missing.
 try:
@@ -286,6 +287,9 @@ class DictationEngine:
         Called when recording ends.
     transcribe_lock : threading.Lock | None
         Lock shared with the voice listener to serialise Whisper calls.
+    on_dictation_result : callable | None
+        Called with ``(entry_dict)`` after a successful dictation is saved
+        to history. Used by the UI to update the history window.
     """
 
     def __init__(
@@ -298,6 +302,7 @@ class DictationEngine:
         on_dictation_start: Optional[Callable[[], None]] = None,
         on_dictation_end: Optional[Callable[[], None]] = None,
         transcribe_lock: Optional[threading.Lock] = None,
+        on_dictation_result: Optional[Callable] = None,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
@@ -305,7 +310,9 @@ class DictationEngine:
         self._sample_rate = sample_rate
         self._on_dictation_start = on_dictation_start
         self._on_dictation_end = on_dictation_end
+        self._on_dictation_result = on_dictation_result
         self._transcribe_lock = transcribe_lock or threading.Lock()
+        self.history = DictationHistory()
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -550,8 +557,16 @@ class DictationEngine:
             text = self._transcribe(audio)
 
             if text:
+                duration = len(audio) / self._sample_rate
                 debug_log(f"dictation result: {text!r}", "dictation")
                 _clipboard_paste(text)
+                # Persist to history
+                entry = self.history.add(text, duration=duration)
+                if self._on_dictation_result:
+                    try:
+                        self._on_dictation_result(entry)
+                    except Exception:
+                        pass
             else:
                 debug_log("empty transcription — no paste", "dictation")
         except Exception as exc:
