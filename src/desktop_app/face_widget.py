@@ -57,6 +57,7 @@ class JarvisState(Enum):
     LISTENING = "listening"    # Actively listening (collecting or hot window)
     THINKING = "thinking"      # Processing query
     SPEAKING = "speaking"      # Speaking response
+    DICTATING = "dictating"    # Hold-to-dictate recording active
 
 
 # Global Jarvis state - allows daemon to signal overall state to face widget
@@ -222,6 +223,7 @@ class LowPolyFaceWidget(QWidget):
         # Listening animation - bell ring echoes
         self._listening_pulse_time = 0.0  # Time for spawning rings
         self._listening_rings: List[float] = []  # Active ring expansions (0.0 to 1.0)
+        self._dictation_pulse_phase = 0.0  # Steady pulse phase for DICTATING state
 
         # Connect to global Jarvis state
         self._state_manager = get_jarvis_state()
@@ -428,7 +430,7 @@ class LowPolyFaceWidget(QWidget):
         if self._jarvis_state == JarvisState.ASLEEP:
             self._target_activation = 0.0
         else:
-            # IDLE, LISTENING, THINKING, or SPEAKING - all should be awake
+            # IDLE, LISTENING, THINKING, SPEAKING, or DICTATING - all should be awake
             self._target_activation = 1.0
 
         # Smooth activation transition
@@ -497,6 +499,10 @@ class LowPolyFaceWidget(QWidget):
                 if ring < 1.0:
                     new_rings.append(ring)
             self._listening_rings = new_rings
+
+        # Dictation pulse animation (when dictating)
+        if self._jarvis_state == JarvisState.DICTATING:
+            self._dictation_pulse_phase += 0.08  # Steady pulse speed
 
         # Spinner animation (when thinking)
         if self._jarvis_state == JarvisState.THINKING:
@@ -579,6 +585,9 @@ class LowPolyFaceWidget(QWidget):
 
         # Draw listening ring echoes (behind the face)
         self._draw_listening_rings(painter, cx, cy, face_width, face_height)
+
+        # Draw dictation pulse ring (behind the face)
+        self._draw_dictation_pulse(painter, cx, cy, face_width, face_height)
 
         # Draw the face mesh
         self._draw_face_mesh(painter, cx, cy, face_width, face_height)
@@ -978,6 +987,39 @@ class LowPolyFaceWidget(QWidget):
                 p1 = scaled_vertices[i]
                 p2 = scaled_vertices[(i + 1) % len(scaled_vertices)]
                 painter.drawLine(QPointF(*p1), QPointF(*p2))
+
+        painter.setOpacity(1.0)
+
+    def _draw_dictation_pulse(self, painter: QPainter, cx: float, cy: float,
+                              face_width: float, face_height: float):
+        """Draw a steady pulsing ring around the face during dictation."""
+        if self._jarvis_state != JarvisState.DICTATING:
+            return
+
+        # Pulsing opacity and scale driven by a sine wave
+        pulse = (math.sin(self._dictation_pulse_phase) + 1.0) / 2.0  # 0..1
+        scale = 1.12 + pulse * 0.08  # 1.12..1.20 gentle breathing
+        opacity = (0.35 + pulse * 0.25) * self._activation_level
+
+        base_vertices = self._get_face_vertices(cx, cy, face_width, face_height)
+
+        scaled_vertices = []
+        for vx, vy in base_vertices:
+            dx, dy = vx - cx, vy - cy
+            scaled_vertices.append((cx + dx * scale, cy + dy * scale))
+
+        painter.setOpacity(opacity)
+        # Use a red-ish tint to differentiate from listening rings
+        dictation_colour = QColor(239, 68, 68)  # Warm red (#ef4444)
+        ring_pen = QPen(dictation_colour, 2.0)
+        ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(ring_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        for i in range(len(scaled_vertices)):
+            p1 = scaled_vertices[i]
+            p2 = scaled_vertices[(i + 1) % len(scaled_vertices)]
+            painter.drawLine(QPointF(*p1), QPointF(*p2))
 
         painter.setOpacity(1.0)
 

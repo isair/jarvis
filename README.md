@@ -135,6 +135,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Smart Personalities** - Adapts tone: Developer (debugging), Business (planning), Life Coach (health/wellness)
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
+- **Dictation Mode** - Hold a hotkey to record speech, release to paste the transcription into any app (WisprFlow-like)
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
@@ -183,6 +184,26 @@ Speed is relative to original large model. [Source](https://github.com/openai/wh
 }
 ```
 Requires openWakeWord library. Falls back to text detection if unavailable.
+
+</details>
+
+<details>
+<summary><strong>Dictation Mode</strong></summary>
+
+Hold a hotkey to record speech, release to paste the transcription into the focused app. Completely independent from the assistant — no wake word needed.
+
+```json
+{
+  "dictation_enabled": true,
+  "dictation_hotkey": "ctrl+shift+d"
+}
+```
+
+- Uses the same Whisper model as voice input (no extra memory)
+- Text is pasted via clipboard (`Ctrl+V` / `Cmd+V`)
+- Main voice listener is automatically paused during dictation
+- **macOS:** Requires Accessibility permissions for `pynput`
+- **Linux:** Requires X11 (`pynput` has limited Wayland support)
 
 </details>
 
