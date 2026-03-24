@@ -466,6 +466,11 @@ class TestInstallUpdateWindows:
             assert "tasklist" in batch_content
             assert "Process exited" in batch_content
 
+            # Verify the installer is run silently (not the old move/replace approach)
+            assert "/VERYSILENT" in batch_content
+            assert "/SUPPRESSMSGBOXES" in batch_content
+            assert "move /y" not in batch_content
+
 
 class TestInstallUpdateLinux:
     """Tests for Linux update installation."""

@@ -388,23 +388,19 @@ def install_update_windows(download_path: Path) -> bool:
     """Install update on Windows.
 
     Strategy:
-    1. Extract zip to temp location
+    1. Extract zip to temp location (contains Inno Setup installer as Jarvis.exe)
     2. Create batch script to:
        - Wait for current process to actually exit (by PID)
-       - Replace executable
-       - Launch new app
+       - Run the installer silently (upgrades in place to Program Files)
        - Clean up temp directory
     3. Execute batch script and exit
     """
     import zipfile
 
-    app_path = get_app_path()
     temp_dir = Path(tempfile.mkdtemp())
     current_pid = os.getpid()
 
     try:
-        # Validate paths don't contain dangerous batch characters
-        escaped_app = _escape_batch_path(app_path)
         escaped_temp = _escape_batch_path(temp_dir)
 
         with zipfile.ZipFile(download_path, "r") as zf:
@@ -431,15 +427,8 @@ if not errorlevel 1 (
     timeout /t 1 /nobreak >nul
     goto wait_loop
 )
-echo Process exited, applying update...
-del /f "{escaped_app}"
-if exist "{escaped_app}" (
-    echo Failed to delete old executable, retrying...
-    timeout /t 2 /nobreak >nul
-    del /f "{escaped_app}"
-)
-move /y "{escaped_new_exe}" "{escaped_app}"
-start "" "{escaped_app}"
+echo Process exited, running installer...
+"{escaped_new_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 rmdir /s /q "{escaped_temp}"
 '''
         batch_script.write_text(batch_content)
