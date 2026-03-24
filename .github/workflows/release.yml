@@ -109,12 +109,22 @@ jobs:
         run: |
           python src/desktop_app/desktop_assets/generate_icons.py
 
-      - name: 🔨 Build executable
+      - name: 🔨 Build executable (onedir)
         run: |
           pyinstaller jarvis_desktop.spec
 
-      - name: 📦 Package Windows build
+      - name: 🛠️ Install Inno Setup
         run: |
+          choco install innosetup -y
+
+      - name: 📦 Build Windows installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\windows\jarvis_setup.iss
+
+      - name: 📦 Package installer as Jarvis-Windows-x64.zip
+        run: |
+          # Rename installer to Jarvis.exe for backwards compatibility with old updaters
+          Copy-Item dist\Jarvis-Setup-x64.exe dist\Jarvis.exe
           cd dist
           Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
 
