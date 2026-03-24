@@ -416,14 +416,14 @@ def main() -> None:
                 whisper_model_ref=lambda: voice_thread.model,
                 whisper_backend_ref=lambda: voice_thread._whisper_backend,
                 mlx_repo_ref=lambda: voice_thread._mlx_model_repo,
-                hotkey=str(getattr(cfg, "dictation_hotkey", "ctrl+shift+d")),
+                hotkey=cfg.dictation_hotkey,
                 sample_rate=int(getattr(cfg, "sample_rate", 16000)),
                 on_dictation_start=_on_dictation_start,
                 on_dictation_end=_on_dictation_end,
                 transcribe_lock=voice_thread.transcribe_lock,
             )
             dictation.start()
-            hotkey_display = str(getattr(cfg, "dictation_hotkey", "ctrl+shift+d"))
+            hotkey_display = cfg.dictation_hotkey
             print(f"🎙️ Dictation enabled (hold {hotkey_display} to dictate)", flush=True)
         except Exception as e:
             debug_log(f"dictation engine init failed: {e}", "dictation")

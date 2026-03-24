@@ -197,10 +197,18 @@ CUDA is detected automatically — no configuration needed.
 
 Hold a hotkey to record speech, release to paste the transcription into the focused app. Completely independent from the assistant — no wake word needed.
 
+Default hotkeys (aligned with WisprFlow):
+| Platform | Default hotkey | Config value |
+|----------|---------------|-------------|
+| **Windows** | Ctrl + Win | `"ctrl+cmd"` |
+| **macOS** | Ctrl + Option | `"ctrl+alt"` |
+| **Linux** | Ctrl + Alt | `"ctrl+alt"` |
+
+Override in config:
 ```json
 {
   "dictation_enabled": true,
-  "dictation_hotkey": "ctrl+shift+d"
+  "dictation_hotkey": "ctrl+cmd"
 }
 ```
 

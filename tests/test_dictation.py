@@ -81,11 +81,19 @@ class TestHotkeyParsing:
         assert len(mods) == 2
         assert trigger is not None
 
-    def test_parse_single_key_raises(self):
-        """A hotkey with *only* modifiers should fail (no trigger key)."""
+    def test_parse_modifier_only_combo(self):
+        """A modifier-only hotkey like 'ctrl+cmd' should be valid."""
         from src.jarvis.dictation.dictation_engine import parse_hotkey
-        with pytest.raises(ValueError):
-            parse_hotkey("ctrl+shift")
+        mods, trigger = parse_hotkey("ctrl+cmd")
+        assert len(mods) == 2
+        assert trigger is None
+
+    def test_parse_ctrl_alt(self):
+        """macOS/Linux default: ctrl+alt should parse as two modifiers."""
+        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        mods, trigger = parse_hotkey("ctrl+alt")
+        assert len(mods) == 2
+        assert trigger is None
 
     def test_parse_empty_string_raises(self):
         from src.jarvis.dictation.dictation_engine import parse_hotkey
@@ -487,10 +495,15 @@ class TestConfigIntegration:
         assert "dictation_hotkey" in sig.parameters
 
     def test_default_config_has_dictation(self):
+        import sys
         from src.jarvis.config import get_default_config
         defaults = get_default_config()
         assert defaults["dictation_enabled"] is True
-        assert defaults["dictation_hotkey"] == "ctrl+shift+d"
+        # Platform-aware default (aligned with WisprFlow)
+        if sys.platform == "win32":
+            assert defaults["dictation_hotkey"] == "ctrl+cmd"
+        else:
+            assert defaults["dictation_hotkey"] == "ctrl+alt"
 
     def test_load_settings_includes_dictation(self):
         """load_settings should produce Settings with dictation fields."""
