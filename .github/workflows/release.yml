@@ -80,6 +80,7 @@ jobs:
           python-version: '3.11'
 
       - name: 📝 Generate version file
+        id: version
         shell: pwsh
         run: |
           if ("${{ github.ref }}" -eq "refs/heads/main" -and "${{ needs.semantic-release.outputs.new_release_published }}" -eq "true") {
@@ -95,6 +96,7 @@ jobs:
           RELEASE_CHANNEL = "$channel"
           "@ | Out-File -FilePath src/jarvis/_version.py -Encoding utf8
           Write-Host "Generated version file with VERSION=$version, RELEASE_CHANNEL=$channel"
+          echo "app_version=$version" >> $env:GITHUB_OUTPUT
 
       - name: 📦 Install dependencies
         run: |
@@ -119,7 +121,7 @@ jobs:
 
       - name: 📦 Build Windows installer
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\windows\jarvis_setup.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="${{ steps.version.outputs.app_version }}" installer\windows\jarvis_setup.iss
 
       - name: 📦 Package installer as Jarvis-Windows-x64.zip
         run: |

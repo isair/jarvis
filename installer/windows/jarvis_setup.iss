@@ -9,6 +9,10 @@
 #define MyAppName "Jarvis"
 #define MyAppExeName "Jarvis.exe"
 #define MyAppPublisher ""
+; Version can be overridden via ISCC command line: /DMyAppVersion=1.2.3
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 
 ; VC++ Redistributable download URL (VS 2015-2022 x64)
 #define VCRedistURL "https://aka.ms/vs/17/release/vc_redist.x64.exe"
@@ -16,6 +20,7 @@
 [Setup]
 AppId={{B8A3D6F1-7C42-4E5A-9D12-3F8E6A1B5C90}
 AppName={#MyAppName}
+AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
@@ -72,8 +77,6 @@ end;
 
 // Download VC++ Redistributable if needed
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
@@ -92,6 +95,7 @@ end;
 procedure DeinitializeSetup;
 var
   InstallerPath, InstalledDir: String;
+  ResultCode: Integer;
 begin
   InstallerPath := ExpandConstant('{srcexe}');
   InstalledDir := ExpandConstant('{app}');
@@ -102,7 +106,7 @@ begin
     Log('Scheduling cleanup of old installer at: ' + InstallerPath);
     Exec('cmd.exe',
       '/c ping -n 3 127.0.0.1 >nul & del /f "' + InstallerPath + '"',
-      '', SW_HIDE, ewNoWait, 0);
+      '', SW_HIDE, ewNoWait, ResultCode);
   end;
 end;
 
