@@ -481,8 +481,9 @@ class VoiceListener(threading.Thread):
                     (utterance_start_time > 0 and utterance_start_time < last_tts_finish_time) or
                     # Case 2: Utterance ended within grace period after TTS
                     (utterance_end_time > 0 and utterance_end_time - last_tts_finish_time < grace_period) or
-                    # Case 3: Fallback - processing happening within grace period
-                    (time.time() - last_tts_finish_time < grace_period)
+                    # Case 3: Fallback - only when utterance timing is unavailable
+                    (utterance_start_time == 0 and utterance_end_time == 0 and
+                     time.time() - last_tts_finish_time < grace_period)
                 ))
             )
 
@@ -533,13 +534,16 @@ class VoiceListener(threading.Thread):
                             return
                     else:
                         # Hot window mode - no wake word needed
-                        debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{intent_judgment.query}\"", "voice")
+                        # Use actual user text as query: in hot window there's no wake word
+                        # to strip, and the intent judge's extraction can lose words
+                        # (e.g. extracting "I" from "No, I'm good.")
+                        hot_query = text_lower
+                        debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{hot_query}\"", "voice")
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
 
-                        # Use the extracted query (cleaned of pre-wake-word chatter)
-                        self.state_manager.start_collection(intent_judgment.query)
+                        self.state_manager.start_collection(hot_query)
 
                         # Start thinking tune and show processing message
                         self._start_thinking_tune()
