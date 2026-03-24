@@ -387,6 +387,50 @@ def main() -> None:
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+
+    # Initialize dictation engine (hold-to-dictate)
+    dictation = None
+    if bool(getattr(cfg, "dictation_enabled", True)):
+        try:
+            from .dictation.dictation_engine import DictationEngine as _DE  # noqa: F811
+
+            def _on_dictation_start():
+                voice_thread._dictation_active = True
+                try:
+                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    get_jarvis_state().set_state(JarvisState.DICTATING)
+                except Exception:
+                    pass
+                debug_log("dictation started — listener paused", "dictation")
+
+            def _on_dictation_end():
+                voice_thread._dictation_active = False
+                try:
+                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    get_jarvis_state().set_state(JarvisState.IDLE)
+                except Exception:
+                    pass
+                debug_log("dictation ended — listener resumed", "dictation")
+
+            dictation = _DE(
+                whisper_model_ref=lambda: voice_thread.model,
+                whisper_backend_ref=lambda: voice_thread._whisper_backend,
+                mlx_repo_ref=lambda: voice_thread._mlx_model_repo,
+                hotkey=str(getattr(cfg, "dictation_hotkey", "ctrl+shift+d")),
+                sample_rate=int(getattr(cfg, "sample_rate", 16000)),
+                on_dictation_start=_on_dictation_start,
+                on_dictation_end=_on_dictation_end,
+                transcribe_lock=voice_thread.transcribe_lock,
+            )
+            dictation.start()
+            hotkey_display = str(getattr(cfg, "dictation_hotkey", "ctrl+shift+d"))
+            print(f"🎙️ Dictation enabled (hold {hotkey_display} to dictate)", flush=True)
+        except Exception as e:
+            debug_log(f"dictation engine init failed: {e}", "dictation")
+            print(f"  ⚠ Dictation not available: {e}", flush=True)
+    else:
+        print("🎙️ Dictation disabled", flush=True)
+
     print("─" * 50, flush=True)
 
     # Periodic diary update checking
@@ -441,7 +485,12 @@ def main() -> None:
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
 
-        # Clean shutdown
+        # Clean shutdown - stop dictation first
+        if dictation is not None:
+            debug_log("stopping dictation engine...", "jarvis")
+            dictation.stop()
+            debug_log("dictation engine stopped", "jarvis")
+
         if voice_thread is not None:
             debug_log("stopping voice thread...", "jarvis")
             voice_thread.stop()
