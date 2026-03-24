@@ -495,21 +495,19 @@ if sys.platform == 'darwin':
             print(f"Warning: Could not find source for {lib_name}")
 
 elif sys.platform == 'win32':
-    # Windows: Create single executable
+    # Windows: Create onedir distribution (directory with EXE + DLLs alongside)
+    # This avoids the VC++ runtime DLL conflicts that plague onefile mode and
+    # enables packaging via Inno Setup installer.
     exe = EXE(
         pyz,
         a.scripts,
-        a.binaries,
-        a.zipfiles,
-        a.datas,
         [],
+        exclude_binaries=True,
         name='Jarvis',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
         upx=True,
-        upx_exclude=[],
-        runtime_tmpdir=None,
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=False,
@@ -517,6 +515,17 @@ elif sys.platform == 'win32':
         codesign_identity=None,
         entitlements_file=None,
         icon=str(src_path / 'desktop_app' / 'desktop_assets' / 'icon_idle.ico'),
+    )
+
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name='Jarvis',
     )
 
 else:
