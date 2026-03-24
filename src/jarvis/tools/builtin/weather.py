@@ -131,6 +131,8 @@ class WeatherTool(Tool):
                 debug_log(f"    🌤️ geocoding user-specified location: '{location_str}'", "tools")
 
                 geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
+                # Intentionally English — tool results are processed by the LLM,
+                # not shown to the user.  All models handle English data well.
                 geocode_params = {
                     "name": location_str,
                     "count": 1,
