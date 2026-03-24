@@ -131,16 +131,12 @@ class WeatherTool(Tool):
                 debug_log(f"    🌤️ geocoding user-specified location: '{location_str}'", "tools")
 
                 geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
-                import locale
-                try:
-                    system_lang = locale.getlocale()[0] or "en"
-                except (ValueError, TypeError):
-                    system_lang = "en"
-                system_lang = system_lang.split("_")[0]
+                # Intentionally English — tool results are processed by the LLM,
+                # not shown to the user.  All models handle English data well.
                 geocode_params = {
                     "name": location_str,
                     "count": 1,
-                    "language": system_lang,
+                    "language": "en",
                     "format": "json"
                 }
 
