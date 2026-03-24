@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -72,10 +72,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -119,7 +119,7 @@ jobs:
           Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
 
       - name: 📤 Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Jarvis-Windows
           path: dist/Jarvis-Windows-x64.zip
@@ -139,10 +139,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -195,7 +195,7 @@ jobs:
           zip -r Jarvis-macOS-${{ matrix.arch }}.zip Jarvis.app
 
       - name: 📤 Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Jarvis-macOS-${{ matrix.arch }}
           path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
@@ -217,10 +217,10 @@ jobs:
           df -h
 
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -268,7 +268,7 @@ jobs:
           tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
 
       - name: 📤 Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Jarvis-Linux
           path: dist/Jarvis-Linux-x64.tar.gz
@@ -285,7 +285,7 @@ jobs:
 
     steps:
       - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -334,7 +334,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0  # Full history for changelog generation
           fetch-tags: true  # Ensure all tags are fetched
@@ -417,7 +417,7 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
