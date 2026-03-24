@@ -227,7 +227,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['src/desktop_app/rthook_onnxruntime.py'],
     excludes=[
         # Exclude heavy packages to keep bundle size reasonable
         'psycopg2',  # Not used and causes OpenSSL conflicts
@@ -269,6 +269,19 @@ excluded_binary_patterns = [
     # Note: Keep libopenblas (needed by numpy) and libfreetype (needed by av/ffmpeg)
 ]
 
+# Exclude VC++ runtime DLLs from the bundle entirely.  Different packages
+# (PyQt6, conda, etc.) ship conflicting versions that cause access-violation
+# crashes in onnxruntime.  Instead of trying to pick the "right" version we
+# rely on the system-installed Microsoft Visual C++ Redistributable which
+# users are asked to install (see README).  Also exclude other system DLLs
+# that PyInstaller picks up from non-system locations (e.g. Oculus).
+excluded_system_dlls = {
+    'vcruntime140.dll', 'vcruntime140_1.dll',
+    'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+    'ucrtbase.dll',   # Universal CRT — must come from Windows System32
+    'dbghelp.dll',    # Must come from Windows System32
+}
+
 filtered_binaries = []
 for binary in a.binaries:
     name = binary[0].lower()
@@ -276,11 +289,20 @@ for binary in a.binaries:
 
     # Check if this binary should be excluded
     should_exclude = False
-    for pattern in excluded_binary_patterns:
-        if pattern in name or pattern in binary_path:
-            print(f"Excluding heavy binary: {binary[0]}")
-            should_exclude = True
-            break
+    base_name = name.rsplit('\\', 1)[-1].rsplit('/', 1)[-1]
+
+    # Exclude all VC runtime and system DLLs — use system-installed versions
+    if base_name in excluded_system_dlls:
+        print(f"Excluding system DLL (use VC++ Redistributable): {binary[0]}")
+        should_exclude = True
+
+    # Pattern-based exclusions (heavy libraries)
+    if not should_exclude:
+        for pattern in excluded_binary_patterns:
+            if pattern in name or pattern in binary_path:
+                print(f"Excluding heavy binary: {binary[0]}")
+                should_exclude = True
+                break
 
     if not should_exclude:
         filtered_binaries.append(binary)
