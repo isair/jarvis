@@ -1662,8 +1662,8 @@ class WhisperSetupPage(QWizardPage):
 
         layout.addWidget(selection_card)
 
-        # Store selected model (default to tiny for fast first-time experience)
-        self._selected_whisper_model: str = "tiny.en"
+        # Store selected model (default to small for good multilingual support)
+        self._selected_whisper_model: str = "small"
 
         # Build initial slider UI
         self._rebuild_slider_ui()
