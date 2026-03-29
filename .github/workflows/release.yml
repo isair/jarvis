@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -72,14 +72,15 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: 📝 Generate version file
+        id: version
         shell: pwsh
         run: |
           if ("${{ github.ref }}" -eq "refs/heads/main" -and "${{ needs.semantic-release.outputs.new_release_published }}" -eq "true") {
@@ -95,6 +96,7 @@ jobs:
           RELEASE_CHANNEL = "$channel"
           "@ | Out-File -FilePath src/jarvis/_version.py -Encoding utf8
           Write-Host "Generated version file with VERSION=$version, RELEASE_CHANNEL=$channel"
+          echo "app_version=$version" >> $env:GITHUB_OUTPUT
 
       - name: 📦 Install dependencies
         run: |
@@ -109,17 +111,27 @@ jobs:
         run: |
           python src/desktop_app/desktop_assets/generate_icons.py
 
-      - name: 🔨 Build executable
+      - name: 🔨 Build executable (onedir)
         run: |
           pyinstaller jarvis_desktop.spec
 
-      - name: 📦 Package Windows build
+      - name: 🛠️ Install Inno Setup
         run: |
+          choco install innosetup -y
+
+      - name: 📦 Build Windows installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="${{ steps.version.outputs.app_version }}" installer\windows\jarvis_setup.iss
+
+      - name: 📦 Package installer as Jarvis-Windows-x64.zip
+        run: |
+          # Rename installer to Jarvis.exe for backwards compatibility with old updaters
+          Copy-Item dist\Jarvis-Setup-x64.exe dist\Jarvis.exe
           cd dist
           Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
 
       - name: 📤 Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Jarvis-Windows
           path: dist/Jarvis-Windows-x64.zip
@@ -139,10 +151,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -195,7 +207,7 @@ jobs:
           zip -r Jarvis-macOS-${{ matrix.arch }}.zip Jarvis.app
 
       - name: 📤 Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Jarvis-macOS-${{ matrix.arch }}
           path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
@@ -217,10 +229,10 @@ jobs:
           df -h
 
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -268,7 +280,7 @@ jobs:
           tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
 
       - name: 📤 Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Jarvis-Linux
           path: dist/Jarvis-Linux-x64.tar.gz
@@ -285,7 +297,7 @@ jobs:
 
     steps:
       - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -334,7 +346,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0  # Full history for changelog generation
           fetch-tags: true  # Ensure all tags are fetched
@@ -417,7 +429,7 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 

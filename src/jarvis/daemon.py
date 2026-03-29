@@ -386,6 +386,7 @@ def main() -> None:
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+    print("─" * 50, flush=True)
 
     # Periodic diary update checking
     last_diary_check = time.time()
@@ -412,7 +413,7 @@ def main() -> None:
         except Exception:
             pass  # stdin might not be available
 
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not getattr(sys, 'frozen', False):
         stdin_thread = threading.Thread(target=stdin_monitor, daemon=True)
         stdin_thread.start()
 

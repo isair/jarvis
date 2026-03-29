@@ -12,6 +12,14 @@ Tools define when/how to be used. Profiles define what to do after tools execute
 
 Tools return raw data without LLM processing. Profiles handle all response formatting and personality through the daemon's LLM loop. This ensures consistent response style across all profiles.
 
+## Development Environment
+
+The project uses a micromamba environment at `.mamba_env/`. Always activate it before running builds, tests, or the app:
+
+```bash
+eval "$(micromamba.exe shell hook --shell bash)" && micromamba activate "C:/Users/baris/projects/jarvis/.mamba_env"
+```
+
 ## README Maintenance
 
 Keep README.md up-to-date when making changes that affect user-facing functionality. Update the README when:
@@ -47,3 +55,5 @@ Run evals after finalising a change that can affect agent accuracy.
 Commit your changes when you finish a fix or feature before moving on to the next task.
 
 Before running `git commit --amend`, always check `git log --oneline -3` first to verify you're amending the correct commit.
+
+Always use British English everywhere (e.g. "colour" not "color", "behaviour" not "behavior", "initialise" not "initialize").

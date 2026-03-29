@@ -1440,6 +1440,16 @@ class ModelsPage(QWizardPage):
         return super().nextId()
 
 
+def _is_faster_whisper_turbo_supported() -> bool:
+    """Check if the installed faster-whisper supports the large-v3-turbo model."""
+    try:
+        import faster_whisper
+        from packaging.version import Version
+        return Version(faster_whisper.__version__) >= Version("1.1.0")
+    except Exception:
+        return False
+
+
 class WhisperSetupPage(QWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
@@ -1467,6 +1477,7 @@ class WhisperSetupPage(QWizardPage):
         super().__init__(parent)
         self.setTitle("")
         self._is_apple_silicon = is_apple_silicon()
+        self._is_bundled = getattr(sys, 'frozen', False)
         self._is_english_only = True  # Default to English-only for better accuracy
 
         # Main layout with scroll area for overflow
@@ -1651,8 +1662,8 @@ class WhisperSetupPage(QWizardPage):
 
         layout.addWidget(selection_card)
 
-        # Store selected model (default to tiny for fast first-time experience)
-        self._selected_whisper_model: str = "tiny.en"
+        # Store selected model (default to small for good multilingual support)
+        self._selected_whisper_model: str = "small"
 
         # Build initial slider UI
         self._rebuild_slider_ui()
@@ -1728,8 +1739,19 @@ class WhisperSetupPage(QWizardPage):
         self._worker: Optional[CommandWorker] = None
 
     def _get_current_model_options(self) -> list:
-        """Get the model options list based on current language mode."""
-        return self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+        """Get the model options list based on current language mode.
+
+        Filters out large-v3-turbo on non-Apple-Silicon platforms when the
+        installed faster-whisper version does not support it.
+        """
+        options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+        # Apple Silicon uses MLX Whisper which always supports turbo
+        if self._is_apple_silicon:
+            return options
+        # For faster-whisper backend, only show turbo if the library supports it
+        if not _is_faster_whisper_turbo_supported():
+            options = [opt for opt in options if opt[0] != "large-v3-turbo"]
+        return options
 
     def _on_language_changed(self, is_english: bool):
         """Handle language mode change."""
@@ -1956,14 +1978,24 @@ class WhisperSetupPage(QWizardPage):
             self._update_status_row(self.mlx_status, "✅ Installed", True)
             self.install_mlx_btn.setEnabled(False)
             self.install_mlx_btn.setText("✅ MLX Whisper Installed")
+            self.install_mlx_btn.setVisible(True)
+        elif self._is_bundled:
+            # In bundled mode, can't pip install - hide the button
+            self._update_status_row(self.mlx_status, "⚡ Using faster-whisper", True)
+            self.install_mlx_btn.setVisible(False)
         else:
             self._update_status_row(self.mlx_status, "❌ Not installed", False)
             self.install_mlx_btn.setEnabled(True)
             self.install_mlx_btn.setText("🧠 Install MLX Whisper")
+            self.install_mlx_btn.setVisible(True)
 
         # Update status message based on setup state
         if status.is_fully_setup:
             self.status_label.setText("✅ MLX Whisper is ready! GPU-accelerated speech recognition enabled.")
+            self.status_label.setStyleSheet("color: #4ade80;")
+        elif self._is_bundled and not status.is_mlx_whisper_installed:
+            # In bundled mode without MLX, faster-whisper is used automatically
+            self.status_label.setText("✅ Speech recognition ready using faster-whisper.")
             self.status_label.setStyleSheet("color: #4ade80;")
         else:
             if not status.is_ffmpeg_installed:

@@ -51,6 +51,52 @@ from desktop_app.themes import JARVIS_THEME_STYLESHEET
 from desktop_app.face_widget import FaceWindow
 
 
+_LOG_SEPARATOR = "─" * 50
+
+
+def _truncate_logs_for_report(logs: str, max_len: int) -> str:
+    """Truncate logs keeping init section + recent tail.
+
+    Recent logs are more valuable for debugging, so we preserve the tail.
+    The init section (everything up to the last separator line) is kept
+    for context (version, platform, configuration info).
+    """
+    if len(logs) <= max_len:
+        return logs
+
+    marker = "\n\n... (truncated) ...\n\n"
+
+    # Find the init section: everything up to and including the last separator line
+    last_sep = logs.rfind(_LOG_SEPARATOR)
+    if last_sep != -1:
+        init_end = logs.find('\n', last_sep)
+        if init_end == -1:
+            init_end = last_sep + len(_LOG_SEPARATOR)
+        else:
+            init_end += 1  # Include the newline
+        init_section = logs[:init_end]
+    else:
+        # No separator found (e.g. crash logs); skip init preservation
+        init_section = ""
+
+    if len(init_section) + len(marker) >= max_len:
+        # Init section alone exceeds budget; just keep the tail
+        tail_part = logs[-(max_len - len(marker)):]
+        newline_idx = tail_part.find('\n')
+        if newline_idx != -1 and newline_idx < 200:
+            tail_part = tail_part[newline_idx + 1:]
+        return marker.lstrip() + tail_part
+
+    tail_budget = max_len - len(init_section) - len(marker)
+    tail_part = logs[-tail_budget:]
+    # Snap to line boundary to avoid a partial first line
+    newline_idx = tail_part.find('\n')
+    if newline_idx != -1 and newline_idx < 200:
+        tail_part = tail_part[newline_idx + 1:]
+
+    return init_section + marker + tail_part
+
+
 def setup_crash_logging():
     """Set up crash logging for the bundled app to capture startup errors."""
     if getattr(sys, 'frozen', False):
@@ -282,9 +328,8 @@ def show_crash_report_dialog(crash_content: str) -> None:
                     version = "unknown"
 
                 # Truncate crash info for URL (GitHub has limits)
-                truncated = self.crash_info[:4000]
-                if len(self.crash_info) > 4000:
-                    truncated += "\n\n... (truncated, full log in comment)"
+                # Keep init lines + recent tail (recent logs are most useful for debugging)
+                truncated = _truncate_logs_for_report(self.crash_info, 4000)
 
                 title = "Crash Report"
                 body = f"""## Crash Report
@@ -451,6 +496,96 @@ def show_unsupported_model_dialog(model_name: str) -> bool:
         return False
 
 
+def get_lock_file_path() -> Path:
+    """Get the path to the single-instance lock file."""
+    if sys.platform == "darwin":
+        lock_dir = Path.home() / "Library" / "Application Support" / "Jarvis"
+    elif sys.platform == "win32":
+        lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
+    else:
+        lock_dir = Path.home() / ".jarvis"
+
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / "jarvis_desktop.lock"
+
+
+def get_existing_instance_pid() -> Optional[int]:
+    """Read the PID of the existing Jarvis instance from the lock file."""
+    lock_file = get_lock_file_path()
+    try:
+        if lock_file.exists():
+            content = lock_file.read_text().strip()
+            if content.isdigit():
+                return int(content)
+    except Exception:
+        pass
+    return None
+
+
+def kill_existing_instance(pid: int) -> bool:
+    """
+    Terminate an existing Jarvis instance by PID.
+
+    Returns True if the process was terminated, False otherwise.
+    """
+    try:
+        process = psutil.Process(pid)
+        # Verify it's actually a Jarvis process (safety check)
+        proc_name = process.name().lower()
+        if "jarvis" not in proc_name and "python" not in proc_name:
+            debug_log(f"PID {pid} doesn't look like Jarvis (name: {proc_name}), not killing", "desktop")
+            return False
+
+        debug_log(f"Terminating existing Jarvis instance (PID {pid})", "desktop")
+        process.terminate()
+
+        # Wait up to 5 seconds for graceful shutdown
+        try:
+            process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            debug_log(f"Process {pid} didn't terminate gracefully, force killing", "desktop")
+            process.kill()
+            process.wait(timeout=2)
+
+        return True
+    except psutil.NoSuchProcess:
+        # Process already gone
+        return True
+    except Exception as e:
+        debug_log(f"Failed to kill process {pid}: {e}", "desktop")
+        return False
+
+
+def show_instance_conflict_dialog() -> bool:
+    """
+    Show a dialog asking the user if they want to kill the existing instance.
+
+    Returns True if the user chose to kill, False to exit.
+    Must be called after QApplication is created.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+    from PyQt6.QtGui import QIcon
+
+    msg = QMessageBox()
+    msg.setWindowTitle("Jarvis Already Running")
+    msg.setText("Another instance of Jarvis is already running.")
+    msg.setInformativeText("Would you like to close the existing instance and start a new one?")
+    msg.setIcon(QMessageBox.Icon.Question)
+
+    # Add custom buttons
+    kill_btn = msg.addButton("Close Existing && Start New", QMessageBox.ButtonRole.AcceptRole)
+    exit_btn = msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
+    msg.setDefaultButton(kill_btn)
+
+    # Apply theme
+    from desktop_app.themes import JARVIS_THEME_STYLESHEET
+    msg.setStyleSheet(JARVIS_THEME_STYLESHEET)
+
+    msg.exec()
+
+    return msg.clickedButton() == kill_btn
+
+
 def acquire_single_instance_lock() -> bool:
     """
     Acquire a lock to ensure only one instance of the desktop app runs.
@@ -460,16 +595,7 @@ def acquire_single_instance_lock() -> bool:
     """
     global _lock_file_handle
 
-    # Use a predictable lock file location
-    if sys.platform == "darwin":
-        lock_dir = Path.home() / "Library" / "Application Support" / "Jarvis"
-    elif sys.platform == "win32":
-        lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
-    else:
-        lock_dir = Path.home() / ".jarvis"
-
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_dir / "jarvis_desktop.lock"
+    lock_file = get_lock_file_path()
 
     try:
         # Open lock file (create if doesn't exist)
@@ -567,6 +693,26 @@ class LogViewerWindow(QMainWindow):
         header_row_layout.addWidget(title_section)
         header_row_layout.addStretch()
 
+        # Clear button
+        clear_btn = QPushButton("🗑️ Clear")
+        clear_btn.setToolTip("Clear all logs")
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27272a;
+                color: #fafafa;
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #3f3f46;
+                border-color: #f59e0b;
+            }
+        """)
+        clear_btn.clicked.connect(self.clear_logs)
+        header_row_layout.addWidget(clear_btn)
+
         # Report button on the right
         report_btn = QPushButton("🐛 Report Issue")
         report_btn.setToolTip("Report a bug or unexpected behavior on GitHub")
@@ -598,7 +744,7 @@ class LogViewerWindow(QMainWindow):
         layout.addWidget(self.log_display)
 
         # Initial message
-        self.append_log("🚀 Jarvis Log Viewer Ready\n" + "─"*50 + "\n\n")
+        self.append_log("🚀 Jarvis Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
 
     def append_log(self, text: str) -> None:
         """Append text to the log display."""
@@ -609,7 +755,7 @@ class LogViewerWindow(QMainWindow):
     def clear_logs(self) -> None:
         """Clear all logs."""
         self.log_display.clear()
-        self.append_log("📝 Jarvis Logs\n" + "="*60 + "\n")
+        self.append_log("🗑️ Logs Cleared\n" + _LOG_SEPARATOR + "\n\n")
 
     def _report_issue(self) -> None:
         """Open GitHub issue with redacted log contents."""
@@ -628,8 +774,8 @@ class LogViewerWindow(QMainWindow):
             redacted_logs = pattern.sub(repl, redacted_logs)
 
         # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
-        if len(redacted_logs) > 5000:
-            redacted_logs = redacted_logs[:5000] + "\n\n... (truncated)"
+        # Keep init lines + recent tail (recent logs are most useful for debugging)
+        redacted_logs = _truncate_logs_for_report(redacted_logs, 5000)
 
         title = "Bug Report"
         body = f"""## Bug Report
@@ -1404,7 +1550,11 @@ class JarvisSystemTray:
                                 # Run daemon - this should run the main loop
                                 daemon_main()
 
-                                self.log_signals.new_log.emit("⏸️ Daemon main() returned (unexpected)\n")
+                                from jarvis.daemon import is_stop_requested
+                                if is_stop_requested():
+                                    self.log_signals.new_log.emit("✅ Daemon stopped gracefully\n")
+                                else:
+                                    self.log_signals.new_log.emit("⚠️ Daemon exited unexpectedly\n")
                             except KeyboardInterrupt:
                                 self.log_signals.new_log.emit("⏸️ Daemon interrupted\n")
                             except Exception as e:
@@ -1855,11 +2005,44 @@ def main() -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
-    # Single-instance check - must be done BEFORE any GUI is created
+    # Single-instance check
     # This prevents multiple tray icons and log windows from spawning
     if not acquire_single_instance_lock():
-        print("⚠️ Another instance of Jarvis Desktop is already running. Exiting.")
-        return 0
+        print("⚠️ Another instance of Jarvis Desktop is already running.", flush=True)
+
+        # Create a minimal QApplication for the dialog
+        from PyQt6.QtWidgets import QApplication
+        temp_app = QApplication(sys.argv)
+
+        if show_instance_conflict_dialog():
+            # User wants to kill the existing instance
+            existing_pid = get_existing_instance_pid()
+            if existing_pid:
+                print(f"🔄 Closing existing instance (PID {existing_pid})...", flush=True)
+                if kill_existing_instance(existing_pid):
+                    # Wait a moment for the lock file to be released
+                    import time
+                    time.sleep(0.5)
+
+                    # Try to acquire the lock again
+                    if acquire_single_instance_lock():
+                        print("✅ Lock acquired, starting new instance...", flush=True)
+                        # Clean up temp app - we'll create the real one below
+                        temp_app.quit()
+                        del temp_app
+                    else:
+                        print("❌ Failed to acquire lock after killing existing instance.", flush=True)
+                        return 1
+                else:
+                    print("❌ Failed to close existing instance.", flush=True)
+                    return 1
+            else:
+                print("❌ Could not find existing instance PID.", flush=True)
+                return 1
+        else:
+            # User chose to exit
+            print("👋 Exiting.", flush=True)
+            return 0
 
     # Check for previous crash BEFORE setting up new crash logging
     # This way we can read the old crash log before it's overwritten

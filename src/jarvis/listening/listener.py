@@ -35,21 +35,23 @@ except ImportError as e:
     sd = None
     webrtcvad = None
     np = None
-    # Log import error for debugging (especially important for Windows PortAudio issues)
+    # Log import error for debugging
+    print(f"  ⚠️  Audio import error: {e}", flush=True)
+    print("     This may indicate PortAudio is not found", flush=True)
     import sys as _sys
-    if _sys.platform == 'win32':
-        print(f"  ⚠️  Audio import error: {e}", flush=True)
-        print("     This may indicate PortAudio DLL is not found", flush=True)
+    if _sys.platform == 'linux':
+        print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
     del _sys
 except OSError as e:
-    # PortAudio DLL loading errors appear as OSError on Windows
+    # PortAudio loading errors appear as OSError
     sd = None
     webrtcvad = None
     np = None
+    print(f"  ❌ PortAudio initialisation failed: {e}", flush=True)
+    print("     Please reinstall the application or check audio drivers", flush=True)
     import sys as _sys
-    if _sys.platform == 'win32':
-        print(f"  ❌ PortAudio initialization failed: {e}", flush=True)
-        print("     Please reinstall the application or check audio drivers", flush=True)
+    if _sys.platform == 'linux':
+        print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
     del _sys
 
 # Whisper backend imports - try MLX first on Apple Silicon, fall back to faster-whisper
@@ -59,6 +61,16 @@ FASTER_WHISPER_AVAILABLE = False
 def _is_apple_silicon() -> bool:
     """Check if running on Apple Silicon Mac."""
     return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def _get_mic_permission_hint() -> str:
+    """Return platform-appropriate microphone permission guidance."""
+    if sys.platform == 'win32':
+        return "Windows Settings > Privacy > Microphone > Allow apps to access"
+    elif sys.platform == 'darwin':
+        return "System Settings > Privacy & Security > Microphone"
+    else:
+        return "`pactl list sources` or audio settings for your desktop environment"
 
 try:
     if _is_apple_silicon():
@@ -72,6 +84,16 @@ try:
     FASTER_WHISPER_AVAILABLE = True
 except ImportError:
     WhisperModel = None
+
+
+def _is_faster_whisper_turbo_supported() -> bool:
+    """Check if the installed faster-whisper supports the large-v3-turbo model."""
+    try:
+        import faster_whisper
+        from packaging.version import Version
+        return Version(faster_whisper.__version__) >= Version("1.1.0")
+    except Exception:
+        return False
 
 
 def _get_mlx_model_repo(model_name: str) -> str:
@@ -459,8 +481,9 @@ class VoiceListener(threading.Thread):
                     (utterance_start_time > 0 and utterance_start_time < last_tts_finish_time) or
                     # Case 2: Utterance ended within grace period after TTS
                     (utterance_end_time > 0 and utterance_end_time - last_tts_finish_time < grace_period) or
-                    # Case 3: Fallback - processing happening within grace period
-                    (time.time() - last_tts_finish_time < grace_period)
+                    # Case 3: Fallback - only when utterance timing is unavailable
+                    (utterance_start_time == 0 and utterance_end_time == 0 and
+                     time.time() - last_tts_finish_time < grace_period)
                 ))
             )
 
@@ -511,13 +534,16 @@ class VoiceListener(threading.Thread):
                             return
                     else:
                         # Hot window mode - no wake word needed
-                        debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{intent_judgment.query}\"", "voice")
+                        # Use actual user text as query: in hot window there's no wake word
+                        # to strip, and the intent judge's extraction can lose words
+                        # (e.g. extracting "I" from "No, I'm good.")
+                        hot_query = text_lower
+                        debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{hot_query}\"", "voice")
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
 
-                        # Use the extracted query (cleaned of pre-wake-word chatter)
-                        self.state_manager.start_collection(intent_judgment.query)
+                        self.state_manager.start_collection(hot_query)
 
                         # Start thinking tune and show processing message
                         self._start_thinking_tune()
@@ -988,8 +1014,9 @@ class VoiceListener(threading.Thread):
         except Exception as e:
             debug_log(f"PortAudio device query failed: {e}", "voice")
             print(f"  ❌ Audio system error: {e}", flush=True)
-            if sys.platform == 'win32':
-                print("     PortAudio may not be properly installed", flush=True)
+            print("     PortAudio may not be properly installed", flush=True)
+            if sys.platform == 'linux':
+                print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
             return
 
         # Windows 11: Test microphone permission by attempting a brief recording
@@ -1027,6 +1054,19 @@ class VoiceListener(threading.Thread):
         self._whisper_backend = self._determine_whisper_backend()
         model_name = getattr(self.cfg, "whisper_model", "small")
 
+        # Validate large-v3-turbo support for faster-whisper backend
+        if model_name == "large-v3-turbo" and self._whisper_backend != "mlx":
+            if not _is_faster_whisper_turbo_supported():
+                debug_log(
+                    "faster-whisper does not support large-v3-turbo, "
+                    "falling back to large-v3", "voice",
+                )
+                print(
+                    "  ⚠️  large-v3-turbo is not supported by the installed Whisper engine, "
+                    "using large-v3 instead", flush=True,
+                )
+                model_name = "large-v3"
+
         if self._whisper_backend == "mlx":
             if not MLX_WHISPER_AVAILABLE:
                 debug_log("MLX Whisper not available", "voice")
@@ -1044,7 +1084,7 @@ class VoiceListener(threading.Thread):
                     _ = mlx_whisper.transcribe(
                         warmup_audio,
                         path_or_hf_repo=self._mlx_model_repo,
-                        language="en",
+                        language=None,
                     )
                     debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
 
@@ -1204,16 +1244,14 @@ class VoiceListener(threading.Thread):
                 dev = sd.query_devices(stream_kwargs["device"])
                 device_name = dev.get('name', 'Unknown')
                 debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
-                if sys.platform == 'win32':
-                    print(f"  🎤 Using audio device: {device_name}", flush=True)
+                print(f"  🎤 Using audio device: {device_name}", flush=True)
             else:
                 debug_log("using system default input device", "voice")
-                if sys.platform == 'win32':
-                    try:
-                        default_dev = sd.query_devices(sd.default.device[0])
-                        print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
-                    except Exception:
-                        print("  🎤 Using system default input device", flush=True)
+                try:
+                    default_dev = sd.query_devices(sd.default.device[0])
+                    print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
+                except Exception:
+                    print("  🎤 Using system default input device", flush=True)
         except Exception:
             pass
 
@@ -1231,9 +1269,9 @@ class VoiceListener(threading.Thread):
             error_msg = str(e).lower()
             debug_log(f"failed to open input stream: {e}", "voice")
 
-            # Provide helpful error messages for common Windows issues
+            # Provide helpful error messages for common issues
             if "access" in error_msg or "permission" in error_msg:
-                print("  ❌ Microphone access denied. Please check Windows Settings > Privacy > Microphone", flush=True)
+                print(f"  ❌ Microphone access denied. Please check: {_get_mic_permission_hint()}", flush=True)
             elif "device" in error_msg and ("use" in error_msg or "busy" in error_msg):
                 print("  ❌ Microphone is being used by another application", flush=True)
             elif "device" in error_msg:
@@ -1245,7 +1283,7 @@ class VoiceListener(threading.Thread):
 
         # Main audio processing loop
         with stream:
-            # Verify stream is actually recording (helps catch Windows permission issues)
+            # Verify stream is actually recording (helps catch permission issues)
             if not stream.active:
                 try:
                     stream.start()
@@ -1253,7 +1291,7 @@ class VoiceListener(threading.Thread):
                     error_msg = str(e).lower()
                     debug_log(f"failed to start audio stream: {e}", "voice")
                     if "access" in error_msg or "permission" in error_msg:
-                        print("  ❌ Microphone access denied. Please check Windows Settings > Privacy > Microphone", flush=True)
+                        print(f"  ❌ Microphone access denied. Please check: {_get_mic_permission_hint()}", flush=True)
                     else:
                         print(f"  ❌ Failed to start recording: {e}", flush=True)
                     return
@@ -1270,17 +1308,17 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-            # Track start time for audio health monitoring (Windows only)
+            # Track start time for audio health monitoring
             _audio_start_time = time.time()
             _audio_health_logged = False
 
             while not self._should_stop:
-                # One-time audio health check after 5 seconds (Windows only)
-                if sys.platform == 'win32' and not _audio_health_logged and time.time() - _audio_start_time > 5:
+                # One-time audio health check after 5 seconds
+                if not _audio_health_logged and time.time() - _audio_start_time > 5:
                     _audio_health_logged = True
                     if self._callback_count == 0:
                         print("  ⚠️  No audio received after 5 seconds!", flush=True)
-                        print("     Check: Windows Settings > Privacy > Microphone > Allow apps to access", flush=True)
+                        print(f"     Check: {_get_mic_permission_hint()}", flush=True)
                         print("     Also check that your microphone is not muted", flush=True)
 
                 try:
@@ -1432,7 +1470,7 @@ class VoiceListener(threading.Thread):
                 result = mlx_whisper.transcribe(
                     audio,
                     path_or_hf_repo=self._mlx_model_repo,
-                    language="en",
+                    language=None,
                 )
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
@@ -1473,9 +1511,9 @@ class VoiceListener(threading.Thread):
             else:
                 # faster-whisper transcription
                 try:
-                    segments, _info = self.model.transcribe(audio, language="en", vad_filter=False)
+                    segments, _info = self.model.transcribe(audio, language=None, vad_filter=False)
                 except TypeError:
-                    segments, _info = self.model.transcribe(audio, language="en")
+                    segments, _info = self.model.transcribe(audio, language=None)
                 segments_list = list(segments)
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()

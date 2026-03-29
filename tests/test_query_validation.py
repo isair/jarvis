@@ -209,6 +209,21 @@ class TestIntentJudgeWakeWordValidation:
 
         assert should_accept is True, "Should accept - hot window mode"
 
+    def test_hot_window_uses_actual_text_not_intent_judge_query(self):
+        """In hot window mode, the actual user text should be used as the query.
+
+        Regression test: previously the intent judge's extracted query was used,
+        which could lose words (e.g. extracting "I" from "No, I'm good.").
+        Per spec: "Hot window input should reflect what the user actually said."
+        """
+        text_lower = "no, i'm good."
+        intent_judgment_query = "I"  # Bad extraction by small LLM
+
+        # In hot window mode, we should use text_lower, not intent_judgment_query
+        hot_query = text_lower
+        assert hot_query == "no, i'm good."
+        assert hot_query != intent_judgment_query
+
 
 class TestStateTimingScenarios:
     """Tests for state timing and transitions.

@@ -14,7 +14,7 @@ from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
-from .prompts import detect_model_size, get_system_prompts
+from .prompts import ModelSize, detect_model_size, get_system_prompts
 import json
 import re
 import uuid
@@ -179,6 +179,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
+
+        # Instruct small models or Piper TTS to always respond in English.
+        # Small models (3b and below) produce poor non-English output, and
+        # Piper TTS can only synthesise English speech — responding in another
+        # language would produce garbled audio.
+        tts_engine = getattr(cfg, 'tts_engine', 'piper')
+        if model_size == ModelSize.SMALL or tts_engine == 'piper':
+            guidance.append(
+                "Always respond in English regardless of the language the user speaks in."
+            )
 
         if conversation_context:
             guidance.append("\nRelevant conversation history:\n" + conversation_context)

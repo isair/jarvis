@@ -372,8 +372,44 @@ class TestHotWindowTimingWithUtteranceTime:
 
         started_during_tts = utterance_start_time > 0 and utterance_start_time < tts_finish_time
         ended_within_grace = utterance_end_time > 0 and utterance_end_time - tts_finish_time < grace_period
-        processing_within_grace = current_time - tts_finish_time < grace_period
+        # Case 3 only fires when utterance timing is unavailable
+        processing_within_grace = (
+            utterance_start_time == 0 and utterance_end_time == 0 and
+            current_time - tts_finish_time < grace_period
+        )
 
         # Falls back to processing time
         could_be_hot_window = started_during_tts or ended_within_grace or processing_within_grace
         assert could_be_hot_window is True
+
+    def test_processing_time_fallback_not_used_when_utterance_times_available(self):
+        """Case 3 fallback must not fire when utterance timing is available.
+
+        Regression test: previously, Case 3 (time.time() < grace_period) would
+        fire even when utterance timing showed the speech was after the hot window,
+        causing false activations on e.g. "No, I'm good." after hot window expired.
+        """
+        tts_finish_time = 1000.0
+        hot_window_seconds = 3.0
+        echo_tolerance = 0.3
+        grace_period = hot_window_seconds + echo_tolerance
+
+        # Utterance timing IS available and shows speech after hot window
+        utterance_start_time = tts_finish_time + 4.0  # After hot window
+        utterance_end_time = tts_finish_time + 5.0
+        current_time = tts_finish_time + 5.1  # Within grace_period from tts_finish
+
+        started_during_tts = utterance_start_time > 0 and utterance_start_time < tts_finish_time
+        ended_within_grace = utterance_end_time > 0 and utterance_end_time - tts_finish_time < grace_period
+        # Case 3 should NOT fire because utterance timing is available
+        processing_within_grace = (
+            utterance_start_time == 0 and utterance_end_time == 0 and
+            current_time - tts_finish_time < grace_period
+        )
+
+        assert started_during_tts is False
+        assert ended_within_grace is False
+        assert processing_within_grace is False
+
+        could_be_hot_window = started_during_tts or ended_within_grace or processing_within_grace
+        assert could_be_hot_window is False
