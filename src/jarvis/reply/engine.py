@@ -12,7 +12,7 @@ from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOO
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
-from ..llm import chat_with_messages, extract_text_from_response
+from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
 from .prompts import detect_model_size, get_system_prompts
 import json
@@ -167,9 +167,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Step 7: Messages-based loop with tool handling
     # Detect model size for prompt selection
     model_size = detect_model_size(cfg.ollama_chat_model)
-    # Custom jarvis- prefixed models use text-based tool calling (markdown fences)
-    # instead of Ollama's native tools API, which they don't support.
-    use_text_tools = cfg.ollama_chat_model.startswith("jarvis-")
+    # Start with native tool calling. If the model returns HTTP 400 (tools not supported),
+    # we automatically switch to text-based tool calling (markdown fences in system prompt).
+    use_text_tools = False
     prompts = get_system_prompts(model_size)
     debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model}", "planning")
 
@@ -184,8 +184,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append("\nRelevant conversation history:\n" + conversation_context)
 
         if use_text_tools and tools_desc:
-            # Text-based tool calling: include tool descriptions and fence format in the system
-            # message since we cannot use the native tools API parameter for this model.
+            # Text-based tool calling fallback: model returned HTTP 400 for native tools API,
+            # so we inject tool descriptions as plain text and expect markdown fence responses.
             guidance.append("\n" + tools_desc)
             guidance.append(
                 '\nWhen calling a tool output ONLY a markdown code fence tagged `tool_call`:\n'
@@ -238,8 +238,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         if name:
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
-                # Second try: markdown fence tool call for text-based tool calling models
-                # (e.g. jarvis-gemma3n-tools which can't use the native tools API)
+                # Second try: markdown fence tool call for the text-based fallback path
+                # (used when the model returned HTTP 400 for the native tools API)
                 content_field = msg.get("content", "") or ""
                 fence_match = re.search(
                     r"```tool_call\s*\n({.+?})\s*\n```",
@@ -424,16 +424,37 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 has_tool_calls = " (has tool_calls)" if msg.get("tool_calls") else ""
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
 
-        # Send messages to Ollama
-        # Send messages to Ollama with native tool calling support
-        llm_resp = chat_with_messages(
-            base_url=cfg.ollama_base_url,
-            chat_model=cfg.ollama_chat_model,
-            messages=messages,
-            timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
-            extra_options=None,
-            tools=None if use_text_tools else tools_json_schema,
-        )
+        # Send messages to Ollama — try native tool calling first, fall back to text-based
+        # if the model returns HTTP 400 (native tools API not supported).
+        try:
+            llm_resp = chat_with_messages(
+                base_url=cfg.ollama_base_url,
+                chat_model=cfg.ollama_chat_model,
+                messages=messages,
+                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                extra_options=None,
+                tools=None if use_text_tools else tools_json_schema,
+            )
+        except ToolsNotSupportedError:
+            # Model doesn't support the native tools API — switch to text-based tool calling
+            # for the rest of this session and rebuild the system message to include tool
+            # descriptions as plain text with markdown fence instructions.
+            debug_log(
+                f"⚠️ Native tools API not supported by {cfg.ollama_chat_model!r}, "
+                "falling back to text-based tool calling (markdown fences)",
+                "planning",
+            )
+            use_text_tools = True
+            messages[0] = {"role": "system", "content": _build_initial_system_message()}
+            _update_system_message_with_context(messages)
+            llm_resp = chat_with_messages(
+                base_url=cfg.ollama_base_url,
+                chat_model=cfg.ollama_chat_model,
+                messages=messages,
+                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                extra_options=None,
+                tools=None,
+            )
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break

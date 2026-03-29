@@ -109,8 +109,7 @@ class TestModelSizeDetection:
 
     @pytest.mark.eval
     @pytest.mark.parametrize("model_name,expected_size", [
-        pytest.param("jarvis-gemma3n-tools", "SMALL", id="Model size: jarvis-gemma3n-tools → SMALL"),
-        pytest.param("jarvis-gemma3n-tools:3b", "SMALL", id="Model size: jarvis-gemma3n-tools:3b → SMALL"),
+        pytest.param("gemma3n", "SMALL", id="Model size: gemma3n → SMALL"),
         pytest.param("llama3.2:3b", "SMALL", id="Model size: llama3.2:3b → SMALL"),
         pytest.param("llama3.2:1b", "SMALL", id="Model size: llama3.2:1b → SMALL"),
         pytest.param("mistral:7b", "SMALL", id="Model size: mistral:7b → SMALL"),
@@ -160,7 +159,7 @@ class TestGreetingNoTools:
         from jarvis.reply.engine import run_reply_engine
 
         # Use small model to test conservative prompts
-        mock_config.ollama_chat_model = "jarvis-gemma3n-tools"
+        mock_config.ollama_chat_model = "gemma3n"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
@@ -203,7 +202,7 @@ class TestGreetingNoTools:
         from jarvis.reply.engine import run_reply_engine
 
         # Use small model
-        mock_config.ollama_chat_model = "jarvis-gemma3n-tools"
+        mock_config.ollama_chat_model = "gemma3n"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
@@ -249,11 +248,9 @@ class TestGreetingNoTools:
 # =============================================================================
 
 def _is_small_model(model_name: str) -> bool:
-    """Check if model is a small model (1b-7b)."""
-    if not model_name:
-        return False
-    name_lower = model_name.lower()
-    return any(p in name_lower for p in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+    """Check if model is classified as small by the model size detector."""
+    from jarvis.reply.prompts import detect_model_size, ModelSize
+    return detect_model_size(model_name) == ModelSize.SMALL
 
 
 class TestGreetingNoToolsLive:

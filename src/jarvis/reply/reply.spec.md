@@ -57,9 +57,15 @@ Design principles enforced by the engine:
 6. Agentic Messages Loop with Dynamic Context
    - For each turn of the loop (max `agentic_max_turns` turns, default 8):
      - Update first system message with fresh time/location context
-     - Send messages to LLM with native tool calling via Ollama's tools API parameter
+     - Send messages to LLM — try native tool calling first (Ollama `tools` API parameter)
+     - If the model returns HTTP 400 (native tools API not supported), automatically fall back
+       to text-based tool calling for the rest of the session:
+       - Rebuild system message to inject tool descriptions and markdown fence instructions
+       - Re-send without the `tools` parameter
+       - Parse responses for `` ```tool_call ``` `` fences instead of `tool_calls` field
      - Parse response using standard OpenAI-compatible message format:
-       - `tool_calls` field: Execute tools and continue loop
+       - `tool_calls` field (native path): Execute tools and continue loop
+       - `` ```tool_call ``` `` fence (text path): Execute tools and continue loop
        - `thinking` field: Internal reasoning (not shown to user), continue loop
        - `content` field: Natural language response to user
    - Note: System messages are NOT added after the conversation starts, as this breaks native tool calling in models like Llama 3.2
@@ -76,12 +82,13 @@ Design principles enforced by the engine:
      - LLM returns empty response with no tool calls for multiple turns
 
    Tool protocol details:
-   - Native tool calling: Tools are passed to Ollama via the `tools` API parameter in OpenAI-compatible JSON schema format
-   - The LLM requests tools via the standard `tool_calls` field in its response message
+   - Native tool calling (default): Tools are passed to Ollama via the `tools` API parameter in OpenAI-compatible JSON schema format; the LLM requests tools via the standard `tool_calls` field
+   - Text-based fallback (automatic): If the model returns HTTP 400, the engine switches to injecting tool descriptions as plain text in the system message and parsing `` ```tool_call ``` `` markdown fences from the model's content field
+   - Fallback is detected once per session (first HTTP 400 response) and persists for the rest of the conversation
    - Internal reasoning uses the `thinking` field (not shown to user)
    - Allowed tools: profile allowlist plus MCP (if configured)
    - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
-   - Tool results are appended to messages as `{role: "tool", tool_call_id: "<id>", content: "<text>"}`; errors as `{role: "tool", tool_call_id: "<id>", content: "Error: <message>"}`
+   - Tool results: native path appends `{role: "tool", tool_call_id: "<id>", content: "<text>"}` messages; text-based fallback appends `{role: "user", content: "[Tool result: name]\n<text>"}` messages
    - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
 
 8. Output and Memory Update

@@ -245,7 +245,7 @@ class TestConfigNewOptions:
 
         defaults = get_default_config()
 
-        assert defaults["intent_judge_model"] == "jarvis-gemma3n-tools"
+        assert defaults["intent_judge_model"] == "gemma3n"
         assert defaults["intent_judge_timeout_sec"] == 3.0
 
     def test_transcript_buffer_config_defaults(self):

@@ -12,8 +12,7 @@ class TestModelSizeDetection:
 
     @pytest.mark.parametrize("model_name,expected_small", [
         # Small models (should return SMALL)
-        ("jarvis-gemma3n-tools", True),
-        ("jarvis-gemma3n-tools:3b", True),
+        ("gemma3n", True),
         ("llama3.2:3b", True),
         ("llama3.2:1b", True),
         ("mistral:7b", True),
