@@ -154,19 +154,19 @@ Most users won't need to change anything. Config file: `~/.config/jarvis/config.
 <summary><strong>Speech Recognition (Whisper)</strong></summary>
 
 #### Language Modes
-- **English Only** (default, better accuracy): `"whisper_model": "small.en"`
-- **Multilingual** (99 languages): `"whisper_model": "small"`
+- **Multilingual** (default, 99 languages): `"whisper_model": "medium"`
+- **English Only** (slightly better English accuracy): `"whisper_model": "medium.en"`
 
 #### Model Sizes
-| Model | English | Multilingual | Size | VRAM | Speed |
-|-------|---------|--------------|------|------|-------|
-| Tiny | `tiny.en` | `tiny` | ~75MB | ~1GB | ~10x |
-| Base | `base.en` | `base` | ~150MB | ~1GB | ~7x |
-| **Small** | `small.en` | `small` | ~500MB | ~2GB | ~4x |
-| Medium | `medium.en` | `medium` | ~1.5GB | ~5GB | ~2x |
-| Large V3 Turbo | - | `large-v3-turbo` | ~1.6GB | ~6GB | ~8x |
+| Model | English | Multilingual | Download | VRAM | Speed |
+|-------|---------|--------------|----------|------|-------|
+| Tiny | `tiny.en` | `tiny` | ~75 MB | ~1 GB | ~10x |
+| Base | `base.en` | `base` | ~140 MB | ~1 GB | ~7x |
+| Small | `small.en` | `small` | ~465 MB | ~2 GB | ~4x |
+| **Medium** | `medium.en` | `medium` | ~1.5 GB | ~5 GB | ~2x |
+| Large V3 Turbo | - | `large-v3-turbo` | ~1.5 GB | ~6 GB | ~8x |
 
-Speed is relative to original large model. [Source](https://github.com/openai/whisper)
+Speed is relative to the original large model. [Source](https://github.com/openai/whisper)
 
 #### GPU Acceleration (Windows)
 If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:

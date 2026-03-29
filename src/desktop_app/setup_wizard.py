@@ -1454,23 +1454,23 @@ class WhisperSetupPage(QWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
     # Multilingual models - support ~99 languages
-    # Sizes from OpenAI: https://github.com/openai/whisper
+    # File sizes from HuggingFace (Systran/faster-whisper-*), VRAM from OpenAI
     # (id, name, file_size, vram_required, description)
     WHISPER_MODEL_OPTIONS = [
         ("tiny", "Tiny", "~75MB", "~1GB VRAM", "Fastest, lower accuracy"),
-        ("base", "Base", "~150MB", "~1GB VRAM", "Fast, decent accuracy"),
-        ("small", "Small", "~500MB", "~2GB VRAM", "Good balance (Recommended)"),
-        ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Better accuracy, slower"),
-        ("large-v3-turbo", "Large V3 Turbo", "~1.6GB", "~6GB VRAM", "Best accuracy, 8x faster than large"),
+        ("base", "Base", "~140MB", "~1GB VRAM", "Fast, decent accuracy"),
+        ("small", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
+        ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
+        ("large-v3-turbo", "Large V3 Turbo", "~1.5GB", "~6GB VRAM", "Best accuracy, needs more VRAM"),
     ]
 
-    # English-only models - optimized for English, slightly better accuracy
+    # English-only models - optimised for English, slightly better accuracy
     # Note: large/turbo models don't have .en variants
     WHISPER_MODEL_OPTIONS_EN = [
-        ("tiny.en", "Tiny", "~75MB", "~1GB VRAM", "Fastest, English optimized"),
-        ("base.en", "Base", "~150MB", "~1GB VRAM", "Fast, English optimized"),
-        ("small.en", "Small", "~500MB", "~2GB VRAM", "Good balance (Recommended)"),
-        ("medium.en", "Medium", "~1.5GB", "~5GB VRAM", "Better accuracy, English optimized"),
+        ("tiny.en", "Tiny", "~75MB", "~1GB VRAM", "Fastest, English optimised"),
+        ("base.en", "Base", "~140MB", "~1GB VRAM", "Fast, English optimised"),
+        ("small.en", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
+        ("medium.en", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
     ]
 
     def __init__(self, parent=None):
@@ -1478,7 +1478,7 @@ class WhisperSetupPage(QWizardPage):
         self.setTitle("")
         self._is_apple_silicon = is_apple_silicon()
         self._is_bundled = getattr(sys, 'frozen', False)
-        self._is_english_only = True  # Default to English-only for better accuracy
+        self._is_english_only = False  # Default to multilingual for broader language support
 
         # Main layout with scroll area for overflow
         main_layout = QVBoxLayout()
@@ -1662,8 +1662,8 @@ class WhisperSetupPage(QWizardPage):
 
         layout.addWidget(selection_card)
 
-        # Store selected model (default to small for good multilingual support)
-        self._selected_whisper_model: str = "small"
+        # Store selected model (default to medium for best balance)
+        self._selected_whisper_model: str = "medium"
 
         # Build initial slider UI
         self._rebuild_slider_ui()
@@ -1933,7 +1933,7 @@ class WhisperSetupPage(QWizardPage):
     def initializePage(self):
         """Check status when page is shown."""
         # Load the currently configured whisper model
-        current_whisper_model = "tiny.en"  # Default to tiny for fast first-time experience
+        current_whisper_model = "medium"  # Default to medium multilingual
         try:
             cfg = load_settings()
             current_whisper_model = cfg.whisper_model

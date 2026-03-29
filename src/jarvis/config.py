@@ -333,7 +333,7 @@ def get_default_config() -> Dict[str, Any]:
         "wake_fuzzy_ratio": 0.78,
 
         # Whisper Speech Recognition
-        "whisper_model": "small",
+        "whisper_model": "medium",
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
@@ -487,7 +487,7 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "tiny.en"))
+    whisper_model = str(merged.get("whisper_model", "medium"))
     whisper_backend = str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
