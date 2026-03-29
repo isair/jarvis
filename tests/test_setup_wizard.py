@@ -411,6 +411,81 @@ class TestModelOptions:
         assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
 
 
+class TestGemma3nDefaultModelDetection:
+    """Regression tests: gemma3n is the default small model and must be detected as missing
+    when not installed, triggering the setup wizard install prompt."""
+
+    def test_gemma3n_missing_detected_in_status(self):
+        """When gemma3n is not installed, check_ollama_status reports it as missing."""
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=["gemma3n", "nomic-embed-text"]):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=["nomic-embed-text"]):
+                        status = check_ollama_status()
+
+                        assert "gemma3n" in status.missing_models
+                        assert status.is_fully_setup is False
+
+    def test_gemma3n_installed_not_in_missing(self):
+        """When gemma3n is installed, check_ollama_status does not list it as missing."""
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=["gemma3n", "nomic-embed-text"]):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=["gemma3n", "nomic-embed-text"]):
+                        status = check_ollama_status()
+
+                        assert status.missing_models == []
+                        assert status.is_fully_setup is True
+
+    def test_wizard_shown_when_gemma3n_missing(self):
+        """should_show_setup_wizard returns True when gemma3n is not installed."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.3.0",
+            installed_models=["nomic-embed-text"],
+            missing_models=["gemma3n"],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard() is True
+
+    def test_wizard_not_shown_when_gemma3n_installed(self):
+        """should_show_setup_wizard returns False when gemma3n is present."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.3.0",
+            installed_models=["gemma3n", "nomic-embed-text"],
+            missing_models=[],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard() is False
+
+    def test_gemma3n_latest_tag_stripped_before_comparison(self):
+        """Ollama appends ':latest' to model names; the status check must strip it so
+        gemma3n:latest is not incorrectly treated as missing when gemma3n is required."""
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=["gemma3n", "nomic-embed-text"]):
+                    # Simulate Ollama reporting "gemma3n:latest" in its model list
+                    mock_result = MagicMock()
+                    mock_result.returncode = 0
+                    mock_result.stdout = (
+                        "NAME                       ID              SIZE      MODIFIED\n"
+                        "gemma3n:latest             abc123          2.0 GB    1 day ago\n"
+                        "nomic-embed-text:latest    def456          274 MB    1 week ago\n"
+                    )
+                    with patch("subprocess.run", return_value=mock_result):
+                        status = check_ollama_status()
+
+                        assert "gemma3n" not in status.missing_models
+                        assert status.is_fully_setup is True
+
+
 class TestWhisperModelOptions:
     """Tests for whisper model selection options in setup wizard."""
 
