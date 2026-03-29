@@ -41,10 +41,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "cudalibs"; Description: "Download NVIDIA CUDA libraries for GPU-accelerated speech recognition (~1.1 GB download)"; GroupDescription: "GPU Acceleration:"; Check: HasNvidiaGPU; Flags: unchecked
 
 [Files]
 ; Bundle the entire PyInstaller onedir output
 Source: "..\..\dist\Jarvis\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Bundle the CUDA installer script (PowerShell — no Python needed)
+Source: "install_cuda.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -54,6 +57,8 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: 
 [Run]
 ; Install VC++ Redistributable silently if missing
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/quiet /norestart"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated; Check: VCRedistNeeded
+; Download CUDA libraries if task selected (uses PowerShell to download and extract wheels)
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\install_cuda.ps1"" -TargetDir ""{app}\cuda"""; StatusMsg: "Downloading CUDA libraries for GPU acceleration (this may take several minutes)..."; Flags: waituntilterminated runhidden; Tasks: cudalibs
 ; Launch the application after installation
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
@@ -73,6 +78,16 @@ begin
     // Runtime is installed
     Result := False;
   end;
+end;
+
+// Check whether an NVIDIA GPU is present by looking for the CUDA driver DLL
+function HasNvidiaGPU: Boolean;
+var
+  NvSmiPath: String;
+begin
+  // nvcuda.dll is the CUDA driver — present on any system with NVIDIA drivers
+  NvSmiPath := ExpandConstant('{sys}\nvcuda.dll');
+  Result := FileExists(NvSmiPath);
 end;
 
 // Download VC++ Redistributable if needed
@@ -109,4 +124,3 @@ begin
       '', SW_HIDE, ewNoWait, ResultCode);
   end;
 end;
-

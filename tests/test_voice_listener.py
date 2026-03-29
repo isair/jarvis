@@ -286,25 +286,26 @@ class TestWindowsCudaDetection:
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
             mock_sys.platform = "win32"
-            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
-                        with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+            with patch("jarvis.listening.listener._setup_nvidia_dll_path"):
+                with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                    with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                        with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                            with patch("jarvis.listening.listener.sd") as mock_sd:
+                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                                mock_sd.InputStream.side_effect = Exception("Stop test here")
 
-                            # All CUDA DLLs load successfully
-                            mock_ctypes = MagicMock()
-                            mock_ctypes.CDLL.return_value = MagicMock()
-                            with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
-                                from jarvis.listening.listener import VoiceListener
+                                # All CUDA DLLs load successfully
+                                mock_ctypes = MagicMock()
+                                mock_ctypes.CDLL.return_value = MagicMock()
+                                with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+                                    from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config()
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
-                                listener.run()
+                                    mock_cfg = self._create_mock_config()
+                                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                    listener.run()
 
-                                # Should use auto (not forced to cpu)
-                                assert mock_class.call_args_list[0][1]["device"] == "auto"
+                                    # Should use auto (not forced to cpu)
+                                    assert mock_class.call_args_list[0][1]["device"] == "auto"
 
     def test_cuda_not_available_forces_cpu(self):
         """When CUDA DLLs are missing, falls back to CPU mode."""
@@ -312,25 +313,64 @@ class TestWindowsCudaDetection:
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
             mock_sys.platform = "win32"
-            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
-                        with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+            with patch("jarvis.listening.listener._setup_nvidia_dll_path"):
+                with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                    with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                        with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                            with patch("jarvis.listening.listener.sd") as mock_sd:
+                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                                mock_sd.InputStream.side_effect = Exception("Stop test here")
 
-                            # All DLL probes fail
-                            mock_ctypes = MagicMock()
-                            mock_ctypes.CDLL.side_effect = OSError("not found")
-                            with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
-                                from jarvis.listening.listener import VoiceListener
+                                # All DLL probes fail
+                                mock_ctypes = MagicMock()
+                                mock_ctypes.CDLL.side_effect = OSError("not found")
+                                with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+                                    from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config()
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
-                                listener.run()
+                                    mock_cfg = self._create_mock_config()
+                                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                    listener.run()
 
-                                # Should be forced to cpu
-                                assert mock_class.call_args_list[0][1]["device"] == "cpu"
+                                    # Should be forced to cpu
+                                    assert mock_class.call_args_list[0][1]["device"] == "cpu"
+
+    def test_setup_nvidia_dll_path_adds_pip_package_dirs(self):
+        """_setup_nvidia_dll_path adds NVIDIA pip package bin dirs to PATH."""
+        import os
+        from jarvis.listening.listener import _setup_nvidia_dll_path
+
+        original_path = os.environ.get("PATH", "")
+
+        # Remove any existing nvidia paths so we can detect new additions
+        clean_path = os.pathsep.join(
+            p for p in original_path.split(os.pathsep)
+            if "nvidia" not in p.lower()
+        )
+        os.environ["PATH"] = clean_path
+
+        try:
+            _setup_nvidia_dll_path()
+            new_path = os.environ.get("PATH", "")
+
+            # Should have added nvidia DLL dirs (either real pip packages or nothing)
+            # If nvidia packages are installed, their bin dirs should be on PATH
+            try:
+                import nvidia.cublas
+                cublas_bin = os.path.join(nvidia.cublas.__path__[0], "bin")
+                if os.path.isdir(cublas_bin):
+                    assert cublas_bin in new_path
+            except ImportError:
+                pass  # nvidia packages not installed, nothing to add
+
+            try:
+                import nvidia.cudnn
+                cudnn_bin = os.path.join(nvidia.cudnn.__path__[0], "bin")
+                if os.path.isdir(cudnn_bin):
+                    assert cudnn_bin in new_path
+            except ImportError:
+                pass  # nvidia packages not installed, nothing to add
+        finally:
+            os.environ["PATH"] = original_path
 
 
 class TestLargeV3TurboFallback:

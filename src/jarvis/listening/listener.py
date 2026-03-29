@@ -72,6 +72,59 @@ def _get_mic_permission_hint() -> str:
     else:
         return "`pactl list sources` or audio settings for your desktop environment"
 
+def _setup_nvidia_dll_path() -> None:
+    """Add NVIDIA CUDA DLL directories to PATH on Windows.
+
+    The pip packages nvidia-cublas-cu12 and nvidia-cudnn-cu12 install DLLs
+    under site-packages/nvidia/*/bin/ which isn't on PATH by default.
+    PyInstaller bundles place them in {app}/cuda/. This function finds
+    both locations and prepends them to PATH so ctypes.CDLL can find them.
+    """
+    import os
+
+    dirs_to_add = []
+
+    # 1. Check for NVIDIA pip packages in site-packages
+    try:
+        import nvidia.cublas  # type: ignore[import-untyped]
+        for pkg_path in nvidia.cublas.__path__:
+            bin_dir = os.path.join(pkg_path, "bin")
+            if os.path.isdir(bin_dir):
+                dirs_to_add.append(bin_dir)
+    except (ImportError, AttributeError):
+        pass
+
+    try:
+        import nvidia.cudnn  # type: ignore[import-untyped]
+        for pkg_path in nvidia.cudnn.__path__:
+            bin_dir = os.path.join(pkg_path, "bin")
+            if os.path.isdir(bin_dir):
+                dirs_to_add.append(bin_dir)
+    except (ImportError, AttributeError):
+        pass
+
+    # 2. Check for CUDA DLLs in app directory (installed by install_cuda.ps1)
+    # For frozen apps: check next to the executable (not _MEIPASS, since
+    # CUDA libs are downloaded post-install, not bundled in the archive)
+    if getattr(sys, "frozen", False):
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        app_dir = None
+
+    if app_dir:
+        cuda_dir = os.path.join(app_dir, "cuda")
+        if os.path.isdir(cuda_dir):
+            dirs_to_add.append(cuda_dir)
+
+    # 3. Prepend to PATH (must happen before ctypes.CDLL probes)
+    if dirs_to_add:
+        current_path = os.environ.get("PATH", "")
+        new_entries = os.pathsep.join(dirs_to_add)
+        os.environ["PATH"] = new_entries + os.pathsep + current_path
+        for d in dirs_to_add:
+            debug_log(f"added NVIDIA DLL path: {d}", "voice")
+
+
 try:
     if _is_apple_silicon():
         import mlx_whisper
@@ -1109,6 +1162,12 @@ class VoiceListener(threading.Thread):
             # model loading succeeded. We probe for the specific DLLs needed:
             # cuBLAS (cublas64_XX.dll) and cuDNN (cudnn_ops64_X.dll).
             if sys.platform == 'win32' and device in ("auto", "cuda"):
+                # First, ensure NVIDIA DLL directories are on PATH.
+                # pip packages (nvidia-cublas-cu12, nvidia-cudnn-cu12) install
+                # DLLs under site-packages/nvidia/*/bin/ which isn't on PATH
+                # by default. PyInstaller bundles put them in {app}/cuda/.
+                _setup_nvidia_dll_path()
+
                 cuda_available = False
                 missing_libs = []
                 try:
@@ -1149,7 +1208,7 @@ class VoiceListener(threading.Thread):
                     print("  ℹ️  CUDA not available, using CPU mode", flush=True)
                     if missing_libs:
                         print(f"     Missing: {', '.join(missing_libs)}", flush=True)
-                    print("  💡 Tip: Install NVIDIA CUDA toolkit + cuDNN for GPU acceleration", flush=True)
+                    print("  💡 Tip: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12", flush=True)
                     device = "cpu"
 
             # Build list of (device, compute_type) combinations to try

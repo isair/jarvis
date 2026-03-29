@@ -102,8 +102,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Install requirements but skip heavy optional packages (PyTorch, etc.)
-          # Filter out chatterbox-tts and mlx-whisper (heavy/platform-specific)
-          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper)' } | Set-Content requirements-desktop.txt
+          # Filter out chatterbox-tts, mlx-whisper, and nvidia-* (CUDA libs are
+          # downloaded by the installer on-demand, not bundled in the build)
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper|nvidia-)' } | Set-Content requirements-desktop.txt
           pip install -r requirements-desktop.txt
           pip install pyinstaller
 
