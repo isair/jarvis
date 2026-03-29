@@ -18,6 +18,7 @@ from desktop_app.setup_wizard import (
     should_show_setup_wizard,
     OllamaStatus,
 )
+from jarvis.config import DEFAULT_CHAT_MODEL
 from jarvis.utils.location import (
     get_location_context,
     is_location_available,
@@ -390,7 +391,7 @@ class TestModelOptions:
         from desktop_app.setup_wizard import ModelsPage
 
         assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
-        assert "gemma3n" in ModelsPage.MODEL_OPTIONS
+        assert DEFAULT_CHAT_MODEL in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):
         """Each model option has required info fields."""
@@ -411,78 +412,87 @@ class TestModelOptions:
         assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
 
 
-class TestGemma3nDefaultModelDetection:
-    """Regression tests: gemma3n is the default small model and must be detected as missing
-    when not installed, triggering the setup wizard install prompt."""
+class TestDefaultModelDetection:
+    """Regression tests: the default small model must be detected as missing when not
+    installed, triggering the setup wizard install prompt.
 
-    def test_gemma3n_missing_detected_in_status(self):
-        """When gemma3n is not installed, check_ollama_status reports it as missing."""
+    Uses DEFAULT_CHAT_MODEL from config so these tests stay valid when the default
+    model changes — no hardcoded model names here.
+    """
+
+    EMBED_MODEL = "nomic-embed-text"
+
+    def test_small_model_missing_detected_in_status(self):
+        """When the default chat model is not installed, check_ollama_status reports it as missing."""
+        required = [DEFAULT_CHAT_MODEL, self.EMBED_MODEL]
         with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
             with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
-                with patch("desktop_app.setup_wizard.get_required_models", return_value=["gemma3n", "nomic-embed-text"]):
-                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=["nomic-embed-text"]):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=required):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=[self.EMBED_MODEL]):
                         status = check_ollama_status()
 
-                        assert "gemma3n" in status.missing_models
+                        assert DEFAULT_CHAT_MODEL in status.missing_models
                         assert status.is_fully_setup is False
 
-    def test_gemma3n_installed_not_in_missing(self):
-        """When gemma3n is installed, check_ollama_status does not list it as missing."""
+    def test_small_model_installed_not_in_missing(self):
+        """When the default chat model is installed, check_ollama_status does not list it as missing."""
+        required = [DEFAULT_CHAT_MODEL, self.EMBED_MODEL]
         with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
             with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
-                with patch("desktop_app.setup_wizard.get_required_models", return_value=["gemma3n", "nomic-embed-text"]):
-                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=["gemma3n", "nomic-embed-text"]):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=required):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=required):
                         status = check_ollama_status()
 
                         assert status.missing_models == []
                         assert status.is_fully_setup is True
 
-    def test_wizard_shown_when_gemma3n_missing(self):
-        """should_show_setup_wizard returns True when gemma3n is not installed."""
+    def test_wizard_shown_when_small_model_missing(self):
+        """should_show_setup_wizard returns True when the default chat model is not installed."""
         mock_status = OllamaStatus(
             is_cli_installed=True,
             cli_path="/usr/bin/ollama",
             is_server_running=True,
             server_version="0.3.0",
-            installed_models=["nomic-embed-text"],
-            missing_models=["gemma3n"],
+            installed_models=[self.EMBED_MODEL],
+            missing_models=[DEFAULT_CHAT_MODEL],
         )
 
         with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is True
 
-    def test_wizard_not_shown_when_gemma3n_installed(self):
-        """should_show_setup_wizard returns False when gemma3n is present."""
+    def test_wizard_not_shown_when_small_model_installed(self):
+        """should_show_setup_wizard returns False when the default chat model is present."""
         mock_status = OllamaStatus(
             is_cli_installed=True,
             cli_path="/usr/bin/ollama",
             is_server_running=True,
             server_version="0.3.0",
-            installed_models=["gemma3n", "nomic-embed-text"],
+            installed_models=[DEFAULT_CHAT_MODEL, self.EMBED_MODEL],
             missing_models=[],
         )
 
         with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
             assert should_show_setup_wizard() is False
 
-    def test_gemma3n_latest_tag_stripped_before_comparison(self):
+    def test_latest_tag_stripped_before_comparison(self):
         """Ollama appends ':latest' to model names; the status check must strip it so
-        gemma3n:latest is not incorrectly treated as missing when gemma3n is required."""
+        '<model>:latest' is not incorrectly treated as missing when '<model>' is required."""
+        required = [DEFAULT_CHAT_MODEL, self.EMBED_MODEL]
         with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
             with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
-                with patch("desktop_app.setup_wizard.get_required_models", return_value=["gemma3n", "nomic-embed-text"]):
-                    # Simulate Ollama reporting "gemma3n:latest" in its model list
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=required):
+                    # Simulate Ollama reporting "<model>:latest" in its model list
                     mock_result = MagicMock()
                     mock_result.returncode = 0
                     mock_result.stdout = (
                         "NAME                       ID              SIZE      MODIFIED\n"
-                        "gemma3n:latest             abc123          2.0 GB    1 day ago\n"
-                        "nomic-embed-text:latest    def456          274 MB    1 week ago\n"
+                        f"{DEFAULT_CHAT_MODEL}:latest    abc123          2.0 GB    1 day ago\n"
+                        f"{self.EMBED_MODEL}:latest    def456          274 MB    1 week ago\n"
                     )
                     with patch("subprocess.run", return_value=mock_result):
                         status = check_ollama_status()
 
-                        assert "gemma3n" not in status.missing_models
+                        assert DEFAULT_CHAT_MODEL not in status.missing_models
                         assert status.is_fully_setup is True
 
 
