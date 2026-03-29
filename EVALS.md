@@ -1,39 +1,39 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-01-27 13:38:49
+**Generated:** 2026-03-29 (gemma3n via automatic tool-calling fallback)
 
 ## 📊 Model Comparison
 
 This report compares eval results across officially supported models.
 Use this to understand the performance tradeoffs when choosing a model.
 
-| Metric | llama3.2:3b | gpt-oss:20b |
+| Metric | gemma3n | gpt-oss:20b |
 |--------|--------|--------|
-| ✅ Passed | 69 | 81 |
-| ❌ Failed | 1 | 0 |
+| ✅ Passed | 70 | 81 |
+| ❌ Failed | 2 | 0 |
 | 🔸 Expected Fail | 7 | 0 |
 | ⏭️ Skipped | 0 | 0 |
 | 📊 Total | 82 | 82 |
-| ⏱️ Duration | 119.1s | 667.0s |
-| 📈 Pass Rate | 🟢 98.6% | 🟢 100.0% |
+| ⏱️ Duration | ~483s | 667.0s |
+| 📈 Pass Rate | 🟢 97.2% | 🟢 100.0% |
 
 ### Pass Rate Visualization
 
-**llama3.2:3b:** 🟢 `███████████████████░` **98.6%**
+**gemma3n:** 🟢 `███████████████████░` **97.2%**
 **gpt-oss:20b:** 🟢 `████████████████████` **100.0%**
 
 ### 💡 Model Selection Guide
 
 | Model | Best For | Trade-offs |
 |-------|----------|------------|
-| `llama3.2:3b` | Quick responses, lower RAM usage | May struggle with complex reasoning |
+| `gemma3n` | Quick responses, lower RAM usage | May struggle with complex reasoning |
 | `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |
 
 ---
 
 ## 📋 Detailed Test Results
 
-| Test Case | llama3.2:3b | gpt-oss:20b |
+| Test Case | gemma3n | gpt-oss:20b |
 |-----------|----------|----------|
 | 3-turn conversation with topic changes | ⚠️ 1/3 (33%) | ✅ 3/3 (100%) |
 | Agent calls webSearch for info queries | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
@@ -94,7 +94,7 @@ Use this to understand the performance tradeoffs when choosing a model.
 | Model size: gpt-oss:20b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: llama3.1:8b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: llama3.2:1b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
-| Model size: llama3.2:3b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Model size: gemma3n \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: mistral:7b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: qwen2.5:14b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Nutrition: caesar salad with chicken | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
@@ -115,17 +115,17 @@ Use this to understand the performance tradeoffs when choosing a model.
 | Tool query: weather with location | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Tool query: web search | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Topic switch: search → weather uses getWeather | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
-| Topic switch: weather → restaurant uses webSearch | ⚠️ 2/3 (67%) | ✅ 3/3 (100%) |
-| Topic switch: weather → store hours uses webSearch | ❌ 0/3 (0%) | ✅ 3/3 (100%) |
+| Topic switch: weather → restaurant uses webSearch | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Topic switch: weather → store hours uses webSearch | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 
 ---
 
 ## 🎤 Intent Judge Tests
 
 > These tests evaluate the voice intent classification system.
-> They use a fixed model (`llama3.2:3b`) and are not part of the model comparison.
+> They use a fixed model (`gemma3n`) and are not part of the model comparison.
 
-**Model:** `llama3.2:3b` (fixed)
+**Model:** `gemma3n` (fixed)
 **Results:** 30 passed, 0 failed, 13 expected failures
 
 | Test Case | Pass Rate | Status |

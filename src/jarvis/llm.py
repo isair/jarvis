@@ -6,6 +6,11 @@ import requests
 import json
 
 
+class ToolsNotSupportedError(Exception):
+    """Raised when the model returns HTTP 400 because native tool calling is not supported."""
+    pass
+
+
 def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0) -> Optional[str]:
     """Direct LLM call without temporal context, location, or other ask_coach features."""
     messages = [
@@ -185,6 +190,15 @@ def chat_with_messages(
         return None
     except requests.exceptions.ConnectionError as e:
         print(f"  ❌ LLM connection error: {e}", flush=True)
+        return None
+    except requests.exceptions.HTTPError as e:
+        # Raise a specific error when the model rejects the tools parameter (HTTP 400).
+        # This lets the caller fall back to text-based tool calling automatically.
+        if e.response is not None and e.response.status_code == 400 and tools:
+            raise ToolsNotSupportedError(
+                f"Model {chat_model!r} returned HTTP 400 — native tools API not supported"
+            )
+        print(f"  ❌ LLM HTTP error: {e}", flush=True)
         return None
     except Exception as e:
         print(f"  ❌ LLM error: {e}", flush=True)

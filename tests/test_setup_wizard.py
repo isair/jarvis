@@ -18,6 +18,7 @@ from desktop_app.setup_wizard import (
     should_show_setup_wizard,
     OllamaStatus,
 )
+from jarvis.config import DEFAULT_CHAT_MODEL
 from jarvis.utils.location import (
     get_location_context,
     is_location_available,
@@ -101,7 +102,7 @@ class TestGetRequiredModels:
         mock_settings = MagicMock()
         mock_settings.ollama_chat_model = "llama2:7b"
         mock_settings.ollama_embed_model = "nomic-embed-text"
-        mock_settings.intent_judge_model = "llama3.2:3b"
+        mock_settings.intent_judge_model = "gemma3n"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
@@ -114,7 +115,7 @@ class TestGetRequiredModels:
         mock_settings = MagicMock()
         mock_settings.ollama_chat_model = "gpt-oss:20b"  # Different from intent judge
         mock_settings.ollama_embed_model = "nomic-embed-text"
-        mock_settings.intent_judge_model = "llama3.2:3b"
+        mock_settings.intent_judge_model = "gemma3n"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
@@ -123,7 +124,7 @@ class TestGetRequiredModels:
             assert len(models) == 3
             assert "gpt-oss:20b" in models
             assert "nomic-embed-text" in models
-            assert "llama3.2:3b" in models  # Intent judge model is always required
+            assert "gemma3n" in models  # Intent judge model is always required
 
     def test_returns_defaults_on_config_error(self):
         """Returns default models if config can't be loaded."""
@@ -131,7 +132,7 @@ class TestGetRequiredModels:
             models = get_required_models()
 
             assert len(models) == 2
-            assert "llama3.2:3b" in models
+            assert "gemma3n" in models
             assert "nomic-embed-text" in models
 
 
@@ -390,7 +391,7 @@ class TestModelOptions:
         from desktop_app.setup_wizard import ModelsPage
 
         assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
-        assert "llama3.2:3b" in ModelsPage.MODEL_OPTIONS
+        assert DEFAULT_CHAT_MODEL in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):
         """Each model option has required info fields."""
@@ -409,6 +410,90 @@ class TestModelOptions:
 
         # Verify they're the same object (not just equal values)
         assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
+
+
+class TestDefaultModelDetection:
+    """Regression tests: the default small model must be detected as missing when not
+    installed, triggering the setup wizard install prompt.
+
+    Uses DEFAULT_CHAT_MODEL from config so these tests stay valid when the default
+    model changes — no hardcoded model names here.
+    """
+
+    EMBED_MODEL = "nomic-embed-text"
+
+    def test_small_model_missing_detected_in_status(self):
+        """When the default chat model is not installed, check_ollama_status reports it as missing."""
+        required = [DEFAULT_CHAT_MODEL, self.EMBED_MODEL]
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=required):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=[self.EMBED_MODEL]):
+                        status = check_ollama_status()
+
+                        assert DEFAULT_CHAT_MODEL in status.missing_models
+                        assert status.is_fully_setup is False
+
+    def test_small_model_installed_not_in_missing(self):
+        """When the default chat model is installed, check_ollama_status does not list it as missing."""
+        required = [DEFAULT_CHAT_MODEL, self.EMBED_MODEL]
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=required):
+                    with patch("desktop_app.setup_wizard.check_installed_models", return_value=required):
+                        status = check_ollama_status()
+
+                        assert status.missing_models == []
+                        assert status.is_fully_setup is True
+
+    def test_wizard_shown_when_small_model_missing(self):
+        """should_show_setup_wizard returns True when the default chat model is not installed."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.3.0",
+            installed_models=[self.EMBED_MODEL],
+            missing_models=[DEFAULT_CHAT_MODEL],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard() is True
+
+    def test_wizard_not_shown_when_small_model_installed(self):
+        """should_show_setup_wizard returns False when the default chat model is present."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.3.0",
+            installed_models=[DEFAULT_CHAT_MODEL, self.EMBED_MODEL],
+            missing_models=[],
+        )
+
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard() is False
+
+    def test_latest_tag_stripped_before_comparison(self):
+        """Ollama appends ':latest' to model names; the status check must strip it so
+        '<model>:latest' is not incorrectly treated as missing when '<model>' is required."""
+        required = [DEFAULT_CHAT_MODEL, self.EMBED_MODEL]
+        with patch("desktop_app.setup_wizard.check_ollama_cli", return_value=(True, "/usr/bin/ollama")):
+            with patch("desktop_app.setup_wizard.check_ollama_server", return_value=(True, "0.3.0")):
+                with patch("desktop_app.setup_wizard.get_required_models", return_value=required):
+                    # Simulate Ollama reporting "<model>:latest" in its model list
+                    mock_result = MagicMock()
+                    mock_result.returncode = 0
+                    mock_result.stdout = (
+                        "NAME                       ID              SIZE      MODIFIED\n"
+                        f"{DEFAULT_CHAT_MODEL}:latest    abc123          2.0 GB    1 day ago\n"
+                        f"{self.EMBED_MODEL}:latest    def456          274 MB    1 week ago\n"
+                    )
+                    with patch("subprocess.run", return_value=mock_result):
+                        status = check_ollama_status()
+
+                        assert DEFAULT_CHAT_MODEL not in status.missing_models
+                        assert status.is_fully_setup is True
 
 
 class TestWhisperModelOptions:

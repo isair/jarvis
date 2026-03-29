@@ -23,7 +23,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # Officially supported models (from config.py)
-MODEL_SMALL="llama3.2:3b"
+MODEL_SMALL="gemma3n"
 MODEL_LARGE="gpt-oss:20b"
 
 echo ""

@@ -19,7 +19,7 @@ class TestIntentJudgeConfig:
         """Default config has reasonable values."""
         config = IntentJudgeConfig()
         assert config.assistant_name == "Jarvis"
-        assert config.model == "llama3.2:3b"
+        assert config.model == "gemma3n"
         assert config.timeout_sec == 3.0
         assert config.aliases == []
 
@@ -257,7 +257,7 @@ class TestCreateIntentJudge:
         """Creates judge from config with defaults."""
         mock_cfg = MagicMock()
         mock_cfg.intent_judge_enabled = True
-        mock_cfg.intent_judge_model = "llama3.2:3b"
+        mock_cfg.intent_judge_model = "gemma3n"
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.intent_judge_timeout_sec = 3.0
         mock_cfg.wake_word = "jarvis"
@@ -266,12 +266,12 @@ class TestCreateIntentJudge:
         judge = create_intent_judge(mock_cfg)
 
         assert judge is not None
-        assert judge.config.model == "llama3.2:3b"
+        assert judge.config.model == "gemma3n"
 
     def test_always_returns_judge_when_requests_available(self):
         """Always returns judge when requests library is available (per spec)."""
         mock_cfg = MagicMock()
-        mock_cfg.intent_judge_model = "llama3.2:3b"
+        mock_cfg.intent_judge_model = "gemma3n"
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.intent_judge_timeout_sec = 3.0
         mock_cfg.wake_word = "jarvis"

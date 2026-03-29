@@ -60,7 +60,7 @@ GREETING_TEST_CASES = [
     pytest.param("good night", False, id="Greeting: good night"),
 ]
 
-# User instructions about behavior - should NOT trigger tools
+# User instructions about behaviour - should NOT trigger tools
 USER_INSTRUCTION_TEST_CASES = [
     pytest.param("always use Celsius when telling me temperatures", False, id="Instruction: use Celsius"),
     pytest.param("remember to always tell me things in Celsius", False, id="Instruction: remember Celsius"),
@@ -101,40 +101,7 @@ class ToolCallCapture:
 
 
 # =============================================================================
-# Model Size Detection Tests
-# =============================================================================
-
-class TestModelSizeDetection:
-    """Tests for model size detection logic."""
-
-    @pytest.mark.eval
-    @pytest.mark.parametrize("model_name,expected_size", [
-        pytest.param("llama3.2:3b", "SMALL", id="Model size: llama3.2:3b → SMALL"),
-        pytest.param("llama3.2:1b", "SMALL", id="Model size: llama3.2:1b → SMALL"),
-        pytest.param("mistral:7b", "SMALL", id="Model size: mistral:7b → SMALL"),
-        pytest.param("gpt-oss:20b", "LARGE", id="Model size: gpt-oss:20b → LARGE"),
-        pytest.param("llama3.1:8b", "LARGE", id="Model size: llama3.1:8b → LARGE"),
-        pytest.param("qwen2.5:14b", "LARGE", id="Model size: qwen2.5:14b → LARGE"),
-        pytest.param("gemma2:27b", "LARGE", id="Model size: gemma2:27b → LARGE"),
-        pytest.param(None, "LARGE", id="Model size: None → LARGE (default)"),
-        pytest.param("", "LARGE", id="Model size: empty → LARGE (default)"),
-    ])
-    def test_model_size_detection(self, model_name: str, expected_size: str):
-        """Verify model size is correctly detected from model name."""
-        from jarvis.reply.prompts import detect_model_size, ModelSize
-
-        result = detect_model_size(model_name)
-        expected = ModelSize.SMALL if expected_size == "SMALL" else ModelSize.LARGE
-
-        print(f"\n  Model: {model_name}")
-        print(f"  Detected: {result.value}")
-        print(f"  Expected: {expected.value}")
-
-        assert result == expected, f"Expected {expected_size} for model '{model_name}'"
-
-
-# =============================================================================
-# Greeting Behavior Tests (Mocked)
+# Greeting Behaviour Tests (Mocked)
 # =============================================================================
 
 class TestGreetingNoTools:
@@ -158,7 +125,7 @@ class TestGreetingNoTools:
         from jarvis.reply.engine import run_reply_engine
 
         # Use small model to test conservative prompts
-        mock_config.ollama_chat_model = "llama3.2:3b"
+        mock_config.ollama_chat_model = "gemma3n"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
@@ -201,7 +168,7 @@ class TestGreetingNoTools:
         from jarvis.reply.engine import run_reply_engine
 
         # Use small model
-        mock_config.ollama_chat_model = "llama3.2:3b"
+        mock_config.ollama_chat_model = "gemma3n"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
@@ -247,11 +214,9 @@ class TestGreetingNoTools:
 # =============================================================================
 
 def _is_small_model(model_name: str) -> bool:
-    """Check if model is a small model (1b-7b)."""
-    if not model_name:
-        return False
-    name_lower = model_name.lower()
-    return any(p in name_lower for p in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+    """Check if model is classified as small by the model size detector."""
+    from jarvis.reply.prompts import detect_model_size, ModelSize
+    return detect_model_size(model_name) == ModelSize.SMALL
 
 
 class TestGreetingNoToolsLive:
@@ -262,7 +227,7 @@ class TestGreetingNoToolsLive:
 
     NOTE: Small models (1b-7b) may still incorrectly call tools for greetings
     despite explicit prompt constraints. This is a fundamental limitation of
-    small model reasoning capacity. These tests document this behavior.
+    small model reasoning capacity. These tests document this behaviour.
     """
 
     @pytest.mark.eval
@@ -343,7 +308,7 @@ class TestGreetingNoToolsLive:
         eval_db,
         eval_dialogue_memory
     ):
-        """Live test: user instructions about behavior should not trigger tool calls."""
+        """Live test: user instructions about behaviour should not trigger tool calls."""
         from jarvis.reply.engine import run_reply_engine
         from helpers import JUDGE_MODEL
 

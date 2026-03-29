@@ -12,10 +12,11 @@ from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOO
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
-from ..llm import chat_with_messages, extract_text_from_response
+from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from ..utils.location import get_location_context
@@ -166,6 +167,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Step 7: Messages-based loop with tool handling
     # Detect model size for prompt selection
     model_size = detect_model_size(cfg.ollama_chat_model)
+    # Start with native tool calling. If the model returns HTTP 400 (tools not supported),
+    # we automatically switch to text-based tool calling (markdown fences in system prompt).
+    use_text_tools = False
     prompts = get_system_prompts(model_size)
     debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model}", "planning")
 
@@ -189,8 +193,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if conversation_context:
             guidance.append("\nRelevant conversation history:\n" + conversation_context)
 
-        # Note: tools_desc is NOT included here because tools are passed via the native tools API parameter
-        # Including tools in both places confuses the model and causes it to not use tools properly
+        if use_text_tools and tools_desc:
+            # Text-based tool calling fallback: model returned HTTP 400 for native tools API,
+            # so we inject tool descriptions as plain text and expect markdown fence responses.
+            guidance.append("\n" + tools_desc)
+            guidance.append(
+                '\nWhen calling a tool output ONLY a markdown code fence tagged `tool_call`:\n'
+                '```tool_call\n{"name": "toolName", "arguments": {...}}\n```\n'
+                'Output nothing else on that turn.'
+            )
+        # else: tools are passed via the native tools API parameter — do not include tools_desc
+        # here as well, since that confuses the model and causes it to not use tools properly.
 
         return "\n".join(guidance)
 
@@ -235,8 +248,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         if name:
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
-                # Note: Text-based fallback parsing was removed since all supported models
-                # (gpt-oss:20b, llama3.2:3b) use native tool calling via the tools API parameter
+                # Second try: markdown fence tool call for the text-based fallback path
+                # (used when the model returned HTTP 400 for the native tools API)
+                content_field = msg.get("content", "") or ""
+                fence_match = re.search(
+                    r"```tool_call\s*\n({.+?})\s*\n```",
+                    content_field,
+                    re.DOTALL,
+                )
+                if fence_match:
+                    data = json.loads(fence_match.group(1).strip())
+                    name = str(data.get("name", "")).strip()
+                    args = data.get("arguments", data.get("args", {}))
+                    if name:
+                        return name, (args if isinstance(args, dict) else {}), f"call_{uuid.uuid4().hex[:8]}"
 
         except Exception:
             pass
@@ -341,7 +366,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         """
         Handle responses where the model outputs JSON instead of natural language.
 
-        Some smaller models (e.g., llama3.2:3b) occasionally output JSON-structured
+        Some smaller models (e.g., gemma3n) occasionally output JSON-structured
         responses instead of plain text. This function extracts readable text from
         common JSON patterns.
 
@@ -409,16 +434,37 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 has_tool_calls = " (has tool_calls)" if msg.get("tool_calls") else ""
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
 
-        # Send messages to Ollama
-        # Send messages to Ollama with native tool calling support
-        llm_resp = chat_with_messages(
-            base_url=cfg.ollama_base_url,
-            chat_model=cfg.ollama_chat_model,
-            messages=messages,
-            timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
-            extra_options=None,
-            tools=tools_json_schema,
-        )
+        # Send messages to Ollama — try native tool calling first, fall back to text-based
+        # if the model returns HTTP 400 (native tools API not supported).
+        try:
+            llm_resp = chat_with_messages(
+                base_url=cfg.ollama_base_url,
+                chat_model=cfg.ollama_chat_model,
+                messages=messages,
+                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                extra_options=None,
+                tools=None if use_text_tools else tools_json_schema,
+            )
+        except ToolsNotSupportedError:
+            # Model doesn't support the native tools API — switch to text-based tool calling
+            # for the rest of this session and rebuild the system message to include tool
+            # descriptions as plain text with markdown fence instructions.
+            debug_log(
+                f"⚠️ Native tools API not supported by {cfg.ollama_chat_model!r}, "
+                "falling back to text-based tool calling (markdown fences)",
+                "planning",
+            )
+            use_text_tools = True
+            messages[0] = {"role": "system", "content": _build_initial_system_message()}
+            _update_system_message_with_context(messages)
+            llm_resp = chat_with_messages(
+                base_url=cfg.ollama_base_url,
+                chat_model=cfg.ollama_chat_model,
+                messages=messages,
+                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                extra_options=None,
+                tools=None,
+            )
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break
@@ -517,12 +563,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             if signature in recent_tool_signatures:
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
-                # Use tool response to guide the model without breaking native tool calling
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."
-                })
+                if use_text_tools:
+                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You already called this tool with these arguments. Use the results from the previous tool call to answer the user."})
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."})
                 continue
 
             # Check if we already have results for this type of tool (prevents tool call loops)
@@ -532,11 +576,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
             if duplicate_tool_count >= 2:
                 debug_log(f"  ⚠️ Too many {tool_name} calls ({duplicate_tool_count}) - returning guidance", "planning")
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."
-                })
+                if use_text_tools:
+                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You have already called this tool {duplicate_tool_count} times. Use the results from those calls to answer the user's question."})
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."})
                 continue
 
             # Execute tool
@@ -573,12 +616,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             # Append tool result
             if result.reply_text:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,  # Use proper tool_call_id from LLM
-                    "tool_name": tool_name,  # Include tool_name for duplicate detection
-                    "content": result.reply_text
-                })
+                if use_text_tools:
+                    messages.append({
+                        "role": "user",
+                        "content": f"[Tool result: {tool_name}]\n{result.reply_text}",
+                        "tool_name": tool_name,  # kept for duplicate detection
+                    })
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,  # Include tool_name for duplicate detection
+                        "content": result.reply_text,
+                    })
                 debug_log(f"    ✅ tool result appended ({len(result.reply_text)} chars)", "planning")
 
                 # Note: We don't add a guidance system message here because adding system messages
@@ -594,10 +644,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     pass
             else:
                 err = result.error_message or "(no result)"
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,  # Use proper tool_call_id from LLM
-                    "content": f"Error: {err}"
+                if use_text_tools:
+                    messages.append({"role": "user", "content": f"[Tool error: {tool_name}] {err}"})
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Error: {err}"
                 })
                 debug_log(f"    ❌ tool error: {err}", "planning")
             # Loop continues to let the agent produce the next step/final reply
