@@ -1103,18 +1103,53 @@ class VoiceListener(threading.Thread):
             device = getattr(self.cfg, "whisper_device", "auto")
             compute = getattr(self.cfg, "whisper_compute_type", "int8")
 
-            # On Windows, check if CUDA is actually available before trying to use it
-            # faster-whisper lazily loads CUDA libraries during transcription, causing
-            # runtime errors even if model loading succeeded
+            # On Windows, check if CUDA runtime libraries are actually available
+            # before trying to use them. faster-whisper/CTranslate2 lazily loads
+            # CUDA libraries during transcription, causing runtime errors even if
+            # model loading succeeded. We probe for the specific DLLs needed:
+            # cuBLAS (cublas64_XX.dll) and cuDNN (cudnn_ops64_X.dll).
             if sys.platform == 'win32' and device in ("auto", "cuda"):
+                cuda_available = False
+                missing_libs = []
                 try:
                     import ctypes
-                    ctypes.CDLL("cublas64_12.dll")
-                    debug_log("CUDA libraries found, GPU acceleration available", "voice")
-                except OSError:
-                    debug_log("CUDA libraries not found, forcing CPU mode", "voice")
+
+                    # Check cuBLAS (required)
+                    cublas_found = False
+                    for ver in range(20, 10, -1):
+                        try:
+                            ctypes.CDLL(f"cublas64_{ver}.dll")
+                            cublas_found = True
+                            debug_log(f"cuBLAS found (cublas64_{ver}.dll)", "voice")
+                            break
+                        except OSError:
+                            continue
+                    if not cublas_found:
+                        missing_libs.append("cuBLAS")
+
+                    # Check cuDNN (required for transcription)
+                    cudnn_found = False
+                    for ver in range(15, 7, -1):
+                        try:
+                            ctypes.CDLL(f"cudnn_ops64_{ver}.dll")
+                            cudnn_found = True
+                            debug_log(f"cuDNN found (cudnn_ops64_{ver}.dll)", "voice")
+                            break
+                        except OSError:
+                            continue
+                    if not cudnn_found:
+                        missing_libs.append("cuDNN")
+
+                    cuda_available = cublas_found and cudnn_found
+                except Exception as e:
+                    debug_log(f"CUDA library probe failed: {e}", "voice")
+
+                if not cuda_available:
+                    debug_log(f"CUDA libraries missing: {missing_libs}, forcing CPU mode", "voice")
                     print("  ℹ️  CUDA not available, using CPU mode", flush=True)
-                    print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+                    if missing_libs:
+                        print(f"     Missing: {', '.join(missing_libs)}", flush=True)
+                    print("  💡 Tip: Install NVIDIA CUDA toolkit + cuDNN for GPU acceleration", flush=True)
                     device = "cpu"
 
             # Build list of (device, compute_type) combinations to try

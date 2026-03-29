@@ -257,6 +257,82 @@ class TestWhisperComputeTypeFallback:
                             assert listener.model is None
 
 
+class TestWindowsCudaDetection:
+    """Tests for Windows CUDA detection logic."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 6.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_cuda_detected_when_all_dlls_present(self):
+        """When cuBLAS and cuDNN DLLs are found, GPU mode is used."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            # All CUDA DLLs load successfully
+                            mock_ctypes = MagicMock()
+                            mock_ctypes.CDLL.return_value = MagicMock()
+                            with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_cfg = self._create_mock_config()
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener.run()
+
+                                # Should use auto (not forced to cpu)
+                                assert mock_class.call_args_list[0][1]["device"] == "auto"
+
+    def test_cuda_not_available_forces_cpu(self):
+        """When CUDA DLLs are missing, falls back to CPU mode."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            # All DLL probes fail
+                            mock_ctypes = MagicMock()
+                            mock_ctypes.CDLL.side_effect = OSError("not found")
+                            with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_cfg = self._create_mock_config()
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener.run()
+
+                                # Should be forced to cpu
+                                assert mock_class.call_args_list[0][1]["device"] == "cpu"
+
+
 class TestLargeV3TurboFallback:
     """Tests for large-v3-turbo runtime fallback when faster-whisper is too old."""
 
