@@ -116,12 +116,19 @@ def _setup_nvidia_dll_path() -> None:
         if os.path.isdir(cuda_dir):
             dirs_to_add.append(cuda_dir)
 
-    # 3. Prepend to PATH (must happen before ctypes.CDLL probes)
+    # 3. Register DLL directories (must happen before ctypes.CDLL probes)
+    # Use both os.add_dll_directory (for ctypes.CDLL) and PATH (for
+    # subprocess/child processes). On Windows, PATH changes after process
+    # start don't affect ctypes.CDLL search — add_dll_directory is needed.
     if dirs_to_add:
         current_path = os.environ.get("PATH", "")
         new_entries = os.pathsep.join(dirs_to_add)
         os.environ["PATH"] = new_entries + os.pathsep + current_path
         for d in dirs_to_add:
+            try:
+                os.add_dll_directory(d)
+            except (OSError, AttributeError):
+                pass
             debug_log(f"added NVIDIA DLL path: {d}", "voice")
 
 
@@ -1208,7 +1215,7 @@ class VoiceListener(threading.Thread):
                     print("  ℹ️  CUDA not available, using CPU mode", flush=True)
                     if missing_libs:
                         print(f"     Missing: {', '.join(missing_libs)}", flush=True)
-                    print("  💡 Tip: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12", flush=True)
+                    print("  💡 For GPU acceleration, reinstall with the CUDA option enabled", flush=True)
                     device = "cpu"
 
             # Build list of (device, compute_type) combinations to try
