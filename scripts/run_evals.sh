@@ -23,7 +23,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # Officially supported models (from config.py)
-MODEL_SMALL="gemma3n"
+MODEL_SMALL="jarvis-gemma3n-tools"
 MODEL_LARGE="gpt-oss:20b"
 
 echo ""

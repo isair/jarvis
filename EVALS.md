@@ -7,7 +7,7 @@
 This report compares eval results across officially supported models.
 Use this to understand the performance tradeoffs when choosing a model.
 
-| Metric | gemma3n | gpt-oss:20b |
+| Metric | jarvis-gemma3n-tools | gpt-oss:20b |
 |--------|--------|--------|
 | ✅ Passed | 69 | 81 |
 | ❌ Failed | 1 | 0 |
@@ -19,21 +19,21 @@ Use this to understand the performance tradeoffs when choosing a model.
 
 ### Pass Rate Visualization
 
-**gemma3n:** 🟢 `███████████████████░` **98.6%**
+**jarvis-gemma3n-tools:** 🟢 `███████████████████░` **98.6%**
 **gpt-oss:20b:** 🟢 `████████████████████` **100.0%**
 
 ### 💡 Model Selection Guide
 
 | Model | Best For | Trade-offs |
 |-------|----------|------------|
-| `gemma3n` | Quick responses, lower RAM usage | May struggle with complex reasoning |
+| `jarvis-gemma3n-tools` | Quick responses, lower RAM usage | May struggle with complex reasoning |
 | `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |
 
 ---
 
 ## 📋 Detailed Test Results
 
-| Test Case | gemma3n | gpt-oss:20b |
+| Test Case | jarvis-gemma3n-tools | gpt-oss:20b |
 |-----------|----------|----------|
 | 3-turn conversation with topic changes | ⚠️ 1/3 (33%) | ✅ 3/3 (100%) |
 | Agent calls webSearch for info queries | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
@@ -94,7 +94,7 @@ Use this to understand the performance tradeoffs when choosing a model.
 | Model size: gpt-oss:20b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: llama3.1:8b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: llama3.2:1b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
-| Model size: gemma3n \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Model size: jarvis-gemma3n-tools \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: mistral:7b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: qwen2.5:14b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Nutrition: caesar salad with chicken | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
@@ -123,9 +123,9 @@ Use this to understand the performance tradeoffs when choosing a model.
 ## 🎤 Intent Judge Tests
 
 > These tests evaluate the voice intent classification system.
-> They use a fixed model (`gemma3n`) and are not part of the model comparison.
+> They use a fixed model (`jarvis-gemma3n-tools`) and are not part of the model comparison.
 
-**Model:** `gemma3n` (fixed)
+**Model:** `jarvis-gemma3n-tools` (fixed)
 **Results:** 30 passed, 0 failed, 13 expected failures
 
 | Test Case | Pass Rate | Status |

@@ -205,7 +205,7 @@ def is_intent_judge_test(result: TestResult) -> bool:
     """Check if a test is an intent judge test (uses fixed model, not configurable).
 
     Intent judge tests belong to specific test classes that use a fixed model
-    (gemma3n) for the intent classification system. These shouldn't be
+    (jarvis-gemma3n-tools) for the intent classification system. These shouldn't be
     compared across models since they always use the same model.
     """
     # Classes that contain intent judge tests
@@ -237,7 +237,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     now = datetime.now()
 
     # Separate intent judge tests from main LLM tests
-    # Intent judge tests use fixed model (gemma3n), so only show once
+    # Intent judge tests use fixed model (jarvis-gemma3n-tools), so only show once
     intent_judge_results = {}
     main_llm_tests = set()
 
@@ -348,7 +348,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("")
     lines.append("| Model | Best For | Trade-offs |")
     lines.append("|-------|----------|------------|")
-    lines.append("| `gemma3n` | Quick responses, lower RAM usage | May struggle with complex reasoning |")
+    lines.append("| `jarvis-gemma3n-tools` | Quick responses, lower RAM usage | May struggle with complex reasoning |")
     lines.append("| `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |")
     lines.append("")
 
@@ -402,7 +402,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         lines.append("## 🎤 Intent Judge Tests")
         lines.append("")
         lines.append("> These tests evaluate the voice intent classification system.")
-        lines.append("> They use a fixed model (`gemma3n`) and are not part of the model comparison.")
+        lines.append("> They use a fixed model (`jarvis-gemma3n-tools`) and are not part of the model comparison.")
         lines.append("")
 
         # Calculate intent judge stats
@@ -411,7 +411,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         ij_xfailed = sum(1 for r in intent_judge_results.values() if r.outcome == "xfailed")
         ij_total = len(intent_judge_results)
 
-        lines.append(f"**Model:** `gemma3n` (fixed)")
+        lines.append(f"**Model:** `jarvis-gemma3n-tools` (fixed)")
         lines.append(f"**Results:** {ij_passed} passed, {ij_failed} failed, {ij_xfailed} expected failures")
         lines.append("")
 
