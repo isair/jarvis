@@ -168,6 +168,13 @@ Most users won't need to change anything. Config file: `~/.config/jarvis/config.
 
 Speed is relative to original large model. [Source](https://github.com/openai/whisper)
 
+#### GPU Acceleration (Windows)
+If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:
+```bash
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+```
+CUDA is detected automatically — no configuration needed.
+
 </details>
 
 <details>
