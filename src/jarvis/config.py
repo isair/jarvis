@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # Other modules should import from here rather than defining their own lists.
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
-    "smollm3": {
+    "alibayram/smollm3": {
         "name": "SmolLM3 3B (Recommended)",
         "description": "Fast, limited reasoning, ~2GB download",
         "size": "~2GB",
@@ -28,7 +28,7 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
 }
 
 # The default chat model (first in the supported list)
-DEFAULT_CHAT_MODEL = "smollm3"
+DEFAULT_CHAT_MODEL = "alibayram/smollm3"
 
 
 def get_supported_model_ids() -> set[str]:
@@ -364,7 +364,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
-        "intent_judge_model": "smollm3",  # Model for intent judging (needs reasoning ability)
+        "intent_judge_model": "alibayram/smollm3",  # Model for intent judging (needs reasoning ability)
         "intent_judge_timeout_sec": 3.0,  # Max time to wait for intent judge response
 
         # Transcript Buffer - used for both retention and context passed to intent judge
@@ -515,7 +515,7 @@ def load_settings() -> Settings:
     audio_wake_enabled = bool(merged.get("audio_wake_enabled", True))
     audio_wake_threshold = float(merged.get("audio_wake_threshold", 0.5))
     # Intent Judge - always used when available
-    intent_judge_model = str(merged.get("intent_judge_model", "smollm3"))
+    intent_judge_model = str(merged.get("intent_judge_model", "alibayram/smollm3"))
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 3.0))
 
     # Transcript Buffer - used for both retention and context passed to intent judge

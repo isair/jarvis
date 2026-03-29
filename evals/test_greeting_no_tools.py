@@ -109,8 +109,8 @@ class TestModelSizeDetection:
 
     @pytest.mark.eval
     @pytest.mark.parametrize("model_name,expected_size", [
-        pytest.param("smollm3", "SMALL", id="Model size: smollm3 → SMALL"),
-        pytest.param("smollm3:3b", "SMALL", id="Model size: smollm3:3b → SMALL"),
+        pytest.param("alibayram/smollm3", "SMALL", id="Model size: alibayram/smollm3 → SMALL"),
+        pytest.param("alibayram/smollm3:3b", "SMALL", id="Model size: alibayram/smollm3:3b → SMALL"),
         pytest.param("llama3.2:3b", "SMALL", id="Model size: llama3.2:3b → SMALL"),
         pytest.param("llama3.2:1b", "SMALL", id="Model size: llama3.2:1b → SMALL"),
         pytest.param("mistral:7b", "SMALL", id="Model size: mistral:7b → SMALL"),
@@ -160,7 +160,7 @@ class TestGreetingNoTools:
         from jarvis.reply.engine import run_reply_engine
 
         # Use small model to test conservative prompts
-        mock_config.ollama_chat_model = "smollm3"
+        mock_config.ollama_chat_model = "alibayram/smollm3"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
@@ -203,7 +203,7 @@ class TestGreetingNoTools:
         from jarvis.reply.engine import run_reply_engine
 
         # Use small model
-        mock_config.ollama_chat_model = "smollm3"
+        mock_config.ollama_chat_model = "alibayram/smollm3"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):

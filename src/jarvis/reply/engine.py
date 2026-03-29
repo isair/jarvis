@@ -226,7 +226,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
                 # Note: Text-based fallback parsing was removed since all supported models
-                # (gpt-oss:20b, smollm3) use native tool calling via the tools API parameter
+                # (gpt-oss:20b, alibayram/smollm3) use native tool calling via the tools API parameter
 
         except Exception:
             pass
@@ -331,7 +331,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         """
         Handle responses where the model outputs JSON instead of natural language.
 
-        Some smaller models (e.g., smollm3) occasionally output JSON-structured
+        Some smaller models (e.g., alibayram/smollm3) occasionally output JSON-structured
         responses instead of plain text. This function extracts readable text from
         common JSON patterns.
 

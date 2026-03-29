@@ -185,7 +185,7 @@ def get_required_models() -> List[str]:
     Always includes:
     - Chat model (user-selectable)
     - Embedding model
-    - Intent judge model (smollm3 - required for voice intent classification)
+    - Intent judge model (alibayram/smollm3 - required for voice intent classification)
     """
     try:
         cfg = load_settings()
@@ -201,18 +201,18 @@ def get_required_models() -> List[str]:
 
         # Intent judge model - always required for voice intent classification
         # This is separate from the chat model and cannot be changed by users
-        intent_judge_model = getattr(cfg, "intent_judge_model", "smollm3")
+        intent_judge_model = getattr(cfg, "intent_judge_model", "alibayram/smollm3")
         if intent_judge_model and intent_judge_model not in models:
             models.append(intent_judge_model)
 
         return models
     except Exception:
         # Default models if config can't be loaded
-        # Note: DEFAULT_CHAT_MODEL is smollm3 which is also the intent judge model,
+        # Note: DEFAULT_CHAT_MODEL is alibayram/smollm3 which is also the intent judge model,
         # so the default list is effectively just 2 unique models
         defaults = [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
-        if "smollm3" not in defaults:
-            defaults.append("smollm3")
+        if "alibayram/smollm3" not in defaults:
+            defaults.append("alibayram/smollm3")
         return defaults
 
 
@@ -1245,11 +1245,11 @@ class ModelsPage(QWizardPage):
 
         # Get config values
         embed_model = "nomic-embed-text"
-        intent_judge_model = "smollm3"
+        intent_judge_model = "alibayram/smollm3"
         try:
             cfg = load_settings()
             embed_model = cfg.ollama_embed_model
-            intent_judge_model = getattr(cfg, "intent_judge_model", "smollm3")
+            intent_judge_model = getattr(cfg, "intent_judge_model", "alibayram/smollm3")
         except Exception:
             pass
 
@@ -1259,7 +1259,7 @@ class ModelsPage(QWizardPage):
             installed = wizard.ollama_status.installed_models
 
         # Required models: selected chat model + embed model + intent judge model
-        # Intent judge (smollm3) is always required for voice intent classification
+        # Intent judge (alibayram/smollm3) is always required for voice intent classification
         required = [self._selected_model, embed_model]
         if intent_judge_model and intent_judge_model not in required:
             required.append(intent_judge_model)

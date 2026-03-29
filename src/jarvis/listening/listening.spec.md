@@ -36,7 +36,7 @@ This document outlines the voice listening architecture. The system uses a **tra
                     ▼ (on wake detection)
 ┌───────────────────────────────────────┐
 │          Intent Judge LLM             │
-│        (smollm3 or main)          │
+│        (alibayram/smollm3 or main)          │
 │                                       │
 │  Inputs:                              │
 │  - Transcript buffer (recent)         │
@@ -254,7 +254,7 @@ Judge output: {"directed": true, "query": "Ni hao", "reasoning": "First segment 
 
   "transcript_buffer_duration_sec": 120,
 
-  "intent_judge_model": "smollm3",
+  "intent_judge_model": "alibayram/smollm3",
   "intent_judge_timeout_sec": 3.0,
 
   "hot_window_seconds": 3.0,

@@ -101,7 +101,7 @@ class TestGetRequiredModels:
         mock_settings = MagicMock()
         mock_settings.ollama_chat_model = "llama2:7b"
         mock_settings.ollama_embed_model = "nomic-embed-text"
-        mock_settings.intent_judge_model = "smollm3"
+        mock_settings.intent_judge_model = "alibayram/smollm3"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
@@ -114,7 +114,7 @@ class TestGetRequiredModels:
         mock_settings = MagicMock()
         mock_settings.ollama_chat_model = "gpt-oss:20b"  # Different from intent judge
         mock_settings.ollama_embed_model = "nomic-embed-text"
-        mock_settings.intent_judge_model = "smollm3"
+        mock_settings.intent_judge_model = "alibayram/smollm3"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
@@ -123,7 +123,7 @@ class TestGetRequiredModels:
             assert len(models) == 3
             assert "gpt-oss:20b" in models
             assert "nomic-embed-text" in models
-            assert "smollm3" in models  # Intent judge model is always required
+            assert "alibayram/smollm3" in models  # Intent judge model is always required
 
     def test_returns_defaults_on_config_error(self):
         """Returns default models if config can't be loaded."""
@@ -131,7 +131,7 @@ class TestGetRequiredModels:
             models = get_required_models()
 
             assert len(models) == 2
-            assert "smollm3" in models
+            assert "alibayram/smollm3" in models
             assert "nomic-embed-text" in models
 
 
@@ -390,7 +390,7 @@ class TestModelOptions:
         from desktop_app.setup_wizard import ModelsPage
 
         assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
-        assert "smollm3" in ModelsPage.MODEL_OPTIONS
+        assert "alibayram/smollm3" in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):
         """Each model option has required info fields."""

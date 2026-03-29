@@ -12,8 +12,8 @@ class TestModelSizeDetection:
 
     @pytest.mark.parametrize("model_name,expected_small", [
         # Small models (should return SMALL)
-        ("smollm3", True),
-        ("smollm3:3b", True),
+        ("alibayram/smollm3", True),
+        ("alibayram/smollm3:3b", True),
         ("llama3.2:3b", True),
         ("llama3.2:1b", True),
         ("mistral:7b", True),

@@ -26,7 +26,7 @@ def _make_cfg(**overrides):
     # Minimal settings object with required attributes referenced in engine
     base = {
         'ollama_base_url': 'http://127.0.0.1:11434',
-        'ollama_chat_model': 'smollm3',
+        'ollama_chat_model': 'alibayram/smollm3',
         'ollama_embed_model': 'nomic-embed-text',
         'llm_profile_select_timeout_sec': 0.1,
         'llm_tools_timeout_sec': 0.1,

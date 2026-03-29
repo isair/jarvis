@@ -141,7 +141,7 @@ Click the system tray icon → **Start Listening** → Say "Jarvis" and talk!
 
 | Hardware | RAM | Model |
 |----------|-----|-------|
-| Most users | 8GB+ | `smollm3` (default) |
+| Most users | 8GB+ | `alibayram/smollm3` (default) |
 | High-end | 16GB+ | `gpt-oss:20b` |
 
 The setup wizard will guide you through model selection and installation on first launch.
@@ -173,7 +173,7 @@ Speed is relative to original large model. [Source](https://github.com/openai/wh
 <details>
 <summary><strong>Voice Interface (Advanced)</strong></summary>
 
-**LLM Intent Judge** - Jarvis uses `smollm3` for intelligent voice intent classification (echo detection, query extraction, stop commands). This model is automatically installed alongside your chosen chat model during setup. The intent judge cannot be disabled but gracefully falls back to simpler text matching if Ollama is unavailable.
+**LLM Intent Judge** - Jarvis uses `alibayram/smollm3` for intelligent voice intent classification (echo detection, query extraction, stop commands). This model is automatically installed alongside your chosen chat model during setup. The intent judge cannot be disabled but gracefully falls back to simpler text matching if Ollama is unavailable.
 
 **Audio-Level Wake Word Detection** (optional) - More precise wake word timing using openWakeWord:
 ```json

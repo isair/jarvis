@@ -625,7 +625,7 @@ def run_intent_judge(case: IntentJudgeTestCase):
 
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
-        model="smollm3",  # Use the model specified in the spec
+        model="alibayram/smollm3",  # Use the model specified in the spec
         timeout_sec=10.0,
     ))
 
@@ -649,7 +649,7 @@ def run_intent_judge_multi_segment(case: "MultiSegmentTestCase"):
 
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
-        model="smollm3",
+        model="alibayram/smollm3",
         timeout_sec=10.0,
     ))
 
@@ -684,7 +684,7 @@ def is_intent_judge_available() -> bool:
             return False
         data = resp.json()
         models = [m.get("name", "") for m in data.get("models", [])]
-        return any("smollm3" in m for m in models)
+        return any("alibayram/smollm3" in m for m in models)
     except Exception:
         return False
 
@@ -700,7 +700,7 @@ class TestIntentJudgeAccuracy:
     def test_intent_judge_case(self, case: IntentJudgeTestCase):
         """Test individual intent judge case."""
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (smollm3) not available")
+            pytest.skip("Intent judge model (alibayram/smollm3) not available")
 
         # Mark known failing cases as xfail
         if case.name in KNOWN_FAILING_CASES:
@@ -829,7 +829,7 @@ class TestIntentJudgeMultiSegment:
     def test_multi_segment_case(self, case: MultiSegmentTestCase):
         """Test intent judge with multiple transcript segments."""
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (smollm3) not available")
+            pytest.skip("Intent judge model (alibayram/smollm3) not available")
 
         # Mark known failing cases as xfail
         if case.name in KNOWN_FAILING_CASES:
@@ -898,13 +898,13 @@ class TestProcessedSegmentFiltering:
         should extract "tell me a random topic", NOT "what's the weather".
         """
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (smollm3) not available")
+            pytest.skip("Intent judge model (alibayram/smollm3) not available")
 
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
         judge = IntentJudge(IntentJudgeConfig(
             assistant_name="Jarvis",
-            model="smollm3",
+            model="alibayram/smollm3",
             timeout_sec=10.0,
         ))
 

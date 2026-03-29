@@ -2,10 +2,10 @@
 Nutrition Extraction Evaluations
 
 Tests the LLM's ability to extract accurate nutritional information from meal descriptions.
-This is critical for smaller models like smollm3 which may struggle with nutrition estimation.
+This is critical for smaller models like alibayram/smollm3 which may struggle with nutrition estimation.
 
 Run with specific model:
-    EVAL_JUDGE_MODEL=smollm3 ./scripts/run_evals.sh nutrition
+    EVAL_JUDGE_MODEL=alibayram/smollm3 ./scripts/run_evals.sh nutrition
     EVAL_JUDGE_MODEL=gpt-oss:20b ./scripts/run_evals.sh nutrition
 
 For EVALS.md generation (always use gpt-oss:20b):
