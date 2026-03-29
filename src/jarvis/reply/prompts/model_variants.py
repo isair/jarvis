@@ -27,7 +27,7 @@ _SMALL_MODEL_PATTERNS = (
     ":1b", ":3b", ":7b",
     "-1b", "-3b", "-7b",
     "_1b", "_3b", "_7b",
-    "alibayram/smollm3",  # SmolLM3 3B - always small regardless of tag
+    "gemma3n",  # Gemma 3n - always small regardless of tag
 )
 
 
@@ -36,7 +36,7 @@ def detect_model_size(model_name: Optional[str]) -> ModelSize:
     Detect model size from model name.
 
     Args:
-        model_name: Ollama model name (e.g., "alibayram/smollm3", "gpt-oss:20b")
+        model_name: Ollama model name (e.g., "gemma3n", "gpt-oss:20b")
 
     Returns:
         ModelSize.SMALL for 1b/3b/7b models, ModelSize.LARGE otherwise

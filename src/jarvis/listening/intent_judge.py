@@ -41,7 +41,7 @@ class IntentJudgeConfig:
 
     assistant_name: str = "Jarvis"
     aliases: list = None
-    model: str = "alibayram/smollm3"
+    model: str = "gemma3n"
     ollama_base_url: str = "http://127.0.0.1:11434"
     timeout_sec: float = 3.0
 
@@ -59,7 +59,7 @@ class IntentJudge:
     2. What the actual query is (excluding echo, pre-wake-word chatter, filler)
     3. Whether this is a stop command
 
-    Uses a small model (alibayram/smollm3) for better accuracy compared to
+    Uses a small model (gemma3n) for better accuracy compared to
     the simpler intent_validator.
     """
 
@@ -364,7 +364,7 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
     Returns:
         IntentJudge instance or None if requests library unavailable
     """
-    model = str(getattr(cfg, "intent_judge_model", "alibayram/smollm3"))
+    model = str(getattr(cfg, "intent_judge_model", "gemma3n"))
     ollama_base_url = str(getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"))
 
     config = IntentJudgeConfig(
