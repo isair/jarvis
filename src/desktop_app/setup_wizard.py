@@ -444,7 +444,7 @@ class SetupWizard(QWizard):
         super().__init__(parent)
         self.setWindowTitle("🚀 Jarvis Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
-        self.setMinimumSize(700, 800)
+        self.setMinimumSize(700, 875)
 
         # Apply dark theme
         self._apply_theme()
