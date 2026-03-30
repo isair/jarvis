@@ -598,15 +598,20 @@ def acquire_single_instance_lock() -> bool:
     lock_file = get_lock_file_path()
 
     try:
-        # Open lock file (create if doesn't exist)
-        _lock_file_handle = open(lock_file, 'w')
+        # Open in append+read binary mode — does NOT truncate the file.
+        # Opening with 'w' would truncate immediately, destroying the existing
+        # instance's PID before we even attempt the lock, making it unreadable.
+        _lock_file_handle = open(lock_file, 'a+b')
 
         if sys.platform == "win32":
-            # Windows: use msvcrt for file locking
+            # Windows: use msvcrt for file locking.
+            # Must seek to 0 first — 'a+b' positions at EOF, but msvcrt.locking
+            # locks at the current file position, so we need a consistent byte.
             import msvcrt
+            _lock_file_handle.seek(0)
             try:
                 msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except IOError:
+            except OSError:
                 # Lock failed - another instance is running
                 _lock_file_handle.close()
                 _lock_file_handle = None
@@ -622,8 +627,10 @@ def acquire_single_instance_lock() -> bool:
                 _lock_file_handle = None
                 return False
 
-        # Write our PID to the lock file for debugging
-        _lock_file_handle.write(str(os.getpid()))
+        # Lock acquired — overwrite the file with our PID
+        _lock_file_handle.seek(0)
+        _lock_file_handle.truncate(0)
+        _lock_file_handle.write(str(os.getpid()).encode())
         _lock_file_handle.flush()
 
         # Register cleanup to release lock on exit

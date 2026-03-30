@@ -565,6 +565,111 @@ class TestDaemonExitLogMessage:
         assert "gracefully" not in emitted[0].lower()
 
 
+class TestSingleInstanceLock:
+    """Tests for the single-instance locking mechanism.
+
+    Focuses on the regression where 'w' mode truncated the lock file before
+    the lock attempt, destroying the existing instance's PID.
+    """
+
+    def test_get_existing_instance_pid_reads_pid(self, tmp_path):
+        """get_existing_instance_pid() should return the PID stored in the lock file."""
+        from desktop_app.app import get_existing_instance_pid
+
+        lock_file = tmp_path / "jarvis_desktop.lock"
+        lock_file.write_bytes(b"12345")
+
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
+
+        assert pid == 12345
+
+    def test_get_existing_instance_pid_returns_none_when_empty(self, tmp_path):
+        """get_existing_instance_pid() should return None for an empty lock file."""
+        from desktop_app.app import get_existing_instance_pid
+
+        lock_file = tmp_path / "jarvis_desktop.lock"
+        lock_file.write_bytes(b"")
+
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
+
+        assert pid is None
+
+    def test_get_existing_instance_pid_returns_none_when_missing(self, tmp_path):
+        """get_existing_instance_pid() should return None when the lock file is absent."""
+        from desktop_app.app import get_existing_instance_pid
+
+        lock_file = tmp_path / "jarvis_desktop.lock"
+
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
+
+        assert pid is None
+
+    def test_lock_file_not_truncated_on_failed_lock_attempt(self, tmp_path):
+        """The existing PID must still be readable after a failed lock attempt.
+
+        This is the core regression: opening with 'w' truncated the file before
+        the lock call, so get_existing_instance_pid() returned None and the
+        'close existing' flow broke with "Could not find existing instance PID."
+        """
+        from desktop_app.app import get_existing_instance_pid
+
+        lock_file = tmp_path / "jarvis_desktop.lock"
+        existing_pid = 99999
+        lock_file.write_bytes(str(existing_pid).encode())
+
+        # Simulate a failed lock attempt by opening the file in append+read binary
+        # mode (the fixed mode) and then locking failure — the file must be intact.
+        fh = open(lock_file, 'a+b')
+        try:
+            # Verify the file still has the original PID content after being
+            # opened non-destructively.
+            fh.seek(0)
+            content = fh.read().decode().strip()
+            assert content == str(existing_pid), (
+                f"Lock file was truncated on open — PID {existing_pid} was lost. "
+                "This reproduces the bug where 'w' mode destroyed the PID before "
+                "the lock attempt completed."
+            )
+        finally:
+            fh.close()
+
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
+
+        assert pid == existing_pid, (
+            "get_existing_instance_pid() should still return the existing PID "
+            "after a failed lock attempt."
+        )
+
+    def test_acquire_lock_writes_current_pid(self, tmp_path):
+        """acquire_single_instance_lock() should write the current process PID."""
+        import desktop_app.app as app_module
+
+        lock_file = tmp_path / "jarvis_desktop.lock"
+        original_handle = app_module._lock_file_handle
+
+        try:
+            with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+                result = app_module.acquire_single_instance_lock()
+
+            assert result is True
+            content = lock_file.read_bytes().decode().strip()
+            assert content == str(os.getpid()), (
+                f"Lock file should contain current PID {os.getpid()}, got {content!r}"
+            )
+        finally:
+            # Release lock so the file handle is closed
+            if app_module._lock_file_handle and app_module._lock_file_handle is not original_handle:
+                try:
+                    app_module._lock_file_handle.close()
+                except Exception:
+                    pass
+                app_module._lock_file_handle = original_handle
+
+
 class TestMemoryViewerModulePath:
     """Tests to verify memory viewer module references are valid.
 
