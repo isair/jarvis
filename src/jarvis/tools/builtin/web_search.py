@@ -55,8 +55,11 @@ def _fetch_page_content(url: str, max_chars: int = 3000) -> Optional[str]:
         return None
 
 
-def _tavily_search(search_query: str, api_key: str) -> ToolExecutionResult:
-    """Execute web search using the Tavily API."""
+def _tavily_search(search_query: str, api_key: str) -> Tuple[ToolExecutionResult, int]:
+    """Execute web search using the Tavily API.
+
+    Returns a tuple of (ToolExecutionResult, result_count).
+    """
     from tavily import TavilyClient
 
     client = TavilyClient(api_key=api_key)
@@ -66,22 +69,24 @@ def _tavily_search(search_query: str, api_key: str) -> ToolExecutionResult:
         search_depth="basic",
     )
 
-    results: list[str] = []
-    for i, item in enumerate(response.get("results", []), start=1):
+    raw_results = response.get("results", [])
+    result_count = len(raw_results)
+    formatted: list[str] = []
+    for i, item in enumerate(raw_results, start=1):
         title = item.get("title", "")
         url = item.get("url", "")
         content = item.get("content", "")
-        results.append(f"{i}. **{title}**")
-        results.append(f"   Link: {url}")
+        formatted.append(f"{i}. **{title}**")
+        formatted.append(f"   Link: {url}")
         if content:
-            results.append(f"   {content}")
-        results.append("")
+            formatted.append(f"   {content}")
+        formatted.append("")
 
-    if results:
+    if formatted:
         reply_text = (
             f"Here are the web search results for '{search_query}'. "
             f"Use this information to reply to the user's query:\n\n"
-            + "\n".join(results)
+            + "\n".join(formatted)
         )
     else:
         reply_text = (
@@ -89,7 +94,7 @@ def _tavily_search(search_query: str, api_key: str) -> ToolExecutionResult:
             f"Let the user know you couldn't find results and suggest they try different search terms."
         )
 
-    return ToolExecutionResult(success=True, reply_text=reply_text)
+    return ToolExecutionResult(success=True, reply_text=reply_text), result_count
 
 
 class WebSearchTool(Tool):
@@ -139,8 +144,7 @@ class WebSearchTool(Tool):
                 if tavily_api_key:
                     debug_log("Using Tavily search provider", "web")
                     try:
-                        result = _tavily_search(search_query, tavily_api_key)
-                        count = result.reply_text.count("**") // 2
+                        result, count = _tavily_search(search_query, tavily_api_key)
                         if count > 0:
                             context.user_print(f"✅ Found {count} results.")
                         else:

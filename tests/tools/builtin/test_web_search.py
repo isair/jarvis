@@ -120,10 +120,10 @@ class TestWebSearchTool:
         self.context.cfg.web_search_provider = "tavily"
         self.context.cfg.tavily_api_key = "tvly-test-key"
 
-        mock_tavily.return_value = ToolExecutionResult(
+        mock_tavily.return_value = (ToolExecutionResult(
             success=True,
             reply_text="Here are the web search results for 'test query'. Use this information to reply to the user's query:\n\n1. **Result Title**\n   Link: https://example.com\n   Some content\n"
-        )
+        ), 1)
 
         args = {"search_query": "test query"}
         result = self.tool.run(args, self.context)

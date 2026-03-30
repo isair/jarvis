@@ -133,7 +133,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Conversational Awareness** - Understands ongoing discussions. Ask "Jarvis, what do you think?" and it knows what you're talking about. Works naturally in multi-person conversations.
 - **Unlimited Memory** - Never forgets. Searches across all your conversation history. Memory Viewer GUI included.
 - **Smart Personalities** - Adapts tone: Developer (debugging), Business (planning), Life Coach (health/wellness)
-- **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
+- **Built-in Tools** - Screenshot OCR, web search (DuckDuckGo or Tavily), weather, file access, nutrition tracking, location awareness
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
@@ -211,6 +211,29 @@ Voice cloning with Chatterbox - add a 3-10 second .wav sample:
 {
   "tts_engine": "chatterbox",
   "tts_chatterbox_audio_prompt": "/path/to/voice.wav"
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Web Search</strong></summary>
+
+Web search uses DuckDuckGo by default (no API key needed). You can optionally switch to [Tavily](https://app.tavily.com) for higher-quality, LLM-optimised results:
+
+```json
+{
+  "web_search_provider": "tavily",
+  "tavily_api_key": "tvly-YOUR_API_KEY"
+}
+```
+
+The API key can also be supplied via the `TAVILY_API_KEY` environment variable. If `web_search_provider` is set to `"tavily"` but no key is found, Jarvis falls back to DuckDuckGo automatically.
+
+To disable web search entirely (for full offline mode):
+```json
+{
+  "web_search_enabled": false
 }
 ```
 
