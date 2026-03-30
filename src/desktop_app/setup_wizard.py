@@ -280,7 +280,7 @@ def check_ollama_status() -> OllamaStatus:
 
         # Normalize model names (remove :latest suffix for comparison)
         def normalize_model(name: str) -> str:
-            return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
+            return name[:-len(":latest")] if name.endswith(":latest") else name
 
         installed_normalized = {normalize_model(m) for m in installed}
 
@@ -1097,6 +1097,11 @@ class ModelsPage(QWizardPage):
     # Use the centralized model configuration from config.py
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
 
+    # Wizard heights: base matches SetupWizard.setMinimumSize; installing adds
+    # space for the progress bar (~22px) and log output (max 150px) with padding.
+    _WIZARD_HEIGHT_BASE = 875
+    _WIZARD_HEIGHT_INSTALLING = 1060
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
@@ -1228,6 +1233,13 @@ class ModelsPage(QWizardPage):
         self._current_model_index = 0
         self._worker: Optional[CommandWorker] = None
 
+    def _set_wizard_height(self, height: int) -> None:
+        """Resize the parent wizard to the given height, updating the minimum too."""
+        wizard = self.wizard()
+        if wizard:
+            wizard.setMinimumHeight(height)
+            wizard.resize(wizard.width(), height)
+
     def _on_model_selected(self, model_id: str):
         """Handle model selection."""
         self._selected_model = model_id
@@ -1266,7 +1278,7 @@ class ModelsPage(QWizardPage):
 
         # Check which are missing
         def normalize_model(name: str) -> str:
-            return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
+            return name[:-len(":latest")] if name.endswith(":latest") else name
 
         installed_normalized = {normalize_model(m) for m in installed}
         self._missing_models = [
@@ -1364,9 +1376,12 @@ class ModelsPage(QWizardPage):
     def _install_next_model(self):
         """Install the next model in the queue."""
         if self._current_model_index >= len(self._missing_models):
-            # All models installed
+            # All models installed — collapse back to base height
             self._is_complete = True
             self.progress.setVisible(False)
+            self.log_output.setVisible(False)
+            self.log_output.clear()
+            self._set_wizard_height(self._WIZARD_HEIGHT_BASE)
             self.status_label.setText("✅ All models installed successfully!")
             self.status_label.setStyleSheet("color: #4ade80;")
             self.install_btn.setEnabled(False)
@@ -1381,6 +1396,7 @@ class ModelsPage(QWizardPage):
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # Indeterminate
         self.log_output.setVisible(True)
+        self._set_wizard_height(self._WIZARD_HEIGHT_INSTALLING)
 
         self.status_label.setText(f"📥 Installing {model}... ({self._current_model_index + 1}/{len(self._missing_models)})")
         self.status_label.setStyleSheet("color: #a1a1aa;")
