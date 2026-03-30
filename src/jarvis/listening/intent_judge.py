@@ -41,7 +41,7 @@ class IntentJudgeConfig:
 
     assistant_name: str = "Jarvis"
     aliases: list = None
-    model: str = "gemma3n"
+    model: str = "gemma3n:e2b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     timeout_sec: float = 3.0
 
@@ -364,7 +364,7 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
     Returns:
         IntentJudge instance or None if requests library unavailable
     """
-    model = str(getattr(cfg, "intent_judge_model", "gemma3n"))
+    model = str(getattr(cfg, "intent_judge_model", "gemma3n:e2b"))
     ollama_base_url = str(getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"))
 
     config = IntentJudgeConfig(
