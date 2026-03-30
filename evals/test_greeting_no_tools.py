@@ -1,11 +1,8 @@
 """
-Greeting No-Tools Evaluations
+Greeting No-Tools Evaluations (Live)
 
-Tests that greetings and simple conversation don't trigger tool calls,
-while tool-requiring queries still do.
-
-This is critical for small models (3b) which may incorrectly call tools
-for simple greetings when prompted to "proactively use tools."
+Live tests that verify greetings don't trigger tool calls with real LLM inference.
+Mocked equivalents live in tests/test_greeting_no_tools.py as unit tests.
 
 Run: ./scripts/run_evals.sh test_greeting
 """
@@ -25,8 +22,6 @@ from unittest.mock import patch
 
 from helpers import (
     MockConfig,
-    create_mock_llm_response,
-    create_tool_call,
     is_judge_llm_available,
 )
 
@@ -35,50 +30,6 @@ requires_judge_llm = pytest.mark.skipif(
     not _JUDGE_LLM_AVAILABLE,
     reason="Judge LLM not available"
 )
-
-
-# =============================================================================
-# Test Data
-# =============================================================================
-
-# Greetings in multiple languages - should NOT trigger tools
-GREETING_TEST_CASES = [
-    pytest.param("hello", False, id="Greeting: hello"),
-    pytest.param("hi there", False, id="Greeting: hi there"),
-    pytest.param("hey", False, id="Greeting: hey"),
-    pytest.param("ni hao", False, id="Greeting: ni hao (Chinese)"),
-    pytest.param("bonjour", False, id="Greeting: bonjour (French)"),
-    pytest.param("hola", False, id="Greeting: hola (Spanish)"),
-    pytest.param("merhaba", False, id="Greeting: merhaba (Turkish)"),
-    pytest.param("ciao", False, id="Greeting: ciao (Italian)"),
-    pytest.param("guten tag", False, id="Greeting: guten tag (German)"),
-    pytest.param("how are you", False, id="Greeting: how are you"),
-    pytest.param("thank you", False, id="Greeting: thank you"),
-    pytest.param("thanks", False, id="Greeting: thanks"),
-    pytest.param("goodbye", False, id="Greeting: goodbye"),
-    pytest.param("good morning", False, id="Greeting: good morning"),
-    pytest.param("good night", False, id="Greeting: good night"),
-]
-
-# User instructions about behaviour - should NOT trigger tools
-USER_INSTRUCTION_TEST_CASES = [
-    pytest.param("always use Celsius when telling me temperatures", False, id="Instruction: use Celsius"),
-    pytest.param("remember to always tell me things in Celsius", False, id="Instruction: remember Celsius"),
-    pytest.param("be more brief in your responses", False, id="Instruction: be more brief"),
-    pytest.param("speak in French from now on", False, id="Instruction: speak in French"),
-    pytest.param("always give me the short version", False, id="Instruction: short version"),
-    pytest.param("don't use emojis in your responses", False, id="Instruction: no emojis"),
-    pytest.param("note that I prefer metric units", False, id="Instruction: prefer metric"),
-]
-
-# Queries that SHOULD trigger tools
-TOOL_REQUIRED_TEST_CASES = [
-    pytest.param("what's the weather", True, id="Tool query: weather"),
-    pytest.param("search for python tutorials", True, id="Tool query: web search"),
-    pytest.param("what's the weather in Tokyo", True, id="Tool query: weather with location"),
-    pytest.param("look up the news today", True, id="Tool query: news search"),
-    pytest.param("what did I eat yesterday", True, id="Tool query: meal recall"),
-]
 
 
 # =============================================================================
@@ -98,115 +49,6 @@ class ToolCallCapture:
 
     def tool_names(self) -> List[str]:
         return [c["name"] for c in self.calls]
-
-
-# =============================================================================
-# Greeting Behaviour Tests (Mocked)
-# =============================================================================
-
-class TestGreetingNoTools:
-    """
-    Tests that greetings don't trigger tool calls.
-
-    Uses mocked LLM to verify the prompt system works correctly.
-    """
-
-    @pytest.mark.eval
-    @pytest.mark.parametrize("query,should_use_tools", GREETING_TEST_CASES + USER_INSTRUCTION_TEST_CASES)
-    def test_greeting_no_tool_calls(
-        self,
-        query: str,
-        should_use_tools: bool,
-        mock_config,
-        eval_db,
-        eval_dialogue_memory
-    ):
-        """Greetings should not trigger tool calls."""
-        from jarvis.reply.engine import run_reply_engine
-
-        # Use small model to test conservative prompts
-        mock_config.ollama_chat_model = "gemma3n"
-        capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-            return ToolExecutionResult(success=True, reply_text="Tool result")
-
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
-            # Simulate model correctly NOT calling tools for greetings
-            return create_mock_llm_response("Hello! How can I help you today?")
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
-
-            response = run_reply_engine(
-                db=eval_db, cfg=mock_config, tts=None,
-                text=query, dialogue_memory=eval_dialogue_memory
-            )
-
-        print(f"\n  Query: '{query}'")
-        print(f"  Tools called: {capture.tool_names() or 'none'}")
-        print(f"  Response: {(response or '')[:80]}...")
-
-        assert not capture.has_any_tool(), \
-            f"Greeting '{query}' should NOT trigger tools. Called: {capture.tool_names()}"
-
-    @pytest.mark.eval
-    @pytest.mark.parametrize("query,should_use_tools", TOOL_REQUIRED_TEST_CASES)
-    def test_tool_queries_still_work(
-        self,
-        query: str,
-        should_use_tools: bool,
-        mock_config,
-        eval_db,
-        eval_dialogue_memory
-    ):
-        """Tool-requiring queries should still trigger tools."""
-        from jarvis.reply.engine import run_reply_engine
-
-        # Use small model
-        mock_config.ollama_chat_model = "gemma3n"
-        capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-            return ToolExecutionResult(success=True, reply_text="Weather: 20C sunny")
-
-        call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
-            nonlocal call_count
-            call_count += 1
-
-            if call_count == 1:
-                # Model correctly identifies need for tool
-                if "weather" in query.lower():
-                    return create_mock_llm_response("", [create_tool_call("getWeather", {"location": "here"})])
-                elif "search" in query.lower() or "look up" in query.lower() or "news" in query.lower():
-                    return create_mock_llm_response("", [create_tool_call("webSearch", {"search_query": query})])
-                elif "eat" in query.lower() or "meal" in query.lower():
-                    return create_mock_llm_response("", [create_tool_call("fetchMeals", {})])
-            return create_mock_llm_response("Here's the information you requested.")
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
-
-            response = run_reply_engine(
-                db=eval_db, cfg=mock_config, tts=None,
-                text=query, dialogue_memory=eval_dialogue_memory
-            )
-
-        print(f"\n  Query: '{query}'")
-        print(f"  Tools called: {capture.tool_names() or 'none'}")
-        print(f"  Response: {(response or '')[:80]}...")
-
-        assert capture.has_any_tool(), \
-            f"Query '{query}' SHOULD trigger tools but didn't. Response: {response}"
 
 
 # =============================================================================
