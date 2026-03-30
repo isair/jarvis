@@ -1,4 +1,4 @@
-"""Web search tool implementation using DuckDuckGo."""
+"""Web search tool implementation using DuckDuckGo or Tavily."""
 
 import requests
 from typing import Dict, Any, Optional, List, Tuple
@@ -55,8 +55,45 @@ def _fetch_page_content(url: str, max_chars: int = 3000) -> Optional[str]:
         return None
 
 
+def _tavily_search(search_query: str, api_key: str) -> ToolExecutionResult:
+    """Execute web search using the Tavily API."""
+    from tavily import TavilyClient
+
+    client = TavilyClient(api_key=api_key)
+    response = client.search(
+        query=search_query,
+        max_results=5,
+        search_depth="basic",
+    )
+
+    results: list[str] = []
+    for i, item in enumerate(response.get("results", []), start=1):
+        title = item.get("title", "")
+        url = item.get("url", "")
+        content = item.get("content", "")
+        results.append(f"{i}. **{title}**")
+        results.append(f"   Link: {url}")
+        if content:
+            results.append(f"   {content}")
+        results.append("")
+
+    if results:
+        reply_text = (
+            f"Here are the web search results for '{search_query}'. "
+            f"Use this information to reply to the user's query:\n\n"
+            + "\n".join(results)
+        )
+    else:
+        reply_text = (
+            f"The web search for '{search_query}' returned no results. "
+            f"Let the user know you couldn't find results and suggest they try different search terms."
+        )
+
+    return ToolExecutionResult(success=True, reply_text=reply_text)
+
+
 class WebSearchTool(Tool):
-    """Tool for performing web searches using DuckDuckGo."""
+    """Tool for performing web searches using DuckDuckGo or Tavily."""
 
     @property
     def name(self) -> str:
@@ -64,7 +101,7 @@ class WebSearchTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Search the web using DuckDuckGo for current information, news, or general queries."
+        return "Search the web for current information, news, or general queries. Supports DuckDuckGo (default) and Tavily providers."
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
@@ -77,7 +114,7 @@ class WebSearchTool(Tool):
         }
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
-        """Execute web search using DuckDuckGo."""
+        """Execute web search using the configured provider."""
         context.user_print("🌐 Searching the web…")
         cfg = context.cfg
         try:
@@ -94,6 +131,31 @@ class WebSearchTool(Tool):
                 return ToolExecutionResult(success=False, reply_text="Please provide a search query for the web search.")
 
             debug_log(f"    🌐 searching for '{search_query}'", "web")
+
+            # Check if Tavily is the configured provider
+            provider = getattr(cfg, "web_search_provider", "duckduckgo")
+            tavily_api_key = getattr(cfg, "tavily_api_key", None)
+            if provider == "tavily":
+                if tavily_api_key:
+                    debug_log("Using Tavily search provider", "web")
+                    try:
+                        result = _tavily_search(search_query, tavily_api_key)
+                        count = result.reply_text.count("**") // 2
+                        if count > 0:
+                            context.user_print(f"✅ Found {count} results.")
+                        else:
+                            context.user_print("⚠️ No web results found.")
+                        return result
+                    except Exception as tavily_err:
+                        debug_log(f"Tavily search failed: {tavily_err}", "web")
+                        return ToolExecutionResult(
+                            success=False,
+                            reply_text=f"Tavily search failed for '{search_query}': {tavily_err}"
+                        )
+                else:
+                    debug_log("Tavily selected but TAVILY_API_KEY is missing, falling back to DuckDuckGo", "web")
+
+            # DuckDuckGo search (default fallback)
 
             # Gather instant answers
             instant_results = []

@@ -155,6 +155,8 @@ class Settings:
 
     # Web Search
     web_search_enabled: bool
+    web_search_provider: str  # "duckduckgo" (default) or "tavily"
+    tavily_api_key: str | None
 
     # MCP Integration
     mcps: Dict[str, Any]
@@ -394,6 +396,8 @@ def get_default_config() -> Dict[str, Any]:
 
         # Web Search
         "web_search_enabled": True,
+        "web_search_provider": "duckduckgo",  # "duckduckgo" (default) or "tavily"
+        "tavily_api_key": None,  # Set via TAVILY_API_KEY env var or config
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
@@ -532,6 +536,11 @@ def load_settings() -> Settings:
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
+    web_search_provider = str(merged.get("web_search_provider", "duckduckgo")).lower()
+    if web_search_provider not in ("duckduckgo", "tavily"):
+        web_search_provider = "duckduckgo"
+    tavily_api_key_val = merged.get("tavily_api_key") or os.environ.get("TAVILY_API_KEY")
+    tavily_api_key = None if tavily_api_key_val in (None, "", "null") else str(tavily_api_key_val)
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
@@ -648,6 +657,8 @@ def load_settings() -> Settings:
 
         # Web Search
         web_search_enabled=web_search_enabled,
+        web_search_provider=web_search_provider,
+        tavily_api_key=tavily_api_key,
 
         # MCP Integration
         mcps=mcps,

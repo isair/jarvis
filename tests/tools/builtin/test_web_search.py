@@ -113,3 +113,57 @@ class TestWebSearchTool:
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True  # still returns guidance
         assert "wasn't able to find" in result.reply_text.lower()
+
+    @patch('src.jarvis.tools.builtin.web_search._tavily_search')
+    def test_run_tavily_provider(self, mock_tavily):
+        """Test web search using Tavily provider."""
+        self.context.cfg.web_search_provider = "tavily"
+        self.context.cfg.tavily_api_key = "tvly-test-key"
+
+        mock_tavily.return_value = ToolExecutionResult(
+            success=True,
+            reply_text="Here are the web search results for 'test query'. Use this information to reply to the user's query:\n\n1. **Result Title**\n   Link: https://example.com\n   Some content\n"
+        )
+
+        args = {"search_query": "test query"}
+        result = self.tool.run(args, self.context)
+
+        assert result.success is True
+        assert "Result Title" in result.reply_text
+        mock_tavily.assert_called_once_with("test query", "tvly-test-key")
+
+    @patch('requests.get')
+    def test_tavily_fallback_when_no_api_key(self, mock_get):
+        """Test that Tavily falls back to DuckDuckGo when API key is missing."""
+        self.context.cfg.web_search_provider = "tavily"
+        self.context.cfg.tavily_api_key = None
+
+        # Set up DuckDuckGo mocks (instant + lite)
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {"Abstract": "Fallback answer"}
+        instant.raise_for_status = Mock()
+        lite = Mock()
+        lite.status_code = 200
+        lite.content = b'<html><body></body></html>'
+        mock_get.side_effect = [instant, lite]
+
+        args = {"search_query": "test query"}
+        result = self.tool.run(args, self.context)
+
+        assert result.success is True
+        assert "Fallback answer" in result.reply_text
+
+    @patch('src.jarvis.tools.builtin.web_search._tavily_search')
+    def test_tavily_error_returns_failure(self, mock_tavily):
+        """Test that Tavily errors are reported cleanly."""
+        self.context.cfg.web_search_provider = "tavily"
+        self.context.cfg.tavily_api_key = "tvly-test-key"
+
+        mock_tavily.side_effect = Exception("API rate limit exceeded")
+
+        args = {"search_query": "test query"}
+        result = self.tool.run(args, self.context)
+
+        assert result.success is False
+        assert "Tavily search failed" in result.reply_text
