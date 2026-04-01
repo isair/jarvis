@@ -2,6 +2,12 @@
 Reply Engine - Main orchestrator for response generation.
 
 Handles profile selection, memory enrichment, tool planning and execution.
+Implements the JARVIS autonomy specification:
+  - Request classification (informational vs operational)
+  - Internal execution planning via the agentic loop
+  - Risk assessment and approval for destructive actions
+  - Task state tracking for execution visibility and resumption
+  - Recovery on tool failure with alternative approaches
 """
 
 from __future__ import annotations
@@ -15,6 +21,8 @@ from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
+from ..task_state import begin_task, get_active_task, TaskStatus
+from ..approval import classify_request, RequestType, requires_approval, approval_prompt, assess_risk, RiskLevel
 import json
 import uuid
 from datetime import datetime, timezone
@@ -42,6 +50,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     """
     # Step 1: Redact sensitive information
     redacted = redact(text)
+
+    # Step 1a: Classify request and begin task state tracking
+    request_type = classify_request(redacted)
+    task = begin_task(redacted)
+    debug_log(f"request type: {request_type.value}", "planning")
 
     # Step 2: Check for recent dialogue context first (needed for profile selection)
     recent_messages = []
@@ -387,6 +400,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     max_turns = cfg.agentic_max_turns
     turn = 0
 
+    # Transition task state to executing now that messages are built
+    task.set_executing()
+
     # Visible progress indicator before LLM loop (helps diagnose hangs)
     print(f"  💬 Generating response...", flush=True)
     debug_log(f"Starting LLM conversation loop (max {max_turns} turns)...", "planning")
@@ -539,6 +555,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 })
                 continue
 
+            # Risk assessment and approval check (Decision Policy)
+            if requires_approval(tool_name, tool_args):
+                task.set_awaiting_approval()
+                prompt_text = approval_prompt(tool_name, tool_args)
+                debug_log(f"  🔐 approval required for {tool_name}", "planning")
+                try:
+                    print(f"  🔐 {prompt_text}", flush=True)
+                except Exception:
+                    pass
+                # Surface approval request as the reply so the TTS/voice loop
+                # returns the prompt to the user; execution does not proceed.
+                # The user must re-issue the command after confirming.
+                return prompt_text
+
+            # Record step in task state before execution
+            step = task.add_step(
+                description=f"Execute {tool_name}",
+                tool_name=tool_name,
+            )
+            step.start()
+
             # Execute tool
             result = run_tool_with_retries(
                 db=db,
@@ -554,6 +591,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:
                 debug_log("stop signal received - ending conversation without reply", "planning")
+                step.complete("stop signal")
+                task.complete()
                 try:
                     print("💤 Returning to wake word mode\n", flush=True)
                 except Exception:
@@ -573,6 +612,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             # Append tool result
             if result.reply_text:
+                step.complete(result.reply_text[:120])
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,  # Use proper tool_call_id from LLM
@@ -594,6 +634,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     pass
             else:
                 err = result.error_message or "(no result)"
+                step.fail(err[:120])
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,  # Use proper tool_call_id from LLM
@@ -635,6 +676,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if not reply or not reply.strip():
         reply = "Sorry, I had trouble processing that. Could you try again?"
         debug_log("no reply generated, returning error message", "planning")
+        task.fail("no reply generated")
 
         # Print error message
         try:
@@ -654,6 +696,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
+    task.complete()
+    debug_log(task.summary(), "task")
     safe_reply = reply.strip()
     if safe_reply:
         # Print reply with appropriate header
