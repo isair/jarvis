@@ -1,5 +1,6 @@
 """
 Reply Engine - Main orchestrator for response generation.
+Copyright 2026 sjackson0109
 
 Handles profile selection, memory enrichment, tool planning and execution.
 Implements the JARVIS autonomy specification:
