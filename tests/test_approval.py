@@ -1,4 +1,7 @@
-"""Unit tests for the approval module."""
+"""Unit tests for the approval module.
+Copyright 2026 sjackson0109
+
+"""
 
 import pytest
 
