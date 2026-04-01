@@ -1,5 +1,6 @@
 """
 Task State – session-scoped execution tracker.
+Copyright 2026 sjackson0109
 
 Maintains the active task state during multi-step workflow execution,
 supporting resumption within a session and providing clear execution
