@@ -1,5 +1,7 @@
 """
 Approval – risk assessment and approval logic.
+Copyright 2026 sjackson0109
+
 
 Implements the Decision Policy from the JARVIS specification:
 - Act automatically on clear, specific instructions
