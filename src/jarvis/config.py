@@ -159,6 +159,33 @@ class Settings:
     # MCP Integration
     mcps: Dict[str, Any]
 
+    # ── Policy & Workspace Confinement ─────────────────────────────────────────
+    policy_mode: str
+    """One of: always_allow | ask_destructive | ask_every_time | deny_all."""
+
+    workspace_roots: list[str]
+    """Directories the agent is permitted to read/write (workspace_only mode)."""
+
+    blocked_roots: list[str]
+    """Directories that are always denied even if inside workspace_roots."""
+
+    read_only_roots: list[str]
+    """Directories that may be read but not written or deleted."""
+
+    local_files_mode: str
+    """One of: workspace_only | home_only | unrestricted."""
+
+    use_subprocess_for_writes: bool
+    """Run WRITE_OPERATIONAL tools in an isolated subprocess."""
+
+    # ── Audit ───────────────────────────────────────────────────────────────────
+    audit_db_path: str | None
+    """Path to the audit SQLite database. Defaults to sibling of db_path."""
+
+    # ── Shutdown ────────────────────────────────────────────────────────────────
+    shutdown_diary_timeout_sec: float
+    """Maximum seconds to wait for diary LLM update during shutdown."""
+
 
 
 def _default_config_path() -> Path:
@@ -397,6 +424,27 @@ def get_default_config() -> Dict[str, Any]:
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
+
+        # Policy & workspace confinement
+        "policy_mode": "ask_destructive",
+        "workspace_roots": [],
+        "blocked_roots": [
+            "C:\\Windows",
+            "C:\\Program Files",
+            "C:\\Program Files (x86)",
+            "/bin", "/boot", "/dev", "/etc",
+            "/lib", "/lib64", "/proc", "/sbin",
+            "/sys", "/usr",
+        ],
+        "read_only_roots": [],
+        "local_files_mode": "home_only",
+        "use_subprocess_for_writes": False,
+
+        # Audit
+        "audit_db_path": None,
+
+        # Shutdown
+        "shutdown_diary_timeout_sec": 45.0,
     }
 
 
@@ -533,6 +581,22 @@ def load_settings() -> Settings:
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     mcps = _ensure_dict(merged.get("mcps"))
+
+    # Policy & workspace confinement
+    policy_mode = str(merged.get("policy_mode", "ask_destructive"))
+    workspace_roots = _ensure_list(merged.get("workspace_roots", []))
+    blocked_roots = _ensure_list(merged.get("blocked_roots", []))
+    read_only_roots = _ensure_list(merged.get("read_only_roots", []))
+    local_files_mode = str(merged.get("local_files_mode", "home_only"))
+    use_subprocess_for_writes = bool(merged.get("use_subprocess_for_writes", False))
+
+    # Audit
+    audit_db_path_val = merged.get("audit_db_path")
+    audit_db_path = None if audit_db_path_val in (None, "", "null") else str(audit_db_path_val)
+
+    # Shutdown
+    shutdown_diary_timeout_sec = float(merged.get("shutdown_diary_timeout_sec", 45.0))
+
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
@@ -651,4 +715,18 @@ def load_settings() -> Settings:
 
         # MCP Integration
         mcps=mcps,
+
+        # Policy & workspace confinement
+        policy_mode=policy_mode,
+        workspace_roots=workspace_roots,
+        blocked_roots=blocked_roots,
+        read_only_roots=read_only_roots,
+        local_files_mode=local_files_mode,
+        use_subprocess_for_writes=use_subprocess_for_writes,
+
+        # Audit
+        audit_db_path=audit_db_path,
+
+        # Shutdown
+        shutdown_diary_timeout_sec=shutdown_diary_timeout_sec,
     )

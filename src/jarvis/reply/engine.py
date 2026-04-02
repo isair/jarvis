@@ -22,12 +22,26 @@ from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
+from .errors import (
+    AgentError,
+    ApprovalRequiredError,
+    LoopExhaustedError,
+    ModelOutputError,
+    PolicyDeniedError as AgentPolicyDeniedError,
+    ToolExecutionError,
+    ToolSchemaError,
+)
 from ..task_state import begin_task, get_active_task, TaskStatus
 from ..approval import classify_request, RequestType, requires_approval, approval_prompt, assess_risk, RiskLevel
 import json
 import uuid
 from datetime import datetime, timezone
 from ..utils.location import get_location_context
+
+# Policy and audit imports (gracefully degrade when not configured)
+from ..policy import engine as _policy_engine_module, models as _policy_models
+from ..audit.recorder import get_recorder as _get_audit_recorder
+from ..audit.models import TaskRecord, TaskStepRecord, PolicyDecisionRecord
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -56,6 +70,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     request_type = classify_request(redacted)
     task = begin_task(redacted)
     debug_log(f"request type: {request_type.value}", "planning")
+
+    # Step 1b: Begin audit record (no-op when audit not configured)
+    _audit = _get_audit_recorder()
+    _audit_task_id = task.task_id if hasattr(task, "task_id") else str(uuid.uuid4().hex)
+    if _audit:
+        try:
+            _audit_task_record = TaskRecord(
+                task_id=_audit_task_id,
+                intent=redacted[:500],
+                request_type=request_type.value if hasattr(request_type, "value") else str(request_type),
+                status="planning",
+            )
+            _audit.begin_task(_audit_task_record)
+        except Exception as _exc:
+            debug_log(f"audit: failed to begin task record: {_exc}", "audit")
 
     # Step 2: Check for recent dialogue context first (needed for profile selection)
     recent_messages = []
@@ -92,6 +121,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         recent_context=recent_context_summary,
     )
     print(f"  🎭 Profile selected: {profile_name}", flush=True)
+
+    # Track for the final audit finish call
+    _audit_selected_profile = profile_name
 
     system_prompt = PROFILES.get(profile_name, PROFILES["developer"]).system_prompt
 
@@ -556,7 +588,56 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 })
                 continue
 
-            # Risk assessment and approval check (Decision Policy)
+            # Policy evaluation (replaces raw requires_approval check)
+            _policy_decision = None
+            _step_id = uuid.uuid4().hex
+            try:
+                _policy_decision = _policy_engine_module.evaluate(tool_name, tool_args)
+                # Record policy decision in audit
+                if _audit:
+                    try:
+                        _constraints_json = json.dumps(
+                            [c.name for c in _policy_decision.applied_constraints]
+                        )
+                        _audit.record_policy_decision(PolicyDecisionRecord(
+                            audit_id=_policy_decision.audit_id,
+                            task_id=_audit_task_id,
+                            step_id=_step_id,
+                            tool_name=tool_name,
+                            tool_class=_policy_decision.tool_class.value,
+                            risk_level=_policy_decision.risk_level.value,
+                            allowed=_policy_decision.allowed,
+                            approval_required=_policy_decision.approval_required,
+                            decision_reason=_policy_decision.decision_reason,
+                            denied_reason=_policy_decision.denied_reason or "",
+                            constraints_json=_constraints_json,
+                        ))
+                    except Exception as _ae:
+                        debug_log(f"audit: policy decision record error: {_ae}", "audit")
+
+                if not _policy_decision.allowed:
+                    debug_log(f"  🚫 policy denied {tool_name}: {_policy_decision.denied_reason}", "planning")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Error: Action denied by policy — {_policy_decision.denied_reason or _policy_decision.decision_reason}",
+                    })
+                    continue
+
+            except _policy_models.PolicyDeniedError as _pde:
+                debug_log(f"  🚫 policy denied {tool_name}: {_pde}", "planning")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"Error: Action denied by policy — {_pde}",
+                })
+                continue
+            except Exception as _pe:
+                debug_log(f"  ⚠️ policy evaluation error: {_pe}", "planning")
+                # Fall through to legacy approval check on policy engine error
+
+            # Legacy approval check (used when policy engine is not configured
+            # or as defence-in-depth for HIGH-risk tools)
             if requires_approval(tool_name, tool_args):
                 task.set_awaiting_approval()
                 prompt_text = approval_prompt(tool_name, tool_args)
@@ -568,6 +649,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # Surface approval request as the reply so the TTS/voice loop
                 # returns the prompt to the user; execution does not proceed.
                 # The user must re-issue the command after confirming.
+                if _audit:
+                    try:
+                        from ..audit.models import ApprovalRecord
+                        _audit.record_approval(ApprovalRecord(
+                            task_id=_audit_task_id,
+                            step_id=_step_id,
+                            tool_name=tool_name,
+                            operation=str((tool_args or {}).get("operation", "*")),
+                            decision="requested",
+                        ))
+                    except Exception:
+                        pass
                 return prompt_text
 
             # Record step in task state before execution
@@ -642,6 +735,33 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "content": f"Error: {err}"
                 })
                 debug_log(f"    ❌ tool error: {err}", "planning")
+
+            # Audit: record step outcome
+            if _audit:
+                try:
+                    import hashlib as _hashlib
+                    _args_hash = _hashlib.sha256(
+                        json.dumps(tool_args or {}, sort_keys=True).encode()
+                    ).hexdigest()[:16]
+                    _policy_audit_id = (
+                        _policy_decision.audit_id if _policy_decision else ""
+                    )
+                    _step_success = bool(result.reply_text and not result.error_message)
+                    _step_summary = (
+                        result.reply_text[:200] if _step_success else (result.error_message or "")[:200]
+                    )
+                    _audit.record_step(TaskStepRecord(
+                        step_id=_step_id,
+                        task_id=_audit_task_id,
+                        tool_name=tool_name,
+                        args_hash=_args_hash,
+                        policy_audit_id=_policy_audit_id,
+                        result_summary=_step_summary,
+                        success=_step_success,
+                    ))
+                except Exception as _se:
+                    debug_log(f"audit: step record error: {_se}", "audit")
+
             # Loop continues to let the agent produce the next step/final reply
             continue
 
@@ -678,6 +798,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         reply = "Sorry, I had trouble processing that. Could you try again?"
         debug_log("no reply generated, returning error message", "planning")
         task.fail("no reply generated")
+        if _audit:
+            try:
+                _audit.finish_task(_audit_task_id, final_status="failed", error="no reply generated")
+            except Exception:
+                pass
 
         # Print error message
         try:
@@ -698,6 +823,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 10: Output and memory update
     task.complete()
+    if _audit:
+        try:
+            _audit.finish_task(_audit_task_id, final_status="complete")
+        except Exception:
+            pass
     debug_log(task.summary(), "task")
     safe_reply = reply.strip()
     if safe_reply:
