@@ -35,9 +35,12 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 
 # Global lock file handle (must remain open for the lock to persist)
 _lock_file_handle = None
-# PID read from lock file during a failed lock attempt (Windows mandatory locks
-# prevent reading the file from a separate handle, so we capture it here)
-_existing_instance_pid: Optional[int] = None
+# Byte offset used for the lock region — deliberately beyond where PID content
+# lives (bytes 0–~10) so other processes can still read the PID while the lock
+# is held.  Windows msvcrt.locking() creates mandatory locks that block ALL
+# access (including reads from other handles) on the locked bytes, so locking
+# at byte 0 would make the PID unreadable by a second instance.
+_LOCK_OFFSET = 1024
 
 # Try to import WebEngine (optional dependency for embedded memory viewer)
 try:
@@ -513,14 +516,7 @@ def get_lock_file_path() -> Path:
 
 
 def get_existing_instance_pid() -> Optional[int]:
-    """Read the PID of the existing Jarvis instance from the lock file.
-
-    On Windows, mandatory file locks prevent reading from a separate handle,
-    so we return the PID captured during the failed lock attempt instead.
-    """
-    if _existing_instance_pid is not None:
-        return _existing_instance_pid
-
+    """Read the PID of the existing Jarvis instance from the lock file."""
     lock_file = get_lock_file_path()
     try:
         if lock_file.exists():
@@ -603,7 +599,7 @@ def acquire_single_instance_lock() -> bool:
     Returns True if lock acquired (we're the only instance), False otherwise.
     The lock file handle is kept open globally to maintain the lock.
     """
-    global _lock_file_handle, _existing_instance_pid
+    global _lock_file_handle
 
     lock_file = get_lock_file_path()
 
@@ -615,20 +611,15 @@ def acquire_single_instance_lock() -> bool:
 
         if sys.platform == "win32":
             # Windows: use msvcrt for file locking.
-            # Must seek to 0 first — 'a+b' positions at EOF, but msvcrt.locking
-            # locks at the current file position, so we need a consistent byte.
+            # Lock at _LOCK_OFFSET (not byte 0) so the PID content at bytes
+            # 0–~10 remains readable by other processes.  msvcrt.locking()
+            # creates mandatory locks that block ALL I/O on the locked bytes.
             import msvcrt
-            _lock_file_handle.seek(0)
+            _lock_file_handle.seek(_LOCK_OFFSET)
             try:
                 msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError:
-                # Lock failed - another instance is running.
-                # Read PID now — Windows mandatory locks prevent reading from
-                # a separate file handle, so this is our only chance.
-                _lock_file_handle.seek(0)
-                raw = _lock_file_handle.read().decode(errors="replace").strip()
-                if raw.isdigit():
-                    _existing_instance_pid = int(raw)
+                # Lock failed — another instance is running
                 _lock_file_handle.close()
                 _lock_file_handle = None
                 return False

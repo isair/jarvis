@@ -574,70 +574,38 @@ class TestSingleInstanceLock:
 
     def test_get_existing_instance_pid_reads_pid(self, tmp_path):
         """get_existing_instance_pid() should return the PID stored in the lock file."""
-        import desktop_app.app as app_module
         from desktop_app.app import get_existing_instance_pid
 
         lock_file = tmp_path / "jarvis_desktop.lock"
         lock_file.write_bytes(b"12345")
 
-        saved = app_module._existing_instance_pid
-        try:
-            app_module._existing_instance_pid = None
-            with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
-                pid = get_existing_instance_pid()
-        finally:
-            app_module._existing_instance_pid = saved
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
 
         assert pid == 12345
 
     def test_get_existing_instance_pid_returns_none_when_empty(self, tmp_path):
         """get_existing_instance_pid() should return None for an empty lock file."""
-        import desktop_app.app as app_module
         from desktop_app.app import get_existing_instance_pid
 
         lock_file = tmp_path / "jarvis_desktop.lock"
         lock_file.write_bytes(b"")
 
-        saved = app_module._existing_instance_pid
-        try:
-            app_module._existing_instance_pid = None
-            with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
-                pid = get_existing_instance_pid()
-        finally:
-            app_module._existing_instance_pid = saved
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
 
         assert pid is None
 
     def test_get_existing_instance_pid_returns_none_when_missing(self, tmp_path):
         """get_existing_instance_pid() should return None when the lock file is absent."""
-        import desktop_app.app as app_module
         from desktop_app.app import get_existing_instance_pid
 
         lock_file = tmp_path / "jarvis_desktop.lock"
 
-        saved = app_module._existing_instance_pid
-        try:
-            app_module._existing_instance_pid = None
-            with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
-                pid = get_existing_instance_pid()
-        finally:
-            app_module._existing_instance_pid = saved
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
 
         assert pid is None
-
-    def test_get_existing_instance_pid_returns_cached_pid(self):
-        """get_existing_instance_pid() should return the cached PID from a failed lock attempt."""
-        import desktop_app.app as app_module
-        from desktop_app.app import get_existing_instance_pid
-
-        saved = app_module._existing_instance_pid
-        try:
-            app_module._existing_instance_pid = 77777
-            pid = get_existing_instance_pid()
-        finally:
-            app_module._existing_instance_pid = saved
-
-        assert pid == 77777
 
     def test_lock_file_not_truncated_on_failed_lock_attempt(self, tmp_path):
         """The existing PID must still be readable after a failed lock attempt.
@@ -646,7 +614,6 @@ class TestSingleInstanceLock:
         the lock call, so get_existing_instance_pid() returned None and the
         'close existing' flow broke with "Could not find existing instance PID."
         """
-        import desktop_app.app as app_module
         from desktop_app.app import get_existing_instance_pid
 
         lock_file = tmp_path / "jarvis_desktop.lock"
@@ -669,13 +636,8 @@ class TestSingleInstanceLock:
         finally:
             fh.close()
 
-        saved = app_module._existing_instance_pid
-        try:
-            app_module._existing_instance_pid = None
-            with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
-                pid = get_existing_instance_pid()
-        finally:
-            app_module._existing_instance_pid = saved
+        with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+            pid = get_existing_instance_pid()
 
         assert pid == existing_pid, (
             "get_existing_instance_pid() should still return the existing PID "
@@ -694,17 +656,66 @@ class TestSingleInstanceLock:
                 result = app_module.acquire_single_instance_lock()
 
             assert result is True
-            # Read via the open handle — on Windows, mandatory locks prevent
-            # reading from a separate file handle.
-            fh = app_module._lock_file_handle
-            assert fh is not None, "Lock file handle should be kept open"
-            fh.seek(0)
-            content = fh.read().decode().strip()
+            # PID should be readable from a separate handle because the lock
+            # is at _LOCK_OFFSET, not at byte 0.
+            content = lock_file.read_text().strip()
             assert content == str(os.getpid()), (
                 f"Lock file should contain current PID {os.getpid()}, got {content!r}"
             )
         finally:
             # Release lock so the file handle is closed
+            if app_module._lock_file_handle and app_module._lock_file_handle is not original_handle:
+                try:
+                    app_module._lock_file_handle.close()
+                except Exception:
+                    pass
+                app_module._lock_file_handle = original_handle
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific lock test")
+    def test_lock_blocks_second_process_and_pid_readable(self, tmp_path):
+        """On Windows, the lock must block a second process while keeping the PID readable."""
+        import desktop_app.app as app_module
+        import subprocess
+
+        lock_file = tmp_path / "jarvis_desktop.lock"
+        original_handle = app_module._lock_file_handle
+
+        try:
+            with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
+                result = app_module.acquire_single_instance_lock()
+            assert result is True
+
+            # Child process: try to acquire the same lock and read the PID
+            child_code = '''
+import msvcrt, sys
+LOCK_OFFSET = 1024
+lock_path = r"""''' + str(lock_file) + '''"""
+fh = open(lock_path, "a+b")
+fh.seek(LOCK_OFFSET)
+try:
+    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    print("LOCK_ACQUIRED")
+except OSError:
+    print("LOCK_BLOCKED")
+fh.close()
+try:
+    pid = open(lock_path).read().strip()
+    print("PID_READ=" + pid)
+except Exception as e:
+    print("PID_FAILED=" + str(e))
+'''
+            proc = subprocess.run(
+                [sys.executable, "-c", child_code],
+                capture_output=True, text=True, timeout=10,
+            )
+            lines = proc.stdout.strip().splitlines()
+            assert "LOCK_BLOCKED" in lines, (
+                f"Child should have been blocked from acquiring lock, got: {lines}"
+            )
+            pid_line = [l for l in lines if l.startswith("PID_READ=")]
+            assert pid_line, f"Child should have read the PID, got: {lines}"
+            assert pid_line[0] == f"PID_READ={os.getpid()}"
+        finally:
             if app_module._lock_file_handle and app_module._lock_file_handle is not original_handle:
                 try:
                     app_module._lock_file_handle.close()
