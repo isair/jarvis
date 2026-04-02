@@ -19,7 +19,7 @@ class TestIntentJudgeConfig:
         """Default config has reasonable values."""
         config = IntentJudgeConfig()
         assert config.assistant_name == "Jarvis"
-        assert config.model == "gemma3n"
+        assert config.model == "gemma3n:e2b"
         assert config.timeout_sec == 3.0
         assert config.aliases == []
 
