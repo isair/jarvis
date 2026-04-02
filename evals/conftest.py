@@ -576,7 +576,10 @@ def pytest_sessionfinish(session, exitstatus):
 
     markdown = _eval_report.generate_markdown()
     report_path.write_text(markdown, encoding="utf-8")
-    print(f"\n📄 Eval report saved to: {report_path}")
+    try:
+        print(f"\n📄 Eval report saved to: {report_path}")
+    except UnicodeEncodeError:
+        print(f"\nEval report saved to: {report_path}")
 
 
 # =============================================================================

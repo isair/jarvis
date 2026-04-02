@@ -29,7 +29,7 @@ if str(SRC) not in sys.path:
 class MockConfig:
     """Minimal config object for unit tests that need a config."""
     ollama_base_url: str = "http://localhost:11434"
-    ollama_chat_model: str = "gemma3n"
+    ollama_chat_model: str = "gemma4:e2b"
     ollama_embed_model: str = "nomic-embed-text"
     db_path: str = ":memory:"
     sqlite_vss_path: Optional[str] = None

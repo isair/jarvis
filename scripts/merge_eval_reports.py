@@ -205,7 +205,7 @@ def is_intent_judge_test(result: TestResult) -> bool:
     """Check if a test is an intent judge test (uses fixed model, not configurable).
 
     Intent judge tests belong to specific test classes that use a fixed model
-    (gemma3n) for the intent classification system. These shouldn't be
+    (gemma4) for the intent classification system. These shouldn't be
     compared across models since they always use the same model.
     """
     # Classes that contain intent judge tests
@@ -231,13 +231,59 @@ def is_intent_judge_test(result: TestResult) -> bool:
     return any(pattern in result.name for pattern in intent_judge_patterns)
 
 
+def _parse_pass_rate_fraction(pass_rate: str) -> Optional[Tuple[int, int]]:
+    """Parse a pass rate string like '2/3 (67%)' into (passes, total).
+
+    Returns None for non-standard formats (SKIPPED, XFAIL, N/A, etc.).
+    """
+    match = re.match(r'(\d+)/(\d+)', pass_rate)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def _calc_run_level_pass_rate(
+    report: ModelReport, main_llm_tests: set
+) -> Tuple[int, int]:
+    """Calculate pass rate from individual run results across all main LLM tests.
+
+    Returns (total_passes, total_runs) by parsing each test's pass_rate string.
+    Falls back to counting fully-passed/failed tests when pass_rate data is missing.
+    """
+    total_passes = 0
+    total_runs = 0
+
+    for test_name in main_llm_tests:
+        result = report.results.get(test_name)
+        if not result:
+            continue
+
+        # Skip xfailed/skipped — not countable
+        if result.outcome in ("xfailed", "skipped"):
+            continue
+
+        fraction = _parse_pass_rate_fraction(result.pass_rate) if result.pass_rate else None
+        if fraction:
+            total_passes += fraction[0]
+            total_runs += fraction[1]
+        else:
+            # Fallback: treat passed as 1/1, failed as 0/1
+            if result.outcome == "passed":
+                total_passes += 1
+                total_runs += 1
+            elif result.outcome == "failed":
+                total_runs += 1
+
+    return total_passes, total_runs
+
+
 def generate_combined_report(reports: List[ModelReport]) -> str:
     """Generate a combined markdown report comparing multiple models."""
     lines = []
     now = datetime.now()
 
     # Separate intent judge tests from main LLM tests
-    # Intent judge tests use fixed model (gemma3n), so only show once
+    # Intent judge tests use fixed model (gemma4), so only show once
     intent_judge_results = {}
     main_llm_tests = set()
 
@@ -300,6 +346,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
 
     metrics = [
         ("✅ Passed", "passed"),
+        ("⚠️ Partial", "partial"),
         ("❌ Failed", "failed"),
         ("🔸 Expected Fail", "xfailed"),
         ("⏭️ Skipped", "skipped"),
@@ -317,12 +364,11 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
                 row += f" {val} |"
         lines.append(row)
 
-    # Pass rate row
+    # Pass rate row (calculated from individual test run results for accuracy)
     row = "| 📈 Pass Rate |"
     for report in reports:
-        stats = stats_by_model[report.model_name]
-        countable = stats["passed"] + stats["failed"]
-        rate = (stats["passed"] / countable * 100) if countable > 0 else 0.0
+        total_passes, total_runs = _calc_run_level_pass_rate(report, main_llm_tests)
+        rate = (total_passes / total_runs * 100) if total_runs > 0 else 0.0
         emoji = "🟢" if rate >= 80 else "🟡" if rate >= 50 else "🔴"
         row += f" {emoji} {rate:.1f}% |"
     lines.append(row)
@@ -333,9 +379,8 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("### Pass Rate Visualization")
     lines.append("")
     for report in reports:
-        stats = stats_by_model[report.model_name]
-        countable = stats["passed"] + stats["failed"]
-        rate = (stats["passed"] / countable * 100) if countable > 0 else 0.0
+        total_passes, total_runs = _calc_run_level_pass_rate(report, main_llm_tests)
+        rate = (total_passes / total_runs * 100) if total_runs > 0 else 0.0
         bar_filled = int(rate / 5)  # 20 chars max
         bar_empty = 20 - bar_filled
         bar = "█" * bar_filled + "░" * bar_empty
@@ -348,7 +393,7 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("")
     lines.append("| Model | Best For | Trade-offs |")
     lines.append("|-------|----------|------------|")
-    lines.append("| `gemma3n` | Quick responses, lower RAM usage | May struggle with complex reasoning |")
+    lines.append("| `gemma4` | Quick responses, lower RAM usage | May struggle with complex reasoning |")
     lines.append("| `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |")
     lines.append("")
 
@@ -402,17 +447,23 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
         lines.append("## 🎤 Intent Judge Tests")
         lines.append("")
         lines.append("> These tests evaluate the voice intent classification system.")
-        lines.append("> They use a fixed model (`gemma3n`) and are not part of the model comparison.")
+        lines.append("> They use a fixed model (`gemma4`) and are not part of the model comparison.")
         lines.append("")
 
         # Calculate intent judge stats
         ij_passed = sum(1 for r in intent_judge_results.values() if r.outcome == "passed")
+        ij_partial = sum(1 for r in intent_judge_results.values() if r.outcome == "partial")
         ij_failed = sum(1 for r in intent_judge_results.values() if r.outcome == "failed")
         ij_xfailed = sum(1 for r in intent_judge_results.values() if r.outcome == "xfailed")
         ij_total = len(intent_judge_results)
 
-        lines.append(f"**Model:** `gemma3n` (fixed)")
-        lines.append(f"**Results:** {ij_passed} passed, {ij_failed} failed, {ij_xfailed} expected failures")
+        lines.append(f"**Model:** `gemma4` (fixed)")
+        result_parts = [f"{ij_passed} passed"]
+        if ij_partial > 0:
+            result_parts.append(f"{ij_partial} partial")
+        result_parts.append(f"{ij_failed} failed")
+        result_parts.append(f"{ij_xfailed} expected failures")
+        lines.append(f"**Results:** {', '.join(result_parts)}")
         lines.append("")
 
         lines.append("| Test Case | Pass Rate | Status |")
@@ -469,7 +520,7 @@ def main():
 
     # Generate combined report
     combined = generate_combined_report(reports)
-    print(combined)
+    sys.stdout.buffer.write(combined.encode("utf-8"))
 
 
 if __name__ == "__main__":

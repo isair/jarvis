@@ -23,7 +23,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # Officially supported models (from config.py)
-MODEL_SMALL="gemma3n"
+MODEL_SMALL="gemma4:e2b"
 MODEL_LARGE="gpt-oss:20b"
 
 echo ""
@@ -156,6 +156,11 @@ if [ "$MULTI_MODEL" = true ] && [ "$OLLAMA_AVAILABLE" = true ]; then
     # Run with small model
     export EVAL_REPORT_PATH="${TEMP_DIR}/evals_small.md"
     run_evals_for_model "$MODEL_SMALL" "_small" || FINAL_EXIT_CODE=$?
+
+    # Unload all models to avoid VRAM corruption when switching
+    echo "  🔄 Unloading models before switching..."
+    curl -s "${OLLAMA_URL}/api/generate" -d "{\"model\":\"$MODEL_SMALL\",\"keep_alive\":0}" > /dev/null 2>&1
+    sleep 2
 
     # Run with large model
     export EVAL_REPORT_PATH="${TEMP_DIR}/evals_large.md"
