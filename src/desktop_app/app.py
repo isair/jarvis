@@ -35,6 +35,12 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 
 # Global lock file handle (must remain open for the lock to persist)
 _lock_file_handle = None
+# Byte offset used for the lock region — deliberately beyond where PID content
+# lives (bytes 0–~10) so other processes can still read the PID while the lock
+# is held.  Windows msvcrt.locking() creates mandatory locks that block ALL
+# access (including reads from other handles) on the locked bytes, so locking
+# at byte 0 would make the PID unreadable by a second instance.
+_LOCK_OFFSET = 1024
 
 # Try to import WebEngine (optional dependency for embedded memory viewer)
 try:
@@ -598,16 +604,22 @@ def acquire_single_instance_lock() -> bool:
     lock_file = get_lock_file_path()
 
     try:
-        # Open lock file (create if doesn't exist)
-        _lock_file_handle = open(lock_file, 'w')
+        # Open in append+read binary mode — does NOT truncate the file.
+        # Opening with 'w' would truncate immediately, destroying the existing
+        # instance's PID before we even attempt the lock, making it unreadable.
+        _lock_file_handle = open(lock_file, 'a+b')
 
         if sys.platform == "win32":
-            # Windows: use msvcrt for file locking
+            # Windows: use msvcrt for file locking.
+            # Lock at _LOCK_OFFSET (not byte 0) so the PID content at bytes
+            # 0–~10 remains readable by other processes.  msvcrt.locking()
+            # creates mandatory locks that block ALL I/O on the locked bytes.
             import msvcrt
+            _lock_file_handle.seek(_LOCK_OFFSET)
             try:
                 msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except IOError:
-                # Lock failed - another instance is running
+            except OSError:
+                # Lock failed — another instance is running
                 _lock_file_handle.close()
                 _lock_file_handle = None
                 return False
@@ -622,8 +634,10 @@ def acquire_single_instance_lock() -> bool:
                 _lock_file_handle = None
                 return False
 
-        # Write our PID to the lock file for debugging
-        _lock_file_handle.write(str(os.getpid()))
+        # Lock acquired — overwrite the file with our PID
+        _lock_file_handle.seek(0)
+        _lock_file_handle.truncate(0)
+        _lock_file_handle.write(str(os.getpid()).encode())
         _lock_file_handle.flush()
 
         # Register cleanup to release lock on exit
