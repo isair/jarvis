@@ -365,7 +365,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         """
         Handle responses where the model outputs JSON instead of natural language.
 
-        Some smaller models (e.g., gemma3n) occasionally output JSON-structured
+        Some smaller models (e.g., gemma4) occasionally output JSON-structured
         responses instead of plain text. This function extracts readable text from
         common JSON patterns.
 
