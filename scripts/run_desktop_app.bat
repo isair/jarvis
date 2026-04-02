@@ -22,11 +22,9 @@ if "%VOICE_DEBUG%"=="1" (
 )
 echo.
 
-REM Navigate to project root
-cd /d "%~dp0.."
-
-REM Set up paths
-set "PROJECT_ROOT=%cd%"
+REM Navigate to project root (use for-loop to resolve .. reliably across shells)
+for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
+cd /d "%PROJECT_ROOT%"
 set "MAMBA_ENV=%PROJECT_ROOT%\.mamba_env"
 set "PYTHONPATH=%PROJECT_ROOT%\src;%PYTHONPATH%"
 
