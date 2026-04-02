@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,23 @@ DEFAULT_CHAT_MODEL = "gemma3n"
 def get_supported_model_ids() -> set[str]:
     """Get set of supported model IDs for quick lookup."""
     return set(SUPPORTED_CHAT_MODELS.keys())
+
+
+def _default_dictation_hotkey() -> str:
+    """Return the platform-appropriate default dictation hotkey.
+
+    Aligned with WisprFlow defaults:
+    - Windows: Ctrl+Win (pynput maps Win to ``cmd``)
+    - macOS: Fn is not detectable by pynput, so use Ctrl+Option (WisprFlow
+      fallback when Fn is unavailable)
+    - Linux: Ctrl+Alt (mirrors macOS fallback)
+    """
+    if sys.platform == "win32":
+        return "ctrl+cmd"
+    elif sys.platform == "darwin":
+        return "ctrl+alt"
+    else:
+        return "ctrl+alt"
 
 
 def _default_db_path() -> str:
@@ -155,6 +173,10 @@ class Settings:
 
     # Web Search
     web_search_enabled: bool
+
+    # Dictation (hold-to-dictate)
+    dictation_enabled: bool
+    dictation_hotkey: str
 
     # MCP Integration
     mcps: Dict[str, Any]
@@ -395,6 +417,10 @@ def get_default_config() -> Dict[str, Any]:
         # Web Search
         "web_search_enabled": True,
 
+        # Dictation (hold-to-dictate, WisprFlow-like)
+        "dictation_enabled": True,
+        "dictation_hotkey": _default_dictation_hotkey(),
+
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
     }
@@ -532,6 +558,8 @@ def load_settings() -> Settings:
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
+    dictation_enabled = bool(merged.get("dictation_enabled", True))
+    dictation_hotkey = str(merged.get("dictation_hotkey", _default_dictation_hotkey())).strip()
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
@@ -648,6 +676,10 @@ def load_settings() -> Settings:
 
         # Web Search
         web_search_enabled=web_search_enabled,
+
+        # Dictation
+        dictation_enabled=dictation_enabled,
+        dictation_hotkey=dictation_hotkey,
 
         # MCP Integration
         mcps=mcps,
