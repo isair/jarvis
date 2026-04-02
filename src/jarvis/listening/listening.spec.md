@@ -324,6 +324,7 @@ When components are unavailable, the system degrades gracefully:
 |-----------|---------------------|
 | openWakeWord | Text-based wake detection only |
 | Intent Judge | Simple text-based wake word + query extraction |
+| 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
 | Transcript Buffer | Process each utterance independently (current behavior) |
 
 ## Future: Acoustic Echo Cancellation
