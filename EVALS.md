@@ -1,13 +1,13 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-03-29 (gemma3n via automatic tool-calling fallback)
+**Generated:** 2026-03-29 (gemma4 via automatic tool-calling fallback)
 
 ## 📊 Model Comparison
 
 This report compares eval results across officially supported models.
 Use this to understand the performance tradeoffs when choosing a model.
 
-| Metric | gemma3n | gpt-oss:20b |
+| Metric | gemma4 | gpt-oss:20b |
 |--------|--------|--------|
 | ✅ Passed | 70 | 81 |
 | ❌ Failed | 2 | 0 |
@@ -19,21 +19,21 @@ Use this to understand the performance tradeoffs when choosing a model.
 
 ### Pass Rate Visualization
 
-**gemma3n:** 🟢 `███████████████████░` **97.2%**
+**gemma4:** 🟢 `███████████████████░` **97.2%**
 **gpt-oss:20b:** 🟢 `████████████████████` **100.0%**
 
 ### 💡 Model Selection Guide
 
 | Model | Best For | Trade-offs |
 |-------|----------|------------|
-| `gemma3n` | Quick responses, lower RAM usage | May struggle with complex reasoning |
+| `gemma4` | Quick responses, lower RAM usage | May struggle with complex reasoning |
 | `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |
 
 ---
 
 ## 📋 Detailed Test Results
 
-| Test Case | gemma3n | gpt-oss:20b |
+| Test Case | gemma4 | gpt-oss:20b |
 |-----------|----------|----------|
 | 3-turn conversation with topic changes | ⚠️ 1/3 (33%) | ✅ 3/3 (100%) |
 | Agent calls webSearch for info queries | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
@@ -94,7 +94,7 @@ Use this to understand the performance tradeoffs when choosing a model.
 | Model size: gpt-oss:20b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: llama3.1:8b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: llama3.2:1b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
-| Model size: gemma3n \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
+| Model size: gemma4 \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: mistral:7b \u2192 SMALL | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Model size: qwen2.5:14b \u2192 LARGE | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
 | Nutrition: caesar salad with chicken | ✅ 3/3 (100%) | ✅ 3/3 (100%) |
@@ -123,9 +123,9 @@ Use this to understand the performance tradeoffs when choosing a model.
 ## 🎤 Intent Judge Tests
 
 > These tests evaluate the voice intent classification system.
-> They use a fixed model (`gemma3n`) and are not part of the model comparison.
+> They use a fixed model (`gemma4`) and are not part of the model comparison.
 
-**Model:** `gemma3n` (fixed)
+**Model:** `gemma4` (fixed)
 **Results:** 30 passed, 0 failed, 13 expected failures
 
 | Test Case | Pass Rate | Status |

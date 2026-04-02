@@ -117,7 +117,7 @@ class TestGreetingNoTools:
         """Greetings and user instructions should not trigger tool calls."""
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_chat_model = "gemma3n"
+        mock_config.ollama_chat_model = "gemma4"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):  # noqa: F841 (shadows fixture)
@@ -154,7 +154,7 @@ class TestGreetingNoTools:
         """Queries that require tools should still trigger them."""
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_chat_model = "gemma3n"
+        mock_config.ollama_chat_model = "gemma4"
         capture = ToolCallCapture()
 
         def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):  # noqa: F841 (shadows fixture)

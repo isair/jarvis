@@ -13,16 +13,16 @@ from dotenv import load_dotenv
 # Other modules should import from here rather than defining their own lists.
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
-    "gemma3n:e2b": {
-        "name": "Gemma 3n E2B (Recommended)",
-        "description": "Fast, multimodal, effective 2B — ~5.6GB download",
-        "size": "~5.6GB",
+    "gemma4:e2b": {
+        "name": "Gemma 4 E2B (Recommended)",
+        "description": "Fast, multimodal, effective 2B — ~7.2GB download",
+        "size": "~7.2GB",
         "ram": "8GB+",
     },
-    "gemma3n:e4b": {
-        "name": "Gemma 3n E4B (Better Quality)",
-        "description": "Smarter, multimodal, effective 4B — ~7.5GB download",
-        "size": "~7.5GB",
+    "gemma4:e4b": {
+        "name": "Gemma 4 E4B (Better Quality)",
+        "description": "Smarter, multimodal, effective 4B — ~9.6GB download",
+        "size": "~9.6GB",
         "ram": "12GB+",
     },
     "gpt-oss:20b": {
@@ -34,7 +34,7 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
 }
 
 # The default chat model (first in the supported list)
-DEFAULT_CHAT_MODEL = "gemma3n:e2b"
+DEFAULT_CHAT_MODEL = "gemma4:e2b"
 
 
 def get_supported_model_ids() -> set[str]:
@@ -370,7 +370,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
-        "intent_judge_model": "gemma3n:e2b",  # Model for intent judging (needs reasoning ability)
+        "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
         "intent_judge_timeout_sec": 3.0,  # Max time to wait for intent judge response
 
         # Transcript Buffer - used for both retention and context passed to intent judge
@@ -521,7 +521,7 @@ def load_settings() -> Settings:
     audio_wake_enabled = bool(merged.get("audio_wake_enabled", True))
     audio_wake_threshold = float(merged.get("audio_wake_threshold", 0.5))
     # Intent Judge - always used when available
-    intent_judge_model = str(merged.get("intent_judge_model", "gemma3n:e2b"))
+    intent_judge_model = str(merged.get("intent_judge_model", "gemma4:e2b"))
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 3.0))
 
     # Transcript Buffer - used for both retention and context passed to intent judge
