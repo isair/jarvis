@@ -29,6 +29,25 @@ import json
 import signal
 import sys
 import threading
+import types
+
+
+def _write_error(request_id: str, message: str) -> None:
+    """
+    Write a minimal error :class:`WorkerResponse` to stdout and flush.
+
+    Used when the worker cannot parse or handle a request at all and
+    needs to return an error without a full response object.
+    """
+    error_resp = {
+        "request_id": request_id,
+        "success": False,
+        "reply_text": "",
+        "error_message": message,
+        "exit_code": 1,
+    }
+    sys.stdout.write(json.dumps(error_resp) + "\n")
+    sys.stdout.flush()
 
 
 def _timeout_handler(signum, frame):
@@ -66,7 +85,7 @@ def main() -> None:
 
         # Execute the tool
         try:
-            result = _run_builtin(req.tool_name, req.tool_args)
+            result = _run_builtin(req.tool_name, req.tool_args, req.safety_config)
             resp = WorkerResponse(
                 request_id=req.request_id,
                 success=result.get("success", False),
@@ -88,10 +107,20 @@ def main() -> None:
         sys.exit(1)
 
 
-def _run_builtin(tool_name: str, tool_args: dict) -> dict:
-    """Import and run the named built-in tool without a full ToolContext."""
-    # We import lazily to keep the subprocess startup light.
-    # Only safe, whitelist-approved tools reach this path via runner.py.
+def _run_builtin(tool_name: str, tool_args: dict, safety_config: dict) -> dict:
+    """
+    Import and run the named built-in tool inside the worker subprocess.
+
+    Args:
+        tool_name: Canonical tool identifier.
+        tool_args: Arguments forwarded from the parent request.
+        safety_config: Path-safety constraints from the parent daemon config
+            (``workspace_roots``, ``blocked_roots``, ``read_only_roots``,
+            ``local_files_mode``).  Used to construct a minimal cfg object
+            so that tools enforce the same path constraints as in-process.
+    """
+    # Lazy imports keep subprocess startup fast.
+    # Only built-in tools are permitted here — MCP tools never run out-of-process.
     from jarvis.tools.registry import BUILTIN_TOOLS
     from jarvis.tools.base import ToolContext
 
@@ -99,10 +128,20 @@ def _run_builtin(tool_name: str, tool_args: dict) -> dict:
     if tool is None:
         return {"success": False, "reply_text": "", "error_message": f"Unknown tool: {tool_name}"}
 
-    # Minimal context for subprocess execution (no db, cfg, or TTS available)
+    # Reconstruct a minimal cfg-like object from safety fields forwarded
+    # by the runner.  This ensures path-safety constraints (workspace_roots,
+    # blocked_roots, etc.) are enforced inside the worker even though the
+    # full Settings object is not available in the subprocess.
+    _safety = safety_config or {}
+    _cfg = types.SimpleNamespace(
+        workspace_roots=list(_safety.get("workspace_roots") or []),
+        blocked_roots=list(_safety.get("blocked_roots") or []),
+        read_only_roots=list(_safety.get("read_only_roots") or []),
+        local_files_mode=str(_safety.get("local_files_mode") or "workspace"),
+    )
     ctx = ToolContext(
         db=None,
-        cfg=None,
+        cfg=_cfg,
         system_prompt="",
         original_prompt="",
         redacted_text="",

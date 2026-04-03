@@ -205,11 +205,20 @@ class ToolRunner:
         """Spawn an isolated worker process and execute the tool there."""
         from .worker_protocol import WorkerRequest, WorkerResponse
 
+        # Forward path-safety constraints so the worker can enforce them
+        # without a full cfg object (see WorkerRequest.safety_config).
+        safety_config = {
+            "workspace_roots": list(getattr(self._cfg, "workspace_roots", None) or []),
+            "blocked_roots": list(getattr(self._cfg, "blocked_roots", None) or []),
+            "read_only_roots": list(getattr(self._cfg, "read_only_roots", None) or []),
+            "local_files_mode": str(getattr(self._cfg, "local_files_mode", "workspace")),
+        }
         req = WorkerRequest(
             tool_name=tool_name,
             tool_args=tool_args,
             request_id=uuid.uuid4().hex,
             timeout_sec=timeout_sec,
+            safety_config=safety_config,
         )
 
         python_exe = sys.executable

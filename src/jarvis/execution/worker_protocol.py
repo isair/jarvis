@@ -30,6 +30,20 @@ class WorkerRequest:
     timeout_sec: float = 30.0
     """Maximum execution time after which the worker should self-terminate."""
 
+    safety_config: Dict[str, Any] = field(default_factory=dict)
+    """
+    Path safety constraints forwarded from the parent daemon's config.
+
+    Expected keys (all optional):
+      ``workspace_roots``  – list[str] of allowed root paths
+      ``blocked_roots``    – list[str] of blocked path prefixes
+      ``read_only_roots``  – list[str] of read-only path prefixes
+      ``local_files_mode`` – str policy mode for file operations
+
+    Passing these through ensures the worker enforces the same path
+    constraints as the parent process even without a full cfg object.
+    """
+
     def to_json(self) -> str:
         return json.dumps(asdict(self))
 
@@ -40,6 +54,7 @@ class WorkerRequest:
             tool_args=d.get("tool_args", {}),
             request_id=d.get("request_id", ""),
             timeout_sec=float(d.get("timeout_sec", 30.0)),
+            safety_config=d.get("safety_config", {}),
         )
 
     @classmethod
