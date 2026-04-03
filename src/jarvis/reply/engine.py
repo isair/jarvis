@@ -5,7 +5,7 @@ Handles profile selection, memory enrichment, tool planning and execution.
 """
 
 from __future__ import annotations
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING
 
 from ..utils.redact import redact
 from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
@@ -569,7 +569,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
                 signature = (tool_name, stable_args)
             except Exception:
-                signature = (tool_name, "__unserializable_args__")
+                signature = (tool_name, "__unserialised_args__")
 
             if signature in recent_tool_signatures:
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")

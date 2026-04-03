@@ -93,6 +93,12 @@ class ApprovalStore:
 
     Pass ``db_path`` to enable SQLite persistence.  When omitted the store
     operates in in-memory mode and grants are lost on process exit.
+
+    ``default_ttl_sec`` sets an expiry time applied to every new grant
+    whose ``expires_at`` is not explicitly provided.  This prevents grants
+    from accumulating across restarts when SQLite persistence is enabled.
+    Defaults to 3 600 s (one hour).  Pass ``None`` to allow grants with
+    no expiry (not recommended for persisted stores).
     """
 
     _CREATE_TABLE = """
@@ -107,11 +113,12 @@ class ApprovalStore:
     );
     """
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(self, db_path: Optional[str] = None, default_ttl_sec: Optional[float] = 3600.0) -> None:
         self._lock = threading.Lock()
         self._memory: List[ScopedGrant] = []
         self._db_path = db_path
         self._db_conn: Optional[sqlite3.Connection] = None
+        self._default_ttl_sec = default_ttl_sec
 
         if db_path:
             try:
@@ -139,8 +146,15 @@ class ApprovalStore:
         """
         Record a new approval grant.
 
+        When ``expires_at`` is ``None`` and the store was initialised with a
+        ``default_ttl_sec``, the grant will expire after that many seconds.
+        This ensures grants do not persist indefinitely across sessions when
+        using SQLite-backed storage.
+
         Returns the created :class:`ScopedGrant`.
         """
+        if expires_at is None and self._default_ttl_sec is not None:
+            expires_at = time.time() + self._default_ttl_sec
         g = ScopedGrant(
             tool_name=tool_name,
             operation=operation,
