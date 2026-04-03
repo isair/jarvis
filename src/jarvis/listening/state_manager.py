@@ -216,6 +216,19 @@ class StateManager:
                 self._hot_window_expiry_timer.cancel()
                 self._hot_window_expiry_timer = None
 
+    def reset_hot_window_expiry(self) -> None:
+        """Reset the hot window expiry timer to give the user the full window.
+
+        Called when echo is rejected during the hot window, so the time spent
+        processing echo doesn't eat into the user's actual follow-up window.
+        """
+        if not self.is_hot_window_active():
+            return
+
+        self._hot_window_start_time = time.time()
+        self._schedule_hot_window_expiry()
+        debug_log(f"hot window expiry reset (echo rejected, restarting {self.hot_window_seconds}s timer)", "state")
+
     def _schedule_hot_window_expiry(self) -> None:
         """Schedule hot window expiry timer.
 
