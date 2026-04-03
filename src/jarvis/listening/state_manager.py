@@ -221,9 +221,26 @@ class StateManager:
 
         Called when echo is rejected during the hot window, so the time spent
         processing echo doesn't eat into the user's actual follow-up window.
+
+        If the hot window already expired while the echo was being transcribed,
+        this reactivates it — the user shouldn't lose their follow-up window
+        just because Whisper was slow to produce the echo transcript.
         """
-        if not self.is_hot_window_active():
-            return
+        with self._state_lock:
+            if self._state == ListeningState.HOT_WINDOW:
+                # Still active — just reset the timer
+                pass
+            elif self._state == ListeningState.WAKE_WORD:
+                # Expired while processing echo — reactivate
+                self._state = ListeningState.HOT_WINDOW
+                debug_log("hot window reactivated (expired during echo processing)", "state")
+                try:
+                    print(f"👂 Listening for follow-up ({int(self.hot_window_seconds)}s)...", flush=True)
+                except Exception:
+                    pass
+            else:
+                # COLLECTING or another active state — don't interfere
+                return
 
         self._hot_window_start_time = time.time()
         self._schedule_hot_window_expiry()

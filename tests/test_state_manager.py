@@ -226,12 +226,41 @@ class TestHotWindowExpiry:
 
         sm.stop()
 
-    def test_reset_hot_window_expiry_noop_when_not_active(self):
-        """reset_hot_window_expiry does nothing when hot window is not active."""
+    def test_reset_hot_window_expiry_reactivates_expired_window(self):
+        """reset_hot_window_expiry reactivates a hot window that expired during echo processing."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.08)
+
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Let the hot window fully expire
+            time.sleep(0.12)
+            assert sm.get_state() == ListeningState.WAKE_WORD
+
+            # Simulate echo rejection arriving after expiry — should reactivate
+            sm.reset_hot_window_expiry()
+            assert sm.is_hot_window_active() is True
+
+            # New timer should keep it alive for another full window
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Then expire normally
+            time.sleep(0.06)
+            assert sm.is_hot_window_active() is False
+
+        sm.stop()
+
+    def test_reset_hot_window_expiry_noop_when_collecting(self):
+        """reset_hot_window_expiry does not interfere with COLLECTING state."""
         sm = StateManager()
-        # Should not raise or change state
+        sm.start_collection("test query")
+        assert sm.get_state() == ListeningState.COLLECTING
+
         sm.reset_hot_window_expiry()
-        assert sm.get_state() == ListeningState.WAKE_WORD
+        assert sm.get_state() == ListeningState.COLLECTING
         sm.stop()
 
     def test_check_hot_window_expiry_fallback(self):
