@@ -149,7 +149,7 @@ The setup wizard will guide you through model selection and installation on firs
 
 ## Configuration
 
-Most users won't need to change anything. Config file: `~/.config/jarvis/config.json`
+Most users won't need to change anything. Open **⚙️ Settings** from the tray menu to configure Jarvis through a graphical interface — no JSON editing required. Settings are saved to `~/.config/jarvis/config.json`.
 
 <details>
 <summary><strong>Speech Recognition (Whisper)</strong></summary>

@@ -1276,6 +1276,11 @@ class JarvisSystemTray:
         self.setup_wizard_action.triggered.connect(self.show_setup_wizard)
         self.menu.addAction(self.setup_wizard_action)
 
+        # Settings action
+        self.settings_action = QAction("⚙️ Settings")
+        self.settings_action.triggered.connect(self.show_settings)
+        self.menu.addAction(self.settings_action)
+
         # Check for updates action
         self.check_updates_action = QAction("🔄 Check for Updates")
         self.check_updates_action.triggered.connect(lambda: self.check_for_updates(show_no_update_dialog=True))
@@ -1329,6 +1334,26 @@ class JarvisSystemTray:
         # For existing users: restart to apply changes
         if result == QWizard.DialogCode.Accepted or was_listening:
             self.start_daemon()
+
+    def show_settings(self) -> None:
+        """Show the settings window."""
+        from desktop_app.settings_window import SettingsWindow
+        from PyQt6.QtWidgets import QMessageBox
+
+        dialog = SettingsWindow()
+        result = dialog.exec()
+
+        # If settings were saved and daemon is running, offer to restart
+        if result == QDialog.DialogCode.Accepted and self.is_listening:
+            reply = QMessageBox.question(
+                None, "🔄 Restart?",
+                "Settings saved. Restart Jarvis now to apply changes?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.stop_daemon()
+                self.start_daemon()
 
     def check_for_updates(self, show_no_update_dialog: bool = False) -> None:
         """Check for available updates.
