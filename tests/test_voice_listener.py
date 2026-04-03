@@ -803,3 +803,189 @@ class TestCrossPlatformAudioHealthWarning:
                             captured = capsys.readouterr()
                             assert "No audio received after 5 seconds" in captured.out
                             assert "pactl" in captured.out
+
+
+class TestResample:
+    """Tests for the _resample helper function."""
+
+    def test_identity_when_rates_match(self):
+        """When src and dst rates are the same, returns the same object."""
+        import numpy as _np
+        from jarvis.listening.listener import _resample
+
+        audio = _np.ones(160, dtype=_np.float32)
+        result = _resample(audio, 16000, 16000)
+        assert result is audio
+
+    def test_downsample_48k_to_16k(self):
+        """Downsampling from 48 kHz to 16 kHz produces correct length and dtype."""
+        import numpy as _np
+        from jarvis.listening.listener import _resample
+
+        src_rate, dst_rate = 48000, 16000
+        duration = 1.0  # 1 second
+        audio = _np.random.randn(int(src_rate * duration)).astype(_np.float32)
+        result = _resample(audio, src_rate, dst_rate)
+
+        expected_len = int(len(audio) * dst_rate / src_rate)
+        assert len(result) == expected_len
+        assert result.dtype == _np.float32
+
+    def test_upsample_8k_to_16k(self):
+        """Upsampling from 8 kHz to 16 kHz produces correct length."""
+        import numpy as _np
+        from jarvis.listening.listener import _resample
+
+        src_rate, dst_rate = 8000, 16000
+        duration = 0.5
+        audio = _np.random.randn(int(src_rate * duration)).astype(_np.float32)
+        result = _resample(audio, src_rate, dst_rate)
+
+        expected_len = int(len(audio) * dst_rate / src_rate)
+        assert len(result) == expected_len
+
+    def test_preserves_sine_wave_frequency(self):
+        """A 440 Hz sine resampled from 48 kHz to 16 kHz keeps its peak near 440 Hz."""
+        import numpy as _np
+        from jarvis.listening.listener import _resample
+
+        src_rate, dst_rate = 48000, 16000
+        freq = 440.0
+        duration = 0.5
+        t = _np.arange(int(src_rate * duration)) / src_rate
+        audio = _np.sin(2 * _np.pi * freq * t).astype(_np.float32)
+
+        resampled = _resample(audio, src_rate, dst_rate)
+
+        # FFT to find dominant frequency
+        fft_mag = _np.abs(_np.fft.rfft(resampled))
+        freqs = _np.fft.rfftfreq(len(resampled), d=1.0 / dst_rate)
+        peak_freq = freqs[_np.argmax(fft_mag)]
+
+        assert abs(peak_freq - freq) <= 2.0, f"Peak frequency {peak_freq} Hz not within 2 Hz of {freq} Hz"
+
+
+class TestSampleRateFallback:
+    """Tests for InputStream sample rate fallback on Linux."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 6.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys):
+        """Falls back to device native rate when 16 kHz is rejected."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            import queue as q
+
+                            # query_devices returns native rate info
+                            device_info = {
+                                "name": "ALSA HDA Intel",
+                                "max_input_channels": 2,
+                                "default_samplerate": 44100.0,
+                            }
+                            mock_sd.query_devices.side_effect = lambda *args, **kwargs: (
+                                device_info if args or kwargs else [device_info]
+                            )
+
+                            # First InputStream call rejects 16 kHz, second succeeds
+                            mock_stream = MagicMock()
+                            mock_stream.active = False
+                            mock_stream.__enter__ = MagicMock(return_value=mock_stream)
+                            mock_stream.__exit__ = MagicMock(return_value=False)
+
+                            call_count = [0]
+                            def input_stream_side_effect(**kw):
+                                call_count[0] += 1
+                                if call_count[0] == 1:
+                                    raise Exception("Invalid sample rate [PaErrorCode -9987]")
+                                return mock_stream
+
+                            mock_sd.InputStream.side_effect = input_stream_side_effect
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+
+                            # Make the run loop exit immediately
+                            get_calls = [0]
+                            def fake_get(timeout=0.2):
+                                get_calls[0] += 1
+                                if get_calls[0] >= 2:
+                                    listener._should_stop = True
+                                raise q.Empty()
+
+                            listener._audio_q = MagicMock()
+                            listener._audio_q.get = fake_get
+
+                            with patch("jarvis.listening.listener.time") as mock_time:
+                                mock_time.time.return_value = 0
+                                mock_time.sleep = time.sleep
+                                listener.run()
+
+                            # InputStream should have been called twice
+                            assert mock_sd.InputStream.call_count == 2
+                            # Second call should use native 44100 rate
+                            second_call_kwargs = mock_sd.InputStream.call_args_list[1][1]
+                            assert second_call_kwargs["samplerate"] == 44100
+                            # Listener should store the stream rate
+                            assert listener._stream_samplerate == 44100
+
+                            captured = capsys.readouterr()
+                            assert "44100" in captured.out
+                            assert "resampling" in captured.out.lower()
+
+    def test_no_fallback_for_permission_errors(self):
+        """Permission errors do not trigger sample rate fallback."""
+        mock_whisper_model = MagicMock()
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [
+                                {"name": "Test Mic", "max_input_channels": 1}
+                            ]
+                            mock_sd.InputStream.side_effect = Exception("Device access denied")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # Should only have tried once — no fallback
+                            assert mock_sd.InputStream.call_count == 1

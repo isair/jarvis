@@ -72,6 +72,19 @@ def _get_mic_permission_hint() -> str:
     else:
         return "`pactl list sources` or audio settings for your desktop environment"
 
+def _resample(audio, src_rate: int, dst_rate: int):
+    """Resample a 1-D float32 numpy array from *src_rate* to *dst_rate*.
+
+    Uses linear interpolation — fast and good enough for speech going into Whisper.
+    """
+    if src_rate == dst_rate or np is None:
+        return audio
+    ratio = dst_rate / src_rate
+    n_out = int(len(audio) * ratio)
+    indices = np.arange(n_out) / ratio
+    return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+
+
 def _setup_nvidia_dll_path() -> None:
     """Add NVIDIA CUDA DLL directories to PATH on Windows.
 
@@ -892,7 +905,7 @@ class VoiceListener(threading.Thread):
         # Use WebRTC VAD
         try:
             pcm16 = np.clip(frame.flatten() * 32768.0, -32768, 32767).astype(np.int16).tobytes()
-            return bool(self._vad.is_speech(pcm16, self._samplerate))
+            return bool(self._vad.is_speech(pcm16, getattr(self, "_stream_samplerate", self._samplerate)))
         except Exception:
             return False
 
@@ -1356,7 +1369,10 @@ class VoiceListener(threading.Thread):
         except Exception:
             pass
 
-        # Open audio stream
+        # Open audio stream — try configured rate first, fall back to device
+        # native rate when the hardware rejects 16 kHz (common on Linux ALSA).
+        self._stream_samplerate = self._samplerate
+        open_error = None
         try:
             stream = sd.InputStream(
                 samplerate=self._samplerate,
@@ -1368,7 +1384,38 @@ class VoiceListener(threading.Thread):
             )
         except Exception as e:
             error_msg = str(e).lower()
-            debug_log(f"failed to open input stream: {e}", "voice")
+            is_rate_error = "sample rate" in error_msg or "9987" in error_msg
+            if is_rate_error:
+                debug_log(f"device rejected {self._samplerate} Hz, querying native rate", "voice")
+                try:
+                    if "device" in stream_kwargs:
+                        dev_info = sd.query_devices(stream_kwargs["device"])
+                    else:
+                        dev_info = sd.query_devices(kind="input")
+                    native_rate = int(dev_info.get("default_samplerate", self._samplerate))
+                    if native_rate != self._samplerate:
+                        self._stream_samplerate = native_rate
+                        native_frame_samples = max(1, int(native_rate * 30 / 1000))
+                        print(f"  ⚠️  Device doesn't support {self._samplerate} Hz — using {native_rate} Hz with resampling", flush=True)
+                        debug_log(f"retrying stream at native {native_rate} Hz", "voice")
+                        stream = sd.InputStream(
+                            samplerate=native_rate,
+                            channels=1,
+                            dtype="float32",
+                            blocksize=native_frame_samples,
+                            callback=self._on_audio,
+                            **stream_kwargs,
+                        )
+                    else:
+                        open_error = e
+                except Exception:
+                    open_error = e
+            else:
+                open_error = e
+
+        if open_error is not None:
+            error_msg = str(open_error).lower()
+            debug_log(f"failed to open input stream: {open_error}", "voice")
 
             # Provide helpful error messages for common issues
             if "access" in error_msg or "permission" in error_msg:
@@ -1376,10 +1423,10 @@ class VoiceListener(threading.Thread):
             elif "device" in error_msg and ("use" in error_msg or "busy" in error_msg):
                 print("  ❌ Microphone is being used by another application", flush=True)
             elif "device" in error_msg:
-                print(f"  ❌ Failed to open microphone: {e}", flush=True)
+                print(f"  ❌ Failed to open microphone: {open_error}", flush=True)
                 print("     Try selecting a different audio device in settings", flush=True)
             else:
-                print(f"  ❌ Failed to start audio recording: {e}", flush=True)
+                print(f"  ❌ Failed to start audio recording: {open_error}", flush=True)
             return
 
         # Main audio processing loop
@@ -1548,6 +1595,11 @@ class VoiceListener(threading.Thread):
 
         if audio is None or audio.size == 0:
             return
+
+        # Resample to Whisper's expected rate if the stream ran at a different rate
+        stream_rate = getattr(self, "_stream_samplerate", self._samplerate)
+        if stream_rate != self._samplerate:
+            audio = _resample(audio, stream_rate, self._samplerate)
 
         # Filter short audio
         audio_duration = len(audio) / self._samplerate
