@@ -1,7 +1,4 @@
-"""Unit tests for the task_state module."
-Copyright 2026 sjackson0109
-
-""
+"""Unit tests for the task_state module."""
 
 import time
 import pytest
