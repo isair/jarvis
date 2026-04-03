@@ -294,15 +294,14 @@ def main() -> None:
     print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
-    # Initialise runtime health registry.
+    # Initialise runtime health registry (sets module-level singleton).
     # Graceful: a failure degrades the service but does not abort startup.
     try:
         from .runtime.health import configure as _configure_health
-        _health = _configure_health()
+        _configure_health()
         debug_log("health registry configured", "runtime")
     except Exception as _he:
         debug_log(f"health registry init failed (non-fatal): {_he}", "runtime")
-        _health = None
 
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}
