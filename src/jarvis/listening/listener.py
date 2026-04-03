@@ -1402,7 +1402,11 @@ class VoiceListener(threading.Thread):
                     if not self.is_speech_active:
                         if is_voice:
                             self.is_speech_active = True
-                            utterance_start_time = time.time()
+
+                            # Backdate start time by pre-roll duration — the
+                            # actual speech onset was before VAD triggered.
+                            pre_roll_sec = len(self._pre_roll) * frame_ms / 1000.0
+                            utterance_start_time = time.time() - pre_roll_sec
 
                             # Capture hot window state when voice starts
                             self.state_manager.capture_hot_window_state_at_voice_start()
