@@ -128,7 +128,7 @@ After TTS finishes, allow wake-word-free follow-up.
 1. During TTS: Use segment-based matching to detect echo
 2. After TTS (delayed echo):
    - Short queries (≤4 words): Skip similarity check (false positives on common words)
-   - Longer queries (>4 words): Reject if similarity ≥70% to TTS
+   - Longer queries (>4 words): If similarity ≥70% to TTS, try salvage first (user speech may be appended to echo in the same Whisper chunk). Only reject if no salvageable user speech found.
 3. Accepted input: Use the ACTUAL text heard, not intent judge synthesis
    - Intent judge synthesizes from conversation context, which can return wrong queries
    - Hot window input should reflect what the user actually said
