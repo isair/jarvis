@@ -5,6 +5,11 @@ Shared stylesheets for Qt interfaces, matching the Memory Viewer's
 deep space theme with amber accents.
 """
 
+from __future__ import annotations
+
+import os
+import tempfile
+
 # Color palette
 COLORS = {
     "bg_primary": "#0a0b0f",
@@ -361,11 +366,12 @@ JARVIS_THEME_STYLESHEET = """
         border: none;
         width: 20px;
     }
-    
+
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
     QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
         background-color: #f59e0b;
     }
+
     
     QListWidget {
         background-color: #12141a;
@@ -448,7 +454,78 @@ JARVIS_THEME_STYLESHEET = """
 """
 
 
+_CHECKMARK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">'
+    '<path d="M4 9l3.5 3.5L14 5" stroke="#0a0b0f" stroke-width="2.5" '
+    'stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
+)
+
+_RADIO_DOT_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">'
+    '<circle cx="9" cy="9" r="4" fill="#0a0b0f"/></svg>'
+)
+
+_ARROW_UP_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">'
+    '<path d="M2.5 7.5L6 4l3.5 3.5" stroke="#a1a1aa" stroke-width="1.5" '
+    'stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
+)
+
+_ARROW_DOWN_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">'
+    '<path d="M2.5 4.5L6 8l3.5-3.5" stroke="#a1a1aa" stroke-width="1.5" '
+    'stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
+)
+
+# Cached icon paths (created once per process)
+_icon_dir: str | None = None
+
+
+_ICON_STYLESHEET_TEMPLATE = """
+    QCheckBox::indicator:checked {{
+        image: url({check});
+    }}
+    QRadioButton::indicator:checked {{
+        image: url({radio});
+    }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+        image: url({arrow_up});
+        width: 10px;
+        height: 10px;
+    }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+        image: url({arrow_down});
+        width: 10px;
+        height: 10px;
+    }}
+"""
+
+
+def _ensure_icons() -> dict[str, str]:
+    """Write indicator SVGs to a temp directory, return {name: path} mapping."""
+    global _icon_dir
+    if _icon_dir is None:
+        _icon_dir = tempfile.mkdtemp(prefix="jarvis_theme_")
+
+    icons = {
+        "check": _CHECKMARK_SVG,
+        "radio": _RADIO_DOT_SVG,
+        "arrow_up": _ARROW_UP_SVG,
+        "arrow_down": _ARROW_DOWN_SVG,
+    }
+    paths: dict[str, str] = {}
+    for name, svg in icons.items():
+        path = os.path.join(_icon_dir, f"{name}.svg")
+        if not os.path.exists(path):
+            with open(path, "w") as f:
+                f.write(svg)
+        paths[name] = path.replace("\\", "/")
+    return paths
+
+
 def apply_theme(widget) -> None:
-    """Apply the Jarvis theme to a Qt widget."""
-    widget.setStyleSheet(JARVIS_THEME_STYLESHEET)
+    """Apply the Jarvis theme to a Qt widget, including SVG-based indicator icons."""
+    icons = _ensure_icons()
+    icon_css = _ICON_STYLESHEET_TEMPLATE.format(**icons)
+    widget.setStyleSheet(JARVIS_THEME_STYLESHEET + icon_css)
 
