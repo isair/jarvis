@@ -15,6 +15,9 @@ from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
+# Audit imports (gracefully degrade when not configured)
+from ..audit.recorder import get_recorder as _get_audit_recorder
+from ..audit.models import TaskRecord, TaskStepRecord
 import json
 import re
 import uuid
@@ -43,6 +46,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     """
     # Step 1: Redact sensitive information
     redacted = redact(text)
+
+    # Step 1a: Begin audit record (no-op when audit not configured)
+    _audit = _get_audit_recorder()
+    _audit_task_id = uuid.uuid4().hex
+    if _audit:
+        try:
+            _audit.begin_task(TaskRecord(
+                task_id=_audit_task_id,
+                intent=redacted[:500],
+                request_type="unknown",
+                status="planning",
+            ))
+        except Exception as _exc:
+            debug_log(f"audit: failed to begin task record: {_exc}", "audit")
 
     # Step 2: Check for recent dialogue context first (needed for profile selection)
     recent_messages = []
@@ -593,6 +610,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 max_retries=1,
             )
 
+            # Audit: record step outcome
+            if _audit:
+                try:
+                    import hashlib as _hashlib
+                    _args_hash = _hashlib.sha256(
+                        json.dumps(tool_args or {}, sort_keys=True).encode()
+                    ).hexdigest()[:16]
+                    _step_success = bool(result.reply_text and not result.error_message)
+                    _step_summary = (
+                        result.reply_text[:200] if _step_success else (result.error_message or "")[:200]
+                    )
+                    _audit.record_step(TaskStepRecord(
+                        step_id=uuid.uuid4().hex,
+                        task_id=_audit_task_id,
+                        tool_name=tool_name,
+                        args_hash=_args_hash,
+                        policy_audit_id="",
+                        result_summary=_step_summary,
+                        success=_step_success,
+                    ))
+                except Exception as _se:
+                    debug_log(f"audit: step record error: {_se}", "audit")
+
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:
                 debug_log("stop signal received - ending conversation without reply", "planning")
@@ -687,6 +727,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if not reply or not reply.strip():
         reply = "Sorry, I had trouble processing that. Could you try again?"
         debug_log("no reply generated, returning error message", "planning")
+        if _audit:
+            try:
+                _audit.finish_task(_audit_task_id, final_status="failed", error="no reply generated")
+            except Exception:
+                pass
 
         # Print error message
         try:
@@ -706,6 +751,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
+    if _audit:
+        try:
+            _audit.finish_task(_audit_task_id, final_status="complete")
+        except Exception:
+            pass
     safe_reply = reply.strip()
     if safe_reply:
         # Print reply with appropriate header

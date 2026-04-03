@@ -165,6 +165,9 @@ class Settings:
     # MCP Integration
     mcps: Dict[str, Any]
 
+    # ── Audit ───────────────────────────────────────────────────────────────────────
+    audit_db_path: str | None
+    """Path to the audit SQLite database. Defaults to sibling of db_path."""
 
 
 def _default_config_path() -> Path:
@@ -403,6 +406,9 @@ def get_default_config() -> Dict[str, Any]:
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
+
+        # Audit
+        "audit_db_path": None,
     }
 
 
@@ -539,6 +545,11 @@ def load_settings() -> Settings:
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     mcps = _ensure_dict(merged.get("mcps"))
+
+    # Audit
+    audit_db_path_val = merged.get("audit_db_path")
+    audit_db_path = None if audit_db_path_val in (None, "", "null") else str(audit_db_path_val)
+
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
@@ -657,4 +668,7 @@ def load_settings() -> Settings:
 
         # MCP Integration
         mcps=mcps,
+
+        # Audit
+        audit_db_path=audit_db_path,
     )
