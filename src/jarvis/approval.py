@@ -152,37 +152,30 @@ class RequestType(Enum):
     OPERATIONAL = "operational"      # Performs an action / changes state
 
 
-# Keywords that strongly suggest an operational intent
-_OPERATIONAL_KEYWORDS = (
-    "create", "write", "save", "delete", "remove", "update", "edit", "modify",
-    "send", "post", "submit", "upload", "download", "install", "uninstall",
-    "run", "execute", "start", "stop", "restart", "book", "schedule", "cancel",
-    "log", "record", "add", "append",
-)
-
-
-def classify_request(text: str) -> RequestType:
+def classify_request(text: str, tool_name: Optional[str] = None) -> RequestType:
     """
     Classify a user request as informational or operational.
 
-    Uses a lightweight keyword heuristic so that the reply engine can
-    choose appropriate behaviour (e.g. skip approval for read-only queries).
+    Classification is language-agnostic: if a tool has already been
+    selected for this request the classification is ``OPERATIONAL``;
+    otherwise it defaults to ``INFORMATIONAL``.  Callers in the reply
+    engine may update the classification after the agentic loop completes
+    (e.g. by calling this again once tool selection is known).
 
     Args:
-        text: Redacted user query
+        text: Redacted user query (unused in current implementation but
+              retained for API compatibility and future extension).
+        tool_name: Canonical tool identifier if one has been chosen,
+                   or ``None`` for the initial pre-loop classification.
 
     Returns:
-        RequestType.OPERATIONAL if the request implies side-effects,
-        RequestType.INFORMATIONAL otherwise
+        RequestType.OPERATIONAL if a tool is being executed,
+        RequestType.INFORMATIONAL otherwise.
     """
-    lower = (text or "").lower()
-    for kw in _OPERATIONAL_KEYWORDS:
-        # Simple word-boundary check to avoid false positives in longer words
-        if f" {kw} " in f" {lower} " or lower.startswith(kw + " "):
-            debug_log(f"request classified as operational (keyword='{kw}')", "approval")
-            return RequestType.OPERATIONAL
-
-    debug_log("request classified as informational", "approval")
+    if tool_name:
+        debug_log(f"request classified as operational (tool='{tool_name}')", "approval")
+        return RequestType.OPERATIONAL
+    debug_log("request classified as informational (pre-execution)", "approval")
     return RequestType.INFORMATIONAL
 
 

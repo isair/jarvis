@@ -107,6 +107,23 @@ class TaskState:
         self.status = TaskStatus.AWAITING_APPROVAL
         debug_log("task awaiting approval", "task")
 
+    def set_approved(self) -> None:
+        """
+        Resume execution after the user has granted approval.
+
+        Transitions the task from ``AWAITING_APPROVAL`` back to
+        ``EXECUTING``.  If the task is not in the approval-pending state
+        this is a no-op so callers do not need to guard the call.
+        """
+        if self.status == TaskStatus.AWAITING_APPROVAL:
+            self.status = TaskStatus.EXECUTING
+            debug_log("task approved — resuming execution", "task")
+        else:
+            debug_log(
+                f"set_approved called on task in state {self.status.value} — no-op",
+                "task",
+            )
+
     def add_step(self, description: str, tool_name: Optional[str] = None) -> TaskStep:
         """Add and return a new pending step."""
         step = TaskStep(description=description, tool_name=tool_name)
