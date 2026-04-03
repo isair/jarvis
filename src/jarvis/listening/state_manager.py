@@ -19,7 +19,7 @@ class ListeningState(Enum):
 class StateManager:
     """Manages listening state transitions and timing."""
 
-    def __init__(self, hot_window_seconds: float = 6.0, echo_tolerance: float = 0.3,
+    def __init__(self, hot_window_seconds: float = 3.0, echo_tolerance: float = 0.3,
                  voice_collect_seconds: float = 2.0, max_collect_seconds: float = 60.0):
         """
         Initialize state manager.
