@@ -576,6 +576,35 @@ class TestRepetitiveHallucinationDetection:
         text = "hello hello world this is a normal sentence"
         assert listener._is_repetitive_hallucination(text) is False
 
+    def test_detects_multi_char_pattern_no_spaces(self):
+        """Detects repeating multi-character pattern without spaces."""
+        listener = self._create_mock_listener()
+        assert listener._is_repetitive_hallucination("abcabcabcabcabc") is True
+
+    def test_accepts_low_coverage_pattern(self):
+        """Pattern repeating 4+ times but covering <60% of text is not flagged."""
+        listener = self._create_mock_listener()
+        assert listener._is_repetitive_hallucination(
+            "abababab this is a completely different long sentence") is False
+
+    def test_detects_word_with_varying_punctuation(self):
+        """Detects repetition even with varying punctuation across words."""
+        listener = self._create_mock_listener()
+        assert listener._is_repetitive_hallucination("stop. stop! stop? stop, stop") is True
+
+    def test_accepts_repeated_word_below_50_percent(self):
+        """Word appearing 4+ times but <50% of total words is not flagged."""
+        listener = self._create_mock_listener()
+        # "the" appears 4 times = 4/10 = 40%
+        assert listener._is_repetitive_hallucination(
+            "the cat and the dog and the bird and the fish") is False
+
+    def test_accepts_two_consecutive_only(self):
+        """Only 2 consecutive repetitions — not enough to flag."""
+        listener = self._create_mock_listener()
+        assert listener._is_repetitive_hallucination(
+            "I think think that is fine really") is False
+
 
 class TestMicPermissionHint:
     """Tests for platform-aware microphone permission hint."""
