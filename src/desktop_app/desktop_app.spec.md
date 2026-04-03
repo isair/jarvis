@@ -18,6 +18,7 @@ src/desktop_app/
 ├── app.py               # JarvisSystemTray, windows, startup flow
 ├── splash_screen.py     # Animated startup splash
 ├── setup_wizard.py      # First-run setup wizard
+├── settings_window.py   # Auto-generated settings UI from config metadata
 ├── face_widget.py       # Animated face visualization
 ├── themes.py            # Qt stylesheets and color palette
 ├── diary_dialog.py      # End-of-session diary update dialog
@@ -85,6 +86,7 @@ The central controller that manages:
 | **LogViewerWindow** | Real-time log output from the daemon, with "Report Issue" button |
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
 | **FaceWindow** | Animated face that reacts to speaking state |
+| **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 
 ### LogViewerWindow Features
