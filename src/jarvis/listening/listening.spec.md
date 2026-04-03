@@ -136,6 +136,8 @@ After TTS finishes, allow wake-word-free follow-up.
    - Partial echoes may not reach the normal 85% threshold
    - Whisper transcription errors can lower similarity scores
 
+**Grace Period for Echo Detection:** The hot window echo detection path (Priority 1) uses a generous timing check — not just formal hot window state, but also a grace period (`hot_window_seconds + echo_tolerance`) after TTS. This is critical because Whisper can merge echo + user speech into a single chunk that arrives after the formal hot window has expired. Without the grace period, the salvage logic never runs and the merged text confuses the intent judge.
+
 **Timer Reset on Echo Rejection:** When echo is rejected during the hot window, the expiry timer resets so the user gets the full window from the last echo rejection. Without this, echo processing time eats into the user's actual follow-up window. If the hot window already expired while the echo was being transcribed (Whisper latency), the window is reactivated — the user should not lose their follow-up opportunity because of slow echo processing.
 
 **Expiry:** Timer-based, guaranteed to fire even if no audio
