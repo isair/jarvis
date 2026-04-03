@@ -365,178 +365,51 @@ class VoiceListener(threading.Thread):
         # Track if this input was received during TTS (for logging purposes)
         received_during_tts = self.tts and self.tts.is_speaking()
 
-        # Priority 1: Hot window echo rejection (fast path for obvious echo)
-        # Per spec, hot window input should go to intent judge for final determination.
-        # Here we only do fast rejection of obvious echo to avoid unnecessary LLM calls.
-        in_hot_window = self.state_manager.was_hot_window_active_at_voice_start() or self.state_manager.is_hot_window_active()
-        if in_hot_window and self.tts and self.tts.enabled and self.echo_detector._last_tts_text:
-            # Determine if utterance started during TTS
-            is_speaking_now = self.tts.is_speaking()
-            if is_speaking_now:
-                is_during_tts = True
-            else:
-                tts_finish_time = self.echo_detector._last_tts_finish_time
-                echo_tolerance = self.echo_detector.echo_tolerance
-                is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
+        # Echo rejection & stop commands — only while TTS is actively playing.
+        # After TTS finishes, the intent judge handles everything (echo detection,
+        # hot window follow-ups, etc.) using full transcript context + last TTS text.
+        if self.tts and self.tts.enabled and self.tts.is_speaking():
+            # Stop command detection (fast, text-based)
+            stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
+            if is_stop_command(text_lower, stop_commands):
+                debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
+                self.tts.interrupt()
+                try:
+                    while not self._audio_q.empty():
+                        self._audio_q.get_nowait()
+                except Exception:
+                    pass
+                return
 
-            # During TTS: always try salvage first, then check for pure echo
-            # TTS timing is unreliable, so we can't trust position-based echo detection alone
-            # The salvage function searches the full TTS text to find mixed echo+speech
-            if is_during_tts:
-                # Always try salvage first - handles mixed echo+user speech
+            # Echo rejection during active TTS
+            should_reject = self.echo_detector.should_reject_as_echo(
+                text_lower, utterance_energy, True,
+                getattr(self.cfg, 'tts_rate', 200), utterance_start_time
+            )
+            if should_reject:
+                # Try to salvage user speech appended after echo
                 salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
                     text_lower,
                     getattr(self.cfg, 'tts_rate', 200),
                     utterance_start_time,
                 )
                 if salvaged and salvaged.strip() and salvaged != text_lower:
-                    # Salvage succeeded - update the transcript buffer so intent judge
-                    # sees clean data instead of mixed echo+speech
-                    debug_log(f"hot window: salvaged user speech: '{salvaged}'", "voice")
+                    debug_log(f"salvaged user speech from echo during TTS: '{salvaged}'", "voice")
                     self._transcript_buffer.update_last_segment_text(salvaged)
                     text_lower = salvaged
-                    # Fall through to intent judge with clean buffer
-                elif self.echo_detector.should_reject_as_echo(
-                    text_lower, utterance_energy, is_during_tts,
-                    getattr(self.cfg, 'tts_rate', 200), utterance_start_time,
-                    in_hot_window=True
-                ):
-                    # Pure echo (no salvageable user speech) - reject this utterance
-                    # but DON'T expire hot window - user might have real follow-up coming
-                    debug_log(f"rejected as echo during hot window (no salvage possible): '{text_lower}'", "echo")
-                    if not self.cfg.voice_debug:
-                        try:
-                            print("🔇 Ignoring echo from previous response")
-                        except Exception:
-                            pass
-                    # Clear voice state for this echo but keep hot window active
-                    # Reset expiry so echo processing time doesn't eat into user's window
-                    self.state_manager.clear_hot_window_voice_state()
-                    self.state_manager.reset_hot_window_expiry()
-                    return
-            else:
-                # After TTS: use length-aware echo detection for fast rejection
-                # Short queries (<=4 words) skip fast rejection - partial_ratio gives false positives
-                # Longer queries (>4 words) use threshold 70 to catch partial echoes
-                word_count = len(text_lower.split())
-                if word_count > 4:
-                    if self.echo_detector._check_text_similarity(text_lower, self.echo_detector._last_tts_text, threshold=70):
-                        # Before rejecting, try to salvage user speech from the end
-                        # Whisper may produce one chunk with echo + user query appended
-                        salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
-                            text_lower,
-                            getattr(self.cfg, 'tts_rate', 200),
-                            utterance_start_time,
-                        )
-                        if salvaged and salvaged.strip() and salvaged != text_lower:
-                            debug_log(f"hot window (after TTS): salvaged user speech from delayed echo: '{salvaged}'", "voice")
-                            self._transcript_buffer.update_last_segment_text(salvaged)
-                            text_lower = salvaged
-                            # Fall through to intent judge with clean text
-                        else:
-                            # Pure delayed echo - reject but keep hot window active
-                            debug_log(f"rejected as delayed echo during hot window (>4 words, similarity >= 70): '{text_lower}'", "echo")
-                            if not self.cfg.voice_debug:
-                                try:
-                                    print("🔇 Ignoring echo from previous response")
-                                except Exception:
-                                    pass
-                            # Clear voice state for this echo but keep hot window active
-                            # Reset expiry so echo processing time doesn't eat into user's window
-                            self.state_manager.clear_hot_window_voice_state()
-                            self.state_manager.reset_hot_window_expiry()
-                            return
-
-            # Hot window input passed fast echo check - fall through to intent judge
-            # Per spec: "Any speech triggers the intent judge (no wake word needed)"
-            # The intent judge will make the final decision on echo vs real follow-up
-            debug_log(f"hot window: passed fast echo check, will use intent judge: '{text_lower}'", "voice")
-
-            # Clear the TTS flag since echo check confirmed this is NOT echo
-            # This ensures the intent judge sees it as user speech
-            self._transcript_buffer.clear_last_segment_tts_flag()
-
-        # Priority 2: Check for echo (during TTS or echo window) - strict rejection outside hot window
-        if self.tts and self.tts.enabled:
-            # Determine if the utterance started while TTS was active, accounting for processing delays.
-            is_speaking_now = self.tts.is_speaking()
-            if is_speaking_now:
-                is_during_tts = True
-            else:
-                tts_finish_time = self.echo_detector._last_tts_finish_time
-                echo_tolerance = self.echo_detector.echo_tolerance
-                is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
-
-            # Check if heard text is longer than TTS - may contain user speech appended
-            # If so, try salvage BEFORE echo rejection (handles Whisper transcription differences)
-            tts_text = self.echo_detector._last_tts_text or ""
-            heard_words = len(text_lower.split())
-            tts_words = len(tts_text.split())
-            heard_longer_than_tts = heard_words > tts_words + 3  # 3+ extra words = likely user speech
-
-            if is_during_tts and heard_longer_than_tts:
-                # Try salvage first - heard text may have user speech after TTS content
-                salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
-                if salvaged and salvaged.strip() and salvaged != text_lower:
-                    debug_log(f"salvaged user speech (heard longer than TTS): '{salvaged}'", "voice")
-                    self._transcript_buffer.update_last_segment_text(salvaged)
-                    text_lower = salvaged
-                    # Continue processing with cleaned text (skip echo check)
                 else:
-                    # Salvage failed - fall through to echo check
-                    pass
-
-            # Check if this should be rejected as echo
-            should_reject = self.echo_detector.should_reject_as_echo(
-                text_lower,
-                utterance_energy,
-                is_during_tts,
-                getattr(self.cfg, 'tts_rate', 200),
-                utterance_start_time
-            )
-            if should_reject:
-                debug_log(f"echo rejected: '{text_lower[:50]}' (during_tts={is_during_tts})", "echo")
-                print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
-                if is_during_tts:
-                    # Attempt to remove leading echo and accept the remainder
-                    salvaged = self.echo_detector.cleanup_leading_echo_during_tts(
-                        text_lower,
-                        getattr(self.cfg, 'tts_rate', 200),
-                        utterance_start_time,
-                    )
-                    if salvaged and salvaged.strip() and salvaged != text_lower:
-                        debug_log(f"salvaged user speech from echo: '{salvaged}'", "voice")
-                        # Update the transcript buffer so intent judge sees clean data
-                        self._transcript_buffer.update_last_segment_text(salvaged)
-                        text_lower = salvaged
-                    else:
-                        return
-                else:
+                    debug_log(f"echo rejected during TTS: '{text_lower[:50]}'", "echo")
+                    print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
                     return
 
-            # Use the live state for stop command check, as we only care about interrupting active speech.
-            if is_speaking_now:
-                stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
-                if is_stop_command(text_lower, stop_commands):
-                    # Since echo detection already passed (we reached here), trust that decision
-                    # Now we have proper energy calculation from before frames were cleared
-                    debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f}, post-echo-check)", "voice")
-                    self.tts.interrupt()
-                    # Clear pending audio
-                    try:
-                        while not self._audio_q.empty():
-                            self._audio_q.get_nowait()
-                    except Exception:
-                        pass
-                    return
-
-        # Check hot window expiry (only if not processed as hot window input)
+        # Check hot window expiry
         self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
-        # Priority 3: LLM-based intent judge (upgraded, with full context)
-        # During TTS, we still want to use intent judge for longer utterances that passed
-        # echo detection - these could be user responses to TTS questions. Short utterances
-        # (1-3 words) during TTS are handled by text-based stop word detection in Priority 2.
+        # Intent judge — the single decision-maker for all post-TTS input.
+        # Gets full transcript context, last TTS text, and hot window state.
+        # Handles: echo detection, wake word queries, hot window follow-ups.
+        # During active TTS, skip short utterances (<=3 words) as those are
+        # handled by stop command detection above.
         is_speaking_now = self.tts and self.tts.is_speaking()
         intent_judgment = None
 

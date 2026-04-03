@@ -119,32 +119,17 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Duration:** Configurable (default: 3 seconds)
 
-**Behavior:**
-- Any speech triggers the intent judge (no wake word needed)
-- Intent judge determines if speech is echo or real follow-up
-- Judge has full context: TTS text, timing, transcript content
+**Behaviour:** All speech goes to the intent judge — no heuristic pre-filtering. The intent judge receives `last_tts_text` and `in_hot_window=True`, giving it full context to distinguish echo from real follow-ups.
 
-**Echo Detection Flow (Hot Window):**
-1. During TTS: Use segment-based matching to detect echo
-2. After TTS (delayed echo):
-   - Short queries (≤4 words): Skip similarity check (false positives on common words)
-   - Longer queries (>4 words): If similarity ≥70% to TTS, try salvage first (user speech may be appended to echo in the same Whisper chunk). Only reject if no salvageable user speech found.
-3. Accepted input: Use the ACTUAL text heard, not intent judge synthesis
-   - Intent judge synthesizes from conversation context, which can return wrong queries
-   - Hot window input should reflect what the user actually said
-4. This approach handles high-volume environments with room reverb, where:
-   - Partial echoes may not reach the normal 85% threshold
-   - Whisper transcription errors can lower similarity scores
+**Voice start capture:** `capture_hot_window_state_at_voice_start` returns True when the hot window is formally active OR when activation is pending (during the `echo_tolerance` delay). This ensures speech that starts the moment TTS finishes is correctly identified as hot window input, even if Whisper delivers the chunk after the window expires.
 
-**Voice Start During Pending Activation:** `capture_hot_window_state_at_voice_start` returns True not only when the hot window is formally active, but also when a hot window activation is pending (during the `echo_tolerance` delay). The user or speaker echo can start producing audio the moment TTS finishes — before the echo_tolerance delay completes. This speech is still part of the hot window period. Without this, Whisper can merge echo + user speech into a single chunk that arrives after the hot window has expired, and the echo salvage logic would never run because `in_hot_window` would be False.
-
-**Timer Reset on Echo Rejection:** When echo is rejected during the hot window, the expiry timer resets so the user gets the full window from the last echo rejection. Without this, echo processing time eats into the user's actual follow-up window. If the hot window already expired while the echo was being transcribed (Whisper latency), the window is reactivated — the user should not lose their follow-up opportunity because of slow echo processing.
+**`could_be_hot_window` (intent judge context):** Uses generous timing — formal hot window state, pending activation, or utterance timing within a grace period of `hot_window_seconds + echo_tolerance` after TTS. This covers all cases: speech starting during hot window but finishing after, Whisper delivering chunks late, etc.
 
 **Expiry:** Timer-based, guaranteed to fire even if no audio
 
 ### 3. During TTS
 
-While TTS is playing, listen for stop commands only.
+While TTS is playing, echo rejection and stop commands are handled with fast text-based checks (no LLM). This prevents self-loops where the mic picks up TTS output. After TTS finishes, the intent judge takes over.
 
 **Stop detection:**
 - Text-based: Check for "stop", "quiet", "shut up", etc.
