@@ -136,6 +136,8 @@ After TTS finishes, allow wake-word-free follow-up.
    - Partial echoes may not reach the normal 85% threshold
    - Whisper transcription errors can lower similarity scores
 
+**Timer Reset on Echo Rejection:** When echo is rejected during the hot window, the expiry timer resets so the user gets the full window from the last echo rejection. Without this, echo processing time eats into the user's actual follow-up window.
+
 **Expiry:** Timer-based, guaranteed to fire even if no audio
 
 ### 3. During TTS

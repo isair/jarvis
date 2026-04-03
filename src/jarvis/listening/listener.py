@@ -411,7 +411,9 @@ class VoiceListener(threading.Thread):
                         except Exception:
                             pass
                     # Clear voice state for this echo but keep hot window active
+                    # Reset expiry so echo processing time doesn't eat into user's window
                     self.state_manager.clear_hot_window_voice_state()
+                    self.state_manager.reset_hot_window_expiry()
                     return
             else:
                 # After TTS: use length-aware echo detection for fast rejection
@@ -429,7 +431,9 @@ class VoiceListener(threading.Thread):
                             except Exception:
                                 pass
                         # Clear voice state for this echo but keep hot window active
+                        # Reset expiry so echo processing time doesn't eat into user's window
                         self.state_manager.clear_hot_window_voice_state()
+                        self.state_manager.reset_hot_window_expiry()
                         return
 
             # Hot window input passed fast echo check - fall through to intent judge
