@@ -15,6 +15,17 @@ from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
+from .errors import (
+    AgentError,
+    ApprovalRequiredError,
+    LoopExhaustedError,
+    ModelOutputError,
+    PolicyDeniedError as AgentPolicyDeniedError,
+    ToolExecutionError,
+    ToolSchemaError,
+)
+# Policy imports (gracefully degrade when not configured)
+from ..policy import engine as _policy_engine_module, models as _policy_models
 import json
 import re
 import uuid
@@ -580,6 +591,30 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 else:
                     messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."})
                 continue
+
+            # Policy evaluation
+            _policy_decision = None
+            try:
+                _policy_decision = _policy_engine_module.evaluate(tool_name, tool_args)
+                if not _policy_decision.allowed:
+                    debug_log(f"  🚫 policy denied {tool_name}: {_policy_decision.denied_reason}", "planning")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Error: Action denied by policy — {_policy_decision.denied_reason or _policy_decision.decision_reason}",
+                    })
+                    continue
+            except _policy_models.PolicyDeniedError as _pde:
+                debug_log(f"  🚫 policy denied {tool_name}: {_pde}", "planning")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"Error: Action denied by policy — {_pde}",
+                })
+                continue
+            except Exception as _pe:
+                debug_log(f"  ⚠️ policy evaluation error: {_pe}", "planning")
+                # Fall through on policy engine error
 
             # Execute tool
             result = run_tool_with_retries(

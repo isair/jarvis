@@ -294,6 +294,32 @@ def main() -> None:
     print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
+    # Initialise runtime health registry + policy via bootstrap helpers.
+    # Each init is graceful: a failure degrades the service but does not abort startup.
+    try:
+        from .runtime.health import configure as _configure_health
+        _health = _configure_health()
+        debug_log("health registry configured", "runtime")
+    except Exception as _he:
+        debug_log(f"health registry init failed (non-fatal): {_he}", "runtime")
+        _health = None
+
+    try:
+        from .policy.approvals import ApprovalStore as _ApprovalStore
+        from .policy.engine import configure as _configure_policy
+        _approval_store = _ApprovalStore()
+        _configure_policy(cfg, _approval_store)
+        debug_log(f"policy engine configured: mode={getattr(cfg, 'policy_mode', 'ask_destructive')}", "runtime")
+        if _health:
+            _health.ready("policy", f"mode={getattr(cfg, 'policy_mode', 'ask_destructive')}")
+    except Exception as _pe:
+        debug_log(f"policy init failed (non-fatal): {_pe}", "runtime")
+        if _health:
+            try:
+                _health.degraded("policy", "policy engine unavailable", error=str(_pe))
+            except Exception:
+                pass
+
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}
     if mcps:
