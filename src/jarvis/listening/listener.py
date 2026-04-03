@@ -368,19 +368,7 @@ class VoiceListener(threading.Thread):
         # Priority 1: Hot window echo rejection (fast path for obvious echo)
         # Per spec, hot window input should go to intent judge for final determination.
         # Here we only do fast rejection of obvious echo to avoid unnecessary LLM calls.
-        #
-        # Use generous timing: formal hot window state OR recent TTS within grace period.
-        # Whisper can merge echo + user speech into one chunk that arrives after the hot
-        # window expired. Without the grace period, the salvage logic never runs and the
-        # merged text confuses the intent judge downstream.
         in_hot_window = self.state_manager.was_hot_window_active_at_voice_start() or self.state_manager.is_hot_window_active()
-        if not in_hot_window and self.echo_detector._last_tts_finish_time > 0:
-            grace = self.state_manager.hot_window_seconds + self.state_manager.echo_tolerance
-            tts_finish = self.echo_detector._last_tts_finish_time
-            if (utterance_start_time > 0 and utterance_start_time < tts_finish + grace) or \
-               (utterance_end_time > 0 and utterance_end_time - tts_finish < grace):
-                in_hot_window = True
-                debug_log("treating as hot window input (grace period after recent TTS)", "voice")
         if in_hot_window and self.tts and self.tts.enabled and self.echo_detector._last_tts_text:
             # Determine if utterance started during TTS
             is_speaking_now = self.tts.is_speaking()

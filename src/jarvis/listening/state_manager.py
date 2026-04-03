@@ -173,19 +173,23 @@ class StateManager:
         return False
 
     def capture_hot_window_state_at_voice_start(self) -> None:
-        """Capture whether hot window was active when voice input started.
+        """Capture whether hot window was active (or pending) when voice input started.
 
-        Note: We only check if the state is HOT_WINDOW, not whether the time
-        has elapsed. This prevents a race condition where the user starts
-        speaking near the end of the hot window - the state might not have
-        been updated to WAKE_WORD yet even if the time limit just passed.
-        The important thing is that the system was in hot window mode when
-        the user started speaking.
+        Returns True for two cases:
+        1. State is HOT_WINDOW (formal hot window is active)
+        2. A hot window activation timer is pending (echo_tolerance delay before
+           formal activation). The user/echo can start speaking the moment TTS
+           finishes — before the echo_tolerance delay completes. This speech is
+           still part of the hot window period.
         """
         with self._state_lock:
-            self._was_hot_window_active_at_voice_start = self._state == ListeningState.HOT_WINDOW
+            is_active = self._state == ListeningState.HOT_WINDOW
+        with self._timer_lock:
+            is_pending = self._hot_window_activation_timer is not None
+        self._was_hot_window_active_at_voice_start = is_active or is_pending
         if self._was_hot_window_active_at_voice_start:
-            debug_log("voice input started during active hot window", "state")
+            reason = "active" if is_active else "pending activation"
+            debug_log(f"voice input started during hot window ({reason})", "state")
 
     def was_hot_window_active_at_voice_start(self) -> bool:
         """Check if hot window was active when current voice input started."""

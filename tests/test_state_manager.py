@@ -300,6 +300,19 @@ class TestHotWindowVoiceState:
         sm.capture_hot_window_state_at_voice_start()
         assert sm.was_hot_window_active_at_voice_start() is False
 
+    def test_capture_hot_window_state_when_pending_activation(self):
+        """Captures True during echo_tolerance delay (activation pending but not yet active)."""
+        sm = StateManager(echo_tolerance=1.0, hot_window_seconds=3.0)
+
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            # State is still WAKE_WORD, but activation timer is pending
+            assert sm.get_state() == ListeningState.WAKE_WORD
+            sm.capture_hot_window_state_at_voice_start()
+            assert sm.was_hot_window_active_at_voice_start() is True
+
+        sm.stop()
+
     def test_clear_hot_window_voice_state(self):
         """Can clear the captured hot window voice state."""
         sm = StateManager()
