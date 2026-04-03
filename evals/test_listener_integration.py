@@ -16,24 +16,10 @@ These integration evals verify the COUPLING:
 Requires: Ollama running with gemma4 model available.
 """
 
-import sys
 import time
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
-
-# Ensure imports work from evals directory
-_this_file = Path(__file__).resolve()
-EVALS_DIR = _this_file.parent
-ROOT = EVALS_DIR.parent
-SRC = ROOT / "src"
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-if str(EVALS_DIR) not in sys.path:
-    sys.path.insert(0, str(EVALS_DIR))
 
 
 # ---------------------------------------------------------------------------

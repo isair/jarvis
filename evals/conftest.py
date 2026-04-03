@@ -32,7 +32,18 @@ if str(SRC) not in sys.path:
 if str(EVALS) not in sys.path:
     sys.path.insert(0, str(EVALS))
 
-from helpers import MockConfig, JUDGE_MODEL
+from helpers import MockConfig, JUDGE_MODEL, is_judge_llm_available
+
+
+# =============================================================================
+# Shared Markers
+# =============================================================================
+
+_JUDGE_LLM_AVAILABLE = is_judge_llm_available()
+requires_judge_llm = pytest.mark.skipif(
+    not _JUDGE_LLM_AVAILABLE,
+    reason="Judge LLM not available"
+)
 
 
 # =============================================================================
