@@ -284,6 +284,12 @@ def _get_external_ip_automatically() -> Optional[str]:
     if ip:
         return ip
 
+    # Final fallback: single DNS query to OpenDNS (privacy-light)
+    ip = _resolve_public_ip_via_opendns()
+    if ip and not _is_private_ip(ip):
+        debug_log(f"Public IP resolved via OpenDNS: {ip}", "location")
+        return ip
+
     return None
 
 
