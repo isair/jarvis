@@ -90,7 +90,7 @@ Use this to understand the performance tradeoffs when choosing a model.
 > They use a fixed model (`gemma4`) and are not part of the model comparison.
 
 **Model:** `gemma4` (fixed)
-**Results:** 4 passed, 22 failed, 13 expected failures
+**Results:** 7 passed, 19 failed, 17 expected failures
 
 | Test Case | Pass Rate | Status |
 |-----------|-----------|--------|
@@ -107,16 +107,16 @@ Use this to understand the performance tradeoffs when choosing a model.
 | echo_plus_rejected_similar_plus_wake_retry | 0/3 (0%) | ❌ |
 | echo_slipped_through_then_wake_query | 0/3 (0%) | ❌ |
 | full_buffer_with_tts_echoes_and_wake_retry | 0/3 (0%) | ❌ |
-| hot_window_simple_followup | 1/3 (33%) | ⚠️ |
+| hot_window_simple_followup | 3/3 (100%) | ✅ |
 | hot_window_thanks_followup | 0/3 (0%) | ❌ |
 | mentioned_in_narrative_past_tense | 3/3 XFAIL | 🔸 |
 | mentioned_in_narrative_third_person | 3/3 XFAIL | 🔸 |
 | multi_person_restaurant_recommendation | 3/3 XFAIL | 🔸 |
-| multi_person_travel_planning | 0/3 (0%) | ❌ |
+| multi_person_travel_planning | 3/3 XFAIL | 🔸 |
 | multi_person_vague_reference | 3/3 XFAIL | 🔸 |
 | multi_person_weather_discussion | 3/3 XFAIL | 🔸 |
 | multiple_echoes_then_interrupt | 3/3 XFAIL | 🔸 |
-| no_wake_word_casual_speech | 0/3 (0%) | ❌ |
+| no_wake_word_casual_speech | 3/3 XFAIL | 🔸 |
 | no_wake_word_in_buffer | 3/3 XFAIL | 🔸 |
 | no_wake_word_simple_question | 3/3 XFAIL | 🔸 |
 | non_english_followup | 3/3 XFAIL | 🔸 |
@@ -125,7 +125,7 @@ Use this to understand the performance tradeoffs when choosing a model.
 | quiet_command | 3/3 XFAIL | 🔸 |
 | stop_command_during_tts | 0/3 (0%) | ❌ |
 | test_hot_window_mode_indicated_in_prompt | 3/3 (100%) | ✅ |
-| test_processed_segment_not_reextracted | 1/3 (33%) | ⚠️ |
+| test_processed_segment_not_reextracted | 0/3 (0%) | ❌ |
 | test_returns_none_when_ollama_unavailable | 3/3 (100%) | ✅ |
 | test_system_prompt_has_echo_guidance | 3/3 (100%) | ✅ |
 | test_tts_text_included_for_echo_detection | 3/3 (100%) | ✅ |
@@ -133,10 +133,10 @@ Use this to understand the performance tradeoffs when choosing a model.
 | user_followup_statement_after_opinion_question | 0/3 (0%) | ❌ |
 | user_followup_statement_after_question_nihilism | 0/3 (0%) | ❌ |
 | user_followup_statement_meaning_of_life | 0/3 (0%) | ❌ |
-| wake_word_completely_unrelated_to_tts | 1/3 (33%) | ⚠️ |
-| wake_word_different_topic_not_echo | 0/3 (0%) | ❌ |
-| wake_word_simple_question | 2/3 (67%) | ⚠️ |
-| wake_word_with_pre_chatter | 0/3 (0%) | ❌ |
+| wake_word_completely_unrelated_to_tts | 3/3 (100%) | ✅ |
+| wake_word_different_topic_not_echo | 3/3 XFAIL | 🔸 |
+| wake_word_simple_question | 3/3 (100%) | ✅ |
+| wake_word_with_pre_chatter | 3/3 XFAIL | 🔸 |
 
 ### 📖 Legend
 
