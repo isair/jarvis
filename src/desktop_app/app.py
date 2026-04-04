@@ -16,6 +16,12 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
+# Suppress pkg_resources deprecation warning from webrtcvad in bundled apps
+if getattr(sys, 'frozen', False):
+    import warnings
+    warnings.filterwarnings('ignore', message='pkg_resources is deprecated',
+                            category=UserWarning)
+
 # Note: QtWebEngine is not used on macOS bundled apps due to sandbox/bundling issues
 # The Memory Viewer opens in the system browser instead (see MemoryViewerWindow)
 
