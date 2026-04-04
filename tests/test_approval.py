@@ -146,19 +146,40 @@ def test_informational_queries():
 
 @pytest.mark.unit
 def test_operational_queries():
-    operational = [
+    """With a tool_name supplied, classification is OPERATIONAL regardless of text."""
+    tool_invocations = [
+        ("delete the old log files", "localFiles"),
+        ("write a summary to notes.txt", "localFiles"),
+        ("save this conversation", "writeFile"),
+        ("create a new file called report.md", "localFiles"),
+        ("log meal apple for lunch", "logMeal"),
+        ("run the tests", "shell"),
+        ("book a restaurant tonight", "mcp_restaurant"),
+    ]
+    for query, tool_name in tool_invocations:
+        result = classify_request(query, tool_name=tool_name)
+        assert result == RequestType.OPERATIONAL, (
+            f"Expected OPERATIONAL when tool_name='{tool_name}' for: '{query}'"
+        )
+
+
+@pytest.mark.unit
+def test_operational_without_tool_is_informational():
+    """Without a tool_name, even action-sounding text is classified INFORMATIONAL.
+
+    classify_request() is language-agnostic: it relies on tool presence, not
+    keyword matching, so the same text may arrive in any language.
+    """
+    action_texts = [
         "delete the old log files",
         "write a summary to notes.txt",
-        "save this conversation",
-        "create a new file called report.md",
         "send an email to Alice",
-        "log meal apple for lunch",
-        "run the tests",
-        "book a restaurant for tonight",
     ]
-    for query in operational:
+    for query in action_texts:
         result = classify_request(query)
-        assert result == RequestType.OPERATIONAL, f"Expected OPERATIONAL for: '{query}'"
+        assert result == RequestType.INFORMATIONAL, (
+            f"Expected INFORMATIONAL (no tool_name) for: '{query}'"
+        )
 
 
 @pytest.mark.unit
