@@ -43,7 +43,7 @@ class IntentJudgeConfig:
     aliases: list = None
     model: str = "gemma4:e2b"
     ollama_base_url: str = "http://127.0.0.1:11434"
-    timeout_sec: float = 3.0
+    timeout_sec: float = 10.0
 
     def __post_init__(self):
         if self.aliases is None:
@@ -310,7 +310,7 @@ Examples:
                     "stream": False,
                     "options": {
                         "temperature": 0.0,
-                        "num_predict": 400,
+                        "num_predict": 800,
                     },
                 },
                 timeout=self.config.timeout_sec,
@@ -372,7 +372,7 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
         aliases=list(getattr(cfg, "wake_aliases", [])),
         model=model,
         ollama_base_url=ollama_base_url,
-        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 3.0)),
+        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
     )
 
     return IntentJudge(config)

@@ -255,7 +255,7 @@ Judge output: {"directed": true, "query": "Ni hao", "reasoning": "First segment 
   "transcript_buffer_duration_sec": 120,
 
   "intent_judge_model": "gemma4:e2b",
-  "intent_judge_timeout_sec": 3.0,
+  "intent_judge_timeout_sec": 10.0,
 
   "hot_window_seconds": 3.0,
   "echo_tolerance": 0.3
