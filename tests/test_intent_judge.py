@@ -20,7 +20,7 @@ class TestIntentJudgeConfig:
         config = IntentJudgeConfig()
         assert config.assistant_name == "Jarvis"
         assert config.model == "gemma4:e2b"
-        assert config.timeout_sec == 3.0
+        assert config.timeout_sec == 10.0
         assert config.aliases == []
 
     def test_custom_config(self):
