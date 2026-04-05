@@ -1502,12 +1502,6 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        # If wake word was detected during this utterance, start beep now
-        # This provides immediate feedback as soon as the user finishes speaking
-        if self._wake_timestamp is not None:
-            if self.tts is None or not self.tts.is_speaking():
-                self._start_thinking_tune()
-
         # Speech recognition with appropriate backend
         try:
             if self._whisper_backend == "mlx":
@@ -1574,6 +1568,24 @@ class VoiceListener(threading.Thread):
 
         # Log successful transcription
         print(f"  📝 Heard: \"{text}\"", flush=True)
+
+        # Start beep early — before intent judge — so user gets immediate feedback.
+        # We'll stop it later if the intent judge rejects the input.
+        if not (self.tts and self.tts.is_speaking()) and not self._is_thinking_tune_active():
+            in_hot_window = (
+                self.state_manager.was_hot_window_active_at_voice_start()
+                or self.state_manager.is_hot_window_active()
+            )
+            if in_hot_window:
+                self._start_thinking_tune()
+                debug_log("early beep: hot window active", "voice")
+            else:
+                wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+                fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
+                if is_wake_word_detected(text.lower(), wake_word, aliases, fuzzy_ratio):
+                    self._start_thinking_tune()
+                    debug_log("early beep: wake word detected", "voice")
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
