@@ -329,57 +329,43 @@ class TestEchoAndUserSpeechInSameChunk:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-class TestGracePeriodBoundaries:
-    """The grace period (hot_window_seconds + echo_tolerance) determines whether
-    late-arriving transcripts are still treated as hot window input."""
+class TestHotWindowOnlyFromStateManager:
+    """Hot window status comes exclusively from the state manager's formal
+    activation/expiry — not from time-based grace periods. This prevents
+    false hot window claims after the user has seen 'Returning to wake word mode'."""
 
     @patch("builtins.print")
-    def test_utterance_within_grace_period_accepted(self, _print):
-        """Utterance ending within grace period after TTS is treated as hot window."""
-        hot_window_seconds = 3.0
-        echo_tolerance = 0.3
+    def test_recent_tts_without_hot_window_activation_not_treated_as_hot(self, _print):
+        """TTS finishing without hot window activation does not create a hot window."""
         listener, _ = _create_listener(
-            hot_window_seconds=hot_window_seconds,
-            echo_tolerance=echo_tolerance,
+            hot_window_seconds=3.0,
+            echo_tolerance=0.3,
         )
 
+        # Track TTS finish but do NOT schedule hot window activation
         listener.echo_detector.track_tts_start("answer text")
         listener.echo_detector.track_tts_finish()
-        tts_finish = listener.echo_detector._last_tts_finish_time
 
-        # Utterance ends 2.5s after TTS (within 3.3s grace period)
-        utterance_start = tts_finish + 1.5
-        utterance_end = tts_finish + 2.5
-
+        # Judge says directed, but no wake word and no hot window
         _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
 
-        listener._process_transcript(
-            "thanks",
-            utterance_energy=0.01,
-            utterance_start_time=utterance_start,
-            utterance_end_time=utterance_end,
-        )
+        listener._process_transcript("thanks", utterance_energy=0.01)
 
-        assert _accepted_query(listener) == "thanks"
+        # Should NOT be accepted — no hot window active, no wake word
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_utterance_beyond_grace_period_requires_wake_word(self, _print):
-        """Utterance ending after grace period is NOT treated as hot window."""
-        hot_window_seconds = 3.0
-        echo_tolerance = 0.3
+    def test_formal_hot_window_activation_required(self, _print):
+        """Only formally activated hot window allows wake-word-free input."""
         listener, _ = _create_listener(
-            hot_window_seconds=hot_window_seconds,
-            echo_tolerance=echo_tolerance,
+            hot_window_seconds=3.0,
+            echo_tolerance=0.02,
         )
 
         listener.echo_detector.track_tts_start("old answer")
         listener.echo_detector.track_tts_finish()
         tts_finish = listener.echo_detector._last_tts_finish_time
-
-        # Utterance ends 4.0s after TTS (beyond 3.3s grace period)
-        utterance_start = tts_finish + 3.5
-        utterance_end = tts_finish + 4.0
 
         # Judge says directed, but no wake word in text — should be rejected
         _install_intent_judge(listener, _make_judgment(directed=True, query="hello there"))
@@ -387,24 +373,24 @@ class TestGracePeriodBoundaries:
         listener._process_transcript(
             "hello there",
             utterance_energy=0.01,
-            utterance_start_time=utterance_start,
-            utterance_end_time=utterance_end,
+            utterance_start_time=tts_finish + 0.5,
+            utterance_end_time=tts_finish + 1.0,
         )
 
         assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_no_timestamps_recent_tts_accepted(self, _print):
-        """When Whisper provides no timestamps but TTS was recent, treat as hot window."""
-        listener, _ = _create_listener(hot_window_seconds=3.0, echo_tolerance=0.3)
+    def test_no_timestamps_with_active_hot_window_accepted(self, _print):
+        """When Whisper provides no timestamps but hot window is active, accepted."""
+        listener, _ = _create_listener(hot_window_seconds=3.0, echo_tolerance=0.02)
 
         listener.echo_detector.track_tts_start("recent response")
-        listener.echo_detector.track_tts_finish()
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
 
         _install_intent_judge(listener, _make_judgment(directed=True, query="and also"))
 
-        # No utterance timing (both 0) — fallback uses time.time() vs tts_finish
         listener._process_transcript(
             "and also",
             utterance_energy=0.01,
@@ -416,13 +402,13 @@ class TestGracePeriodBoundaries:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_no_timestamps_stale_tts_rejected(self, _print):
-        """When Whisper provides no timestamps and TTS was long ago, require wake word."""
+    def test_no_timestamps_without_hot_window_rejected(self, _print):
+        """When Whisper provides no timestamps and no hot window, requires wake word."""
         listener, _ = _create_listener(hot_window_seconds=3.0, echo_tolerance=0.3)
 
         listener.echo_detector.track_tts_start("stale response")
-        # Manually backdate the TTS finish time
-        listener.echo_detector._last_tts_finish_time = time.time() - 30.0
+        # TTS finished but no hot window scheduled
+        listener.echo_detector.track_tts_finish()
 
         _install_intent_judge(listener, _make_judgment(directed=True, query="random remark"))
 
@@ -613,6 +599,37 @@ class TestEchoConfirmedHotWindowReset:
             "the weather will be sunny tomorrow",
             utterance_energy=0.01)
 
+        # Hot window should still be active (reset by echo rejection)
+        assert listener.state_manager.is_hot_window_active()
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_echo_rejected_even_when_judge_says_directed(self, _print):
+        """Echo is caught even when intent judge says directed in hot window.
+
+        The mic picks up Jarvis's TTS output and Whisper transcribes it.
+        The intent judge may think it's a follow-up, but the fuzzy echo
+        check catches it before acceptance.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        tts_text = "Georgian cuisine is incredibly rich and you should try Khachapuri and Georgian bread."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Judge thinks this is a directed follow-up
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="and kg chai like georgian bread",
+            confidence="high", reasoning="user follow-up"))
+
+        # But the text is actually echo of the TTS output
+        listener._process_transcript(
+            "and kg chai like georgian bread",
+            utterance_energy=0.01)
+
+        # Should be rejected as echo despite judge saying directed
+        assert _accepted_query(listener) == ""
         # Hot window should still be active (reset by echo rejection)
         assert listener.state_manager.is_hot_window_active()
         listener.state_manager.stop()

@@ -450,27 +450,15 @@ class VoiceListener(threading.Thread):
             last_tts_text = self.echo_detector._last_tts_text or ""
             last_tts_finish_time = self.echo_detector._last_tts_finish_time or 0.0
 
-            # Determine if this could be a hot window follow-up
-            # This helps the intent judge know to look for echo + follow-up patterns
-            #
-            # We're generous here because:
-            # 1. Users often start speaking during TTS and continue into follow-up
-            # 2. Long utterances may span TTS completion + hot window
-            # 3. It's better to let the intent judge decide (it has full context)
-            grace_period = self.state_manager.hot_window_seconds + self.state_manager.echo_tolerance
+            # Determine if this could be a hot window follow-up.
+            # Only use formal hot window state — no time-based grace period.
+            # The state manager already handles the timing (echo_tolerance
+            # delay before activation, hot_window_seconds before expiry).
+            # A generous grace period caused false hot window claims after
+            # the user had already seen "Returning to wake word mode".
             could_be_hot_window = (
                 self.state_manager.was_hot_window_active_at_voice_start() or
-                self.state_manager.is_hot_window_active() or
-                # Treat as hot window if there was recent TTS, using these checks:
-                (last_tts_finish_time > 0 and (
-                    # Case 1: Utterance started during TTS (user speaking through TTS)
-                    (utterance_start_time > 0 and utterance_start_time < last_tts_finish_time) or
-                    # Case 2: Utterance ended within grace period after TTS
-                    (utterance_end_time > 0 and utterance_end_time - last_tts_finish_time < grace_period) or
-                    # Case 3: Fallback - only when utterance timing is unavailable
-                    (utterance_start_time == 0 and utterance_end_time == 0 and
-                     time.time() - last_tts_finish_time < grace_period)
-                ))
+                self.state_manager.is_hot_window_active()
             )
 
             intent_judgment = self._intent_judge.judge(
@@ -507,6 +495,7 @@ class VoiceListener(threading.Thread):
                             text_lower, wake_word, aliases
                         )
                         if not has_wake_word:
+                            print(f"  🧠 Intent override: no wake word found, ignoring", flush=True)
                             debug_log(
                                 f"⚠️ Intent judge said directed but no wake word found in '{text_lower[:50]}...' "
                                 f"(reasoning: {intent_judgment.reasoning})",
@@ -526,7 +515,20 @@ class VoiceListener(threading.Thread):
                                 pass
                             return
                     else:
-                        # Hot window mode - no wake word needed
+                        # Hot window mode - no wake word needed, but check for echo.
+                        # The mic can pick up Jarvis's own TTS output and Whisper
+                        # transcribes it as user speech. Check fuzzy similarity.
+                        if last_tts_text:
+                            echo_score = fuzz.partial_ratio(
+                                text_lower[:100], last_tts_text.lower()[:200]
+                            )
+                            if echo_score >= 70:
+                                debug_log(f"🔇 Echo in hot window (directed, score={echo_score}): \"{text_lower}\"", "voice")
+                                print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
+                                self.state_manager.reset_hot_window_expiry()
+                                self._stop_thinking_tune()
+                                return
+
                         # Use actual user text as query: in hot window there's no wake word
                         # to strip, and the intent judge's extraction can lose words
                         # (e.g. extracting "I" from "No, I'm good.")
@@ -559,6 +561,7 @@ class VoiceListener(threading.Thread):
                             text_lower, wake_word, aliases
                         )
                         if not has_wake_word:
+                            print(f"  🧠 Intent override: no wake word found, ignoring", flush=True)
                             debug_log(
                                 f"⚠️ Intent judge said directed (no query) but no wake word in '{text_lower[:50]}...'",
                                 "voice"
@@ -577,6 +580,18 @@ class VoiceListener(threading.Thread):
                                 pass
                             return
                     else:
+                        # Hot window — echo check before accepting
+                        if last_tts_text:
+                            echo_score = fuzz.partial_ratio(
+                                text_lower[:100], last_tts_text.lower()[:200]
+                            )
+                            if echo_score >= 70:
+                                debug_log(f"🔇 Echo in hot window (directed/no-query, score={echo_score}): \"{text_lower}\"", "voice")
+                                print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
+                                self.state_manager.reset_hot_window_expiry()
+                                self._stop_thinking_tune()
+                                return
+
                         debug_log(f"✅ Intent judge accepted (directed, high confidence, using actual text): \"{text_lower}\"", "voice")
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
