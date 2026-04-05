@@ -84,7 +84,7 @@ def check_mlx_whisper_status() -> MLXWhisperStatus:
 
 
 # Import config early (no PyQt6 dependency) - needed for detection functions
-from jarvis.config import load_settings, get_default_config
+from jarvis.config import load_settings, get_default_config, default_config_path
 
 
 class SetupStatus(Enum):
@@ -1335,12 +1335,7 @@ class ModelsPage(QWizardPage):
     def _save_model_to_config(self):
         """Save the selected chat model to config file."""
         try:
-            xdg = os.environ.get("XDG_CONFIG_HOME")
-            if xdg:
-                config_path = Path(xdg) / "jarvis" / "config.json"
-            else:
-                config_path = Path.home() / ".config" / "jarvis" / "config.json"
-
+            config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             if config_path.exists():
@@ -1946,12 +1941,7 @@ class WhisperSetupPage(QWizardPage):
     def _save_whisper_model_to_config(self):
         """Save the selected whisper model to config file."""
         try:
-            xdg = os.environ.get("XDG_CONFIG_HOME")
-            if xdg:
-                config_path = Path(xdg) / "jarvis" / "config.json"
-            else:
-                config_path = Path.home() / ".config" / "jarvis" / "config.json"
-
+            config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             if config_path.exists():
@@ -2401,14 +2391,8 @@ class LocationPage(QWizardPage):
 
         try:
             import json
-            from pathlib import Path
 
-            xdg = os.environ.get("XDG_CONFIG_HOME")
-            if xdg:
-                config_path = Path(xdg) / "jarvis" / "config.json"
-            else:
-                config_path = Path.home() / ".config" / "jarvis" / "config.json"
-
+            config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             if config_path.exists():

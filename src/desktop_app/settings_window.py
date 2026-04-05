@@ -24,7 +24,7 @@ from PyQt6.QtGui import QFont
 
 from jarvis.config import (
     get_default_config, load_config,
-    _default_config_path, _save_json, _load_json,
+    default_config_path, _save_json, _load_json,
     SUPPORTED_CHAT_MODELS,
 )
 from jarvis.debug import debug_log
@@ -324,7 +324,7 @@ class SettingsWindow(QDialog):
         self.setMinimumSize(680, 560)
         self.resize(740, 620)
         self._widgets: Dict[str, Any] = {}  # key -> widget
-        self._config_path = _default_config_path()
+        self._config_path = default_config_path()
         self._current_config = _load_json(self._config_path)
         self._defaults = get_default_config()
         self._merged = {**self._defaults, **self._current_config}

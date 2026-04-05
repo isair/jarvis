@@ -235,15 +235,15 @@ def _is_cgnat_ip(ip: str) -> bool:
 
 def _get_external_ip_via_socket() -> Optional[str]:
     """
-    Get external IP address by creating a socket connection to determine
-    which local interface would be used for external communication.
+    Determine which local IP the OS would use to route to external servers.
 
-    This method creates a connection to a well-known external server (Google DNS)
-    to determine the local IP address used for external communication.
-    No data is actually sent.
+    Opens a UDP socket to well-known DNS servers (Google, Cloudflare, OpenDNS)
+    without sending data, then reads the local interface IP. This typically
+    returns a private/NAT IP (e.g. 192.168.x.x) which is filtered out. It
+    only returns a result when the host has a directly-assigned public IP.
 
     Returns:
-        IP address used for external communication, None if failed.
+        A public IP if the local interface has one, None otherwise.
     """
     # Try multiple well-known servers to increase reliability
     servers = [
@@ -462,10 +462,24 @@ def get_location_info(
     # Return cached location result if we already computed for this final ip_address
     if ip_address in _location_cache:
         cached = _location_cache[ip_address]
-        # Ensure we always include ip key even if older cache missing it
-        if 'ip' not in cached:
-            cached['ip'] = ip_address
-        return cached.copy()
+        # Negative results (errors) expire after location_cache_minutes so DB updates can take effect
+        if "error" in cached:
+            cached_at = cached.get("_cached_at")
+            if cached_at and datetime.now(timezone.utc) - cached_at > timedelta(minutes=location_cache_minutes):
+                with _cache_lock:
+                    _location_cache.pop(ip_address, None)
+            else:
+                # Ensure we always include ip key even if older cache missing it
+                if 'ip' not in cached:
+                    cached['ip'] = ip_address
+                result = cached.copy()
+                result.pop("_cached_at", None)
+                return result
+        else:
+            # Ensure we always include ip key even if older cache missing it
+            if 'ip' not in cached:
+                cached['ip'] = ip_address
+            return cached.copy()
 
     # Check if database is available
     db_path = _get_database_path()
@@ -512,14 +526,18 @@ def get_location_info(
             "reason": reason,
             "advice": advice,
         }
-        # Cache negative result with same TTL so it expires and retries after DB updates
-        _location_cache[ip_address] = result.copy()
+        # Cache negative result with TTL so it expires and retries after DB updates
+        cached_result = result.copy()
+        cached_result["_cached_at"] = datetime.now(timezone.utc)
+        _location_cache[ip_address] = cached_result
         _persist_disk_caches(location_cache_minutes)
         return result
     except Exception as e:
         debug_log(f"Error looking up location: {e}", "location")
         result = {"error": f"Error looking up location: {e}", "ip": ip_address}
-        _location_cache[ip_address] = result.copy()
+        cached_result = result.copy()
+        cached_result["_cached_at"] = datetime.now(timezone.utc)
+        _location_cache[ip_address] = cached_result
         _persist_disk_caches(location_cache_minutes)
         return result
 
