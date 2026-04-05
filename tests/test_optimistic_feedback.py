@@ -285,6 +285,78 @@ class TestOptimisticFeedbackHotWindow:
             f"Tune should start before judge, but order was: {call_order}"
 
 
+class TestOptimisticFeedbackOnJudgeTimeout:
+    """Feedback cleans up when intent judge returns None (timeout/error)."""
+
+    def test_beep_stops_when_judge_returns_none(self):
+        """Optimistic beep is cleaned up via Priority 6 when judge times out."""
+        listener, mocks = _make_listener_with_mocks(
+            intent_judge_result=None,  # Simulates timeout/error
+            intent_judge_available=True,
+        )
+
+        # Wake word present so optimistic feedback triggers
+        with patch('jarvis.listening.listener.is_wake_word_detected', return_value=True):
+            with patch('jarvis.listening.listener.extract_query_after_wake', return_value="what is the weather"):
+                listener._process_transcript("jarvis what is the weather", 0.5, time.time() - 1, time.time())
+
+        # Beep should have started optimistically
+        mocks['start_thinking_tune'].assert_called()
+        # Judge returned None, but wake word fallback (Priority 4) should accept,
+        # so start_collection should be called and beep continues
+        mocks['state_manager'].start_collection.assert_called()
+
+    def test_beep_stops_when_judge_returns_none_no_wake_word(self):
+        """Optimistic beep reverts when judge times out and no wake word fallback."""
+        listener, mocks = _make_listener_with_mocks(
+            intent_judge_result=None,  # Simulates timeout/error
+            intent_judge_available=True,
+        )
+
+        # Hot window active so optimistic feedback triggers, but no wake word
+        mocks['state_manager'].is_hot_window_active.return_value = True
+
+        with patch('jarvis.listening.listener.is_wake_word_detected', return_value=False):
+            listener._process_transcript("yes please", 0.5, time.time() - 1, time.time())
+
+        # Beep should have started optimistically then stopped at Priority 6
+        mocks['start_thinking_tune'].assert_called()
+        mocks['stop_thinking_tune'].assert_called()
+
+    def test_face_reverts_when_judge_returns_none_no_fallback(self):
+        """Face state reverts to IDLE when judge times out and no fallback accepts."""
+        import sys
+
+        listener, mocks = _make_listener_with_mocks(
+            intent_judge_result=None,
+            intent_judge_available=True,
+        )
+
+        mocks['state_manager'].is_hot_window_active.return_value = True
+
+        face_state_calls = []
+        mock_face_manager = MagicMock()
+        mock_face_manager.set_state.side_effect = lambda s: face_state_calls.append(str(s))
+
+        mock_face_widget = MagicMock()
+        mock_face_widget.get_jarvis_state.return_value = mock_face_manager
+        mock_face_widget.JarvisState.LISTENING = "LISTENING"
+        mock_face_widget.JarvisState.IDLE = "IDLE"
+        sys.modules['desktop_app'] = MagicMock()
+        sys.modules['desktop_app.face_widget'] = mock_face_widget
+
+        try:
+            with patch('jarvis.listening.listener.is_wake_word_detected', return_value=False):
+                listener._process_transcript("yes please", 0.5, time.time() - 1, time.time())
+
+            assert len(face_state_calls) >= 2, f"Expected at least 2 face state changes, got: {face_state_calls}"
+            assert face_state_calls[0] == "LISTENING"
+            assert face_state_calls[-1] == "IDLE"
+        finally:
+            sys.modules.pop('desktop_app.face_widget', None)
+            sys.modules.pop('desktop_app', None)
+
+
 class TestNoOptimisticFeedbackForUnrelatedSpeech:
     """No beep for speech without wake word or hot window."""
 
