@@ -481,7 +481,12 @@ class SetupWizard(QWizard):
         """Check if location detection is working (cached)."""
         if self._location_working is None:
             try:
-                context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
+                cfg = load_settings()
+                context = get_location_context(
+                    config_ip=cfg.location_ip_address,
+                    auto_detect=cfg.location_auto_detect,
+                    resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+                )
                 self._location_working = context != "Location: Unknown"
             except Exception:
                 self._location_working = False
@@ -704,7 +709,12 @@ class WelcomePage(QWizardPage):
         if not is_location_available():
             self._update_status_row(self.location_status, "⚠️ Database not installed", False)
         else:
-            location_context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
+            cfg = load_settings()
+            location_context = get_location_context(
+                config_ip=cfg.location_ip_address,
+                auto_detect=cfg.location_auto_detect,
+                resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+            )
             if location_context == "Location: Unknown":
                 self._update_status_row(self.location_status, "⚠️ Not configured", False)
             else:
@@ -2270,7 +2280,12 @@ class LocationPage(QWizardPage):
             status_parts.append(f"   3. Save as: {db_path}")
         else:
             status_parts.append("✅ GeoLite2 database found")
-            location_context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
+            cfg = load_settings()
+            location_context = get_location_context(
+                config_ip=cfg.location_ip_address,
+                auto_detect=cfg.location_auto_detect,
+                resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+            )
 
             if location_context == "Location: Unknown":
                 status_parts.append("❌ Could not detect public IP address")

@@ -229,6 +229,29 @@ Voice cloning with Chatterbox - add a 3-10 second .wav sample:
 </details>
 
 <details>
+<summary><strong>Location Detection</strong></summary>
+
+Jarvis can provide location-aware responses (weather, local time, etc.) using a local GeoLite2 database — no cloud geolocation services are used.
+
+**IP detection chain** (in order of preference):
+1. **Manual IP** — configure `location_ip_address` in settings
+2. **UPnP** — queries your local router (no traffic leaves LAN)
+3. **Socket heuristic** — determines which interface routes externally (no data sent)
+4. **OpenDNS DNS query** — single `myip.opendns.com` lookup to `208.67.222.222` (only external query)
+
+If your ISP uses carrier-grade NAT (CGNAT), Jarvis automatically resolves your true public IP via the same OpenDNS DNS query. This can be disabled:
+
+```json
+{
+  "location_cgnat_resolve_public_ip": false
+}
+```
+
+**Setup:** Register for a free [MaxMind GeoLite2](https://www.maxmind.com/en/geolite2/signup) account, download the City database (MMDB format), and save it to `~/.local/share/jarvis/geoip/GeoLite2-City.mmdb`. The setup wizard will guide you through this.
+
+</details>
+
+<details>
 <summary><strong>MCP Tool Integration</strong></summary>
 
 Connect Jarvis to external tools via [MCP servers](https://github.com/topics/mcp-server):
@@ -410,6 +433,7 @@ Running from source enables Chatterbox TTS (AI voice with emotion/cloning). Pipe
   "web_search_enabled": false,
   "mcps": {},
   "location_auto_detect": false,
+  "location_cgnat_resolve_public_ip": false,
   "location_enabled": false
 }
 ```
