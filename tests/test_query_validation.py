@@ -299,7 +299,7 @@ class TestStateTimingScenarios:
         """Quick follow-up right after TTS should be in hot window."""
         tts_finish_time = 1000.0
         echo_tolerance = 0.3
-        hot_window_seconds = 6.0
+        hot_window_seconds = 3.0
 
         # User speaks right after TTS
         utterance_start_time = 1000.5  # Just after TTS

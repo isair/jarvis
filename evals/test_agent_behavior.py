@@ -10,31 +10,17 @@ Tests core agent capabilities:
 Run: ./scripts/run_evals.sh
 """
 
-import sys
-from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Tuple
-
-_this_file = Path(__file__).resolve()
-EVALS_DIR = _this_file.parent
-if str(EVALS_DIR) not in sys.path:
-    sys.path.insert(0, str(EVALS_DIR))
+from typing import List, Optional, Tuple
 
 import pytest
 from unittest.mock import patch
-import json
 
+from conftest import requires_judge_llm
 from helpers import (
-    MockConfig,
+    MockConfig, ToolCallCapture,
     create_mock_llm_response, create_tool_call,
+    create_mock_tool_run,
     judge_response_answers_query,
-    is_judge_llm_available
-)
-
-_JUDGE_LLM_AVAILABLE = is_judge_llm_available()
-requires_judge_llm = pytest.mark.skipif(
-    not _JUDGE_LLM_AVAILABLE,
-    reason="Judge LLM not available"
 )
 
 
@@ -116,24 +102,6 @@ def evaluate_response(response: Optional[str], query: str) -> Tuple[bool, List[s
             issues.append("Nutrition query but no nutrition info in response")
 
     return len(issues) == 0, issues
-
-
-@dataclass
-class ToolCallCapture:
-    """Captures tool calls during evaluation."""
-    calls: List[Dict[str, Any]] = field(default_factory=list)
-
-    def record(self, name: str, args: Dict[str, Any]):
-        self.calls.append({"name": name, "args": args})
-
-    def has_tool(self, name: str) -> bool:
-        return any(c["name"] == name for c in self.calls)
-
-    def get_args(self, name: str) -> Optional[Dict[str, Any]]:
-        for c in self.calls:
-            if c["name"] == name:
-                return c["args"]
-        return None
 
 
 # =============================================================================
@@ -218,14 +186,7 @@ class TestContextUtilization:
         query = "how's the weather?"
         user_location = "Berlin, Germany"
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_SEARCH)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {"webSearch": MOCK_WEATHER_SEARCH})
 
         call_count = 0
         def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
@@ -278,11 +239,9 @@ class TestToolUsage:
 
         query = "what's happening in tech news today?"
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-            return ToolExecutionResult(success=True, reply_text="Tech news: AI advances, new chip releases.")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "webSearch": "Tech news: AI advances, new chip releases.",
+        })
 
         call_count = 0
         def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
@@ -313,16 +272,10 @@ class TestToolUsage:
 
         query = "how's the weather this week?"
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_SEARCH)
-            elif tool_name == "fetchWebPage":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_PAGE)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "webSearch": MOCK_WEATHER_SEARCH,
+            "fetchWebPage": MOCK_WEATHER_PAGE,
+        })
 
         call_count = 0
         def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
@@ -382,16 +335,10 @@ class TestMultiStepReasoning:
 
         query = "should I order pizza tonight?"
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "recallConversation":
-                return ToolExecutionResult(success=True, reply_text=MOCK_MEMORY_RESULTS)
-            elif tool_name == "fetchMeals":
-                return ToolExecutionResult(success=True, reply_text=MOCK_NUTRITION_DATA)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "recallConversation": MOCK_MEMORY_RESULTS,
+            "fetchMeals": MOCK_NUTRITION_DATA,
+        })
 
         call_count = 0
         def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
@@ -445,16 +392,10 @@ class TestMultiStepReasoning:
         query = "what are some news from today that might interest me?"
         capture = ToolCallCapture()
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "recallConversation":
-                return ToolExecutionResult(success=True, reply_text=MOCK_USER_INTERESTS_MEMORY)
-            elif tool_name == "webSearch":
-                # Return news that matches user interests
-                return ToolExecutionResult(success=True, reply_text="AI breakthrough, SpaceX launch, quantum computing milestone")
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "recallConversation": MOCK_USER_INTERESTS_MEMORY,
+            "webSearch": "AI breakthrough, SpaceX launch, quantum computing milestone",
+        })
 
         call_count = 0
         has_recalled_memory = False
@@ -643,13 +584,9 @@ class TestMemoryEnrichment:
             "[2024-12-20] User follows AI and machine learning developments closely",
         ]
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text="SpaceX launched, new AI model released")
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "webSearch": "SpaceX launched, new AI model released",
+        })
 
         call_count = 0
         def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
@@ -769,17 +706,11 @@ class TestLiveEndToEnd:
             "[2024-12-20] User follows AI and machine learning developments closely",
         ]
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "recallConversation":
-                return ToolExecutionResult(success=True, reply_text=MOCK_USER_INTERESTS_MEMORY)
-            elif tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text="AI breakthrough announced, SpaceX launch successful, quantum computing milestone reached")
-            elif tool_name == "fetchWebPage":
-                return ToolExecutionResult(success=True, reply_text="Full article about AI and space news...")
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "recallConversation": MOCK_USER_INTERESTS_MEMORY,
+            "webSearch": "AI breakthrough announced, SpaceX launch successful, quantum computing milestone reached",
+            "fetchWebPage": "Full article about AI and space news...",
+        })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context', return_value="Location: London, UK"), \

@@ -19,7 +19,7 @@ class ListeningState(Enum):
 class StateManager:
     """Manages listening state transitions and timing."""
 
-    def __init__(self, hot_window_seconds: float = 6.0, echo_tolerance: float = 0.3,
+    def __init__(self, hot_window_seconds: float = 3.0, echo_tolerance: float = 0.3,
                  voice_collect_seconds: float = 2.0, max_collect_seconds: float = 60.0):
         """
         Initialize state manager.
@@ -46,7 +46,8 @@ class StateManager:
 
         # Hot window state
         self._hot_window_start_time: float = 0.0
-        self._was_hot_window_active_at_voice_start: bool = False
+        self._hot_window_span_start: float = 0.0  # When window span began (schedule time)
+        self._hot_window_span_end: float = 0.0     # When window span ended (expiry time)
 
         # Timer-based hot window management
         self._hot_window_activation_timer: Optional[threading.Timer] = None
@@ -172,30 +173,50 @@ class StateManager:
 
         return False
 
-    def capture_hot_window_state_at_voice_start(self) -> None:
-        """Capture whether hot window was active when voice input started.
+    def was_speech_during_hot_window(self, utterance_start_time: float) -> bool:
+        """Check if speech started during the hot window time span.
 
-        Note: We only check if the state is HOT_WINDOW, not whether the time
-        has elapsed. This prevents a race condition where the user starts
-        speaking near the end of the hot window - the state might not have
-        been updated to WAKE_WORD yet even if the time limit just passed.
-        The important thing is that the system was in hot window mode when
-        the user started speaking.
+        Uses timestamps instead of a mutable boolean flag. This eliminates
+        race conditions between the hot window expiry timer and slow Whisper
+        transcription — the check works regardless of when the transcript arrives.
+
+        Args:
+            utterance_start_time: When VAD detected voice onset (time.time()).
+                                  If 0, falls back to current state check.
+
+        Returns:
+            True if:
+            - Hot window is currently active, OR
+            - Hot window activation is pending (echo_tolerance delay), OR
+            - Speech started during the window span (even if window has since expired)
         """
         with self._state_lock:
-            self._was_hot_window_active_at_voice_start = self._state == ListeningState.HOT_WINDOW
-        if self._was_hot_window_active_at_voice_start:
-            debug_log("voice input started during active hot window", "state")
+            is_active = self._state == ListeningState.HOT_WINDOW
+            span_start = self._hot_window_span_start
+            span_end = self._hot_window_span_end
 
-    def was_hot_window_active_at_voice_start(self) -> bool:
-        """Check if hot window was active when current voice input started."""
-        with self._state_lock:
-            return self._was_hot_window_active_at_voice_start
+        with self._timer_lock:
+            is_pending = self._hot_window_activation_timer is not None
 
-    def clear_hot_window_voice_state(self) -> None:
-        """Clear the hot window voice start state."""
-        with self._state_lock:
-            self._was_hot_window_active_at_voice_start = False
+        # Currently active — always accept regardless of timing
+        if is_active:
+            return True
+
+        # No timestamp — fall back to current state
+        if utterance_start_time <= 0:
+            return is_pending
+
+        # Pending activation — accept if speech started after scheduling
+        if is_pending:
+            return span_start <= 0 or utterance_start_time >= span_start
+
+        # Window expired — accept if speech started within the span
+        # This is the key fix: timestamps survive timer expiry, so speech
+        # that started during the window is accepted even if Whisper is slow
+        if span_start > 0 and span_end > 0:
+            return span_start <= utterance_start_time <= span_end
+
+        return False
 
     def cancel_hot_window_activation(self) -> None:
         """Cancel any pending hot window activation timer.
@@ -216,6 +237,36 @@ class StateManager:
                 self._hot_window_expiry_timer.cancel()
                 self._hot_window_expiry_timer = None
 
+    def reset_hot_window_expiry(self) -> None:
+        """Reset the hot window expiry timer to give the user the full window.
+
+        Called when echo is rejected during the hot window, so the time spent
+        processing echo doesn't eat into the user's actual follow-up window.
+
+        If the hot window already expired while the echo was being transcribed,
+        this reactivates it — the user shouldn't lose their follow-up window
+        just because Whisper was slow to produce the echo transcript.
+        """
+        with self._state_lock:
+            if self._state == ListeningState.HOT_WINDOW:
+                # Still active — just reset the timer
+                self._hot_window_start_time = time.time()
+            elif self._state == ListeningState.WAKE_WORD:
+                # Expired while processing echo — reactivate
+                self._state = ListeningState.HOT_WINDOW
+                self._hot_window_start_time = time.time()
+                debug_log("hot window reactivated (expired during echo processing)", "state")
+                try:
+                    print(f"👂 Listening for follow-up ({int(self.hot_window_seconds)}s)...", flush=True)
+                except Exception:
+                    pass
+            else:
+                # COLLECTING or another active state — don't interfere
+                return
+
+        self._schedule_hot_window_expiry()
+        debug_log(f"hot window expiry reset (echo rejected, restarting {self.hot_window_seconds}s timer)", "state")
+
     def _schedule_hot_window_expiry(self) -> None:
         """Schedule hot window expiry timer.
 
@@ -228,8 +279,9 @@ class StateManager:
                 if self._state != ListeningState.HOT_WINDOW:
                     return
                 self._state = ListeningState.WAKE_WORD
+                self._hot_window_span_end = time.time()
 
-            expiry_time = time.time()
+            expiry_time = self._hot_window_span_end
             duration = expiry_time - self._hot_window_start_time if self._hot_window_start_time > 0 else 0
             expiry_time_str = datetime.fromtimestamp(expiry_time).strftime('%H:%M:%S.%f')[:-3]
             debug_log(f"hot window expired (timer) at {expiry_time_str} after {duration:.2f}s", "state")
@@ -274,10 +326,19 @@ class StateManager:
         # Cancel any pending activation first
         self.cancel_hot_window_activation()
 
+        # Start a new window span — reset end so old expired spans don't interfere
+        with self._state_lock:
+            self._hot_window_span_start = time.time()
+            self._hot_window_span_end = 0.0
+
         # Cache voice_debug for use in timer callbacks
         self._voice_debug = voice_debug
 
         def _activate():
+            # Clear the timer reference now that it's fired
+            with self._timer_lock:
+                self._hot_window_activation_timer = None
+
             # Check if we should still activate
             if self._should_stop:
                 debug_log("hot window activation cancelled (should_stop=True)", "state")
@@ -353,6 +414,7 @@ class StateManager:
 
             with self._state_lock:
                 self._state = ListeningState.WAKE_WORD
+                self._hot_window_span_end = time.time()
 
             debug_log("hot window expired (poll)", "state")
 
@@ -389,6 +451,7 @@ class StateManager:
         if self.is_hot_window_active():
             with self._state_lock:
                 self._state = ListeningState.WAKE_WORD
+                self._hot_window_span_end = time.time()
 
             debug_log("hot window manually expired", "state")
 

@@ -11,21 +11,21 @@ This document outlines the voice listening architecture. The system uses a **tra
                             │
             ┌───────────────┼───────────────┐
             ▼               ▼               ▼
-┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-│     VAD       │  │  openWakeWord │  │   TTS Output  │
-│ (speech gate) │  │ ("hey jarvis")│  │   Tracking    │
-└───────┬───────┘  └───────┬───────┘  └───────────────┘
-        │                  │
-        ▼                  │
-┌───────────────┐          │
-│    Whisper    │          │
-│ (transcribe)  │          │
-└───────┬───────┘          │
-        │                  │
-        ▼                  ▼
+┌───────────────┐                  ┌───────────────┐
+│     VAD       │                  │   TTS Output  │
+│ (speech gate) │                  │   Tracking    │
+└───────┬───────┘                  └───────────────┘
+        │
+        ▼
+┌───────────────┐
+│    Whisper    │
+│ (transcribe)  │
+└───────┬───────┘
+        │
+        ▼
 ┌───────────────────────────────────────┐
 │     Rolling Transcript Buffer         │
-│     (5 minutes, with timestamps)      │
+│     (2 minutes, with timestamps)      │
 │                                       │
 │  Segments include:                    │
 │  - text, start_time, end_time         │
@@ -70,20 +70,11 @@ Instead of extracting post-wake-word audio, we:
 **Benefits:**
 - Pre-wake-word chatter naturally filtered: "blah blah Jarvis what time is it" → "what time is it"
 - Full context available for intent understanding
-- Echo detection handled by smart LLM, not timing heuristics
+- Echo detection via multi-layer approach (fuzzy text matching + LLM intent judge)
 
-### 2. Hybrid Wake Detection
+### 2. Text-Based Wake Detection
 
-Two parallel wake detection streams, first wins:
-
-| Stream | Detects | Timing | Use Case |
-|--------|---------|--------|----------|
-| openWakeWord | "hey jarvis" | Audio-level, instant | Users who say "hey jarvis" |
-| Text-based | "jarvis" + aliases | After transcription | Users who say just "jarvis" |
-
-**Deduplication:** When openWakeWord fires, set a flag to skip text-based check for that utterance.
-
-**Note:** openWakeWord is only enabled when `wake_word` config is "jarvis" (the only available model). For custom wake words, text-based detection is used exclusively.
+Wake word detection operates on the rolling transcript buffer. When Whisper produces text, it is checked for the configured wake word and aliases using fuzzy matching (`rapidfuzz`). This supports arbitrary wake words in any language.
 
 ### 3. Context-Aware Intent Judge
 
@@ -99,15 +90,14 @@ The intent judge receives full context and makes intelligent decisions:
 System is waiting for wake word activation.
 
 **Triggers:**
-- openWakeWord detects "hey jarvis" at audio level (optional, requires jarvis wake word)
-- Text-based detection finds "jarvis" (or aliases) in transcript (always available)
+- Text-based detection finds wake word (or aliases) in transcript
 
 **On trigger:**
-1. Wait for utterance to complete (user finishes speaking)
-2. Start "thinking" beep and set face to LISTENING immediately after utterance ends — both for openWakeWord (audio-level) and text-based wake detection (before intent judge)
+1. Start thinking beep immediately and set face state to LISTENING
+2. Wait for utterance to complete (user finishes speaking)
 3. Send transcript buffer + wake timestamp to intent judge
 4. If `directed=true` and `query` exists, dispatch to reply engine
-5. If rejected, stop the beep and revert face to IDLE
+5. If rejected, stop the beep and revert face state to IDLE
 
 ### 2. Hot Window Mode
 
@@ -117,29 +107,17 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Duration:** Configurable (default: 3 seconds)
 
-**Behaviour:**
-- Any speech triggers the intent judge (no wake word needed)
-- Optimistic feedback (beep + LISTENING face state) starts before the intent judge call to eliminate perceived latency; reverted if the judge rejects
-- Intent judge determines if speech is echo or real follow-up
-- Judge has full context: TTS text, timing, transcript content
+**Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
-**Echo Detection Flow (Hot Window):**
-1. During TTS: Use segment-based matching to detect echo
-2. After TTS (delayed echo):
-   - Short queries (≤4 words): Skip similarity check (false positives on common words)
-   - Longer queries (>4 words): Reject if similarity ≥70% to TTS
-3. Accepted input: Use the ACTUAL text heard, not intent judge synthesis
-   - Intent judge synthesizes from conversation context, which can return wrong queries
-   - Hot window input should reflect what the user actually said
-4. This approach handles high-volume environments with room reverb, where:
-   - Partial echoes may not reach the normal 85% threshold
-   - Whisper transcription errors can lower similarity scores
+**Timestamp-based detection:** `was_speech_during_hot_window(utterance_start_time)` compares the VAD-onset timestamp against the hot window's time span (from schedule to expiry). This eliminates race conditions between slow Whisper transcription and the expiry timer — if the user started speaking during the window, it counts as hot window input regardless of when the transcript arrives.
+
+**`could_be_hot_window` (intent judge context):** Derived from timestamp comparison — returns True if the hot window is active, activation is pending, or the utterance started within the window span even after expiry.
 
 **Expiry:** Timer-based, guaranteed to fire even if no audio
 
 ### 3. During TTS
 
-While TTS is playing, listen for stop commands only.
+While TTS is playing, echo rejection and stop commands are handled with fast text-based checks (no LLM). This prevents self-loops where the mic picks up TTS output. After TTS finishes, the intent judge takes over.
 
 **Stop detection:**
 - Text-based: Check for "stop", "quiet", "shut up", etc.
@@ -187,7 +165,7 @@ The transcript buffer serves as the "live" portion of short-term memory:
 
 The intent judge receives the full transcript buffer (default: 120 seconds / 2 minutes) and **synthesizes a complete query** using conversation context.
 
-This enables Jarvis to **chime into ongoing conversations** between people. When someone asks "Jarvis, what do you think?", the judge uses context to understand what they were discussing and creates a complete, actionable query.
+This enables Jarvis to **chime into ongoing conversations** between people. When someone asks "Jarvis, what do you think?", the judge uses context to understand what they were discussing and creates a complete, actionable query. Vague references like "that", "it", "this" in the current segment are resolved using previous segments in the buffer (e.g. "I think dinosaurs are cool" + "What do you think about that Jarvis?" → "what do you think about dinosaurs being cool").
 
 **Multi-person conversation example:**
 ```
@@ -206,7 +184,7 @@ Transcript (last 120 seconds):
 [12:28:45] "Yeah, we should check before planning the picnic"
 [12:29:00] "Jarvis what do you think"
 
-Wake word detected at: 12:29:00.5 (audio-level) OR 12:29:00.8 (text-based)
+Wake word detected at: 12:29:00.8 (text-based)
 Last TTS: "The weather is sunny and 72 degrees"
 TTS finished at: 12:28:02
 Current state: wake_word_mode
@@ -224,13 +202,14 @@ Current state: wake_word_mode
 }
 ```
 
-### Echo Handling by Judge
+### Multi-Layer Echo Detection
 
-The intent judge handles echo detection intelligently:
+Echo detection uses a layered approach for reliability:
 
-1. **Content comparison:** Does transcript match TTS text?
-2. **Timing:** Did segment occur shortly after TTS?
-3. **Context:** Is this a natural follow-up or just echo?
+1. **Fuzzy text matching (safety net):** `rapidfuzz.fuzz.partial_ratio` compares transcript against last TTS text. Score ≥ 70 = echo. This runs before the intent judge and catches obvious echoes quickly, including in the hot window directed path.
+2. **Intent judge (contextual):** Receives `last_tts_text` and timing context. Can identify echo even when fuzzy matching misses subtle cases, and can extract real user speech from mixed echo+speech chunks.
+
+The fuzzy check acts as a fast, reliable safety net. The intent judge provides deeper understanding but may be unreliable with smaller models (e.g. gemma4).
 
 Example:
 ```
@@ -238,19 +217,28 @@ TTS: "The weather is sunny and 72 degrees"
 TTS finished: 12:30:14
 
 Transcript:
-[12:30:15] "The weather is sunny and 72 degrees" ← Echo (matches TTS, immediately after)
-[12:30:18] "Ni hao" ← Real speech (different content)
+[12:30:15] "The weather is sunny and 72 degrees" ← Echo (fuzzy score 100, rejected)
+[12:30:18] "Ni hao" ← Real speech (fuzzy score < 70, sent to judge)
 
-Judge output: {"directed": true, "query": "Ni hao", "reasoning": "First segment is echo, second is new speech"}
+Judge output: {"directed": true, "query": "Ni hao", "reasoning": "New speech directed at assistant"}
 ```
+
+## Early Feedback (Beep & Face State)
+
+To minimise perceived latency, audio and visual feedback starts **immediately after Whisper transcription**, before the intent judge runs:
+
+- **Wake word mode:** If the transcribed text contains the wake word (fuzzy-matched), start the thinking beep and set face state to LISTENING.
+- **Hot window:** If voice started during an active (or pending) hot window, start the thinking beep and set face state to LISTENING.
+- **No trigger:** If neither condition is met, no feedback is given.
+
+If the intent judge later rejects the query (and no hot window override applies), the beep is stopped and face state reverts to IDLE. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
+
+**Face state is not set during TTS** — the beep is suppressed while TTS is playing to avoid self-triggering.
 
 ## Configuration
 
 ```json
 {
-  "audio_wake_enabled": true,
-  "audio_wake_threshold": 0.5,
-
   "transcript_buffer_duration_sec": 120,
 
   "intent_judge_model": "gemma4:e2b",
@@ -278,7 +266,7 @@ stateDiagram-v2
     HotWindow: Listening for Follow-up
     DuringTTS: TTS Playing
 
-    WakeWord --> IntentJudge: Wake detected (audio or text)
+    WakeWord --> IntentJudge: Wake detected (text-based)
     IntentJudge --> DuringTTS: Query dispatched, TTS starts
     IntentJudge --> WakeWord: Not directed / no query
     DuringTTS --> HotWindow: TTS ends + echo_tolerance
@@ -294,8 +282,6 @@ Microphone Audio
     ↓
 Sounddevice Callback → _audio_q
     ↓
-    ├→ openWakeWord (parallel, audio-level "hey jarvis")
-    ↓
 Main Loop: Get Frames → VAD Check
     ↓
 Speech Detected → Accumulate Frames
@@ -305,32 +291,34 @@ Silence Timeout → Whisper Transcription
 Add to Transcript Buffer (with timestamps)
     ↓
 Wake Detection Check:
-    ├→ openWakeWord already fired? → Use that timestamp
-    └→ Text contains "jarvis"? → Use utterance timestamp
+    └→ Text contains wake word? → Start thinking beep + LISTENING face
     ↓
 If wake detected OR in hot window:
+    → Fuzzy echo check (partial_ratio ≥ 70 = echo → reject + reset timer)
     → Send buffer + context to Intent Judge
     ↓
 If judge.directed and judge.query:
+    → Verify wake word present (wake word mode) or non-echo (hot window)
     → Dispatch query to Reply Engine
+If judge rejects but in hot window and non-echo:
+    → Override rejection, dispatch as query
 ```
 
-## Fallback Behavior
+## Fallback Behaviour
 
 When components are unavailable, the system degrades gracefully:
 
-| Component | Unavailable Behavior |
+| Component | Unavailable Behaviour |
 |-----------|---------------------|
-| openWakeWord | Text-based wake detection only |
-| Intent Judge | Simple text-based wake word + query extraction |
+| Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
 | 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
-| Transcript Buffer | Process each utterance independently (current behavior) |
+| Transcript Buffer | Process each utterance independently |
 
 ## Future: Acoustic Echo Cancellation
 
-Currently, echo is handled at the transcript level by the intent judge. True acoustic echo cancellation (AEC) would:
+Currently, echo is handled at the transcript level via fuzzy text matching and the intent judge. True acoustic echo cancellation (AEC) would:
 - Require the audio output signal (reference)
 - Process in real-time with adaptive filtering
 - Add 10-50ms latency
 
-**Current recommendation:** The transcript-level echo detection via intent judge is sufficient and simpler. Consider AEC only if transcript-level detection proves inadequate in practice.
+**Current recommendation:** The transcript-level echo detection (fuzzy matching + intent judge) is sufficient and simpler. Consider AEC only if transcript-level detection proves inadequate in practice.

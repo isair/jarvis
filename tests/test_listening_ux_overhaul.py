@@ -19,7 +19,7 @@ class TestStateManagerTimerHotWindow:
         """Create a StateManager instance."""
         from jarvis.listening.state_manager import StateManager
         return StateManager(
-            hot_window_seconds=6.0,
+            hot_window_seconds=3.0,
             echo_tolerance=0.3,
             voice_collect_seconds=2.0,
             max_collect_seconds=60.0
@@ -63,7 +63,7 @@ class TestStateManagerTimerHotWindow:
         from jarvis.listening.state_manager import StateManager, ListeningState
 
         manager = StateManager(
-            hot_window_seconds=6.0,
+            hot_window_seconds=3.0,
             echo_tolerance=0.1,  # Short delay for testing
             voice_collect_seconds=2.0,
             max_collect_seconds=60.0
@@ -159,14 +159,19 @@ class TestStateManagerTimerHotWindow:
             f"(range: {expected_min:.2f}-{expected_max:.2f}s)"
         )
 
-    def test_capture_hot_window_state_thread_safe(self):
-        """Hot window state capture uses proper locking."""
+    def test_was_speech_during_hot_window_thread_safe(self):
+        """Timestamp-based hot window check uses proper locking."""
         manager = self._create_state_manager()
+
+        import time as _time
 
         # Should not raise even if called concurrently
         threads = []
         for _ in range(10):
-            t = threading.Thread(target=manager.capture_hot_window_state_at_voice_start)
+            t = threading.Thread(
+                target=manager.was_speech_during_hot_window,
+                args=(_time.time(),)
+            )
             threads.append(t)
             t.start()
 
@@ -230,23 +235,15 @@ class TestEchoDetectionThreshold:
 class TestConfigNewOptions:
     """Tests for new configuration options."""
 
-    def test_audio_wake_config_defaults(self):
-        """Audio wake config has correct defaults."""
-        from jarvis.config import get_default_config
-
-        defaults = get_default_config()
-
-        assert defaults["audio_wake_enabled"] is True
-        assert defaults["audio_wake_threshold"] == 0.5
-
     def test_intent_judge_config_defaults(self):
         """Intent judge config has correct defaults."""
         from jarvis.config import get_default_config
 
         defaults = get_default_config()
 
-        assert defaults["intent_judge_model"] == "gemma4:e2b"
-        assert defaults["intent_judge_timeout_sec"] == 3.0
+        assert "intent_judge_model" in defaults
+        assert isinstance(defaults["intent_judge_timeout_sec"], (int, float))
+        assert defaults["intent_judge_timeout_sec"] > 0
 
     def test_transcript_buffer_config_defaults(self):
         """Transcript buffer config has correct defaults."""
@@ -263,10 +260,6 @@ class TestConfigNewOptions:
             from jarvis.config import load_settings
 
             settings = load_settings()
-
-            # Audio wake options
-            assert hasattr(settings, "audio_wake_enabled")
-            assert hasattr(settings, "audio_wake_threshold")
 
             # Intent judge options
             assert hasattr(settings, "intent_judge_model")

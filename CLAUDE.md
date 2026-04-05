@@ -50,6 +50,10 @@ When the user says "remember" something, add it to CLAUDE.md in the appropriate 
 
 Run your changes and test them manually, iterate until everything is good.
 
+## Testing Philosophy
+
+Always use TDD: write failing tests first, then implement the fix. Tests should verify **behaviours**, not implementation details. Test what the system does (observable outcomes), not how it does it (internal state, mock call counts, etc.).
+
 Ensure all your changes are covered by all appropriate form of automated tests - unit, integration, visual regression, evals, etc.
 
 Tests should verify mechanisms, not current values. Assert against config-driven or computed references rather than hardcoding specifics that change between migrations.

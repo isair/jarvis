@@ -14,29 +14,14 @@ These evals are critical for catching regressions where the model might:
 Run: ./scripts/run_evals.sh
 """
 
-import sys
-from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
-
-_this_file = Path(__file__).resolve()
-EVALS_DIR = _this_file.parent
-if str(EVALS_DIR) not in sys.path:
-    sys.path.insert(0, str(EVALS_DIR))
-
 import pytest
 from unittest.mock import patch
 
+from conftest import requires_judge_llm
 from helpers import (
-    MockConfig,
-    is_judge_llm_available,
+    MockConfig, ToolCallCapture,
+    create_mock_tool_run,
     JUDGE_MODEL,
-)
-
-_JUDGE_LLM_AVAILABLE = is_judge_llm_available()
-requires_judge_llm = pytest.mark.skipif(
-    not _JUDGE_LLM_AVAILABLE,
-    reason="Judge LLM not available"
 )
 
 
@@ -93,34 +78,6 @@ Today's Tech Headlines:
 
 
 # =============================================================================
-# Tool Call Capture Helper
-# =============================================================================
-
-@dataclass
-class ToolCallCapture:
-    """Captures tool calls during evaluation."""
-    calls: List[Dict[str, Any]] = field(default_factory=list)
-
-    def record(self, name: str, args: Dict[str, Any]):
-        self.calls.append({"name": name, "args": args})
-
-    def has_tool(self, name: str) -> bool:
-        return any(c["name"] == name for c in self.calls)
-
-    def get_args(self, name: str) -> Optional[Dict[str, Any]]:
-        for c in self.calls:
-            if c["name"] == name:
-                return c["args"]
-        return None
-
-    def tool_sequence(self) -> List[str]:
-        return [c["name"] for c in self.calls]
-
-    def clear(self):
-        self.calls = []
-
-
-# =============================================================================
 # Topic Switching Evaluations (Live LLM)
 # =============================================================================
 
@@ -152,16 +109,10 @@ class TestTopicSwitching:
         mock_config.ollama_chat_model = JUDGE_MODEL
 
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "getWeather":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_RESPONSE)
-            elif tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text=MOCK_STORE_HOURS_SEARCH)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "getWeather": MOCK_WEATHER_RESPONSE,
+            "webSearch": MOCK_STORE_HOURS_SEARCH,
+        })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, Royal Kensington and Chelsea, United Kingdom"):
@@ -227,15 +178,10 @@ class TestTopicSwitching:
 
         capture = ToolCallCapture()
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "getWeather":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_RESPONSE)
-            elif tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text=MOCK_RESTAURANT_SEARCH)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "getWeather": MOCK_WEATHER_RESPONSE,
+            "webSearch": MOCK_RESTAURANT_SEARCH,
+        })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
@@ -293,16 +239,10 @@ class TestTopicSwitching:
         mock_config.ollama_chat_model = JUDGE_MODEL
 
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "getWeather":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_RESPONSE)
-            elif tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text=MOCK_NEWS_SEARCH)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "getWeather": MOCK_WEATHER_RESPONSE,
+            "webSearch": MOCK_NEWS_SEARCH,
+        })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
@@ -374,14 +314,7 @@ class TestFollowUpContext:
         mock_config.ollama_chat_model = JUDGE_MODEL
 
         capture = ToolCallCapture()
-
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "getWeather":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_RESPONSE)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {"getWeather": MOCK_WEATHER_RESPONSE})
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
@@ -538,15 +471,10 @@ class TestMultiTurnExtended:
 
         capture = ToolCallCapture()
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-
-            if tool_name == "getWeather":
-                return ToolExecutionResult(success=True, reply_text=MOCK_WEATHER_RESPONSE)
-            elif tool_name == "webSearch":
-                return ToolExecutionResult(success=True, reply_text=MOCK_NEWS_SEARCH)
-            return ToolExecutionResult(success=True, reply_text="OK")
+        mock_tool_run = create_mock_tool_run(capture, {
+            "getWeather": MOCK_WEATHER_RESPONSE,
+            "webSearch": MOCK_NEWS_SEARCH,
+        })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):

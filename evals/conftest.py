@@ -32,7 +32,18 @@ if str(SRC) not in sys.path:
 if str(EVALS) not in sys.path:
     sys.path.insert(0, str(EVALS))
 
-from helpers import MockConfig, JUDGE_MODEL
+from helpers import MockConfig, JUDGE_MODEL, is_judge_llm_available
+
+
+# =============================================================================
+# Shared Markers
+# =============================================================================
+
+_JUDGE_LLM_AVAILABLE = is_judge_llm_available()
+requires_judge_llm = pytest.mark.skipif(
+    not _JUDGE_LLM_AVAILABLE,
+    reason="Judge LLM not available"
+)
 
 
 # =============================================================================
@@ -54,6 +65,13 @@ CLASS_DESCRIPTIONS = {
     "TestIntentJudgePromptQuality": "Intent judge prompt construction quality",
     "TestIntentJudgeFallback": "Intent judge fallback behaviour when unavailable",
     "TestIntentJudgeMultiSegment": "Intent judge with multi-segment buffers and multi-person conversations",
+    "TestWakeWordValidationSafetyNet": "Integration: listener rejects judge hallucinations when no wake word present",
+    "TestEchoReasoningDistrust": "Integration: listener overrides judge echo claims when EchoDetector cleared",
+    "TestHotWindowHeuristicAccuracy": "Integration: could_be_hot_window heuristic passes correct mode to judge",
+    "TestProcessedSegmentFilteringIntegration": "Integration: processed segments excluded from judge prompt",
+    "TestHotWindowUsesRawText": "Integration: hot window preserves full user text, wake word uses judge extraction",
+    "TestMultiSegmentBufferIntegration": "Integration: multi-segment buffer with TTS echoes handled correctly",
+    "TestStopCommandBypassesJudge": "Integration: stop commands during TTS bypass judge entirely",
     "TestTopicSwitching": "Tests correct tool selection when conversation topic changes",
     "TestFollowUpContext": "Tests context retention for follow-up questions",
     "TestMultiTurnExtended": "Extended multi-turn scenarios with longer conversations",

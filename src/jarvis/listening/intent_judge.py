@@ -81,9 +81,14 @@ CRITICAL - Two modes of operation:
 MODE 1: WAKE WORD (look for segment containing wake word like "{name}")
 - Find the segment with the wake word
 - Extract a COMPLETE, STANDALONE query that makes sense on its own
-- IMPORTANT: Include context from the SAME segment! Don't just extract the question fragment.
-- Example: "I think the weather is great. What do you think, Jarvis?"
+- Include context from the SAME segment AND from previous segments to resolve references
+- If the current segment has vague words like "that", "it", "this", "there" — look at previous segments to find what they refer to
+- Example (same segment): "I think the weather is great. What do you think, Jarvis?"
   → query is "what do you think about the weather being great" (NOT just "what do you think")
+- Example (cross-segment reference):
+  Previous segment: "I think dinosaurs are cool"
+  Current segment: "What do you think about that Jarvis?"
+  → query is "what do you think about dinosaurs being cool" (resolve "that" from previous segment)
 - Example: "Jarvis, how much does that iPhone cost?" after discussing iPhones
   → query is "how much does the iPhone cost" (resolve "that" to the actual topic)
 - The query should be answerable WITHOUT needing to see the transcript
@@ -107,10 +112,12 @@ CRITICAL - Echo detection (applies to both modes):
 
 CRITICAL - Current segment marker:
 - "(CURRENT - JUDGE THIS)" marker = the specific segment to judge NOW
-- Extract the query from THIS segment, but include ALL relevant context from it
+- Extract the query from THIS segment, but resolve ALL references using context
 - The CURRENT segment may contain context + question (e.g., "The food was great. What do you think Jarvis?")
   → Extract a COMPLETE query: "what do you think about the food being great"
-- Segments without this marker = background context (may help resolve references like "that" or "it")
+- Segments WITHOUT this marker = background context from earlier speech
+- IMPORTANT: Use background segments to resolve vague references! If the CURRENT segment says "that", "it", "this", or asks a vague question, look at previous segments to understand what it refers to
+- Example: background segment says "I think dinosaurs are cool", then CURRENT says "What do you think about that Jarvis?" → resolve "that" to dinosaurs → query is "what do you think about dinosaurs being cool"
 
 Output JSON only:
 {{"directed": true/false, "query": "extracted query", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
@@ -119,6 +126,7 @@ Examples:
 - "Jarvis what time is it" → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word with question"}}
 - "The weather is lovely today. What do you think Jarvis?" → {{"directed": true, "query": "what do you think about the weather being lovely today", "stop": false, "confidence": "high", "reasoning": "wake word with contextual question"}}
 - "I was looking at the new iPhone. Jarvis how much does it cost?" → {{"directed": true, "query": "how much does the new iPhone cost", "stop": false, "confidence": "high", "reasoning": "wake word with context from same utterance"}}
+- Previous: "I made carbonara for dinner" + Current: "Jarvis can you find me a recipe for that" → {{"directed": true, "query": "find a recipe for carbonara", "stop": false, "confidence": "high", "reasoning": "resolved 'that' from previous segment about carbonara"}}
 - Hot window + user statement → {{"directed": true, "query": "I think absurdism is better than nihilism", "stop": false, "confidence": "high", "reasoning": "user speaking in hot window = directed"}}
 - Hot window + only "(during TTS)" segments → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo, no user speech"}}
 - "stop" or "quiet" command → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}

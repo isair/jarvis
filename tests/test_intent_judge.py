@@ -450,6 +450,57 @@ class TestCurrentSegmentMarker:
         assert "segment to judge" in prompt.lower()
 
 
+class TestCrossSegmentContextInPrompt:
+    """Tests that the system prompt guides cross-segment reference resolution.
+
+    When the CURRENT segment contains vague references like "that", "it", "this",
+    the intent judge should use PREVIOUS segments to resolve them into a complete query.
+    """
+
+    def test_system_prompt_encourages_cross_segment_resolution(self):
+        """System prompt should explicitly tell the LLM to resolve references from other segments."""
+        judge = IntentJudge()
+        prompt = judge._build_system_prompt()
+
+        # The prompt must mention resolving references from other/previous/background segments
+        prompt_lower = prompt.lower()
+        assert "previous" in prompt_lower or "other segment" in prompt_lower or "background" in prompt_lower, (
+            "System prompt should mention using previous/background segments to resolve references"
+        )
+
+    def test_system_prompt_has_cross_segment_example(self):
+        """System prompt should include an example of cross-segment reference resolution."""
+        judge = IntentJudge()
+        prompt = judge._build_system_prompt()
+
+        # Should have an example where context comes from a DIFFERENT segment than the wake word
+        # The key indicator is showing a multi-segment scenario in the prompt examples
+        assert "previous segment" in prompt.lower() or "background context" in prompt.lower() or "earlier segment" in prompt.lower(), (
+            "System prompt should have guidance about using earlier/background segments for context"
+        )
+
+    def test_context_segments_included_in_user_prompt(self):
+        """Background context segments (unprocessed, no wake word) appear in the user prompt."""
+        judge = IntentJudge()
+        segments = [
+            TranscriptSegment("I think dinosaurs are cool", 1000.0, 1001.0),
+            TranscriptSegment("What do you think about that Jarvis", 1002.0, 1003.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=1002.5,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=False,
+            current_text="What do you think about that Jarvis",
+        )
+
+        # Both segments should be in the prompt — the first provides context
+        assert "dinosaurs are cool" in prompt
+        assert "What do you think about that Jarvis" in prompt
+        assert "CURRENT - JUDGE THIS" in prompt
+
+
 class TestProcessedSegmentFiltering:
     """Tests for processed segment filtering functionality.
 
