@@ -159,14 +159,19 @@ class TestStateManagerTimerHotWindow:
             f"(range: {expected_min:.2f}-{expected_max:.2f}s)"
         )
 
-    def test_capture_hot_window_state_thread_safe(self):
-        """Hot window state capture uses proper locking."""
+    def test_was_speech_during_hot_window_thread_safe(self):
+        """Timestamp-based hot window check uses proper locking."""
         manager = self._create_state_manager()
+
+        import time as _time
 
         # Should not raise even if called concurrently
         threads = []
         for _ in range(10):
-            t = threading.Thread(target=manager.capture_hot_window_state_at_voice_start)
+            t = threading.Thread(
+                target=manager.was_speech_during_hot_window,
+                args=(_time.time(),)
+            )
             threads.append(t)
             t.start()
 

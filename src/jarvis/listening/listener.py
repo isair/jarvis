@@ -372,9 +372,8 @@ class VoiceListener(threading.Thread):
         # This prevents: false beeps on echo, intent judge blocking the audio
         # loop for seconds on echo, and hot window extending from echo resets.
         if not received_during_tts and not self._is_thinking_tune_active():
-            in_hot_window = (
-                self.state_manager.was_hot_window_active_at_voice_start()
-                or self.state_manager.is_hot_window_active()
+            in_hot_window = self.state_manager.was_speech_during_hot_window(
+                utterance_start_time
             )
             if in_hot_window:
                 # Fuzzy echo check — instant, no intent judge needed.
@@ -500,9 +499,8 @@ class VoiceListener(threading.Thread):
             # delay before activation, hot_window_seconds before expiry).
             # A generous grace period caused false hot window claims after
             # the user had already seen "Returning to wake word mode".
-            could_be_hot_window = (
-                self.state_manager.was_hot_window_active_at_voice_start() or
-                self.state_manager.is_hot_window_active()
+            could_be_hot_window = self.state_manager.was_speech_during_hot_window(
+                utterance_start_time
             )
 
             intent_judgment = self._intent_judge.judge(
@@ -1515,9 +1513,6 @@ class VoiceListener(threading.Thread):
                             # actual speech onset was before VAD triggered.
                             pre_roll_sec = len(self._pre_roll) * frame_ms / 1000.0
                             utterance_start_time = time.time() - pre_roll_sec
-
-                            # Capture hot window state when voice starts
-                            self.state_manager.capture_hot_window_state_at_voice_start()
 
                             # Track utterance timing for echo detection
                             self.echo_detector.track_utterance_timing(utterance_start_time, 0.0)

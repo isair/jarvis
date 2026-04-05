@@ -185,59 +185,87 @@ class TestUserSpeaksDuringHotWindow:
 
 @pytest.mark.unit
 class TestTranscriptArrivesAfterHotWindowExpiry:
-    """User speaks during hot window but Whisper is slow — transcript arrives after expiry."""
+    """User speaks during hot window but Whisper is slow — transcript arrives after expiry.
+
+    Uses timestamp-based detection: utterance_start_time is compared against the
+    hot window's time span, so it doesn't matter when Whisper finishes."""
 
     @patch("builtins.print")
-    def test_voice_captured_during_window_rejected_after_expiry(self, _print):
-        """Captured voice-start state is cleared on expiry to prevent stale hot window.
+    def test_speech_started_during_window_accepted_after_expiry(self, _print):
+        """Speech that STARTED during the hot window is accepted even after expiry.
 
-        When Whisper is slow, the transcript can arrive after the hot window
-        expired. The user has already seen "Returning to wake word mode" so
-        they expect wake-word-required behaviour. The captured state must not
-        override the expiry.
+        This is the core scenario: user starts speaking at 2.5s into a 3s window,
+        Whisper takes 2s to transcribe, so transcript arrives at 4.5s — after
+        "Returning to wake word mode". The timestamp check still detects the
+        speech started during the window.
         """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.08)
+
+        listener.echo_detector.track_tts_start("Short answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Speech starts during active window
+        speech_start = time.time()
+
+        # Wait for hot window to expire (simulates Whisper delay)
+        time.sleep(0.12)
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Transcript arrives after expiry — but speech_start was during window
+        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        listener._process_transcript(
+            "tell me more", utterance_energy=0.01,
+            utterance_start_time=speech_start, utterance_end_time=time.time())
+
+        assert _accepted_query(listener) == "tell me more"
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_speech_started_after_expiry_rejected(self, _print):
+        """Speech starting AFTER window expired is rejected (requires wake word)."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.05)
 
         listener.echo_detector.track_tts_start("Short answer.")
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        # Capture voice-start while hot window is active
-        listener.state_manager.capture_hot_window_state_at_voice_start()
-
         # Wait for hot window to expire
         time.sleep(0.1)
         assert not listener.state_manager.is_hot_window_active()
-        # Captured state should be cleared by expiry
-        assert not listener.state_manager.was_hot_window_active_at_voice_start()
 
-        # Transcript arrives after expiry — no wake word, so rejected
+        # Speech starts AFTER expiry
+        speech_start = time.time()
+
         _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
-        listener._process_transcript("tell me more", utterance_energy=0.01)
+        listener._process_transcript(
+            "tell me more", utterance_energy=0.01,
+            utterance_start_time=speech_start, utterance_end_time=time.time())
 
         assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
     @patch("builtins.print")
     def test_voice_during_active_window_accepted_before_expiry(self, _print):
-        """Voice captured and processed while hot window is still active succeeds."""
+        """Voice processed while hot window is still active succeeds."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Short answer.")
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        listener.state_manager.capture_hot_window_state_at_voice_start()
+        speech_start = time.time()
 
-        # Transcript arrives while hot window is still active
         _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
-        listener._process_transcript("tell me more", utterance_energy=0.01)
+        listener._process_transcript(
+            "tell me more", utterance_energy=0.01,
+            utterance_start_time=speech_start, utterance_end_time=time.time())
 
         assert _accepted_query(listener) == "tell me more"
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_voice_captured_during_pending_activation(self, _print):
+    def test_voice_during_pending_activation_accepted(self, _print):
         """Voice start during echo_tolerance delay (pending activation) still counts."""
         listener, _ = _create_listener(echo_tolerance=0.5, hot_window_seconds=3.0)
 
@@ -247,15 +275,44 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         # Hot window not yet active (still in echo_tolerance delay)
         assert not listener.state_manager.is_hot_window_active()
 
-        # But voice starts now — capture should detect pending activation
-        listener.state_manager.capture_hot_window_state_at_voice_start()
-        assert listener.state_manager.was_hot_window_active_at_voice_start()
+        # Speech starts now during pending period
+        speech_start = time.time()
 
-        # Process while activation is still pending (hot window will activate)
         _install_intent_judge(listener, _make_judgment(directed=True, query="yes please"))
-        listener._process_transcript("yes please", utterance_energy=0.01)
+        listener._process_transcript(
+            "yes please", utterance_energy=0.01,
+            utterance_start_time=speech_start, utterance_end_time=time.time())
 
         assert _accepted_query(listener) == "yes please"
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_speech_minutes_after_window_not_treated_as_hot(self, _print):
+        """Speech a minute after hot window expired is NOT treated as hot window.
+
+        Regression test: a stale boolean flag previously caused speech long
+        after the window to be treated as hot window input.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.05)
+
+        listener.echo_detector.track_tts_start("Quick answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Wait for window to expire
+        time.sleep(0.1)
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Simulate speech "a minute later" (use a start time well after expiry)
+        speech_start = time.time() + 0.5  # even 500ms later should be rejected
+
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="something funny"))
+        listener._process_transcript(
+            "something funny", utterance_energy=0.01,
+            utterance_start_time=speech_start, utterance_end_time=speech_start + 1.0)
+
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
 

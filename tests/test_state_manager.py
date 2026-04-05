@@ -281,58 +281,54 @@ class TestHotWindowExpiry:
             assert sm.get_state() == ListeningState.WAKE_WORD
 
 
-class TestHotWindowVoiceState:
-    """Tests for hot window voice state capture."""
+class TestTimestampBasedHotWindowDetection:
+    """Tests for timestamp-based hot window detection.
 
-    def test_capture_hot_window_state_when_active(self):
-        """Captures that hot window was active when voice started."""
-        sm = StateManager()
-        sm._state = ListeningState.HOT_WINDOW
+    Instead of capturing a mutable boolean at VAD onset (which gets cleared
+    by timer-based expiry before Whisper finishes), we compare the utterance
+    start time against the hot window's time span. This eliminates race
+    conditions between the expiry timer and Whisper transcription."""
 
-        sm.capture_hot_window_state_at_voice_start()
-        assert sm.was_hot_window_active_at_voice_start() is True
+    def test_speech_during_active_window_detected(self):
+        """Speech starting while hot window is active returns True."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=3.0)
 
-    def test_capture_hot_window_state_when_inactive(self):
-        """Captures that hot window was NOT active when voice started."""
-        sm = StateManager()
-        sm._state = ListeningState.WAKE_WORD
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
 
-        sm.capture_hot_window_state_at_voice_start()
-        assert sm.was_hot_window_active_at_voice_start() is False
+            # Speech starts now, during active window
+            speech_start = time.time()
+            assert sm.was_speech_during_hot_window(speech_start) is True
 
-    def test_capture_hot_window_state_when_pending_activation(self):
-        """Captures True during echo_tolerance delay (activation pending but not yet active)."""
+        sm.stop()
+
+    def test_speech_before_window_not_detected(self):
+        """Speech starting before the hot window span returns False."""
+        sm = StateManager(echo_tolerance=0.5, hot_window_seconds=3.0)
+
+        # Speech started before any window was scheduled
+        old_time = time.time() - 10.0
+        assert sm.was_speech_during_hot_window(old_time) is False
+        sm.stop()
+
+    def test_speech_during_pending_activation_detected(self):
+        """Speech starting during echo_tolerance delay (pending) returns True."""
         sm = StateManager(echo_tolerance=1.0, hot_window_seconds=3.0)
 
         with patch('builtins.print'):
             sm.schedule_hot_window_activation()
             # State is still WAKE_WORD, but activation timer is pending
             assert sm.get_state() == ListeningState.WAKE_WORD
-            sm.capture_hot_window_state_at_voice_start()
-            assert sm.was_hot_window_active_at_voice_start() is True
+
+            speech_start = time.time()
+            assert sm.was_speech_during_hot_window(speech_start) is True
 
         sm.stop()
 
-    def test_clear_hot_window_voice_state(self):
-        """Can clear the captured hot window voice state."""
-        sm = StateManager()
-        sm._state = ListeningState.HOT_WINDOW
-
-        sm.capture_hot_window_state_at_voice_start()
-        assert sm.was_hot_window_active_at_voice_start() is True
-
-        sm.clear_hot_window_voice_state()
-        assert sm.was_hot_window_active_at_voice_start() is False
-
-
-class TestVoiceStateClearedOnExpiry:
-    """Captured voice-start state must be cleared when hot window expires.
-
-    Without this, in-flight Whisper transcriptions can falsely claim hot window
-    even after the user has seen 'Returning to wake word mode'."""
-
-    def test_timer_expiry_clears_captured_state(self):
-        """Timer-based expiry clears was_hot_window_active_at_voice_start."""
+    def test_speech_after_expiry_not_detected(self):
+        """Speech starting after hot window expired returns False."""
         sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.05)
 
         with patch('builtins.print'):
@@ -340,49 +336,93 @@ class TestVoiceStateClearedOnExpiry:
             time.sleep(0.04)
             assert sm.is_hot_window_active() is True
 
-            # Capture state while hot window is active
-            sm.capture_hot_window_state_at_voice_start()
-            assert sm.was_hot_window_active_at_voice_start() is True
-
             # Wait for expiry
             time.sleep(0.08)
             assert sm.is_hot_window_active() is False
-            # Captured state should be cleared
-            assert sm.was_hot_window_active_at_voice_start() is False
+
+            # Speech starts AFTER expiry
+            speech_start = time.time()
+            assert sm.was_speech_during_hot_window(speech_start) is False
 
         sm.stop()
 
-    def test_poll_expiry_clears_captured_state(self):
-        """Poll-based (synchronous) expiry clears captured state."""
-        sm = StateManager(echo_tolerance=0.0, hot_window_seconds=0.05)
+    def test_speech_during_window_detected_after_expiry(self):
+        """Speech that STARTED during window is detected even after expiry.
+
+        This is the core fix: Whisper takes time to transcribe, so the
+        transcript arrives after the window expired. But the speech started
+        during the window, so it should be treated as hot window input.
+        """
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.08)
 
         with patch('builtins.print'):
-            sm._state = ListeningState.HOT_WINDOW
-            sm._hot_window_start_time = time.time()
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
 
-            sm.capture_hot_window_state_at_voice_start()
-            assert sm.was_hot_window_active_at_voice_start() is True
+            # Speech starts during active window
+            speech_start = time.time()
 
-            time.sleep(0.06)
-            sm.check_hot_window_expiry()
+            # Window expires while "Whisper is transcribing"
+            time.sleep(0.10)
+            assert sm.is_hot_window_active() is False
 
-            assert sm.get_state() == ListeningState.WAKE_WORD
-            assert sm.was_hot_window_active_at_voice_start() is False
+            # Transcript arrives — but speech_start was during the window
+            assert sm.was_speech_during_hot_window(speech_start) is True
 
-    def test_manual_expiry_clears_captured_state(self):
-        """Manual expiry clears captured state."""
-        sm = StateManager()
+        sm.stop()
+
+    def test_no_timestamp_falls_back_to_current_state(self):
+        """When utterance_start_time is 0, falls back to current state."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         with patch('builtins.print'):
-            sm._state = ListeningState.HOT_WINDOW
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.was_speech_during_hot_window(0.0) is True
 
-            sm.capture_hot_window_state_at_voice_start()
-            assert sm.was_hot_window_active_at_voice_start() is True
+        sm.stop()
 
-            sm.expire_hot_window()
+    def test_no_timestamp_after_expiry_returns_false(self):
+        """When utterance_start_time is 0 and window expired, returns False."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.05)
 
-            assert sm.get_state() == ListeningState.WAKE_WORD
-            assert sm.was_hot_window_active_at_voice_start() is False
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            time.sleep(0.08)
+            assert sm.was_speech_during_hot_window(0.0) is False
+
+        sm.stop()
+
+    def test_new_window_resets_old_span(self):
+        """A new hot window span doesn't match speech from before it."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.05)
+
+        with patch('builtins.print'):
+            # First window
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            time.sleep(0.08)
+            assert sm.is_hot_window_active() is False
+
+            # Speech between windows
+            between_speech = time.time()
+
+            # Second window
+            time.sleep(0.05)
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Wait for second window to expire
+            time.sleep(0.08)
+            assert sm.is_hot_window_active() is False
+
+            # Speech from between windows should NOT match the second window's span
+            assert sm.was_speech_during_hot_window(between_speech) is False
+
+        sm.stop()
 
 
 class TestStopBehavior:

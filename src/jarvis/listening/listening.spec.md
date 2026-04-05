@@ -109,9 +109,9 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
-**Voice start capture:** `capture_hot_window_state_at_voice_start` returns True when the hot window is formally active OR when activation is pending (during the `echo_tolerance` delay). This ensures speech that starts the moment TTS finishes is correctly identified as hot window input, even if Whisper delivers the chunk after the window expires. This captured state is **cleared on all expiry paths** (timer, poll, manual) to prevent stale claims after the window closes.
+**Timestamp-based detection:** `was_speech_during_hot_window(utterance_start_time)` compares the VAD-onset timestamp against the hot window's time span (from schedule to expiry). This eliminates race conditions between slow Whisper transcription and the expiry timer — if the user started speaking during the window, it counts as hot window input regardless of when the transcript arrives.
 
-**`could_be_hot_window` (intent judge context):** Derived exclusively from the state manager — formal hot window activation or captured voice-start state. No time-based grace periods are used.
+**`could_be_hot_window` (intent judge context):** Derived from timestamp comparison — returns True if the hot window is active, activation is pending, or the utterance started within the window span even after expiry.
 
 **Expiry:** Timer-based, guaranteed to fire even if no audio
 
