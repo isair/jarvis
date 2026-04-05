@@ -593,6 +593,7 @@ class VoiceListener(threading.Thread):
                 # If judge says stop command, interrupt TTS
                 if intent_judgment.stop and self.tts and self.tts.is_speaking():
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
+                    self._stop_thinking_tune()
                     self.tts.interrupt()
                     return
 
