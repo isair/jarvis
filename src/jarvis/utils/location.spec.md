@@ -26,7 +26,7 @@ When `get_location_info` is called without an explicit `ip_address`:
 2. **Auto-detection** (only when `auto_detect=True`):
    1. **UPnP** — queries the local router via `miniupnpc`. Most privacy-friendly; no traffic leaves the LAN. Returns the router's external IP if UPnP is enabled and the IP is public.
    2. **Socket heuristic** — opens a UDP socket to well-known DNS servers (Google `8.8.8.8`, Cloudflare `1.1.1.1`, OpenDNS `208.67.222.222`) without sending data, to determine which local interface would be used. Returns the first non-private IP found.
-   3. **OpenDNS DNS query** — sends a single `myip.opendns.com` A-record query to `208.67.222.222:53`. This is the only step that transmits data externally. Returns the resolved public IP if valid.
+   3. **OpenDNS DNS query** — sends a single `myip.opendns.com` A-record query to `208.67.222.222:53`. This is the only step that transmits data externally. The DNS response is validated for RTYPE=1 (A record) and RCLASS=1 (IN) before interpreting the RDATA as an IPv4 address. Returns the resolved public IP if valid.
 3. **Local IP fallback** — if all auto-detection fails (or `auto_detect=False`), falls back to the local network interface IP via a non-routable socket connect. This IP is typically private and will not produce a geolocation result.
 
 ### CGNAT Resolution
@@ -48,6 +48,7 @@ Two independent caches exist, each with in-memory and on-disk tiers:
 
 - Disk caches are loaded on module import and persisted after each successful lookup or CGNAT resolution.
 - Expired entries are discarded on load.
+- All cache reads and writes are protected by a module-level `threading.RLock` (`_cache_lock`) for thread safety.
 
 ### GeoLite2 Database
 
@@ -60,9 +61,9 @@ Two independent caches exist, each with in-memory and on-disk tiers:
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `get_location_info(ip_address, *, config_ip, auto_detect, resolve_cgnat_public_ip)` | `dict` | Core lookup. Returns location fields or `{"error": ...}`. |
-| `get_location_context(*, config_ip, auto_detect, resolve_cgnat_public_ip)` | `str` | Formatted string like `"Location: London, England, United Kingdom (Europe/London)"` or `"Location: Unknown"`. |
-| `get_detailed_location_info(ip_address, *, config_ip, auto_detect, resolve_cgnat_public_ip)` | `dict` | Extends `get_location_info` with computed `coordinates` and `formatted_address` fields. |
+| `get_location_info(ip_address, *, config_ip, auto_detect, resolve_cgnat_public_ip, location_cache_minutes)` | `dict` | Core lookup. Returns location fields or `{"error": ...}`. |
+| `get_location_context(*, config_ip, auto_detect, resolve_cgnat_public_ip, location_cache_minutes)` | `str` | Formatted string like `"Location: London, England, United Kingdom (Europe/London)"` or `"Location: Unknown"`. |
+| `get_detailed_location_info(ip_address, *, config_ip, auto_detect, resolve_cgnat_public_ip, location_cache_minutes)` | `dict` | Extends `get_location_info` with computed `coordinates` and `formatted_address` fields. |
 | `is_location_available()` | `bool` | `True` if geoip2 is importable and the database file exists. |
 | `setup_location_database()` | `bool` | Checks database availability and prints setup instructions if missing. |
 
@@ -84,5 +85,5 @@ Two independent caches exist, each with in-memory and on-disk tiers:
 
 - **Daemon** (`src/jarvis/daemon.py`): Calls `get_location_context` at startup using config values.
 - **Reply Engine** (`src/jarvis/reply/engine.py`): Refreshes location context each agentic turn via `get_location_context`.
-- **Setup Wizard** (`src/desktop_app/setup_wizard.py`): Uses `get_location_context` and `get_location_info` for status display and IP validation.
+- **Setup Wizard** (`src/desktop_app/setup_wizard.py`): Uses `get_location_context` and `get_location_info` for status display and IP validation. Skips the location page entirely when `location_enabled=false`. Uses the OpenDNS resolver (not an external website) for the "Detect My IP" button. IP validation reuses the core `_is_private_ip` and `_is_cgnat_ip` helpers.
 - **Settings UI** (`src/desktop_app/settings_window.py`): Exposes all five config keys as toggleable fields.

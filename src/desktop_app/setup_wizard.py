@@ -345,6 +345,8 @@ try:
             get_location_context,
             is_location_available,
             _get_database_path,
+            _is_private_ip,
+            _is_cgnat_ip,
             GEOIP2_AVAILABLE,
         )
     except Exception as e:
@@ -355,6 +357,8 @@ try:
         get_location_context = lambda *a, **k: "Location: Unknown"
         is_location_available = lambda: False
         _get_database_path = lambda: None
+        _is_private_ip = lambda ip: True
+        _is_cgnat_ip = lambda ip: False
         GEOIP2_AVAILABLE = False
 
     _PYQT6_AVAILABLE = True
@@ -382,6 +386,8 @@ except ImportError:
     get_location_context = lambda *a, **k: "Location: Unknown"
     is_location_available = lambda: False
     _get_database_path = lambda: None
+    _is_private_ip = lambda ip: True
+    _is_cgnat_ip = lambda ip: False
     GEOIP2_AVAILABLE = False
 
 
@@ -2238,7 +2244,7 @@ class LocationPage(QWizardPage):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
 
-        self.open_ip_btn = QPushButton("🌐 Find My IP")
+        self.open_ip_btn = QPushButton("🔍 Detect My IP")
         self.open_ip_btn.setObjectName("secondary")
         self.open_ip_btn.setMinimumHeight(44)
         self.open_ip_btn.clicked.connect(self._open_ip_lookup)
@@ -2310,8 +2316,16 @@ class LocationPage(QWizardPage):
         self.status_label.setText("\n".join(status_parts))
 
     def _open_ip_lookup(self):
-        """Open IP lookup website."""
-        webbrowser.open("https://whatismyipaddress.com")
+        """Resolve public IP via OpenDNS and populate the input field."""
+        from jarvis.utils.location import _resolve_public_ip_via_opendns
+        resolved = _resolve_public_ip_via_opendns()
+        if resolved:
+            self.ip_input.setText(resolved)
+            self.test_result_label.setText(f"✅ Detected public IP: {resolved}")
+            self.test_result_label.setStyleSheet("color: #4ade80;")
+        else:
+            self.test_result_label.setText("⚠️ Could not detect public IP via DNS")
+            self.test_result_label.setStyleSheet("color: #fbbf24;")
 
     def _test_ip(self):
         """Test the entered IP address."""
@@ -2342,13 +2356,15 @@ class LocationPage(QWizardPage):
                 self._validated_ip = None
                 return
 
-        first_octet = int(octets[0])
-        second_octet = int(octets[1])
-        if (first_octet == 10 or
-            (first_octet == 172 and 16 <= second_octet <= 31) or
-            (first_octet == 192 and second_octet == 168) or
-            first_octet == 127):
+        if _is_private_ip(ip):
             self.test_result_label.setText("⚠️ This appears to be a private IP. Use your public IP instead.")
+            self.test_result_label.setStyleSheet("color: #fbbf24;")
+            self.save_btn.setEnabled(False)
+            self._validated_ip = None
+            return
+
+        if _is_cgnat_ip(ip):
+            self.test_result_label.setText("⚠️ This is a CGNAT IP (100.64.0.0/10). Use your true public IP instead.")
             self.test_result_label.setStyleSheet("color: #fbbf24;")
             self.save_btn.setEnabled(False)
             self._validated_ip = None
