@@ -104,12 +104,10 @@ System is waiting for wake word activation.
 
 **On trigger:**
 1. Wait for utterance to complete (user finishes speaking)
-2. Start "thinking" beep immediately after utterance ends (if openWakeWord fired)
+2. Start "thinking" beep and set face to LISTENING immediately after utterance ends — both for openWakeWord (audio-level) and text-based wake detection (before intent judge)
 3. Send transcript buffer + wake timestamp to intent judge
 4. If `directed=true` and `query` exists, dispatch to reply engine
-5. If rejected, stop the beep
-
-**Note:** If openWakeWord is not available (custom wake words, missing dependencies), the beep starts after text-based wake word detection during transcript processing.
+5. If rejected, stop the beep and revert face to IDLE
 
 ### 2. Hot Window Mode
 
@@ -119,8 +117,9 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Duration:** Configurable (default: 3 seconds)
 
-**Behavior:**
+**Behaviour:**
 - Any speech triggers the intent judge (no wake word needed)
+- Optimistic feedback (beep + LISTENING face state) starts before the intent judge call to eliminate perceived latency; reverted if the judge rejects
 - Intent judge determines if speech is echo or real follow-up
 - Judge has full context: TTS text, timing, transcript content
 

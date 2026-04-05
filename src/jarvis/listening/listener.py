@@ -524,6 +524,7 @@ class VoiceListener(threading.Thread):
         # (1-3 words) during TTS are handled by text-based stop word detection in Priority 2.
         is_speaking_now = self.tts and self.tts.is_speaking()
         intent_judgment = None
+        optimistic_feedback_started = False
 
         # Use the upgraded intent judge if available (with full transcript context)
         # Allow during TTS for longer utterances (>3 words) that might be user responses
@@ -560,6 +561,25 @@ class VoiceListener(threading.Thread):
                 ))
             )
 
+            # Start optimistic feedback before the intent judge LLM call to
+            # eliminate the perceived gap between "Heard" and "Working on it".
+            # If the judge rejects, we stop the beep and revert face state.
+            if not is_speaking_now and not self._is_thinking_tune_active():
+                wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+                has_wake_word = self._wake_timestamp is not None or is_wake_word_detected(
+                    text_lower, wake_word, aliases
+                )
+                if has_wake_word or could_be_hot_window:
+                    self._start_thinking_tune()
+                    try:
+                        from desktop_app.face_widget import get_jarvis_state, JarvisState
+                        get_jarvis_state().set_state(JarvisState.LISTENING)
+                    except (ImportError, Exception):
+                        pass
+                    optimistic_feedback_started = True
+                    debug_log("optimistic feedback started (beep + face) before intent judge", "voice")
+
             intent_judgment = self._intent_judge.judge(
                 segments=context_segments,
                 wake_timestamp=self._wake_timestamp,
@@ -573,6 +593,7 @@ class VoiceListener(threading.Thread):
                 # If judge says stop command, interrupt TTS
                 if intent_judgment.stop and self.tts and self.tts.is_speaking():
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
+                    self._stop_thinking_tune()
                     self.tts.interrupt()
                     return
 
@@ -717,8 +738,14 @@ class VoiceListener(threading.Thread):
                     else:
                         # Trust other rejection reasons (narrative mention, etc.)
                         debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
-                        # Stop any early-started beep since we're rejecting this input
+                        # Stop any early-started beep and revert face since we're rejecting
                         self._stop_thinking_tune()
+                        if optimistic_feedback_started:
+                            try:
+                                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                                get_jarvis_state().set_state(JarvisState.IDLE)
+                            except (ImportError, Exception):
+                                pass
                         return
                 else:
                     # For inconclusive results, fall through to wake word detection
@@ -764,8 +791,14 @@ class VoiceListener(threading.Thread):
         if intent_judgment is not None:
             intent_info = f", intent={intent_judgment.directed}/{intent_judgment.confidence}"
 
-        # Stop any early-started beep since we're not processing this input
+        # Stop any early-started beep and revert face since we're not processing this input
         self._stop_thinking_tune()
+        if optimistic_feedback_started:
+            try:
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                get_jarvis_state().set_state(JarvisState.IDLE)
+            except (ImportError, Exception):
+                pass
 
         if received_during_tts:
             # User spoke during TTS but it wasn't a stop command - this is likely a response
