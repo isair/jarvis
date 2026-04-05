@@ -173,8 +173,9 @@ class StateManager:
 
         return False
 
-    def was_speech_during_hot_window(self, utterance_start_time: float) -> bool:
-        """Check if speech started during the hot window time span.
+    def was_speech_during_hot_window(self, utterance_start_time: float,
+                                     utterance_end_time: float = 0.0) -> bool:
+        """Check if speech overlapped with the hot window time span.
 
         Uses timestamps instead of a mutable boolean flag. This eliminates
         race conditions between the hot window expiry timer and slow Whisper
@@ -183,12 +184,17 @@ class StateManager:
         Args:
             utterance_start_time: When VAD detected voice onset (time.time()).
                                   If 0, falls back to current state check.
+            utterance_end_time: When the utterance ended (time.time()).
+                                Used to detect overlap when the utterance started
+                                before the span (e.g. mic picked up TTS echo)
+                                but extended into the hot window period.
 
         Returns:
             True if:
             - Hot window is currently active, OR
             - Hot window activation is pending (echo_tolerance delay), OR
             - Speech started during the window span (even if window has since expired)
+            - Speech started before the span but ended during it (overlap)
         """
         with self._state_lock:
             is_active = self._state == ListeningState.HOT_WINDOW
@@ -210,11 +216,24 @@ class StateManager:
         if is_pending:
             return span_start <= 0 or utterance_start_time >= span_start
 
-        # Window expired — accept if speech started within the span
-        # This is the key fix: timestamps survive timer expiry, so speech
-        # that started during the window is accepted even if Whisper is slow
+        # Window expired — accept if speech overlapped with the span
+        # This handles two cases:
+        # 1. Speech started within the span (normal hot window follow-up)
+        # 2. Speech started before the span but ended during it (mic picked up
+        #    TTS echo during playback, then user spoke during hot window —
+        #    Whisper merges both into one chunk)
         if span_start > 0 and span_end > 0:
-            return span_start <= utterance_start_time <= span_end
+            if span_start <= utterance_start_time <= span_end:
+                return True
+            if (utterance_end_time > 0
+                    and utterance_start_time < span_start
+                    and utterance_end_time >= span_start):
+                debug_log(
+                    f"utterance overlaps hot window span "
+                    f"(start={utterance_start_time:.2f} < span_start={span_start:.2f}, "
+                    f"end={utterance_end_time:.2f} >= span_start)", "state"
+                )
+                return True
 
         return False
 

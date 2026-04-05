@@ -354,6 +354,99 @@ class TestEchoAndUserSpeechInSameChunk:
         listener.state_manager.stop()
 
     @patch("builtins.print")
+    def test_echo_plus_speech_from_during_tts_accepted_after_expiry(self, _print):
+        """Mixed echo+speech chunk where VAD triggered during TTS is accepted
+        even after the hot window expires.
+
+        Real scenario: TTS plays, mic picks up echo (VAD triggers during TTS),
+        user speaks during hot window, Whisper takes >3s to transcribe the long
+        combined audio, hot window expires, transcript arrives.
+
+        The utterance started BEFORE the hot window span (during TTS) but
+        ended DURING the span (user spoke during window). The system should
+        recognise this overlap and treat it as hot window input.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        tts_text = "Got it. I will keep my responses short and to the point from now on."
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        span_start = listener.state_manager._hot_window_span_start
+
+        # Manually expire hot window (simulates Whisper taking >3s)
+        listener.state_manager.expire_hot_window()
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Intent judge correctly extracts user speech from mixed transcript
+        _install_intent_judge(listener, _make_judgment(
+            directed=True,
+            query="tell me something random"))
+
+        # Mixed chunk: full TTS echo + user speech appended
+        # utterance_start_time is BEFORE span_start (VAD triggered during TTS)
+        # utterance_end_time is AFTER span_start (user spoke during window)
+        mixed_text = (
+            "Got it. I will keep my responses short and to the point from now on. "
+            "Yeah, I guess that's fine, but tell me something random."
+        )
+        listener._process_transcript(
+            mixed_text,
+            utterance_energy=0.01,
+            utterance_start_time=span_start - 2.0,
+            utterance_end_time=span_start + 0.05,
+        )
+
+        query = _accepted_query(listener)
+        assert query != "", (
+            "Mixed echo+speech where utterance overlaps hot window should be "
+            "accepted, not dropped because utterance_start_time < span_start"
+        )
+        assert "random" in query
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_mixed_echo_speech_unsalvaged_uses_judge_extraction(self, _print):
+        """When salvage fails to strip echo, the post-judge echo check should
+        use the intent judge's extraction instead of rejecting everything.
+
+        If the heard text is much longer than TTS (mixed content), the echo
+        check should recognise it's not pure echo and fall through to use the
+        judge's extracted query.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        tts_text = "The current temperature is around nine degrees celsius."
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Intent judge correctly extracts user speech
+        _install_intent_judge(listener, _make_judgment(
+            directed=True,
+            query="what will it be tomorrow"))
+
+        # Mixed text where salvage won't work (Whisper transcribed echo differently
+        # from TTS text, so exact word matching fails). User speech is substantially
+        # longer than TTS echo so word count guard lets it through.
+        mixed_text = (
+            "the temperature is about 9 degrees. "
+            "yeah I figured as much but what will it be like tomorrow afternoon"
+        )
+        listener._process_transcript(
+            mixed_text,
+            utterance_energy=0.01,
+        )
+
+        query = _accepted_query(listener)
+        assert query != "", (
+            "Mixed echo+speech should not be rejected when text is longer than TTS"
+        )
+        assert "tomorrow" in query
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
     def test_utterance_starting_during_tts_ending_after_treated_as_hot_window(self, _print):
         """Utterance that starts before TTS finishes is still treated as hot window context."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)

@@ -373,7 +373,7 @@ class VoiceListener(threading.Thread):
         # loop for seconds on echo, and hot window extending from echo resets.
         if not received_during_tts and not self._is_thinking_tune_active():
             in_hot_window = self.state_manager.was_speech_during_hot_window(
-                utterance_start_time
+                utterance_start_time, utterance_end_time
             )
             if in_hot_window:
                 # Fuzzy echo check — instant, no intent judge needed.
@@ -500,7 +500,7 @@ class VoiceListener(threading.Thread):
             # A generous grace period caused false hot window claims after
             # the user had already seen "Returning to wake word mode".
             could_be_hot_window = self.state_manager.was_speech_during_hot_window(
-                utterance_start_time
+                utterance_start_time, utterance_end_time
             )
 
             intent_judgment = self._intent_judge.judge(
@@ -560,20 +560,52 @@ class VoiceListener(threading.Thread):
                         # Hot window mode - no wake word needed, but check for echo.
                         # The mic can pick up Jarvis's own TTS output and Whisper
                         # transcribes it as user speech. Check fuzzy similarity.
+                        # Only reject PURE echo — if the heard text is significantly
+                        # longer than TTS, it contains user speech mixed with echo
+                        # and the intent judge's extraction should be used instead.
                         if last_tts_text:
                             echo_score = fuzz.partial_ratio(
-                                text_lower[:100], last_tts_text.lower()[:200]
+                                text_lower[:150], last_tts_text.lower()[:300]
                             )
-                            if echo_score >= 70:
-                                debug_log(f"🔇 Echo in hot window (directed, score={echo_score}): \"{text_lower}\"", "voice")
-                                print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
-                                self._stop_thinking_tune()
-                                return
+                            tts_words = len(last_tts_text.split())
+                            text_words = len(text_lower.split())
+                            is_pure_echo = (
+                                echo_score >= 70
+                                and text_words <= max(tts_words * 1.3, tts_words + 3)
+                            )
+                            if is_pure_echo:
+                                # Also check judge's extracted query — if it matches
+                                # TTS too, it's genuinely pure echo. If the query is
+                                # different, the judge extracted real user speech.
+                                query_echo_score = fuzz.partial_ratio(
+                                    intent_judgment.query[:100].lower(),
+                                    last_tts_text.lower()[:200]
+                                )
+                                if query_echo_score >= 70:
+                                    debug_log(f"🔇 Echo in hot window (directed, score={echo_score}): \"{text_lower}\"", "voice")
+                                    print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
+                                    self._stop_thinking_tune()
+                                    return
+                                else:
+                                    debug_log(
+                                        f"echo in text (score={echo_score}) but judge extracted "
+                                        f"non-echo query: \"{intent_judgment.query}\"", "voice"
+                                    )
 
                         # Use actual user text as query: in hot window there's no wake word
                         # to strip, and the intent judge's extraction can lose words
                         # (e.g. extracting "I" from "No, I'm good.")
-                        hot_query = text_lower
+                        # Exception: if text is mixed echo+speech (longer than TTS),
+                        # use the judge's extraction which separates echo from speech.
+                        if last_tts_text:
+                            tts_words = len(last_tts_text.split())
+                            text_words = len(text_lower.split())
+                            if text_words > max(tts_words * 1.3, tts_words + 3):
+                                hot_query = intent_judgment.query
+                            else:
+                                hot_query = text_lower
+                        else:
+                            hot_query = text_lower
                         debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{hot_query}\"", "voice")
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
@@ -622,11 +654,18 @@ class VoiceListener(threading.Thread):
                             return
                     else:
                         # Hot window — echo check before accepting
+                        # Only reject pure echo (similar word count to TTS)
                         if last_tts_text:
                             echo_score = fuzz.partial_ratio(
-                                text_lower[:100], last_tts_text.lower()[:200]
+                                text_lower[:150], last_tts_text.lower()[:300]
                             )
-                            if echo_score >= 70:
+                            tts_words = len(last_tts_text.split())
+                            text_words = len(text_lower.split())
+                            is_pure_echo = (
+                                echo_score >= 70
+                                and text_words <= max(tts_words * 1.3, tts_words + 3)
+                            )
+                            if is_pure_echo:
                                 debug_log(f"🔇 Echo in hot window (directed/no-query, score={echo_score}): \"{text_lower}\"", "voice")
                                 print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
                                 self._stop_thinking_tune()
@@ -690,16 +729,23 @@ class VoiceListener(threading.Thread):
                         debug_log(f"⏭️ Not near hot window ({time_after_hot_window:.2f}s after), falling through to wake word check", "voice")
                         # Continue to wake word detection below
                     else:
-                        # Check if text is echo of TTS output
+                        # Check if text is pure echo of TTS output
                         echo_score = 0
+                        is_pure_echo = False
                         if last_tts_text:
                             echo_score = fuzz.partial_ratio(
-                                text_lower[:100], last_tts_text.lower()[:200]
+                                text_lower[:150], last_tts_text.lower()[:300]
+                            )
+                            tts_words = len(last_tts_text.split())
+                            text_words = len(text_lower.split())
+                            is_pure_echo = (
+                                echo_score >= 70
+                                and text_words <= max(tts_words * 1.3, tts_words + 3)
                             )
 
-                        if could_be_hot_window and echo_score >= 70:
-                            # Confirmed echo — early check should have caught this,
-                            # but handle as safety net.
+                        if could_be_hot_window and is_pure_echo:
+                            # Confirmed pure echo — early check should have caught
+                            # this, but handle as safety net.
                             debug_log(f"🔇 Echo in hot window (score={echo_score}): \"{text_lower}\"", "voice")
                             self._stop_thinking_tune()
                             return
