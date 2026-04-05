@@ -167,7 +167,7 @@ class Settings:
 
 
 
-def _default_config_path() -> Path:
+def default_config_path() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return Path(xdg) / "jarvis" / "config.json"
@@ -236,7 +236,7 @@ def load_config() -> Dict[str, Any]:
     Unlike load_settings(), this returns the raw dict instead of a Settings object.
     """
     cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
-    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else _default_config_path()
+    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else default_config_path()
     cfg_json = _load_json(cfg_path)
 
     # Apply config migrations for version upgrades
@@ -394,9 +394,9 @@ def get_default_config() -> Dict[str, Any]:
         "location_cache_minutes": 60,
         "location_ip_address": None,
         "location_auto_detect": True,
-    # When behind CGNAT (100.64.0.0/10), attempt a privacy-light external DNS query to discover true public IP
-    # Uses a single OpenDNS resolver lookup of myip.opendns.com over DNS (no HTTP services). Disable to avoid any external request.
-    "location_cgnat_resolve_public_ip": True,
+        # When behind CGNAT (100.64.0.0/10), attempt a privacy-light external DNS query to discover true public IP.
+        # Uses a single OpenDNS resolver lookup of myip.opendns.com over DNS (no HTTP services). Disable to avoid any external request.
+        "location_cgnat_resolve_public_ip": True,
 
         # Web Search
         "web_search_enabled": True,
@@ -421,7 +421,7 @@ def load_settings() -> Settings:
 
     # Resolve config path
     cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
-    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else _default_config_path()
+    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else default_config_path()
     cfg_dir = cfg_path.parent
     try:
         cfg_dir.mkdir(parents=True, exist_ok=True)

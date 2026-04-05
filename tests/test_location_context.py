@@ -1,6 +1,10 @@
 import types
+from unittest.mock import patch
 from jarvis.reply.engine import run_reply_engine
-from jarvis.utils.location import get_location_context
+from jarvis.utils.location import (
+    get_location_context,
+    _get_external_ip_automatically,
+)
 
 
 class DummyDB:
@@ -60,3 +64,50 @@ def test_get_location_context_disabled_flag():
     # logic produced 'Location: Disabled' rather than attempting lookup (cannot easily
     # capture printed system messages without refactor, so just ensure direct value plausible)
     assert direct in ("Location: Unknown", "Location: Disabled")
+
+
+def test_auto_detect_falls_back_to_opendns_when_upnp_and_socket_fail():
+    """OpenDNS DNS query is the final fallback in auto-detection (step 3)."""
+    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
+         patch("jarvis.utils.location._get_external_ip_via_socket", return_value=None), \
+         patch("jarvis.utils.location._resolve_public_ip_via_opendns", return_value="93.184.216.34") as mock_dns:
+        result = _get_external_ip_automatically()
+        mock_dns.assert_called_once()
+        assert result == "93.184.216.34"
+
+
+def test_auto_detect_skips_opendns_when_upnp_succeeds():
+    """OpenDNS is not called when UPnP already returned a public IP."""
+    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value="203.0.113.1"), \
+         patch("jarvis.utils.location._resolve_public_ip_via_opendns") as mock_dns:
+        result = _get_external_ip_automatically()
+        mock_dns.assert_not_called()
+        assert result == "203.0.113.1"
+
+
+def test_auto_detect_skips_opendns_when_socket_succeeds():
+    """OpenDNS is not called when socket heuristic already returned a public IP."""
+    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
+         patch("jarvis.utils.location._get_external_ip_via_socket", return_value="198.51.100.5"), \
+         patch("jarvis.utils.location._resolve_public_ip_via_opendns") as mock_dns:
+        result = _get_external_ip_automatically()
+        mock_dns.assert_not_called()
+        assert result == "198.51.100.5"
+
+
+def test_auto_detect_returns_none_when_all_methods_fail():
+    """Returns None when UPnP, socket, and OpenDNS all fail."""
+    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
+         patch("jarvis.utils.location._get_external_ip_via_socket", return_value=None), \
+         patch("jarvis.utils.location._resolve_public_ip_via_opendns", return_value=None):
+        result = _get_external_ip_automatically()
+        assert result is None
+
+
+def test_auto_detect_rejects_private_ip_from_opendns():
+    """Private IPs from OpenDNS are rejected (not returned as valid)."""
+    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
+         patch("jarvis.utils.location._get_external_ip_via_socket", return_value=None), \
+         patch("jarvis.utils.location._resolve_public_ip_via_opendns", return_value="192.168.1.1"):
+        result = _get_external_ip_automatically()
+        assert result is None

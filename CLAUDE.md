@@ -12,6 +12,10 @@ Tools define when/how to be used. Profiles define what to do after tools execute
 
 Tools return raw data without LLM processing. Profiles handle all response formatting and personality through the daemon's LLM loop. This ensures consistent response style across all profiles.
 
+## Git Workflow
+
+The default branch is `develop`. All PRs and feature branches must target `develop`, not `main`.
+
 ## Development Environment
 
 The project uses a micromamba environment at `.mamba_env/`. Always activate it before running builds, tests, or the app:

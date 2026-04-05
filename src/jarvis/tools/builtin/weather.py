@@ -76,6 +76,7 @@ class WeatherTool(Tool):
                 config_ip=getattr(context.cfg, 'location_ip_address', None),
                 auto_detect=getattr(context.cfg, 'location_auto_detect', True),
                 resolve_cgnat_public_ip=getattr(context.cfg, 'location_cgnat_resolve_public_ip', True),
+                location_cache_minutes=getattr(context.cfg, 'location_cache_minutes', 60),
             )
 
             if "error" in location_info:

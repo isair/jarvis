@@ -338,6 +338,7 @@ def main() -> None:
             config_ip=cfg.location_ip_address,
             auto_detect=cfg.location_auto_detect,
             resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+            location_cache_minutes=cfg.location_cache_minutes,
         )
         if location_context == "Location: Unknown":
             print("📍 Location detection not available", flush=True)
