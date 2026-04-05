@@ -288,14 +288,31 @@ class VoiceListener(threading.Thread):
             self._tune_player.start_tune()
 
     def _stop_thinking_tune(self) -> None:
-        """Stop the thinking tune."""
+        """Stop the thinking tune and revert face state to IDLE."""
         if self._tune_player is not None:
             self._tune_player.stop_tune()
             self._tune_player = None
+            try:
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                get_jarvis_state().set_state(JarvisState.IDLE)
+            except ImportError:
+                pass
+            except Exception:
+                pass
 
     def _is_thinking_tune_active(self) -> bool:
         """Check if thinking tune is currently active."""
         return self._tune_player is not None and self._tune_player.is_playing()
+
+    def _set_face_state_listening(self) -> None:
+        """Set the desktop face widget to LISTENING state."""
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            get_jarvis_state().set_state(JarvisState.LISTENING)
+        except ImportError:
+            pass
+        except Exception as e:
+            debug_log(f"failed to set face state to LISTENING: {e}", "voice")
 
     def track_tts_start(self, tts_text: str) -> None:
         """Called when TTS starts speaking."""
@@ -1613,6 +1630,7 @@ class VoiceListener(threading.Thread):
             )
             if in_hot_window:
                 self._start_thinking_tune()
+                self._set_face_state_listening()
                 debug_log("early beep: hot window active", "voice")
             else:
                 wake_word = getattr(self.cfg, "wake_word", "jarvis")
@@ -1620,6 +1638,7 @@ class VoiceListener(threading.Thread):
                 fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
                 if is_wake_word_detected(text.lower(), wake_word, aliases, fuzzy_ratio):
                     self._start_thinking_tune()
+                    self._set_face_state_listening()
                     debug_log("early beep: wake word detected", "voice")
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
