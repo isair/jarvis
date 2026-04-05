@@ -567,6 +567,71 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_contains="picnic",  # User's follow-up statement
         expected_query_not_contains="weather will be",  # NOT the TTS echo
     ),
+
+    # ==========================================================================
+    # Cross-segment context synthesis
+    # The intent judge should resolve vague references ("that", "it") by looking
+    # at PREVIOUS segments in the transcript buffer, not just the CURRENT segment.
+    # This is the "dinosaur bug": user says "I think dinosaurs are cool" then
+    # "What do you think about that Jarvis?" — query should mention dinosaurs.
+    # ==========================================================================
+
+    # Core dinosaur scenario from real bug
+    MultiSegmentTestCase(
+        name="cross_segment_dinosaur_opinion",
+        segments=[
+            ("I think dinosaurs are cool", False),  # Context from earlier
+            ("What do you think about that Jarvis", False),  # Wake word + vague "that"
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,  # Wake detected in second segment
+        expected_directed=True,
+        expected_query_contains="dinosaur",  # Must resolve "that" → dinosaurs
+    ),
+
+    # Cross-segment with longer conversation context
+    MultiSegmentTestCase(
+        name="cross_segment_movie_discussion",
+        segments=[
+            ("I just watched Dune Part Two last night", False),  # Person mentions movie
+            ("It was absolutely incredible", False),  # Follow-up about it
+            ("Jarvis what did the critics think about it", False),  # Wake word + "it" = Dune
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1004.5,
+        expected_directed=True,
+        expected_query_contains="dune",  # Must resolve "it" → Dune Part Two
+    ),
+
+    # Cross-segment: topic introduced then referenced with "that"
+    MultiSegmentTestCase(
+        name="cross_segment_recipe_question",
+        segments=[
+            ("I made carbonara for dinner last night", False),  # Context
+            ("Jarvis can you find me a better recipe for that", False),  # "that" = carbonara
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="carbonara",  # Must resolve "that" → carbonara
+    ),
+
+    # Cross-segment in hot window (no wake word needed)
+    MultiSegmentTestCase(
+        name="cross_segment_hot_window_followup",
+        segments=[
+            ("The capital of France is Paris", True),  # TTS echo (assistant's answer)
+            ("What about Germany", False),  # User follow-up referencing prior topic
+        ],
+        last_tts_text="The capital of France is Paris, known as the City of Light.",
+        in_hot_window=True,
+        wake_timestamp=None,
+        expected_directed=True,
+        expected_query_contains="germany",  # Should ask about Germany's capital
+    ),
 ]
 
 # Test cases that are known to fail with current model (3b)
@@ -584,10 +649,9 @@ KNOWN_FAILING_CASES = {
     "quiet_command",
     # Multi-segment stop detection - LLM sometimes extracts from echo segments
     "multiple_echoes_then_interrupt",
-    # Multi-person conversation context synthesis - requires more sophisticated prompt
+    # Multi-person conversation context synthesis - model understands context but doesn't
+    # synthesize into query when there's no explicit pronoun reference ("that", "it")
     "multi_person_weather_discussion",
-    # Vague reference resolution - 3b model doesn't resolve "that" to topic from context
-    "multi_person_vague_reference",
     # No wake word cases - LLM hallucinates wake word but listener validates this
     # These are EXPECTED to fail at LLM level - the listener's wake word check handles it
     "no_wake_word_simple_question",
