@@ -482,12 +482,16 @@ class SetupWizard(QWizard):
         if self._location_working is None:
             try:
                 cfg = load_settings()
-                context = get_location_context(
-                    config_ip=cfg.location_ip_address,
-                    auto_detect=cfg.location_auto_detect,
-                    resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
-                )
-                self._location_working = context != "Location: Unknown"
+                # If location is disabled, treat as "working" so we skip the page
+                if not getattr(cfg, 'location_enabled', True):
+                    self._location_working = True
+                else:
+                    context = get_location_context(
+                        config_ip=cfg.location_ip_address,
+                        auto_detect=cfg.location_auto_detect,
+                        resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+                    )
+                    self._location_working = context != "Location: Unknown"
             except Exception:
                 self._location_working = False
         return self._location_working
@@ -709,12 +713,15 @@ class WelcomePage(QWizardPage):
         if not is_location_available():
             self._update_status_row(self.location_status, "⚠️ Database not installed", False)
         else:
-            cfg = load_settings()
-            location_context = get_location_context(
-                config_ip=cfg.location_ip_address,
-                auto_detect=cfg.location_auto_detect,
-                resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
-            )
+            try:
+                cfg = load_settings()
+                location_context = get_location_context(
+                    config_ip=cfg.location_ip_address,
+                    auto_detect=cfg.location_auto_detect,
+                    resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+                )
+            except Exception:
+                location_context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
             if location_context == "Location: Unknown":
                 self._update_status_row(self.location_status, "⚠️ Not configured", False)
             else:
@@ -2280,12 +2287,15 @@ class LocationPage(QWizardPage):
             status_parts.append(f"   3. Save as: {db_path}")
         else:
             status_parts.append("✅ GeoLite2 database found")
-            cfg = load_settings()
-            location_context = get_location_context(
-                config_ip=cfg.location_ip_address,
-                auto_detect=cfg.location_auto_detect,
-                resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
-            )
+            try:
+                cfg = load_settings()
+                location_context = get_location_context(
+                    config_ip=cfg.location_ip_address,
+                    auto_detect=cfg.location_auto_detect,
+                    resolve_cgnat_public_ip=cfg.location_cgnat_resolve_public_ip,
+                )
+            except Exception:
+                location_context = get_location_context(auto_detect=True, resolve_cgnat_public_ip=True)
 
             if location_context == "Location: Unknown":
                 status_parts.append("❌ Could not detect public IP address")

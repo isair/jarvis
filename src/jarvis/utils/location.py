@@ -3,7 +3,7 @@ import socket
 import ipaddress
 from pathlib import Path
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import threading
 import sys
@@ -64,7 +64,7 @@ def _load_disk_caches() -> None:
         base.mkdir(parents=True, exist_ok=True)
     except Exception:
         return
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # Location cache
     try:
         if _LOCATION_CACHE_FILE.exists():
@@ -78,6 +78,8 @@ def _load_disk_caches() -> None:
                     continue
                 try:
                     ts = datetime.fromisoformat(ts_str)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                 except Exception:
                     continue
                 # TTL for location cache can vary; default 60 minutes (aligned with config default). We'll store ttl minutes in payload optionally.
@@ -104,6 +106,8 @@ def _load_disk_caches() -> None:
                     continue
                 try:
                     ts = datetime.fromisoformat(ts_str)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                 except Exception:
                     continue
                 if now - ts < _CGNAT_RESOLUTION_TTL:
@@ -122,7 +126,7 @@ def _persist_disk_caches(location_cache_minutes: int = 60) -> None:
         # Location cache serialization
         try:
             loc_out = {}
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             for ip, data in _location_cache.items():
                 loc_out[ip] = {"data": data, "ts": now, "ttl": int(location_cache_minutes)}
             with _LOCATION_CACHE_FILE.open("w", encoding="utf-8") as f:
@@ -371,6 +375,11 @@ def _resolve_public_ip_via_opendns(timeout: float = 1.5) -> Optional[str]:
         answer_start = 12 + question_len
         if len(data) < answer_start + 12:
             return None
+        # Validate answer is an A record (RTYPE=1, RCLASS=1)
+        rtype = int.from_bytes(data[answer_start + 2:answer_start + 4], 'big') if len(data) >= answer_start + 4 else 0
+        rclass = int.from_bytes(data[answer_start + 4:answer_start + 6], 'big') if len(data) >= answer_start + 6 else 0
+        if rtype != 1 or rclass != 1:
+            return None
         rdlength = int.from_bytes(data[answer_start + 10:answer_start + 12], 'big') if len(data) >= answer_start + 12 else 0
         rdata_start = answer_start + 12
         rdata_end = rdata_start + rdlength
@@ -422,7 +431,7 @@ def get_location_info(
     if cgnat_flag and resolve_cgnat_public_ip:
         # Check CGNAT resolution cache first
         cache_entry = _cgnat_resolution_cache.get(ip_address)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if cache_entry:
             ts, cached_public = cache_entry
             if now - ts < _CGNAT_RESOLUTION_TTL:
