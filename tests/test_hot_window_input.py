@@ -491,3 +491,221 @@ class TestEchoRejectionExtendsFollowUpWindow:
 
         assert _accepted_query(listener) == "one more thing"
         listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Early beep and face state feedback
+# ---------------------------------------------------------------------------
+
+def _is_beeping(listener) -> bool:
+    """Check if the thinking tune is currently active."""
+    return listener._tune_player is not None
+
+
+@pytest.mark.unit
+class TestEarlyBeepFeedback:
+    """Beep should start immediately after Whisper transcription, before the
+    intent judge runs. This gives instant auditory feedback to the user."""
+
+    @patch("builtins.print")
+    def test_beep_starts_on_wake_word_before_intent_judge(self, _print):
+        """Beep starts right after 'Heard' when wake word is present."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+
+        # No intent judge installed — beep should still start from the
+        # early detection path, then fallback wake word check processes query.
+        listener._process_transcript("jarvis what time is it", utterance_energy=0.01)
+
+        assert _accepted_query(listener) != ""
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_beep_starts_in_hot_window_before_intent_judge(self, _print):
+        """Beep starts right after 'Heard' when in hot window."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+
+        listener.echo_detector.track_tts_start("Here is the answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        listener._process_transcript("tell me more", utterance_energy=0.01)
+
+        assert _accepted_query(listener) == "tell me more"
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_no_beep_without_wake_word_or_hot_window(self, _print):
+        """No beep when there's no wake word and not in hot window."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+
+        # Random speech, no wake word, no hot window
+        listener._process_transcript("the weather is nice today", utterance_energy=0.01)
+
+        assert _accepted_query(listener) == ""
+        # Beep should not have been started (and if it was, it was stopped)
+        assert not _is_beeping(listener)
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_beep_stops_when_intent_judge_rejects(self, _print):
+        """Early beep is stopped if intent judge rejects the input."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+
+        # Install judge that rejects — speech has wake word so early beep fires,
+        # but judge says not directed so beep should be stopped.
+        _install_intent_judge(listener, _make_judgment(
+            directed=False, query="", confidence="high",
+            reasoning="narrative mention"))
+
+        listener._process_transcript("jarvis is a cool name", utterance_energy=0.01)
+
+        # Query should NOT be accepted (judge rejected + fallback wake word
+        # check won't find a query after "jarvis")
+        assert not _is_beeping(listener)
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_no_beep_during_tts_playback(self, _print):
+        """Beep does not start while TTS is actively speaking."""
+        listener, mock_tts = _create_listener(
+            echo_tolerance=0.02, hot_window_seconds=3.0, tts_speaking=True)
+        listener.cfg.tune_enabled = True
+
+        listener._process_transcript("jarvis what time is it", utterance_energy=0.01)
+
+        # Should not beep during TTS (stop command path handles TTS interrupts)
+        assert not _is_beeping(listener)
+        listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Echo-only rejection resets hot window (confirmed echo required)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestEchoConfirmedHotWindowReset:
+    """Hot window timer resets ONLY when rejected text is confirmed as echo
+    (fuzzy match >= 70 against TTS output). Non-echo rejections should NOT
+    reset the timer."""
+
+    @patch("builtins.print")
+    def test_confirmed_echo_resets_hot_window(self, _print):
+        """Rejected text matching TTS output resets the hot window timer."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        tts_text = "The weather will be sunny tomorrow."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Judge rejects echo text as not directed
+        _install_intent_judge(listener, _make_judgment(
+            directed=False, query="", confidence="high",
+            reasoning="echo of assistant speech"))
+
+        # Feed text that closely matches TTS output (echo)
+        listener._process_transcript(
+            "the weather will be sunny tomorrow",
+            utterance_energy=0.01)
+
+        # Hot window should still be active (reset by echo rejection)
+        assert listener.state_manager.is_hot_window_active()
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_non_echo_rejection_does_not_reset_hot_window(self, _print):
+        """Rejected text NOT matching TTS output does NOT reset timer.
+
+        In hot window, non-echo speech is now accepted (override), so this
+        test verifies that the override fires instead of a timer reset.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        tts_text = "The weather will be sunny tomorrow."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Judge rejects unrelated speech
+        _install_intent_judge(listener, _make_judgment(
+            directed=False, query="", confidence="high",
+            reasoning="background conversation"))
+
+        listener._process_transcript(
+            "did you see the game last night",
+            utterance_energy=0.01)
+
+        # Non-echo speech in hot window is accepted via override
+        assert _accepted_query(listener) == "did you see the game last night"
+        listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Hot window boundary enforcement
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestHotWindowBoundary:
+    """The hot window has a strict time boundary. Speech arriving after
+    the window expires should require wake word detection."""
+
+    @patch("builtins.print")
+    def test_speech_within_window_accepted(self, _print):
+        """Speech processed while hot window is active is accepted."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        listener.echo_detector.track_tts_start("Short answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
+        listener._process_transcript("thanks", utterance_energy=0.01)
+
+        assert _accepted_query(listener) == "thanks"
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_speech_after_window_requires_wake_word(self, _print):
+        """Speech arriving after hot window expired requires wake word."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.05)
+
+        listener.echo_detector.track_tts_start("Short answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Let hot window expire
+        time.sleep(0.1)
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Speech without wake word — should be rejected
+        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        listener._process_transcript("tell me more", utterance_energy=0.01)
+
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_speech_after_window_with_wake_word_accepted(self, _print):
+        """Speech after hot window expired but containing wake word is accepted."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.05)
+
+        listener.echo_detector.track_tts_start("Short answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Let hot window expire
+        time.sleep(0.1)
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Speech with wake word — accepted via wake word detection fallback
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="what time is it"))
+        listener._process_transcript("jarvis what time is it", utterance_energy=0.01)
+
+        assert _accepted_query(listener) != ""
+        listener.state_manager.stop()

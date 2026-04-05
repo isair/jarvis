@@ -325,6 +325,66 @@ class TestHotWindowVoiceState:
         assert sm.was_hot_window_active_at_voice_start() is False
 
 
+class TestVoiceStateClearedOnExpiry:
+    """Captured voice-start state must be cleared when hot window expires.
+
+    Without this, in-flight Whisper transcriptions can falsely claim hot window
+    even after the user has seen 'Returning to wake word mode'."""
+
+    def test_timer_expiry_clears_captured_state(self):
+        """Timer-based expiry clears was_hot_window_active_at_voice_start."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.05)
+
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Capture state while hot window is active
+            sm.capture_hot_window_state_at_voice_start()
+            assert sm.was_hot_window_active_at_voice_start() is True
+
+            # Wait for expiry
+            time.sleep(0.08)
+            assert sm.is_hot_window_active() is False
+            # Captured state should be cleared
+            assert sm.was_hot_window_active_at_voice_start() is False
+
+        sm.stop()
+
+    def test_poll_expiry_clears_captured_state(self):
+        """Poll-based (synchronous) expiry clears captured state."""
+        sm = StateManager(echo_tolerance=0.0, hot_window_seconds=0.05)
+
+        with patch('builtins.print'):
+            sm._state = ListeningState.HOT_WINDOW
+            sm._hot_window_start_time = time.time()
+
+            sm.capture_hot_window_state_at_voice_start()
+            assert sm.was_hot_window_active_at_voice_start() is True
+
+            time.sleep(0.06)
+            sm.check_hot_window_expiry()
+
+            assert sm.get_state() == ListeningState.WAKE_WORD
+            assert sm.was_hot_window_active_at_voice_start() is False
+
+    def test_manual_expiry_clears_captured_state(self):
+        """Manual expiry clears captured state."""
+        sm = StateManager()
+
+        with patch('builtins.print'):
+            sm._state = ListeningState.HOT_WINDOW
+
+            sm.capture_hot_window_state_at_voice_start()
+            assert sm.was_hot_window_active_at_voice_start() is True
+
+            sm.expire_hot_window()
+
+            assert sm.get_state() == ListeningState.WAKE_WORD
+            assert sm.was_hot_window_active_at_voice_start() is False
+
+
 class TestStopBehavior:
     """Tests for state manager stop behavior."""
 
