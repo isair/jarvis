@@ -137,8 +137,14 @@ class TestUserSpeaksDuringHotWindow:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_undirected_background_speech_is_rejected(self, _print):
-        """Background conversation during hot window is not accepted."""
+    def test_undirected_background_speech_is_accepted_in_hot_window(self, _print):
+        """Non-echo speech during hot window is accepted even if judge says not directed.
+
+        The 3s hot window is short enough that false positives (accepting
+        background speech) are preferable to false negatives (ignoring genuine
+        follow-ups like 'don't you already know that?'). Small LLMs sometimes
+        reject valid follow-ups, so we override in hot window mode.
+        """
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Here is your answer.")
@@ -151,7 +157,8 @@ class TestUserSpeaksDuringHotWindow:
 
         listener._process_transcript("did you see the game last night", utterance_energy=0.01)
 
-        assert _accepted_query(listener) == ""
+        # In hot window, non-echo speech is always accepted
+        assert _accepted_query(listener) == "did you see the game last night"
         listener.state_manager.stop()
 
     @patch("builtins.print")

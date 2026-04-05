@@ -466,6 +466,13 @@ class VoiceListener(threading.Thread):
             )
 
             if intent_judgment is not None:
+                # Log intent judge decision for user visibility
+                mode_str = "hot window" if could_be_hot_window else "wake word"
+                if intent_judgment.directed:
+                    print(f"  🧠 Intent ({mode_str}): directed → \"{intent_judgment.query or text_lower}\"", flush=True)
+                else:
+                    print(f"  🧠 Intent ({mode_str}): not directed ({intent_judgment.reasoning})", flush=True)
+
                 # If judge says stop command, interrupt TTS
                 if intent_judgment.stop and self.tts and self.tts.is_speaking():
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
@@ -611,19 +618,47 @@ class VoiceListener(threading.Thread):
                         debug_log(f"⏭️ Not near hot window ({time_after_hot_window:.2f}s after), falling through to wake word check", "voice")
                         # Continue to wake word detection below
                     else:
-                        # Trust other rejection reasons (narrative mention, etc.)
-                        debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
-                        # If the rejected text is echo, reset hot window expiry so
-                        # echo processing time doesn't eat into the user's window.
-                        # Only reset for confirmed echo (text matches TTS output).
-                        if could_be_hot_window and last_tts_text:
+                        # Check if text is echo of TTS output
+                        echo_score = 0
+                        if last_tts_text:
                             echo_score = fuzz.partial_ratio(
                                 text_lower[:100], last_tts_text.lower()[:200]
                             )
-                            if echo_score >= 70:
-                                self.state_manager.reset_hot_window_expiry()
-                                debug_log(f"hot window reset (confirmed echo, score={echo_score})", "state")
-                        # Stop any early-started beep since we're rejecting this input
+
+                        if could_be_hot_window and echo_score >= 70:
+                            # Confirmed echo — reset hot window so echo processing
+                            # time doesn't eat into the user's follow-up window.
+                            debug_log(f"🔇 Echo in hot window (score={echo_score}): \"{text_lower}\"", "voice")
+                            self.state_manager.reset_hot_window_expiry()
+                            debug_log(f"hot window reset (confirmed echo, score={echo_score})", "state")
+                            self._stop_thinking_tune()
+                            return
+
+                        if could_be_hot_window:
+                            # Hot window + non-echo speech → user is talking to us.
+                            # Override the intent judge rejection — small models
+                            # sometimes reject valid follow-ups like "don't you
+                            # already know that?" as not directed.
+                            print(f"  🧠 Intent override: accepting hot window speech", flush=True)
+                            debug_log(
+                                f"⚡ Overriding intent judge in hot window "
+                                f"(echo_score={echo_score}, reasoning={intent_judgment.reasoning}): "
+                                f"\"{text_lower}\"",
+                                "voice"
+                            )
+                            self.state_manager.cancel_hot_window_activation()
+                            self._transcript_buffer.mark_segment_processed(text_lower)
+                            self._clear_audio_buffers()
+                            self.state_manager.start_collection(text_lower)
+                            self._start_thinking_tune()
+                            try:
+                                print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                            except Exception:
+                                pass
+                            return
+
+                        # Outside hot window — trust rejection
+                        debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
                         self._stop_thinking_tune()
                         return
                 else:
