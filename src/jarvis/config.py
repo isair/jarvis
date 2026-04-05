@@ -132,10 +132,6 @@ class Settings:
     echo_energy_threshold: float
     echo_tolerance: float
 
-    # Audio Wake Word Detection
-    audio_wake_enabled: bool
-    audio_wake_threshold: float
-
     # Intent Judge (LLM-based intent classification)
     # Always used when available, falls back to simple wake word detection
     intent_judge_model: str
@@ -365,9 +361,6 @@ def get_default_config() -> Dict[str, Any]:
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
 
         # Audio Wake Word Detection
-        "audio_wake_enabled": True,  # Enable audio-level wake word detection
-        "audio_wake_threshold": 0.5,  # Detection confidence threshold (0.0-1.0)
-
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
         "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
@@ -517,9 +510,6 @@ def load_settings() -> Settings:
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
-    # Audio Wake Word Detection
-    audio_wake_enabled = bool(merged.get("audio_wake_enabled", True))
-    audio_wake_threshold = float(merged.get("audio_wake_threshold", 0.5))
     # Intent Judge - always used when available
     intent_judge_model = str(merged.get("intent_judge_model", "gemma4:e2b"))
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 10.0))
@@ -627,11 +617,6 @@ def load_settings() -> Settings:
         hot_window_seconds=hot_window_seconds,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
-
-        # Audio Wake Word Detection
-        audio_wake_enabled=audio_wake_enabled,
-        audio_wake_threshold=audio_wake_threshold,
-
         # Intent Judge - always used when available
         intent_judge_model=intent_judge_model,
         intent_judge_timeout_sec=intent_judge_timeout_sec,

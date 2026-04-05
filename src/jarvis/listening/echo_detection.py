@@ -1,17 +1,12 @@
 """Echo detection and suppression logic for preventing TTS feedback."""
 
 import time
-import difflib
 from typing import Optional, List
 import re
 
 from ..debug import debug_log
 
-try:
-    from rapidfuzz import fuzz
-    RAPIDFUZZ_AVAILABLE = True
-except ImportError:
-    RAPIDFUZZ_AVAILABLE = False
+from rapidfuzz import fuzz
 
 
 class EchoDetector:
@@ -116,14 +111,7 @@ class EchoDetector:
         heard_lower = self._normalize_for_comparison(heard_text)
         tts_lower = self._normalize_for_comparison(tts_text)
 
-        # Fallback to difflib if rapidfuzz is not available
-        if not RAPIDFUZZ_AVAILABLE:
-            if heard_lower in tts_lower:
-                return True
-            similarity = difflib.SequenceMatcher(a=tts_lower, b=heard_lower).ratio()
-            return similarity >= (threshold / 100.0)
-
-        # Use rapidfuzz for more robust matching.
+        # Use rapidfuzz for robust matching.
         # partial_ratio is excellent for finding echoes which are often substrings.
         # token_set_ratio is good at handling ASR errors where some words might be wrong.
         partial_score = fuzz.partial_ratio(heard_lower, tts_lower)
@@ -276,7 +264,7 @@ class EchoDetector:
         # Phase 3: Fuzzy matching fallback for transcription differences
         # When exact word matching fails (e.g., "cuppa" vs "cup"), try fuzzy matching
         # on prefixes of heard text against the TTS TAIL (not full TTS)
-        if RAPIDFUZZ_AVAILABLE and len(heard_words) > self._min_overlap_accept_words:
+        if len(heard_words) > self._min_overlap_accept_words:
             # Get the tail of TTS (last ~50% of words) - this is what would be echoed
             # when mic picks up the end of TTS playback
             tts_words_list = self._last_tts_text.lower().strip().split()
@@ -366,9 +354,23 @@ class EchoDetector:
         heard_clean = [strip_punct(w) for w in heard_words]
         tts_clean = [strip_punct(w) for w in tts_words]
 
+        def _words_match(a: list, b: list) -> bool:
+            """Check if two word lists match, allowing fuzzy per-word comparison."""
+            if len(a) != len(b):
+                return False
+            for wa, wb in zip(a, b):
+                if wa == wb:
+                    continue
+                # Allow fuzzy match for words Whisper may transcribe differently
+                # (e.g. "tbilisi" vs "tvalisi")
+                if fuzz.ratio(wa, wb) >= 70:
+                    continue
+                return False
+            return True
+
         max_overlap = 0
         for i in range(min(len(tts_clean), len(heard_clean)), 0, -1):
-            if tts_clean[-i:] == heard_clean[:i]:
+            if _words_match(tts_clean[-i:], heard_clean[:i]):
                 max_overlap = i
                 break
 

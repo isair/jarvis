@@ -200,6 +200,69 @@ class TestHotWindowExpiry:
 
         sm.stop()
 
+    def test_reset_hot_window_expiry_extends_timer(self):
+        """reset_hot_window_expiry restarts the timer so echo time doesn't eat the window."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.10)
+
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Wait until most of the window has elapsed
+            time.sleep(0.07)
+            assert sm.is_hot_window_active() is True  # still within 0.10s
+
+            # Reset the timer (simulating echo rejection)
+            sm.reset_hot_window_expiry()
+
+            # After the original window would have expired, it should still be active
+            time.sleep(0.05)
+            assert sm.is_hot_window_active() is True
+
+            # Wait for the full reset window to expire
+            time.sleep(0.07)
+            assert sm.is_hot_window_active() is False
+
+        sm.stop()
+
+    def test_reset_hot_window_expiry_reactivates_expired_window(self):
+        """reset_hot_window_expiry reactivates a hot window that expired during echo processing."""
+        sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.08)
+
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Let the hot window fully expire
+            time.sleep(0.12)
+            assert sm.get_state() == ListeningState.WAKE_WORD
+
+            # Simulate echo rejection arriving after expiry — should reactivate
+            sm.reset_hot_window_expiry()
+            assert sm.is_hot_window_active() is True
+
+            # New timer should keep it alive for another full window
+            time.sleep(0.04)
+            assert sm.is_hot_window_active() is True
+
+            # Then expire normally
+            time.sleep(0.06)
+            assert sm.is_hot_window_active() is False
+
+        sm.stop()
+
+    def test_reset_hot_window_expiry_noop_when_collecting(self):
+        """reset_hot_window_expiry does not interfere with COLLECTING state."""
+        sm = StateManager()
+        sm.start_collection("test query")
+        assert sm.get_state() == ListeningState.COLLECTING
+
+        sm.reset_hot_window_expiry()
+        assert sm.get_state() == ListeningState.COLLECTING
+        sm.stop()
+
     def test_check_hot_window_expiry_fallback(self):
         """check_hot_window_expiry provides synchronous expiry check."""
         sm = StateManager(echo_tolerance=0.0, hot_window_seconds=0.05)
@@ -236,6 +299,19 @@ class TestHotWindowVoiceState:
 
         sm.capture_hot_window_state_at_voice_start()
         assert sm.was_hot_window_active_at_voice_start() is False
+
+    def test_capture_hot_window_state_when_pending_activation(self):
+        """Captures True during echo_tolerance delay (activation pending but not yet active)."""
+        sm = StateManager(echo_tolerance=1.0, hot_window_seconds=3.0)
+
+        with patch('builtins.print'):
+            sm.schedule_hot_window_activation()
+            # State is still WAKE_WORD, but activation timer is pending
+            assert sm.get_state() == ListeningState.WAKE_WORD
+            sm.capture_hot_window_state_at_voice_start()
+            assert sm.was_hot_window_active_at_voice_start() is True
+
+        sm.stop()
 
     def test_clear_hot_window_voice_state(self):
         """Can clear the captured hot window voice state."""

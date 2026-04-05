@@ -7,48 +7,26 @@ Mocked equivalents live in tests/test_greeting_no_tools.py as unit tests.
 Run: ./scripts/run_evals.sh test_greeting
 """
 
-import sys
-from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
-
-_this_file = Path(__file__).resolve()
-EVALS_DIR = _this_file.parent
-if str(EVALS_DIR) not in sys.path:
-    sys.path.insert(0, str(EVALS_DIR))
-
 import pytest
 from unittest.mock import patch
 
-from helpers import (
-    MockConfig,
-    is_judge_llm_available,
-)
-
-_JUDGE_LLM_AVAILABLE = is_judge_llm_available()
-requires_judge_llm = pytest.mark.skipif(
-    not _JUDGE_LLM_AVAILABLE,
-    reason="Judge LLM not available"
-)
+from conftest import requires_judge_llm
+from helpers import MockConfig, ToolCallCapture, create_mock_tool_run
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
-
-@dataclass
-class ToolCallCapture:
-    """Captures tool calls during evaluation."""
-    calls: List[Dict[str, Any]] = field(default_factory=list)
-
-    def record(self, name: str, args: Dict[str, Any]):
-        self.calls.append({"name": name, "args": args})
-
-    def has_any_tool(self) -> bool:
-        return len(self.calls) > 0
-
-    def tool_names(self) -> List[str]:
-        return [c["name"] for c in self.calls]
+def _assert_no_tools(capture, query, is_small, model_name):
+    """Assert no tools were called; xfail for small models."""
+    if capture.has_any_tool():
+        if is_small:
+            pytest.xfail(
+                f"Small model {model_name} called tools for '{query}'. "
+                f"Known limitation. Called: {capture.tool_names()}"
+            )
+        else:
+            pytest.fail(
+                f"Large model '{query}' should NOT trigger tools. "
+                f"Called: {capture.tool_names()}"
+            )
 
 
 # =============================================================================
@@ -102,12 +80,8 @@ class TestGreetingNoToolsLive:
 
         capture = ToolCallCapture()
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-            return ToolExecutionResult(success=True, reply_text="Tool result")
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run):
+        with patch('jarvis.reply.engine.run_tool_with_retries',
+                   side_effect=create_mock_tool_run(capture)):
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
                 text=query, dialogue_memory=eval_dialogue_memory
@@ -121,19 +95,7 @@ class TestGreetingNoToolsLive:
 
         # For greetings, we expect NO tool calls
         if not should_use_tools:
-            if capture.has_any_tool():
-                if is_small:
-                    # Document the limitation but don't fail the test
-                    pytest.xfail(
-                        f"Small model {JUDGE_MODEL} called tools for greeting '{query}'. "
-                        f"This is a known limitation of small models. Called: {capture.tool_names()}"
-                    )
-                else:
-                    # Large models should follow the guidance
-                    pytest.fail(
-                        f"Large model greeting '{query}' should NOT trigger tools. "
-                        f"Called: {capture.tool_names()}"
-                    )
+            _assert_no_tools(capture, query, is_small, JUDGE_MODEL)
 
     @pytest.mark.eval
     @requires_judge_llm
@@ -161,12 +123,8 @@ class TestGreetingNoToolsLive:
 
         capture = ToolCallCapture()
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-            return ToolExecutionResult(success=True, reply_text="Tool result")
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run):
+        with patch('jarvis.reply.engine.run_tool_with_retries',
+                   side_effect=create_mock_tool_run(capture)):
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
                 text=query, dialogue_memory=eval_dialogue_memory
@@ -178,17 +136,7 @@ class TestGreetingNoToolsLive:
         print(f"  Response: {(response or '')[:100]}...")
         print(f"  Model size: {'small' if is_small else 'large'}")
 
-        if capture.has_any_tool():
-            if is_small:
-                pytest.xfail(
-                    f"Small model {JUDGE_MODEL} called tools for instruction '{query}'. "
-                    f"This is a known limitation of small models. Called: {capture.tool_names()}"
-                )
-            else:
-                pytest.fail(
-                    f"Large model instruction '{query}' should NOT trigger tools. "
-                    f"Called: {capture.tool_names()}"
-                )
+        _assert_no_tools(capture, query, is_small, JUDGE_MODEL)
 
     @pytest.mark.eval
     @requires_judge_llm
@@ -208,12 +156,10 @@ class TestGreetingNoToolsLive:
 
         capture = ToolCallCapture()
 
-        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
-            from jarvis.tools.types import ToolExecutionResult
-            capture.record(tool_name, tool_args or {})
-            return ToolExecutionResult(success=True, reply_text="Weather: 22C, partly cloudy")
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run):
+        with patch('jarvis.reply.engine.run_tool_with_retries',
+                   side_effect=create_mock_tool_run(capture, {
+                       "getWeather": "Weather: 22C, partly cloudy",
+                   })):
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
                 text=query, dialogue_memory=eval_dialogue_memory

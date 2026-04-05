@@ -3,13 +3,76 @@ Helper functions and data classes for eval tests.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Tuple
 import os
 
 
 # LLM-as-judge configuration
 JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gpt-oss:20b")
 JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
+
+
+# =============================================================================
+# Tool Call Capture
+# =============================================================================
+
+@dataclass
+class ToolCallCapture:
+    """Captures tool calls during evaluation."""
+
+    calls: List[Dict[str, Any]] = field(default_factory=list)
+
+    def record(self, name: str, args: Dict[str, Any]):
+        self.calls.append({"name": name, "args": args})
+
+    def has_tool(self, name: str) -> bool:
+        return any(c["name"] == name for c in self.calls)
+
+    def has_any_tool(self) -> bool:
+        return len(self.calls) > 0
+
+    def get_args(self, name: str) -> Optional[Dict[str, Any]]:
+        for c in self.calls:
+            if c["name"] == name:
+                return c["args"]
+        return None
+
+    def tool_names(self) -> List[str]:
+        return [c["name"] for c in self.calls]
+
+    # Alias for backward compatibility
+    tool_sequence = tool_names
+
+    def clear(self):
+        self.calls = []
+
+
+# =============================================================================
+# Mock Tool Run Factory
+# =============================================================================
+
+def create_mock_tool_run(
+    capture: ToolCallCapture,
+    responses: Optional[Dict[str, str]] = None,
+):
+    """Create a mock tool runner that captures calls and returns canned responses.
+
+    Args:
+        capture: ToolCallCapture instance to record calls
+        responses: Dict mapping tool name → response text. Unmatched tools return "OK".
+
+    Returns:
+        A function suitable for patching ``run_tool_with_retries``.
+    """
+    responses = responses or {}
+
+    def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
+        from jarvis.tools.types import ToolExecutionResult
+        capture.record(tool_name, tool_args or {})
+        reply = responses.get(tool_name, "OK")
+        return ToolExecutionResult(success=True, reply_text=reply)
+
+    return mock_tool_run
 
 
 @dataclass

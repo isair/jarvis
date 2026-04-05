@@ -12,30 +12,17 @@ For EVALS.md generation (always use gpt-oss:20b):
     ./scripts/run_evals.sh
 """
 
-import sys
 import json
-from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, Tuple
 
-_this_file = Path(__file__).resolve()
-EVALS_DIR = _this_file.parent
-if str(EVALS_DIR) not in sys.path:
-    sys.path.insert(0, str(EVALS_DIR))
-
 import pytest
 
+from conftest import requires_judge_llm
 from helpers import (
     MockConfig,
-    is_judge_llm_available,
     JUDGE_MODEL,
     JUDGE_BASE_URL,
-)
-
-_JUDGE_LLM_AVAILABLE = is_judge_llm_available()
-requires_judge_llm = pytest.mark.skipif(
-    not _JUDGE_LLM_AVAILABLE,
-    reason="Judge LLM not available"
 )
 
 

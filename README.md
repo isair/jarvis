@@ -187,15 +187,6 @@ CUDA is detected automatically — no configuration needed.
 
 **LLM Intent Judge** - Jarvis uses `gemma4:e2b` for intelligent voice intent classification (echo detection, query extraction, stop commands). This model is automatically installed alongside your chosen chat model during setup. The intent judge cannot be disabled but gracefully falls back to simpler text matching if Ollama is unavailable.
 
-**Audio-Level Wake Word Detection** (optional) - More precise wake word timing using openWakeWord:
-```json
-{
-  "audio_wake_enabled": true,
-  "audio_wake_threshold": 0.5
-}
-```
-Requires openWakeWord library. Falls back to text detection if unavailable.
-
 </details>
 
 <details>

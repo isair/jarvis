@@ -48,7 +48,7 @@ JARVIS_THEME_STYLESHEET = """
     QWidget {
         background-color: #0a0b0f;
         color: #f4f4f5;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: '.AppleSystemUIFont', 'Segoe UI', sans-serif;
     }
     
     QLabel {

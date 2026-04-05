@@ -163,13 +163,6 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("wake_fuzzy_ratio", "Fuzzy Match Ratio",
       "How loosely to match the wake word (0.0–1.0)",
       "wake", "float", min_val=0.5, max_val=1.0, step=0.01)
-    f("audio_wake_enabled", "Audio Wake Detection",
-      "Enable audio-level wake word detection",
-      "wake", "bool")
-    f("audio_wake_threshold", "Audio Wake Threshold",
-      "Detection confidence threshold (0.0–1.0)",
-      "wake", "float", min_val=0.0, max_val=1.0, step=0.05)
-
     # --- Whisper ---
     f("whisper_model", "Model Size",
       "Whisper model size (tiny/base/small/medium/large)",

@@ -293,6 +293,23 @@ class TestLeadingEchoCleanup:
         result = detector.cleanup_leading_echo(heard)
         assert result == heard  # Don't cleanup if nothing remains
 
+    def test_cleanup_fuzzy_word_match(self):
+        """Handles Whisper transcription differences (e.g. Tbilisi vs T-Valisi)."""
+        detector = EchoDetector()
+        detector._last_tts_text = (
+            "I don't have a direct way to predict tomorrow's weather, "
+            "but I can check for you. Let me search for the forecast in Tbilisi."
+        )
+
+        heard = (
+            "i don't have a direct way to predict tomorrow's weather "
+            "but i can check for you let me search for the forecast in t-valisi "
+            "you already searched so i can see the tool calls"
+        )
+        result = detector.cleanup_leading_echo(heard)
+        assert "you already searched" in result
+        assert "forecast" not in result
+
 
 class TestHotWindowEchoDetection:
     """Tests for echo detection in hot window mode."""

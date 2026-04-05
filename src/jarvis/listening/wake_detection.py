@@ -75,7 +75,7 @@ def extract_query_after_wake(text_lower: str, wake_word: str, aliases: List[str]
     fragment = fragment.strip().lstrip(",.!?;:")
     fragment = fragment.strip()
     
-    return fragment if fragment else "what should i do next?"
+    return fragment if fragment else ""
 
 
 def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
