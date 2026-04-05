@@ -1123,3 +1123,112 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
         listener._process_transcript("what the hell", utterance_energy=0.01)
         assert _accepted_query(listener) == ""
         listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Speech without wake word outside hot window is ignored
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestSpeechIgnoredOutsideHotWindow:
+    """When no hot window is active and no wake word is present, all speech
+    should be completely ignored — no beep, no intent judge query, no action.
+    This is the default idle state."""
+
+    @patch("builtins.print")
+    def test_complete_sentence_without_wake_word_ignored(self, _print):
+        """A full sentence without wake word and no hot window is ignored."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        # Judge would accept if asked — but it shouldn't matter
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="what is the meaning of life"))
+
+        listener._process_transcript(
+            "what is the meaning of life",
+            utterance_energy=0.01,
+        )
+
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_no_beep_no_intent_for_background_chatter(self, _print):
+        """Background conversation without wake word triggers no beep and
+        no intent judge invocation."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+
+        judge = _install_intent_judge(listener, _make_judgment(
+            directed=True, query="pass the salt"))
+
+        listener._process_transcript(
+            "hey can you pass the salt please",
+            utterance_energy=0.01,
+        )
+
+        assert _accepted_query(listener) == ""
+        # Intent judge should still be called (it's the decision-maker),
+        # but since it returns directed without wake word, it's rejected
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_multiple_utterances_after_hot_window_all_ignored(self, _print):
+        """Multiple consecutive utterances after hot window expires are all
+        ignored if they lack a wake word. The system stays in wake word mode."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        listener.echo_detector.track_tts_start("The answer is 42.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Expire hot window
+        listener.state_manager.expire_hot_window()
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Install judge that would accept everything
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="first remark"))
+
+        # First utterance — no wake word, no hot window
+        listener._process_transcript("I think it might rain later", utterance_energy=0.01)
+        assert _accepted_query(listener) == ""
+
+        # Second utterance — still no wake word, still no hot window
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="second remark"))
+        listener._process_transcript("yeah the forecast said so", utterance_energy=0.01)
+        assert _accepted_query(listener) == ""
+
+        # Third utterance with wake word — THIS should work
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="will it rain"))
+        listener._process_transcript("jarvis will it rain today", utterance_energy=0.01)
+        assert "rain" in _accepted_query(listener)
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_speech_long_after_any_tts_ignored(self, _print):
+        """Speech arriving long after any TTS activity is ignored without
+        wake word, even if the intent judge says directed."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        # TTS happened ages ago, hot window long expired
+        listener.echo_detector.track_tts_start("Old response.")
+        listener.echo_detector.track_tts_finish()
+        # No hot window scheduled — simulates a stale session
+
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="hey what time is it"))
+
+        # Speech with timestamps well after any TTS
+        now = time.time()
+        listener._process_transcript(
+            "hey what time is it",
+            utterance_energy=0.01,
+            utterance_start_time=now,
+            utterance_end_time=now + 1.0,
+        )
+
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
