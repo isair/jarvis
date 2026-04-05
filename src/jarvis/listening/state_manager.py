@@ -264,6 +264,9 @@ class StateManager:
                 if self._state != ListeningState.HOT_WINDOW:
                     return
                 self._state = ListeningState.WAKE_WORD
+                # Clear captured voice-start state so in-flight Whisper
+                # transcriptions don't falsely claim hot window.
+                self._was_hot_window_active_at_voice_start = False
 
             expiry_time = time.time()
             duration = expiry_time - self._hot_window_start_time if self._hot_window_start_time > 0 else 0
@@ -389,6 +392,7 @@ class StateManager:
 
             with self._state_lock:
                 self._state = ListeningState.WAKE_WORD
+                self._was_hot_window_active_at_voice_start = False
 
             debug_log("hot window expired (poll)", "state")
 
@@ -425,6 +429,7 @@ class StateManager:
         if self.is_hot_window_active():
             with self._state_lock:
                 self._state = ListeningState.WAKE_WORD
+                self._was_hot_window_active_at_voice_start = False
 
             debug_log("hot window manually expired", "state")
 

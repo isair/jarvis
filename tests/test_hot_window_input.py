@@ -188,8 +188,14 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
     """User speaks during hot window but Whisper is slow — transcript arrives after expiry."""
 
     @patch("builtins.print")
-    def test_voice_captured_during_window_accepted_after_expiry(self, _print):
-        """Voice start captured during hot window still counts after window expires."""
+    def test_voice_captured_during_window_rejected_after_expiry(self, _print):
+        """Captured voice-start state is cleared on expiry to prevent stale hot window.
+
+        When Whisper is slow, the transcript can arrive after the hot window
+        expired. The user has already seen "Returning to wake word mode" so
+        they expect wake-word-required behaviour. The captured state must not
+        override the expiry.
+        """
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.05)
 
         listener.echo_detector.track_tts_start("Short answer.")
@@ -202,10 +208,29 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         # Wait for hot window to expire
         time.sleep(0.1)
         assert not listener.state_manager.is_hot_window_active()
+        # Captured state should be cleared by expiry
+        assert not listener.state_manager.was_hot_window_active_at_voice_start()
 
-        # Now the transcript arrives (after expiry)
+        # Transcript arrives after expiry — no wake word, so rejected
         _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        listener._process_transcript("tell me more", utterance_energy=0.01)
 
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_voice_during_active_window_accepted_before_expiry(self, _print):
+        """Voice captured and processed while hot window is still active succeeds."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        listener.echo_detector.track_tts_start("Short answer.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        listener.state_manager.capture_hot_window_state_at_voice_start()
+
+        # Transcript arrives while hot window is still active
+        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
         listener._process_transcript("tell me more", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "tell me more"
@@ -214,7 +239,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
     @patch("builtins.print")
     def test_voice_captured_during_pending_activation(self, _print):
         """Voice start during echo_tolerance delay (pending activation) still counts."""
-        listener, _ = _create_listener(echo_tolerance=0.5, hot_window_seconds=0.05)
+        listener, _ = _create_listener(echo_tolerance=0.5, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Answer text.")
         _simulate_tts_finish(listener)
@@ -226,9 +251,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         listener.state_manager.capture_hot_window_state_at_voice_start()
         assert listener.state_manager.was_hot_window_active_at_voice_start()
 
-        # Wait for everything to expire
-        time.sleep(0.6)
-
+        # Process while activation is still pending (hot window will activate)
         _install_intent_judge(listener, _make_judgment(directed=True, query="yes please"))
         listener._process_transcript("yes please", utterance_energy=0.01)
 
