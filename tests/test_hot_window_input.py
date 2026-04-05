@@ -498,6 +498,50 @@ class TestEchoAndUserSpeechInSameChunk:
         listener.state_manager.stop()
 
     @patch("builtins.print")
+    def test_judge_returns_none_hot_window_speech_still_accepted(self, _print):
+        """When the intent judge times out or errors (returns None), hot window
+        speech that passes the echo check should still be accepted.
+
+        Real scenario: user speaks during hot window, Whisper delivers mixed
+        echo+speech, intent judge times out on the long transcript. The beep
+        started (early check passed) but the query is silently dropped because
+        the judge-None path falls through to wake word detection.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        tts_text = "You are currently in Tbilisi, Georgia."
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        span_start = listener.state_manager._hot_window_span_start
+
+        # Hot window expires (Whisper is slow)
+        listener.state_manager.expire_hot_window()
+
+        # Intent judge returns None (timeout)
+        _install_intent_judge(listener, None)
+
+        mixed_text = (
+            "you are currently in T-Ballista Georgia and what do you think "
+            "about Joseph Stalin and communism in general?"
+        )
+        listener._process_transcript(
+            mixed_text,
+            utterance_energy=0.01,
+            utterance_start_time=span_start - 2.0,
+            utterance_end_time=span_start + 0.05,
+        )
+
+        query = _accepted_query(listener)
+        assert query != "", (
+            "Hot window speech should be accepted even when intent judge "
+            "times out — the early echo check already cleared it"
+        )
+        assert "stalin" in query.lower() or "communism" in query.lower()
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
     def test_utterance_starting_during_tts_ending_after_treated_as_hot_window(self, _print):
         """Utterance that starts before TTS finishes is still treated as hot window context."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)

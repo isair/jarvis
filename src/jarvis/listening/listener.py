@@ -519,7 +519,39 @@ class VoiceListener(threading.Thread):
                     print(f"  🧠 Intent ({mode_str}): directed → \"{intent_judgment.query or text_lower}\"", flush=True)
                 else:
                     print(f"  🧠 Intent ({mode_str}): not directed ({intent_judgment.reasoning})", flush=True)
+            else:
+                print(f"  🧠 Intent judge: unavailable (timeout or error)", flush=True)
+                debug_log("intent judge returned None — falling back", "voice")
+                # Hot window fallback: if the early echo check already cleared
+                # this text, accept it even without the judge's verdict.
+                if could_be_hot_window:
+                    last_tts_text_fb = self.echo_detector._last_tts_text or ""
+                    is_pure_echo = False
+                    if last_tts_text_fb:
+                        echo_score = fuzz.partial_ratio(
+                            text_lower[:150], last_tts_text_fb.lower()[:300]
+                        )
+                        tts_words = len(last_tts_text_fb.split())
+                        text_words = len(text_lower.split())
+                        is_pure_echo = (
+                            echo_score >= 70
+                            and text_words <= max(tts_words * 1.3, tts_words + 3)
+                        )
+                    if not is_pure_echo:
+                        print(f"  🧠 Intent fallback: accepting hot window speech", flush=True)
+                        debug_log(f"✅ Hot window fallback (judge unavailable): \"{text_lower}\"", "voice")
+                        self.state_manager.cancel_hot_window_activation()
+                        self._transcript_buffer.mark_segment_processed(text_lower)
+                        self._clear_audio_buffers()
+                        self.state_manager.start_collection(text_lower)
+                        self._start_thinking_tune()
+                        try:
+                            print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                        except Exception:
+                            pass
+                        return
 
+            if intent_judgment is not None:
                 # If judge says stop command, interrupt TTS
                 if intent_judgment.stop and self.tts and self.tts.is_speaking():
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
