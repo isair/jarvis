@@ -725,6 +725,47 @@ class VoiceListener(threading.Thread):
                                 pass
                             return
 
+                        # Check could_be_hot_window (handles overlap: utterance
+                        # started during TTS but extended into hot window span).
+                        # The grace period above only checks utterance_start_time
+                        # which is negative for overlapping utterances.
+                        if could_be_hot_window:
+                            # Verify it's not pure echo before overriding
+                            echo_score = 0
+                            is_pure_echo = False
+                            if last_tts_text:
+                                echo_score = fuzz.partial_ratio(
+                                    text_lower[:150], last_tts_text.lower()[:300]
+                                )
+                                tts_words = len(last_tts_text.split())
+                                text_words = len(text_lower.split())
+                                is_pure_echo = (
+                                    echo_score >= 70
+                                    and text_words <= max(tts_words * 1.3, tts_words + 3)
+                                )
+                            if is_pure_echo:
+                                debug_log(f"🔇 Echo in hot window (echo reasoning confirmed, score={echo_score}): \"{text_lower}\"", "voice")
+                                self._stop_thinking_tune()
+                                return
+                            # Mixed echo+speech — override the echo reasoning
+                            print(f"  🧠 Intent override: accepting hot window speech (mixed echo+speech)", flush=True)
+                            debug_log(
+                                f"⚡ Overriding echo reasoning in hot window "
+                                f"(echo_score={echo_score}, text longer than TTS): "
+                                f"\"{text_lower}\"",
+                                "voice"
+                            )
+                            self.state_manager.cancel_hot_window_activation()
+                            self._transcript_buffer.mark_segment_processed(text_lower)
+                            self._clear_audio_buffers()
+                            self.state_manager.start_collection(text_lower)
+                            self._start_thinking_tune()
+                            try:
+                                print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+                            except Exception:
+                                pass
+                            return
+
                         # Otherwise fall through to wake word detection
                         debug_log(f"⏭️ Not near hot window ({time_after_hot_window:.2f}s after), falling through to wake word check", "voice")
                         # Continue to wake word detection below
