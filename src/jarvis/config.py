@@ -364,7 +364,7 @@ def get_default_config() -> Dict[str, Any]:
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
         "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
-        "intent_judge_timeout_sec": 10.0,  # Max time to wait for intent judge response
+        "intent_judge_timeout_sec": 15.0,  # Max time to wait for intent judge response
 
         # Transcript Buffer - used for both retention and context passed to intent judge
         # 120s (2 min) provides enough context for multi-person conversations
