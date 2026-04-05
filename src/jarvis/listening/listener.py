@@ -367,6 +367,50 @@ class VoiceListener(threading.Thread):
         # Track if this input was received during TTS (for logging purposes)
         received_during_tts = self.tts and self.tts.is_speaking()
 
+        # --- Early echo check + early beep ---
+        # Check for echo BEFORE starting beep and BEFORE intent judge.
+        # This prevents: false beeps on echo, intent judge blocking the audio
+        # loop for seconds on echo, and hot window extending from echo resets.
+        if not received_during_tts and not self._is_thinking_tune_active():
+            in_hot_window = (
+                self.state_manager.was_hot_window_active_at_voice_start()
+                or self.state_manager.is_hot_window_active()
+            )
+            if in_hot_window:
+                # Fuzzy echo check — instant, no intent judge needed.
+                # Only catches pure echo (transcript ≈ TTS text). Mixed
+                # echo+speech chunks (user spoke over echo) go to the
+                # intent judge which can extract the user's speech.
+                last_tts_text = self.echo_detector._last_tts_text or ""
+                if last_tts_text:
+                    echo_score = fuzz.partial_ratio(
+                        text_lower[:150], last_tts_text.lower()[:300]
+                    )
+                    tts_words = len(last_tts_text.split())
+                    text_words = len(text_lower.split())
+                    is_pure_echo = (
+                        echo_score >= 70
+                        and text_words <= max(tts_words * 1.3, tts_words + 3)
+                    )
+                    if is_pure_echo:
+                        debug_log(f"🔇 Early echo rejection (score={echo_score}): \"{text_lower}\"", "voice")
+                        print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
+                        return
+
+                # Non-echo in hot window — start beep
+                self._start_thinking_tune()
+                self._set_face_state_listening()
+                debug_log("early beep: hot window active", "voice")
+            else:
+                # Not in hot window — check for wake word
+                wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+                fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
+                if is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+                    self._start_thinking_tune()
+                    self._set_face_state_listening()
+                    debug_log("early beep: wake word detected", "voice")
+
         # Echo rejection & stop commands — only while TTS is actively playing.
         # After TTS finishes, the intent judge handles everything (echo detection,
         # hot window follow-ups, etc.) using full transcript context + last TTS text.
@@ -525,7 +569,6 @@ class VoiceListener(threading.Thread):
                             if echo_score >= 70:
                                 debug_log(f"🔇 Echo in hot window (directed, score={echo_score}): \"{text_lower}\"", "voice")
                                 print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
-                                self.state_manager.reset_hot_window_expiry()
                                 self._stop_thinking_tune()
                                 return
 
@@ -588,7 +631,6 @@ class VoiceListener(threading.Thread):
                             if echo_score >= 70:
                                 debug_log(f"🔇 Echo in hot window (directed/no-query, score={echo_score}): \"{text_lower}\"", "voice")
                                 print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
-                                self.state_manager.reset_hot_window_expiry()
                                 self._stop_thinking_tune()
                                 return
 
@@ -658,11 +700,9 @@ class VoiceListener(threading.Thread):
                             )
 
                         if could_be_hot_window and echo_score >= 70:
-                            # Confirmed echo — reset hot window so echo processing
-                            # time doesn't eat into the user's follow-up window.
+                            # Confirmed echo — early check should have caught this,
+                            # but handle as safety net.
                             debug_log(f"🔇 Echo in hot window (score={echo_score}): \"{text_lower}\"", "voice")
-                            self.state_manager.reset_hot_window_expiry()
-                            debug_log(f"hot window reset (confirmed echo, score={echo_score})", "state")
                             self._stop_thinking_tune()
                             return
 
@@ -1635,26 +1675,6 @@ class VoiceListener(threading.Thread):
 
         # Log successful transcription
         print(f"  📝 Heard: \"{text}\"", flush=True)
-
-        # Start beep early — before intent judge — so user gets immediate feedback.
-        # We'll stop it later if the intent judge rejects the input.
-        if not (self.tts and self.tts.is_speaking()) and not self._is_thinking_tune_active():
-            in_hot_window = (
-                self.state_manager.was_hot_window_active_at_voice_start()
-                or self.state_manager.is_hot_window_active()
-            )
-            if in_hot_window:
-                self._start_thinking_tune()
-                self._set_face_state_listening()
-                debug_log("early beep: hot window active", "voice")
-            else:
-                wake_word = getattr(self.cfg, "wake_word", "jarvis")
-                aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
-                fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
-                if is_wake_word_detected(text.lower(), wake_word, aliases, fuzzy_ratio):
-                    self._start_thinking_tune()
-                    self._set_face_state_listening()
-                    debug_log("early beep: wake word detected", "voice")
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):

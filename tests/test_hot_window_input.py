@@ -424,30 +424,34 @@ class TestHotWindowOnlyFromStateManager:
 
 
 # ---------------------------------------------------------------------------
-# Tests: Echo rejection extends the follow-up window
+# Tests: Echo rejection does NOT extend the hot window
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-class TestEchoRejectionExtendsFollowUpWindow:
-    """When echo is rejected during/after the hot window, the user should
-    still get their full follow-up window — echo processing time doesn't count."""
+class TestEchoRejectionDoesNotExtendFollowUpWindow:
+    """Echo is caught early (instant fuzzy check), so it doesn't block the
+    audio loop or extend the hot window. The original window duration applies."""
 
     @patch("builtins.print")
-    def test_user_gets_follow_up_window_after_echo_rejection(self, _print):
-        """After echo is rejected, hot window resets so user can still respond."""
-        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.15)
+    def test_echo_does_not_reset_window_timer(self, _print):
+        """Echo rejection leaves the original window timer untouched."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("The answer is 42.")
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        # Simulate echo rejection resetting the timer
-        listener.state_manager.reset_hot_window_expiry()
+        original_start = listener.state_manager._hot_window_start_time
 
-        # Hot window should still be active after reset
+        # Feed echo — caught early
+        listener._process_transcript("The answer is 42", utterance_energy=0.01)
+
+        # Window timer should not have been reset
+        assert listener.state_manager._hot_window_start_time == original_start
+        # Window still active (within original 3s)
         assert listener.state_manager.is_hot_window_active()
 
-        # User speaks within the new window
+        # User speaks within the original window
         _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
         listener._process_transcript("thanks", utterance_energy=0.01)
 
@@ -455,8 +459,8 @@ class TestEchoRejectionExtendsFollowUpWindow:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_expired_window_reactivates_on_late_echo_rejection(self, _print):
-        """If hot window expired during echo processing, echo rejection reactivates it."""
+    def test_echo_after_window_expiry_does_not_reactivate(self, _print):
+        """Late echo arrival after window expired does NOT reactivate the window."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.05)
 
         listener.echo_detector.track_tts_start("Short reply.")
@@ -467,15 +471,15 @@ class TestEchoRejectionExtendsFollowUpWindow:
         time.sleep(0.1)
         assert not listener.state_manager.is_hot_window_active()
 
-        # Echo rejection arrives late — should reactivate
-        listener.state_manager.reset_hot_window_expiry()
-        assert listener.state_manager.is_hot_window_active()
+        # Late echo arrives — window should stay expired
+        listener._process_transcript("Short reply", utterance_energy=0.01)
+        assert not listener.state_manager.is_hot_window_active()
 
-        # User can now speak in the reactivated window
+        # Speech without wake word should be rejected
         _install_intent_judge(listener, _make_judgment(directed=True, query="one more thing"))
         listener._process_transcript("one more thing", utterance_energy=0.01)
 
-        assert _accepted_query(listener) == "one more thing"
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
 
@@ -570,18 +574,17 @@ class TestEarlyBeepFeedback:
 
 
 # ---------------------------------------------------------------------------
-# Tests: Echo-only rejection resets hot window (confirmed echo required)
+# Tests: Echo caught early in hot window (no intent judge, no window reset)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-class TestEchoConfirmedHotWindowReset:
-    """Hot window timer resets ONLY when rejected text is confirmed as echo
-    (fuzzy match >= 70 against TTS output). Non-echo rejections should NOT
-    reset the timer."""
+class TestEchoRejectionInHotWindow:
+    """Echo in the hot window is caught by the early fuzzy check before
+    the intent judge runs. The hot window timer is NOT reset."""
 
     @patch("builtins.print")
-    def test_confirmed_echo_resets_hot_window(self, _print):
-        """Rejected text matching TTS output resets the hot window timer."""
+    def test_confirmed_echo_rejected_without_intent_judge(self, _print):
+        """Echo matching TTS is caught early — intent judge never runs."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
         tts_text = "The weather will be sunny tomorrow."
 
@@ -589,27 +592,27 @@ class TestEchoConfirmedHotWindowReset:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        # Judge rejects echo text as not directed
-        _install_intent_judge(listener, _make_judgment(
+        judge = _install_intent_judge(listener, _make_judgment(
             directed=False, query="", confidence="high",
             reasoning="echo of assistant speech"))
 
-        # Feed text that closely matches TTS output (echo)
         listener._process_transcript(
             "the weather will be sunny tomorrow",
             utterance_energy=0.01)
 
-        # Hot window should still be active (reset by echo rejection)
+        # Echo caught early — no query accepted, no intent judge called
+        assert _accepted_query(listener) == ""
+        judge.judge.assert_not_called()
+        # Hot window still active (within original 3s, NOT reset)
         assert listener.state_manager.is_hot_window_active()
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_echo_rejected_even_when_judge_says_directed(self, _print):
-        """Echo is caught even when intent judge says directed in hot window.
+    def test_echo_rejected_before_intent_judge_can_accept(self, _print):
+        """Echo is caught early even when intent judge would say directed.
 
         The mic picks up Jarvis's TTS output and Whisper transcribes it.
-        The intent judge may think it's a follow-up, but the fuzzy echo
-        check catches it before acceptance.
+        The early fuzzy check catches it before the intent judge runs.
         """
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
         tts_text = "Georgian cuisine is incredibly rich and you should try Khachapuri and Georgian bread."
@@ -618,28 +621,26 @@ class TestEchoConfirmedHotWindowReset:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        # Judge thinks this is a directed follow-up
-        _install_intent_judge(listener, _make_judgment(
+        judge = _install_intent_judge(listener, _make_judgment(
             directed=True, query="and kg chai like georgian bread",
             confidence="high", reasoning="user follow-up"))
 
-        # But the text is actually echo of the TTS output
         listener._process_transcript(
             "and kg chai like georgian bread",
             utterance_energy=0.01)
 
-        # Should be rejected as echo despite judge saying directed
+        # Echo caught early — no query accepted
         assert _accepted_query(listener) == ""
-        # Hot window should still be active (reset by echo rejection)
-        assert listener.state_manager.is_hot_window_active()
+        # Intent judge never called
+        judge.judge.assert_not_called()
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_non_echo_rejection_does_not_reset_hot_window(self, _print):
-        """Rejected text NOT matching TTS output does NOT reset timer.
+    def test_non_echo_speech_accepted_via_override(self, _print):
+        """Non-echo speech in hot window is accepted even if judge rejects.
 
-        In hot window, non-echo speech is now accepted (override), so this
-        test verifies that the override fires instead of a timer reset.
+        In hot window, non-echo speech is always accepted (override), since
+        small LLMs sometimes reject valid follow-ups.
         """
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
         tts_text = "The weather will be sunny tomorrow."
@@ -725,4 +726,155 @@ class TestHotWindowBoundary:
         listener._process_transcript("jarvis what time is it", utterance_energy=0.01)
 
         assert _accepted_query(listener) != ""
+        listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Echo is caught early (before beep and intent judge)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestEchoCaughtBeforeBeepAndIntentJudge:
+    """Echo in the hot window must be caught BEFORE the thinking beep starts
+    and before the intent judge is called. This prevents:
+    1. False beep on echo (user hears beep then nothing happens)
+    2. Intent judge blocking the audio loop for seconds on echo
+    3. Hot window extending indefinitely from repeated echo resets
+    """
+
+    @patch("builtins.print")
+    def test_echo_in_hot_window_does_not_trigger_beep(self, _print):
+        """Echo matching TTS output should not start the thinking beep."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+        tts_text = "Tbilisi is a must-see especially the colourful old town."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Install intent judge that should NOT be called for echo
+        judge = _install_intent_judge(listener, _make_judgment(
+            directed=True, query="tbilisi is a must-see"))
+
+        listener._process_transcript(
+            "Tbilisi is a must-see especially the colourful old town",
+            utterance_energy=0.01)
+
+        # No beep should have started
+        assert not _is_beeping(listener)
+        # Echo should be rejected — no query accepted
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_echo_in_hot_window_skips_intent_judge(self, _print):
+        """Echo caught early should not invoke the intent judge at all."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        tts_text = "For breathtaking scenery you should explore the mountainous regions."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        judge = _install_intent_judge(listener, _make_judgment(
+            directed=True, query="explore the mountainous regions"))
+
+        listener._process_transcript(
+            "For breathtaking scenery you should explore the mountainous regions like Steneti",
+            utterance_energy=0.01)
+
+        # Intent judge should not have been called
+        judge.judge.assert_not_called()
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_echo_does_not_extend_hot_window(self, _print):
+        """Echo rejection should NOT reset/extend the hot window timer.
+
+        Previously, each echo chunk called reset_hot_window_expiry(), extending
+        the window by another full duration. With multiple echo chunks, this
+        created a window lasting 6+ seconds instead of 3, causing speech long
+        after TTS to be treated as hot window input.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.10)
+        tts_text = "The answer is sunny and warm."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Record when hot window started
+        original_start = listener.state_manager._hot_window_start_time
+
+        # Process echo — should be caught early
+        listener._process_transcript(
+            "the answer is sunny and warm",
+            utterance_energy=0.01)
+
+        # Hot window start time should NOT have been reset
+        assert listener.state_manager._hot_window_start_time == original_start
+
+        # Wait for original window to expire
+        time.sleep(0.15)
+        assert not listener.state_manager.is_hot_window_active()
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_non_echo_in_hot_window_still_triggers_beep(self, _print):
+        """Non-echo speech in hot window should still get the early beep."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.cfg.tune_enabled = True
+        tts_text = "The weather is sunny today."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="what about tomorrow"))
+
+        listener._process_transcript("what about tomorrow", utterance_energy=0.01)
+
+        assert _accepted_query(listener) == "what about tomorrow"
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_multiple_echo_chunks_do_not_stack_window_extensions(self, _print):
+        """Multiple echo chunks should not extend the hot window repeatedly.
+
+        Real scenario: TTS response is split into 2+ Whisper chunks. Each
+        previously reset the timer, creating a window of N*hot_window_seconds.
+        Now echo is caught early without any timer reset.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=0.10)
+        tts_text = "Tbilisi is a must-see. For breathtaking scenery explore Svaneti."
+
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # First echo chunk
+        listener._process_transcript(
+            "Tbilisi is a must-see especially the colourful old town",
+            utterance_energy=0.01)
+
+        # Second echo chunk
+        listener._process_transcript(
+            "For breathtaking scenery you should explore Steneti",
+            utterance_energy=0.01)
+
+        # Both should be rejected
+        assert _accepted_query(listener) == ""
+
+        # Window should still expire on original schedule
+        time.sleep(0.15)
+        assert not listener.state_manager.is_hot_window_active()
+
+        # Speech after expiry requires wake word
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="what the hell"))
+        listener._process_transcript("what the hell", utterance_energy=0.01)
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()

@@ -107,7 +107,7 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Duration:** Configurable (default: 3 seconds)
 
-**Behaviour:** Speech first passes through a fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70) against the last TTS text. If it matches, it is silently rejected as echo and the hot window timer is reset. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
+**Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
 **Voice start capture:** `capture_hot_window_state_at_voice_start` returns True when the hot window is formally active OR when activation is pending (during the `echo_tolerance` delay). This ensures speech that starts the moment TTS finishes is correctly identified as hot window input, even if Whisper delivers the chunk after the window expires. This captured state is **cleared on all expiry paths** (timer, poll, manual) to prevent stale claims after the window closes.
 
