@@ -130,11 +130,12 @@ playback cannot reclassify an older utterance.
                             │
             ┌───────────────┼───────────────┐
             ▼               ▼               ▼
-┌───────────────┐                  ┌───────────────┐
-│     VAD       │                  │   TTS Output  │
-│ (speech gate) │                  │   Tracking    │
-└───────┬───────┘                  └───────────────┘
-        │
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│     VAD       │  │Shush Detector │  │   TTS Output  │
+│ (speech gate) │  │(during TTS)   │  │   Tracking    │
+└───────┬───────┘  └───────┬───────┘  └───────────────┘
+        │                  │
+        │                  ▼ (instant TTS interrupt)
         ▼
 ┌───────────────┐
 │    Whisper    │
@@ -314,6 +315,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 
 **Stop detection:**
 - Text-based: Read `stop_commands` and `stop_command_fuzzy_ratio` from loaded settings. An empty phrase list disables this text-based interruption path. Apply the same configured fuzzy threshold to short-control detection and standalone-control echo priority. Check configured phrases such as "stop", "quiet" and "shut up". Ignore empty or whitespace-only entries; normalise Unicode composition, casing, punctuation and whitespace before comparison. Exact configured phrases match complete whitespace or punctuation-delimited tokens, including phrases inside longer speech. Approximation compares the complete short utterance with a configured phrase, never a single word inside unrelated speech. Combining marks remain part of their token; phrases in scripts without word separators remain eligible as standalone controls.
+- **Acoustic shush detection:** During TTS, the audio worker checks for sustained high-frequency frication. At a 20 ms frame size the default 15-frame streak spans 300 ms of captured audio. This path does not wait for transcription.
 - Intent judge can also detect stop commands
 - During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
@@ -427,7 +429,12 @@ feedback, IPC notifications or a dedicated notification worker.
   "intent_judge_timeout_sec": 6.0,
 
   "hot_window_seconds": 3.0,
-  "echo_tolerance": 0.3
+  "echo_tolerance": 0.3,
+
+  "shush_detection_enabled": true,
+  "shush_high_low_ratio": 3.0,
+  "shush_energy_floor": 0.002,
+  "shush_consecutive_frames": 15
 }
 ```
 
@@ -436,6 +443,11 @@ feedback, IPC notifications or a dedicated notification worker.
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides reference speech for classification, routing, planning and replies when someone involves Jarvis. Separate from dialogue memory. |
 | `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
 | `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
+
+| `shush_detection_enabled` | true | Enable acoustic shush detection during TTS playback. |
+| `shush_high_low_ratio` | 3.0 | Minimum ratio of high-band (2–8 kHz) to low-band (0–500 Hz) energy density for a frame to count as fricative. |
+| `shush_energy_floor` | 0.002 | Minimum RMS energy to distinguish shush from silence. |
+| `shush_consecutive_frames` | 15 | Number of consecutive shush-like frames required before triggering (at 20 ms/frame, 15 = 300 ms). |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
@@ -467,6 +479,11 @@ Microphone Audio
 Sounddevice Callback → _audio_q
     ↓
 Main Loop: Get Frames → VAD Check
+    ↓                      ↓ (during TTS)
+    │                 Shush Detector
+    │                 (spectral check per frame)
+    │                      ↓ sustained?
+    │                 Interrupt TTS immediately
     ↓
 Speech Detected → Accumulate Frames
     ↓
