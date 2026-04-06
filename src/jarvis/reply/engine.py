@@ -102,23 +102,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if conversation_context:
         context.append(f"Relevant conversation history:\n{conversation_context}")
 
-    # Step 6: Tool list and description
-    allowed_tools = list(BUILTIN_TOOLS.keys())
-
+    # Step 6: Tool selection and description
     # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
     mcp_tools = {}
     if getattr(cfg, "mcps", {}):
         try:
             from ..tools.registry import get_cached_mcp_tools
             mcp_tools = get_cached_mcp_tools()
-
-            # Add all discovered MCP tools to allowed tools
-            for mcp_tool_name in mcp_tools.keys():
-                if mcp_tool_name not in allowed_tools:
-                    allowed_tools.append(mcp_tool_name)
         except Exception as e:
             debug_log(f"⚠️ Failed to get cached MCP tools: {e}", "mcp")
             mcp_tools = {}
+
+    # Select tools relevant to this query (strategy controlled by config)
+    from ..tools.selection import select_tools
+    strategy = getattr(cfg, "tool_selection_strategy", "all")
+    allowed_tools = select_tools(
+        query=redacted,
+        builtin_tools=BUILTIN_TOOLS,
+        mcp_tools=mcp_tools,
+        strategy=strategy,
+        llm_base_url=cfg.ollama_base_url,
+        llm_model=cfg.ollama_chat_model,
+        llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+    )
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
     tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
