@@ -166,7 +166,7 @@ class Settings:
 
     # Agentic Loop
     agentic_max_turns: int
-    tool_selection_strategy: str  # "all", "keyword", or "llm"
+    tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
 
     # Location Services
     location_enabled: bool
@@ -562,7 +562,7 @@ def load_settings() -> Settings:
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "all")).lower()
-    if tool_selection_strategy not in ("all", "keyword", "llm"):
+    if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
         tool_selection_strategy = "all"
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))

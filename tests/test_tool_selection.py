@@ -1,10 +1,11 @@
 """Tests for tool selection strategies."""
 
 import pytest
-from unittest.mock import patch, Mock
+from unittest.mock import patch
 
 from jarvis.tools.selection import (
     select_tools,
+    ToolSelectionStrategy,
     _tokenise,
     _build_tool_keywords,
     _ALWAYS_INCLUDED,
@@ -58,6 +59,32 @@ def _mcp():
 
 
 # ---------------------------------------------------------------------------
+# Enum
+# ---------------------------------------------------------------------------
+
+class TestToolSelectionStrategy:
+
+    @pytest.mark.unit
+    def test_enum_values(self):
+        assert ToolSelectionStrategy.ALL.value == "all"
+        assert ToolSelectionStrategy.KEYWORD.value == "keyword"
+        assert ToolSelectionStrategy.EMBEDDING.value == "embedding"
+        assert ToolSelectionStrategy.LLM.value == "llm"
+
+    @pytest.mark.unit
+    def test_enum_from_string(self):
+        assert ToolSelectionStrategy("all") == ToolSelectionStrategy.ALL
+        assert ToolSelectionStrategy("keyword") == ToolSelectionStrategy.KEYWORD
+        assert ToolSelectionStrategy("embedding") == ToolSelectionStrategy.EMBEDDING
+        assert ToolSelectionStrategy("llm") == ToolSelectionStrategy.LLM
+
+    @pytest.mark.unit
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError):
+            ToolSelectionStrategy("banana")
+
+
+# ---------------------------------------------------------------------------
 # Tokenisation
 # ---------------------------------------------------------------------------
 
@@ -68,7 +95,6 @@ class TestTokenise:
         tokens = _tokenise("What's the weather in London?")
         assert "weather" in tokens
         assert "london" in tokens
-        # Stop-words removed
         assert "the" not in tokens
         assert "in" not in tokens
 
@@ -101,12 +127,12 @@ class TestAllStrategy:
 
     @pytest.mark.unit
     def test_returns_everything(self):
-        result = select_tools("hello", _builtin(), _mcp(), strategy="all")
+        result = select_tools("hello", _builtin(), _mcp(), strategy=ToolSelectionStrategy.ALL)
         assert len(result) == len(_builtin()) + len(_mcp())
 
     @pytest.mark.unit
-    def test_unknown_strategy_falls_back_to_all(self):
-        result = select_tools("hello", _builtin(), _mcp(), strategy="banana")
+    def test_default_strategy_is_all(self):
+        result = select_tools("hello", _builtin(), _mcp())
         assert len(result) == len(_builtin()) + len(_mcp())
 
 
@@ -118,45 +144,136 @@ class TestKeywordStrategy:
 
     @pytest.mark.unit
     def test_weather_query_selects_weather_tool(self):
-        result = select_tools("what's the weather in London", _builtin(), {}, strategy="keyword")
+        result = select_tools("what's the weather in London", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert "getWeather" in result
 
     @pytest.mark.unit
     def test_weather_query_excludes_irrelevant(self):
-        result = select_tools("what's the weather in London", _builtin(), {}, strategy="keyword")
+        result = select_tools("what's the weather in London", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert "logMeal" not in result
         assert "screenshot" not in result
 
     @pytest.mark.unit
     def test_meal_query_selects_meal_tools(self):
-        result = select_tools("what did I eat yesterday", _builtin(), {}, strategy="keyword")
+        result = select_tools("what did I eat yesterday", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert "fetchMeals" in result or "logMeal" in result
 
     @pytest.mark.unit
     def test_search_query_selects_web_search(self):
-        result = select_tools("search for python tutorials", _builtin(), {}, strategy="keyword")
+        result = select_tools("search for python tutorials", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert "webSearch" in result
 
     @pytest.mark.unit
     def test_stop_always_included(self):
-        result = select_tools("what's the weather", _builtin(), {}, strategy="keyword")
+        result = select_tools("what's the weather", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert "stop" in result
 
     @pytest.mark.unit
     def test_vague_query_falls_back_to_all(self):
-        """A query with no keyword matches should return all tools."""
-        result = select_tools("hmm", _builtin(), {}, strategy="keyword")
+        result = select_tools("hmm", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert len(result) == len(_builtin())
 
     @pytest.mark.unit
     def test_mcp_tools_included(self):
-        result = select_tools("turn on the lights", _builtin(), _mcp(), strategy="keyword")
+        result = select_tools("turn on the lights", _builtin(), _mcp(), strategy=ToolSelectionStrategy.KEYWORD)
         assert "homeassistant__turn_on" in result
 
     @pytest.mark.unit
     def test_file_query_selects_local_files(self):
-        result = select_tools("read the config file", _builtin(), {}, strategy="keyword")
+        result = select_tools("read the config file", _builtin(), {}, strategy=ToolSelectionStrategy.KEYWORD)
         assert "localFiles" in result
+
+
+# ---------------------------------------------------------------------------
+# Strategy: embedding
+# ---------------------------------------------------------------------------
+
+class TestEmbeddingStrategy:
+
+    def _mock_embedding(self, text_to_vec):
+        """Return a mock get_embedding that maps text substrings to vectors."""
+        def mock_get_embedding(text, base_url, model, timeout_sec=10.0):
+            for key, vec in text_to_vec.items():
+                if key in text.lower():
+                    return vec
+            # Default: zero vector
+            return [0.0] * 4
+        return mock_get_embedding
+
+    @pytest.mark.unit
+    def test_selects_similar_tools(self):
+        """Weather query should rank getWeather highest."""
+        mock_embed = self._mock_embedding({
+            "weather": [1.0, 0.0, 0.0, 0.0],      # query + weather tool
+            "search": [0.0, 1.0, 0.0, 0.0],
+            "meal": [0.0, 0.0, 1.0, 0.0],
+            "screen": [0.0, 0.0, 0.0, 1.0],
+            "file": [0.1, 0.1, 0.1, 0.1],
+            "conversation": [0.1, 0.1, 0.1, 0.1],
+        })
+        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
+            result = select_tools(
+                "what's the weather",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.EMBEDDING,
+                llm_base_url="http://localhost",
+                embed_model="nomic-embed-text",
+            )
+        assert "getWeather" in result
+
+    @pytest.mark.unit
+    def test_stop_always_included(self):
+        """Stop tool must be present even if not semantically matched."""
+        mock_embed = self._mock_embedding({
+            "weather": [1.0, 0.0, 0.0, 0.0],
+        })
+        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
+            result = select_tools(
+                "what's the weather",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.EMBEDDING,
+                llm_base_url="http://localhost",
+                embed_model="nomic-embed-text",
+            )
+        assert "stop" in result
+
+    @pytest.mark.unit
+    def test_failed_query_embedding_falls_back(self):
+        """If query embedding fails, fall back to all tools."""
+        def mock_fail(text, base_url, model, timeout_sec=10.0):
+            return None
+
+        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_fail):
+            result = select_tools(
+                "anything",
+                _builtin(), _mcp(),
+                strategy=ToolSelectionStrategy.EMBEDDING,
+                llm_base_url="http://localhost",
+                embed_model="nomic-embed-text",
+            )
+        assert len(result) == len(_builtin()) + len(_mcp())
+
+    @pytest.mark.unit
+    def test_returns_minimum_tools(self):
+        """Should return at least _MIN_SELECTED tools even if similarity is low."""
+        # All tools get zero similarity (orthogonal to query)
+        call_count = [0]
+        def mock_embed(text, base_url, model, timeout_sec=10.0):
+            call_count[0] += 1
+            if call_count[0] == 1:  # query
+                return [1.0, 0.0, 0.0, 0.0]
+            return [0.0, 0.0, 0.0, 1.0]  # all tools orthogonal
+
+        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
+            result = select_tools(
+                "something obscure",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.EMBEDDING,
+                llm_base_url="http://localhost",
+                embed_model="nomic-embed-text",
+            )
+        # Should still have at least _MIN_SELECTED + stop
+        assert len(result) >= 3
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +291,13 @@ class TestLLMStrategy:
             result = select_tools(
                 "what's the weather",
                 _builtin(), {},
-                strategy="llm",
+                strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )
         assert "webSearch" in result
         assert "getWeather" in result
-        assert "stop" in result  # always included
+        assert "stop" in result
 
     @pytest.mark.unit
     def test_none_response_returns_only_mandatory(self):
@@ -191,7 +308,7 @@ class TestLLMStrategy:
             result = select_tools(
                 "hello",
                 _builtin(), {},
-                strategy="llm",
+                strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )
@@ -206,7 +323,7 @@ class TestLLMStrategy:
             result = select_tools(
                 "anything",
                 _builtin(), _mcp(),
-                strategy="llm",
+                strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )
@@ -221,7 +338,7 @@ class TestLLMStrategy:
             result = select_tools(
                 "anything",
                 _builtin(), {},
-                strategy="llm",
+                strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )
@@ -236,7 +353,7 @@ class TestLLMStrategy:
             result = select_tools(
                 "search and weather",
                 _builtin(), {},
-                strategy="llm",
+                strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )

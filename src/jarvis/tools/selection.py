@@ -1,16 +1,18 @@
 """
 Tool selection — pick relevant tools for a user query.
 
-Strategies:
-  - "all":     return every tool (no filtering)
-  - "keyword": score tools by keyword overlap with the query
-  - "llm":     ask a lightweight LLM call to choose tools
+Strategies (ToolSelectionStrategy enum):
+  - ALL:       return every tool (no filtering)
+  - KEYWORD:   score tools by keyword overlap with the query
+  - EMBEDDING: rank tools by cosine similarity of embeddings
+  - LLM:       ask a lightweight LLM call to choose tools
 """
 
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, TYPE_CHECKING
+from enum import Enum
+from typing import Dict, List, TYPE_CHECKING
 
 from ..debug import debug_log
 
@@ -18,8 +20,20 @@ if TYPE_CHECKING:
     from .base import Tool
     from .registry import ToolSpec
 
+
+class ToolSelectionStrategy(Enum):
+    ALL = "all"
+    KEYWORD = "keyword"
+    EMBEDDING = "embedding"
+    LLM = "llm"
+
+
 # Tools that must always be available regardless of selection strategy.
 _ALWAYS_INCLUDED = {"stop"}
+
+# Minimum number of tools to return from similarity-based strategies.
+# Prevents overly aggressive filtering that would leave the model with nothing useful.
+_MIN_SELECTED = 3
 
 # Common English stop-words excluded from keyword matching.
 _STOP_WORDS = frozenset({
@@ -48,14 +62,38 @@ def _tokenise(text: str) -> List[str]:
 
 def _build_tool_keywords(name: str, description: str) -> set:
     """Build a keyword set from tool name (camelCase-split) and description."""
-    # Split camelCase name: "fetchWebPage" -> ["fetch", "web", "page"]
     name_tokens = _TOKEN_RE.findall(_CAMEL_RE.sub(" ", name).lower())
     desc_tokens = _tokenise(description)
     return set(name_tokens) | set(desc_tokens)
 
 
+def _tool_summary(name: str, description: str) -> str:
+    """One-line summary used as embedding input for a tool."""
+    readable_name = _CAMEL_RE.sub(" ", name).lower()
+    return f"{readable_name}: {description}"
+
+
+def _ensure_always_included(
+    selected: List[str],
+    builtin_tools: Dict[str, "Tool"],
+    mcp_tools: Dict[str, "ToolSpec"],
+) -> List[str]:
+    """Append always-included tools if missing."""
+    for t in _ALWAYS_INCLUDED:
+        if t not in selected and (t in builtin_tools or t in mcp_tools):
+            selected.append(t)
+    return selected
+
+
+def _all_tool_names(
+    builtin_tools: Dict[str, "Tool"],
+    mcp_tools: Dict[str, "ToolSpec"],
+) -> List[str]:
+    return list(builtin_tools.keys()) + list(mcp_tools.keys())
+
+
 # ---------------------------------------------------------------------------
-# Keyword strategy
+# Strategy: keyword
 # ---------------------------------------------------------------------------
 
 def _select_keyword(
@@ -66,7 +104,6 @@ def _select_keyword(
     """Score tools by keyword overlap; return those with score > 0."""
     query_tokens = set(_tokenise(query))
     if not query_tokens:
-        # Nothing to match against — return all tools.
         return _all_tool_names(builtin_tools, mcp_tools)
 
     scored: List[tuple] = []
@@ -82,14 +119,9 @@ def _select_keyword(
         scored.append((name, score))
 
     matched = [name for name, score in scored if score > 0]
+    matched = _ensure_always_included(matched, builtin_tools, mcp_tools)
 
-    # Always include mandatory tools.
-    for t in _ALWAYS_INCLUDED:
-        if t not in matched and (t in builtin_tools or t in mcp_tools):
-            matched.append(t)
-
-    if not matched or len(matched) <= len(_ALWAYS_INCLUDED):
-        # No real matches — fall back to all tools so the model isn't hamstrung.
+    if len(matched) <= len(_ALWAYS_INCLUDED):
         debug_log("Keyword tool selection found no matches, falling back to all tools", "planning")
         return _all_tool_names(builtin_tools, mcp_tools)
 
@@ -98,7 +130,81 @@ def _select_keyword(
 
 
 # ---------------------------------------------------------------------------
-# LLM strategy
+# Strategy: embedding
+# ---------------------------------------------------------------------------
+
+def _select_embedding(
+    query: str,
+    builtin_tools: Dict[str, "Tool"],
+    mcp_tools: Dict[str, "ToolSpec"],
+    embed_base_url: str,
+    embed_model: str,
+    embed_timeout_sec: float,
+) -> List[str]:
+    """Rank tools by cosine similarity between query and tool description embeddings."""
+    import numpy as np
+    from ..memory.embeddings import get_embedding
+
+    # Embed the query.
+    query_vec = get_embedding(query, embed_base_url, embed_model, timeout_sec=embed_timeout_sec)
+    if query_vec is None:
+        debug_log("Embedding tool selection: failed to embed query, falling back to all tools", "planning")
+        return _all_tool_names(builtin_tools, mcp_tools)
+
+    query_arr = np.array(query_vec, dtype=np.float32)
+    q_norm = np.linalg.norm(query_arr)
+    if q_norm > 0:
+        query_arr = query_arr / q_norm
+
+    # Embed each tool description and compute cosine similarity.
+    similarities: List[tuple] = []
+
+    all_tools: Dict[str, str] = {}
+    for name, tool in builtin_tools.items():
+        if name in _ALWAYS_INCLUDED:
+            continue
+        all_tools[name] = _tool_summary(name, tool.description)
+    for name, spec in mcp_tools.items():
+        all_tools[name] = _tool_summary(name, spec.description)
+
+    for name, summary in all_tools.items():
+        tool_vec = get_embedding(summary, embed_base_url, embed_model, timeout_sec=embed_timeout_sec)
+        if tool_vec is None:
+            continue
+        tool_arr = np.array(tool_vec, dtype=np.float32)
+        t_norm = np.linalg.norm(tool_arr)
+        if t_norm > 0:
+            tool_arr = tool_arr / t_norm
+        sim = float(np.dot(query_arr, tool_arr))
+        similarities.append((name, sim))
+
+    if not similarities:
+        debug_log("Embedding tool selection: no tool embeddings produced, falling back to all tools", "planning")
+        return _all_tool_names(builtin_tools, mcp_tools)
+
+    # Sort by similarity descending.
+    similarities.sort(key=lambda x: x[1], reverse=True)
+
+    # Select tools above a similarity threshold, with a minimum count.
+    threshold = 0.3
+    selected = [name for name, sim in similarities if sim >= threshold]
+
+    # Always return at least _MIN_SELECTED tools (the top-N by similarity).
+    if len(selected) < _MIN_SELECTED:
+        selected = [name for name, _ in similarities[:_MIN_SELECTED]]
+
+    selected = _ensure_always_included(selected, builtin_tools, mcp_tools)
+
+    debug_log(
+        f"Embedding tool selection: {len(selected)}/{len(builtin_tools) + len(mcp_tools)} tools "
+        f"(top sim={similarities[0][1]:.3f})",
+        "planning",
+    )
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Strategy: llm
 # ---------------------------------------------------------------------------
 
 def _select_llm(
@@ -112,17 +218,13 @@ def _select_llm(
     """Ask a lightweight LLM call which tools are relevant."""
     from ..llm import call_llm_direct
 
-    # Build tool catalogue.
     catalogue_lines: List[str] = []
-    all_names: List[str] = []
     for name, tool in builtin_tools.items():
         if name in _ALWAYS_INCLUDED:
             continue
         catalogue_lines.append(f"- {name}: {tool.description[:120]}")
-        all_names.append(name)
     for name, spec in mcp_tools.items():
         catalogue_lines.append(f"- {name}: {spec.description[:120]}")
-        all_names.append(name)
     catalogue = "\n".join(catalogue_lines)
 
     sys_prompt = (
@@ -154,7 +256,6 @@ def _select_llm(
         debug_log("LLM tool selection returned 'none' — including only mandatory tools", "planning")
         return [t for t in _ALWAYS_INCLUDED if t in builtin_tools or t in mcp_tools]
 
-    # Parse comma-separated names, matching against known tools.
     known = set(builtin_tools.keys()) | set(mcp_tools.keys())
     selected: List[str] = []
     for token in re.split(r"[,\s]+", resp):
@@ -162,12 +263,9 @@ def _select_llm(
         if clean in known and clean not in selected:
             selected.append(clean)
 
-    # Always include mandatory tools.
-    for t in _ALWAYS_INCLUDED:
-        if t not in selected and (t in builtin_tools or t in mcp_tools):
-            selected.append(t)
+    selected = _ensure_always_included(selected, builtin_tools, mcp_tools)
 
-    if not selected or len(selected) <= len(_ALWAYS_INCLUDED):
+    if len(selected) <= len(_ALWAYS_INCLUDED):
         debug_log("LLM tool selection matched nothing, falling back to all tools", "planning")
         return _all_tool_names(builtin_tools, mcp_tools)
 
@@ -179,44 +277,45 @@ def _select_llm(
 # Public API
 # ---------------------------------------------------------------------------
 
-def _all_tool_names(
-    builtin_tools: Dict[str, "Tool"],
-    mcp_tools: Dict[str, "ToolSpec"],
-) -> List[str]:
-    return list(builtin_tools.keys()) + list(mcp_tools.keys())
-
-
 def select_tools(
     query: str,
     builtin_tools: Dict[str, "Tool"],
     mcp_tools: Dict[str, "ToolSpec"],
-    strategy: str = "all",
+    strategy: ToolSelectionStrategy = ToolSelectionStrategy.ALL,
     llm_base_url: str = "",
     llm_model: str = "",
     llm_timeout_sec: float = 8.0,
+    embed_model: str = "",
+    embed_timeout_sec: float = 10.0,
 ) -> List[str]:
     """
     Return a list of tool names relevant to *query*.
 
     Args:
-        query:          User's text query.
-        builtin_tools:  Registry of builtin Tool instances.
-        mcp_tools:      Registry of discovered MCP ToolSpec entries.
-        strategy:       "all", "keyword", or "llm".
-        llm_base_url:   Ollama base URL (needed for "llm" strategy).
-        llm_model:      Chat model name (needed for "llm" strategy).
-        llm_timeout_sec: Timeout for the LLM call.
+        query:            User's text query.
+        builtin_tools:    Registry of builtin Tool instances.
+        mcp_tools:        Registry of discovered MCP ToolSpec entries.
+        strategy:         ToolSelectionStrategy enum value.
+        llm_base_url:     Ollama base URL (needed for llm/embedding strategies).
+        llm_model:        Chat model name (needed for "llm" strategy).
+        llm_timeout_sec:  Timeout for the LLM call.
+        embed_model:      Embedding model name (needed for "embedding" strategy).
+        embed_timeout_sec: Timeout for embedding calls.
 
     Returns:
         List of tool name strings.
     """
-    if strategy == "keyword":
+    if strategy == ToolSelectionStrategy.KEYWORD:
         return _select_keyword(query, builtin_tools, mcp_tools)
-    elif strategy == "llm":
+    elif strategy == ToolSelectionStrategy.EMBEDDING:
+        return _select_embedding(
+            query, builtin_tools, mcp_tools,
+            llm_base_url, embed_model, embed_timeout_sec,
+        )
+    elif strategy == ToolSelectionStrategy.LLM:
         return _select_llm(
             query, builtin_tools, mcp_tools,
             llm_base_url, llm_model, llm_timeout_sec,
         )
     else:
-        # "all" or unknown strategy — return everything.
         return _all_tool_names(builtin_tools, mcp_tools)
