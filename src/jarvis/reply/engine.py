@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
-from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
+from ..profile.profiles import PROFILES, select_profile_llm
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
@@ -133,8 +133,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if conversation_context:
         context.append(f"Relevant conversation history:\n{conversation_context}")
 
-    # Step 6: Tool allowlist and description
-    allowed_tools = PROFILE_ALLOWED_TOOLS.get(profile_name) or list(BUILTIN_TOOLS.keys())
+    # Step 6: Tool list and description
+    allowed_tools = list(BUILTIN_TOOLS.keys())
 
     # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
     mcp_tools = {}
@@ -516,35 +516,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         messages.append(assistant_msg)
 
-        # Check if we're stuck
+        # Check if we're stuck (no content, no tool call)
         if not content and not t_name:
-            # Empty response with no tool calls - this is problematic
-            debug_log("  ⚠️ Empty assistant response with no tool calls", "planning")
+            # Thinking-only turn: let the model continue reasoning
+            if thinking:
+                debug_log("  🧠 Thinking step (no action needed)", "planning")
+                continue
 
-            # With native tool calling, if we get empty response with no tool calls, the model is stuck
-            # Note: We don't add system messages here because they break native tool calling
+            debug_log("  ⚠️ Empty assistant response with no tool calls", "planning")
             if turn > 3:
                 debug_log("  🚨 Force exit - too many empty responses", "planning")
             break
 
-        # Parse for tool calls using OpenAI standard format
-        tool_name = None
-        tool_args = None
-        tool_call_id = None
-
-        # Check for structured tool calls in the response
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
-
-        # If we have thinking but no content and no tool calls, treat as planning step
-        if not content and not tool_name and thinking:
-            debug_log(f"  🧠 Thinking step (no action needed)", "planning")
-
-            # With native tool calling, the model should naturally proceed to respond or call tools
-            # Note: We don't add system messages here because they break native tool calling
-            # If stuck thinking for too many turns, the loop will naturally exit at max_turns
-            continue
-        if tool_name:
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
 
             # Check if tool is not allowed - respond with tool error

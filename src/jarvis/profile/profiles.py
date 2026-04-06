@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict
 from ..llm import call_llm_direct
 
 
@@ -52,40 +52,6 @@ PROFILES: Dict[str, Profile] = {
     ),
 }
 
-
-# Per-profile tool allowlist to limit cognitive load for the LLM
-PROFILE_ALLOWED_TOOLS: Dict[str, List[str]] = {
-    "developer": [
-        "screenshot",
-        "recallConversation",
-        "localFiles",
-        "webSearch",
-        "fetchWebPage",
-        "getWeather",
-        "stop",
-    ],
-    "business": [
-        "screenshot",
-        "recallConversation",
-        "localFiles",
-        "webSearch",
-        "fetchWebPage",
-        "getWeather",
-        "stop",
-    ],
-    "life": [
-        "screenshot",
-        "recallConversation",
-        "logMeal",
-        "fetchMeals",
-        "deleteMeal",
-        "localFiles",
-        "webSearch",
-        "fetchWebPage",
-        "getWeather",
-        "stop",
-    ],
-}
 
 
 

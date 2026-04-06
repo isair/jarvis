@@ -61,9 +61,8 @@ class TestStopSignalIntegration:
         assert "stop" in BUILTIN_TOOLS
         assert isinstance(BUILTIN_TOOLS["stop"], StopTool)
 
-    def test_stop_tool_in_all_profiles(self):
-        """Test that stop tool is available in all profiles."""
-        from src.jarvis.profile.profiles import PROFILE_ALLOWED_TOOLS
+    def test_stop_tool_always_available(self):
+        """Test that stop tool is available to all profiles via BUILTIN_TOOLS."""
+        from src.jarvis.tools.registry import BUILTIN_TOOLS
 
-        for profile_name, allowed_tools in PROFILE_ALLOWED_TOOLS.items():
-            assert "stop" in allowed_tools, f"stop tool missing from {profile_name} profile"
+        assert "stop" in BUILTIN_TOOLS, "stop tool must be in BUILTIN_TOOLS"

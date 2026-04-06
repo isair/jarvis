@@ -5,7 +5,7 @@ This specification documents only the reply flow that begins when a valid user q
 ### Architecture Overview
 - Components:
   - Reply Engine (`src/jarvis/reply/engine.py`): Orchestrates profile selection, conversation-memory enrichment, tool-use protocol, messages loop, output, and memory update.
-  - Profiles (`src/jarvis/profile/profiles.py`): Provide persona-specific `system_prompt` and a per-profile tool allowlist via `PROFILE_ALLOWED_TOOLS`.
+  - Profiles (`src/jarvis/profile/profiles.py`): Provide persona-specific `system_prompt` for each profile.
   - LLM Gateway (`src/jarvis/llm.py`): `chat_with_messages` sends the messages array and returns raw JSON; `extract_text_from_response` normalizes content across providers.
   - Conversation Memory (`src/jarvis/memory/conversation.py`): Supplies recent dialogue messages and keyword/time-bounded recall.
   - Enrichment LLM (`src/jarvis/reply/enrichment.py`): Extracts search params (keywords and optional time bounds) from the current query to drive conversation recall.
@@ -86,7 +86,7 @@ Design principles enforced by the engine:
    - Text-based fallback (automatic): If the model returns HTTP 400, the engine switches to injecting tool descriptions as plain text in the system message and parsing `` ```tool_call ``` `` markdown fences from the model's content field
    - Fallback is detected once per session (first HTTP 400 response) and persists for the rest of the conversation
    - Internal reasoning uses the `thinking` field (not shown to user)
-   - Allowed tools: profile allowlist plus MCP (if configured)
+   - Allowed tools: all builtin tools plus MCP (if configured)
    - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
    - Tool results: native path appends `{role: "tool", tool_call_id: "<id>", content: "<text>"}` messages; text-based fallback appends `{role: "user", content: "[Tool result: name]\n<text>"}` messages
    - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
@@ -238,7 +238,7 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.
 - Tools and MCP:
-  - `PROFILE_ALLOWED_TOOLS` governs default allowlist per profile; MCP servers added from `cfg.mcps`.
+  - All builtin tools are available regardless of profile; MCP servers added from `cfg.mcps`.
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
 - Context injection:
