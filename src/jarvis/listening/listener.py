@@ -150,8 +150,11 @@ try:
     if _is_apple_silicon():
         import mlx_whisper
         MLX_WHISPER_AVAILABLE = True
-except Exception:
+        debug_log("mlx-whisper loaded successfully", "voice")
+except Exception as _mlx_err:
     mlx_whisper = None
+    if _is_apple_silicon():
+        debug_log(f"mlx-whisper unavailable, falling back to faster-whisper: {_mlx_err}", "voice")
 
 try:
     from faster_whisper import WhisperModel
