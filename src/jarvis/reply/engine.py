@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
-from ..profile.profiles import SYSTEM_PROMPT
+from ..system_prompt import SYSTEM_PROMPT
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log

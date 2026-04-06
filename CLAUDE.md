@@ -21,7 +21,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 
 Avoid hardcoded language patterns as this assistant needs to support an arbitrary amount of different languages.
 
-Tools define when/how to be used and return raw data without LLM processing. The unified system prompt in `profiles.py` handles response formatting and personality through the daemon's LLM loop.
+Tools define when/how to be used and return raw data without LLM processing. The unified system prompt in `src/jarvis/system_prompt.py` handles response formatting and personality through the daemon's LLM loop.
 
 ## Git Workflow
 

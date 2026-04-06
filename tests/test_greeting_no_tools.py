@@ -260,5 +260,5 @@ class TestGreetingNoTools:
                 dialogue_memory=dialogue_memory,
             )
 
-        assert capture.has_any_tool(), "logMeal should be callable from developer profile"
+        assert capture.has_any_tool(), "logMeal should always be callable"
         assert "logMeal" in capture.tool_names()
