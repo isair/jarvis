@@ -73,6 +73,35 @@ except Exception as e:
 # Note: Qt WebEngine resources are handled by PyInstaller's hook-PyQt6.QtWebEngineWidgets.py
 # Manual collection can conflict with the hook and cause crashes
 
+# On macOS Apple Silicon, collect mlx_whisper and its dependency submodules/data.
+# These are conditionally imported in listener.py and PyInstaller can't detect them.
+# IMPORTANT: Do NOT use collect_submodules('mlx') — it causes nanobind types in
+# mlx.core to be registered twice (Fatal Python error: Aborted).  Instead, list
+# just the mlx submodules that mlx_whisper actually imports and let PyInstaller
+# resolve the native extension naturally.
+if sys.platform == 'darwin':
+    try:
+        hiddenimports_mlx = (
+            collect_submodules('mlx_whisper')
+            + collect_submodules('tiktoken')
+            + collect_submodules('tiktoken_ext')
+            + collect_submodules('numba')
+        )
+        # Exclude torch_whisper — it's a PyTorch implementation not used by the MLX path
+        hiddenimports_mlx = [m for m in hiddenimports_mlx if 'torch_whisper' not in m]
+        # Add only the specific mlx submodules that mlx_whisper imports
+        hiddenimports_mlx += [
+            'mlx', 'mlx.core', 'mlx.nn', 'mlx.utils',
+        ]
+        datas += collect_data_files('mlx_whisper')
+        datas += collect_data_files('tiktoken')
+        print(f"Collected {len(hiddenimports_mlx)} mlx_whisper submodules (incl. deps)")
+    except Exception as e:
+        hiddenimports_mlx = []
+        print(f"Info: mlx/mlx_whisper not installed, skipping: {e}")
+else:
+    hiddenimports_mlx = []
+
 # Hidden imports that PyInstaller might miss
 hiddenimports = [
     # Jarvis core modules
@@ -177,6 +206,8 @@ hiddenimports = [
     'huggingface_hub.hf_api',
     'huggingface_hub.utils',
     'tokenizers',
+    # Speech recognition (mlx-whisper backend for Apple Silicon)
+    'mlx_whisper',
     # Third-party dependencies
     'dotenv',
     'psutil',
@@ -213,7 +244,32 @@ hiddenimports = [
     'itsdangerous',
     'click',
     'blinker',
+] + hiddenimports_mlx
+
+# Build the excludes list — scipy is kept on macOS (required by mlx_whisper)
+_excludes = [
+    # Exclude heavy packages to keep bundle size reasonable
+    'psycopg2',  # Not used and causes OpenSSL conflicts
+    'torch',  # PyTorch is 1.5-2GB - chatterbox TTS is optional
+    'torchaudio',
+    'torchvision',
+    'chatterbox',  # Optional TTS engine (uses PyTorch)
+    'transformers',  # Heavy ML library (not needed, faster_whisper uses ctranslate2)
+    'safetensors',
+    'accelerate',
+    'cv2',  # OpenCV - not needed for core functionality
+    'opencv-python',
+    'matplotlib',  # Not needed for core app
+    'notebook',
+    'jupyter',
+    'IPython',
+    'sklearn',
+    'scikit-learn',
+    # Note: Keep huggingface_hub - needed by faster_whisper for model downloads
 ]
+# scipy is needed by mlx_whisper on macOS — only exclude on other platforms
+if sys.platform != 'darwin':
+    _excludes.append('scipy')
 
 a = Analysis(
     ['src/desktop_app/app.py'],
@@ -224,27 +280,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=['src/desktop_app/rthook_onnxruntime.py'],
-    excludes=[
-        # Exclude heavy packages to keep bundle size reasonable
-        'psycopg2',  # Not used and causes OpenSSL conflicts
-        'torch',  # PyTorch is 1.5-2GB - chatterbox TTS is optional
-        'torchaudio',
-        'torchvision',
-        'chatterbox',  # Optional TTS engine (uses PyTorch)
-        'transformers',  # Heavy ML library (not needed, faster_whisper uses ctranslate2)
-        'safetensors',
-        'accelerate',
-        'cv2',  # OpenCV - not needed for core functionality
-        'opencv-python',
-        'matplotlib',  # Not needed for core app
-        'notebook',
-        'jupyter',
-        'IPython',
-        'scipy',  # Large, only used by optional features
-        'sklearn',
-        'scikit-learn',
-        # Note: Keep huggingface_hub - needed by faster_whisper for model downloads
-    ],
+    excludes=_excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
