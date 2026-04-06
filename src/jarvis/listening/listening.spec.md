@@ -11,11 +11,12 @@ This document outlines the voice listening architecture. The system uses a **tra
                             │
             ┌───────────────┼───────────────┐
             ▼               ▼               ▼
-┌───────────────┐                  ┌───────────────┐
-│     VAD       │                  │   TTS Output  │
-│ (speech gate) │                  │   Tracking    │
-└───────┬───────┘                  └───────────────┘
-        │
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│     VAD       │  │Shush Detector │  │   TTS Output  │
+│ (speech gate) │  │(during TTS)   │  │   Tracking    │
+└───────┬───────┘  └───────┬───────┘  └───────────────┘
+        │                  │
+        │                  ▼ (instant TTS interrupt)
         ▼
 ┌───────────────┐
 │    Whisper    │
@@ -121,8 +122,12 @@ After TTS finishes, allow wake-word-free follow-up.
 
 While TTS is playing, echo rejection and stop commands are handled with fast text-based checks (no LLM). This prevents self-loops where the mic picks up TTS output. After TTS finishes, the intent judge takes over.
 
-**Stop detection:**
-- Text-based: Check for "stop", "quiet", "shut up", etc.
+**Stop detection (two layers):**
+
+1. **Acoustic shush detection (fastest, ~300 ms):** A spectral fricative detector runs directly on raw audio frames in the main audio loop — no Whisper transcription needed. It analyses the frequency profile of each 20 ms frame: a "shhh" sound has high energy in the 2–8 kHz band and very little below 500 Hz (no harmonic structure). When this pattern persists for a configurable number of consecutive frames (default 15 = 300 ms), TTS is interrupted immediately. Brief sibilants in TTS output ("s", "sh" in words) are too short (~50–100 ms) to trigger the detector. The shush detector resets its streak counter whenever TTS is not active.
+
+2. **Text-based stop commands (after Whisper):** Check for "stop", "quiet", "shut up", etc. in the transcribed text. Slower (~1.5–3 s) but catches spoken stop words.
+
 - Intent judge can also detect stop commands
 
 **Echo handling:**
@@ -247,13 +252,22 @@ If the intent judge later rejects the query (and no hot window override applies)
   "intent_judge_timeout_sec": 15.0,
 
   "hot_window_seconds": 3.0,
-  "echo_tolerance": 0.3
+  "echo_tolerance": 0.3,
+
+  "shush_detection_enabled": true,
+  "shush_high_low_ratio": 3.0,
+  "shush_energy_floor": 0.002,
+  "shush_consecutive_frames": 15
 }
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for transcript buffer. Used for both retention and context passed to intent judge. 2 minutes provides good context for multi-person conversations. |
+| `shush_detection_enabled` | true | Enable acoustic shush detection during TTS playback. |
+| `shush_high_low_ratio` | 3.0 | Minimum ratio of high-band (2–8 kHz) to low-band (0–500 Hz) energy density for a frame to count as fricative. |
+| `shush_energy_floor` | 0.002 | Minimum RMS energy to distinguish shush from silence. |
+| `shush_consecutive_frames` | 15 | Number of consecutive shush-like frames required before triggering (at 20 ms/frame, 15 = 300 ms). |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
@@ -285,6 +299,11 @@ Microphone Audio
 Sounddevice Callback → _audio_q
     ↓
 Main Loop: Get Frames → VAD Check
+    ↓                      ↓ (during TTS)
+    │                 Shush Detector
+    │                 (spectral check per frame)
+    │                      ↓ sustained?
+    │                 Interrupt TTS immediately
     ↓
 Speech Detected → Accumulate Frames
     ↓
