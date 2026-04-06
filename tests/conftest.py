@@ -49,13 +49,11 @@ class MockConfig:
     tts_chatterbox_exaggeration: float = 0.5
     tts_chatterbox_cfg_weight: float = 0.5
     web_search_enabled: bool = True
-    llm_profile_select_timeout_sec: float = 10.0
     llm_tools_timeout_sec: float = 8.0
     llm_embed_timeout_sec: float = 10.0
     llm_chat_timeout_sec: float = 45.0
     agentic_max_turns: int = 8
     memory_enrichment_max_results: int = 5
-    active_profiles: List[str] = field(default_factory=lambda: ["developer", "business", "life"])
     location_enabled: bool = True
     location_ip_address: Optional[str] = None
     location_auto_detect: bool = False

@@ -130,8 +130,7 @@ class TestGreetingNoTools:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             run_reply_engine(
                 db=db, cfg=mock_config, tts=None,
@@ -178,8 +177,7 @@ class TestGreetingNoTools:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             response = run_reply_engine(
                 db=db, cfg=mock_config, tts=None,
@@ -212,8 +210,7 @@ class TestGreetingNoTools:
             return _mock_llm_response("The answer is 42.")
 
         with patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="developer"):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             response = run_reply_engine(
                 db=db, cfg=mock_config, tts=None,
@@ -252,11 +249,10 @@ class TestGreetingNoTools:
                 return _mock_llm_response("", [_tool_call("logMeal", {"description": "pizza"})])
             return _mock_llm_response("Logged your meal!")
 
-        # Use developer profile — logMeal was previously restricted to "life" only
+        # logMeal was previously restricted to "life" profile only — now all tools are always available
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="developer"):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             run_reply_engine(
                 db=db, cfg=mock_config, tts=None,

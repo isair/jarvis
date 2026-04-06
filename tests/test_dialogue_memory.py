@@ -86,22 +86,18 @@ class TestReplyEngineDialogueMemory:
     
     @patch('src.jarvis.reply.engine.chat_with_messages')
     @patch('src.jarvis.reply.engine.extract_text_from_response')
-    @patch('src.jarvis.profile.profiles.select_profile_llm')
-    def test_dialogue_memory_preserves_message_order(self, mock_profile, mock_extract, mock_chat):
+    def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat):
         """Test that reply engine stores conversation in correct order."""
         # Mock dependencies
-        mock_profile.return_value = "developer"
         mock_extract.return_value = "Final response"
         mock_chat.return_value = {"message": {"content": "Final response"}}
-        
+
         # Mock database and config
         mock_db = Mock()
         mock_cfg = Mock()
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.ollama_chat_model = "test"
-        mock_cfg.active_profiles = ["developer"]
         mock_cfg.voice_debug = False
-        mock_cfg.llm_profile_select_timeout_sec = 30.0
         mock_cfg.llm_tools_timeout_sec = 8.0
         mock_cfg.llm_embed_timeout_sec = 10.0
         mock_cfg.llm_chat_timeout_sec = 45.0
@@ -132,12 +128,10 @@ class TestReplyEngineDialogueMemory:
     
     @patch('src.jarvis.reply.engine.chat_with_messages')
     @patch('src.jarvis.reply.engine.extract_text_from_response')
-    @patch('src.jarvis.profile.profiles.select_profile_llm')
     @patch('src.jarvis.reply.engine.run_tool_with_retries')
-    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_profile, mock_extract, mock_chat):
+    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat):
         """Test that JSON tool calls are filtered from dialogue memory."""
         # Mock dependencies
-        mock_profile.return_value = "developer"
         mock_tool.return_value = Mock(reply_text="Weather data", error_message=None)
         
         # Mock multi-turn conversation: structured tool call then final response
@@ -166,9 +160,7 @@ class TestReplyEngineDialogueMemory:
         mock_cfg = Mock()
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.ollama_chat_model = "test"
-        mock_cfg.active_profiles = ["developer"]
         mock_cfg.voice_debug = False
-        mock_cfg.llm_profile_select_timeout_sec = 30.0
         mock_cfg.llm_tools_timeout_sec = 8.0
         mock_cfg.llm_embed_timeout_sec = 10.0
         mock_cfg.llm_chat_timeout_sec = 45.0
@@ -176,10 +168,10 @@ class TestReplyEngineDialogueMemory:
         mock_cfg.location_ip_address = None
         mock_cfg.location_auto_detect = False
         mock_cfg.agentic_max_turns = 8
-        
+
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
-        
+
         # Run reply engine
         result = run_reply_engine(
             db=mock_db,
@@ -188,11 +180,11 @@ class TestReplyEngineDialogueMemory:
             text="What's the weather in London?",
             dialogue_memory=dialogue_memory
         )
-        
+
         # Check that dialogue memory was updated
         chunks = dialogue_memory.get_pending_chunks()
         assert len(chunks) == 2  # User message and assistant response stored separately
-        
+
         # Should include user input and final response
         assert "User: What's the weather in London?" in chunks
         assert "Assistant: It's sunny in London today!" in chunks
@@ -589,52 +581,3 @@ class TestDialogueMemoryUnifiedDurations:
         assert dm.MAX_UNSAVED_AGE_SEC == 120.0
 
 
-@pytest.mark.unit
-class TestDialogueMemoryProfileTracking:
-    """Test profile tracking for follow-up detection."""
-
-    def test_set_and_get_last_profile(self):
-        """Test setting and getting last profile."""
-        dm = DialogueMemory()
-        dm.add_message("user", "test message")
-        dm.set_last_profile("life")
-
-        assert dm.get_last_profile() == "life"
-
-    def test_profile_requires_recent_messages(self):
-        """Profile should only return if there are recent messages."""
-        dm = DialogueMemory()
-        dm.set_last_profile("developer")
-
-        # No messages, so profile should be None
-        assert dm.get_last_profile() is None
-
-    def test_profile_cleared_after_window(self):
-        """Profile should be None if messages are too old."""
-        dm = DialogueMemory()
-        dm.add_message("user", "old message")
-        dm.set_last_profile("business")
-
-        # Manually expire the message
-        with dm._lock:
-            dm._messages = [(time.time() - 400, "user", "old message")]  # 400s ago > 300s window
-
-        assert dm.get_last_profile() is None
-
-    def test_profile_preserved_with_recent_messages(self):
-        """Profile should be preserved if messages are recent."""
-        dm = DialogueMemory()
-        dm.add_message("user", "recent message")
-        dm.set_last_profile("life")
-
-        # Still within window
-        assert dm.get_last_profile() == "life"
-
-    def test_profile_overwrite(self):
-        """Setting profile should overwrite previous value."""
-        dm = DialogueMemory()
-        dm.add_message("user", "test")
-        dm.set_last_profile("developer")
-        dm.set_last_profile("life")
-
-        assert dm.get_last_profile() == "life"

@@ -4,14 +4,14 @@ This specification documents only the reply flow that begins when a valid user q
 
 ### Architecture Overview
 - Components:
-  - Reply Engine (`src/jarvis/reply/engine.py`): Orchestrates profile selection, conversation-memory enrichment, tool-use protocol, messages loop, output, and memory update.
-  - Profiles (`src/jarvis/profile/profiles.py`): Provide persona-specific `system_prompt` for each profile.
+  - Reply Engine (`src/jarvis/reply/engine.py`): Orchestrates conversation-memory enrichment, tool-use protocol, messages loop, output, and memory update.
+  - System Prompt (`src/jarvis/profile/profiles.py`): Provides a unified `SYSTEM_PROMPT` with adaptive guidance for all topics.
   - LLM Gateway (`src/jarvis/llm.py`): `chat_with_messages` sends the messages array and returns raw JSON; `extract_text_from_response` normalizes content across providers.
   - Conversation Memory (`src/jarvis/memory/conversation.py`): Supplies recent dialogue messages and keyword/time-bounded recall.
   - Enrichment LLM (`src/jarvis/reply/enrichment.py`): Extracts search params (keywords and optional time bounds) from the current query to drive conversation recall.
 
 Design principles enforced by the engine:
-- Tool-Profile Separation: Tools define data retrieval; profiles define style/instructions.
+- Unified System Prompt: A single prompt with adaptive guidance handles all topics; no per-profile routing.
 - Tool Response Flow: Tools return raw data; formatting/personality is handled by the LLM through the engine's loop. The system prompt explicitly instructs the model to use tool results to fulfill the user's original request, not to describe the structure or format of the tool response.
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
@@ -28,10 +28,7 @@ Design principles enforced by the engine:
 1. Redact
    - Redact input to remove sensitive data.
 
-2. Profile Selection
-   - Use a lightweight LLM-based router to select the profile; load its system guidance.
-
-3. Recent Dialogue Context
+2. Recent Dialogue Context
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
 
 4. Conversation Memory Enrichment (optional)
@@ -42,13 +39,13 @@ Design principles enforced by the engine:
 
 5. Build Initial Messages
    - messages = [
-     {role: system, content: general instructions + profile-specific instructions + ASR note + tool protocol + enrichment },
+     {role: system, content: unified system prompt + ASR note + tool protocol + enrichment },
      ...recent dialogue messages...,
      {role: user, content: redacted user text}
    ]
 
    System message composition:
-   - Start with the profile `system_prompt`.
+   - Start with the unified `SYSTEM_PROMPT`.
    - Append ASR note: inputs come from speech transcription and may include errors; prefer user intent and ask brief clarifying questions when uncertain.
    - Append the tool-use protocol (allowed response formats and MCP invocation format if configured).
    - Append `Relevant conversation history:` when enrichment produced context.
@@ -101,8 +98,8 @@ Design principles enforced by the engine:
 - Redaction/DB
   - VSS enabled vs disabled
   - Embedding success vs failure (ignored)
-- Profile
-  - Valid LLM selection vs fallback
+- System Prompt
+  - Unified prompt loaded
 - Conversation Memory
   - Params extracted vs empty
   - Tool allowed vs not
@@ -128,7 +125,6 @@ sequenceDiagram
   participant Engine as Reply Engine
   participant Store as Persistent Store
   participant Emb as Embedding Service
-  participant Router as Profile Router
   participant ShortMem as Short-term Memory
   participant Recall as Conversation Recall
   participant Tools as Tool Orchestrator
@@ -137,8 +133,6 @@ sequenceDiagram
 
   Caller->>Engine: text
   Engine->>Engine: Redact
-  Engine->>Router: route(profile candidates, text)
-  Router-->>Engine: profile
   Engine->>ShortMem: recent_messages()
   Engine->>Recall: extract recall params (LLM)
   alt keywords present AND RECALL_CONVERSATION allowed
@@ -231,14 +225,14 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
 
 ### Configuration and Defaults
 - Timeouts (seconds):
-  - `llm_profile_select_timeout_sec` (profile routing)
+
   - `llm_tools_timeout_sec` (enrichment extraction)
   - `llm_embed_timeout_sec` (vector search)
   - `llm_chat_timeout_sec` (messages loop turn)
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.
 - Tools and MCP:
-  - All builtin tools are available regardless of profile; MCP servers added from `cfg.mcps`.
+  - All builtin tools are always available; MCP servers added from `cfg.mcps`.
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
 - Context injection:
@@ -280,7 +274,7 @@ This prevents issues like calling `webSearch` for "ni hao" (Chinese greeting).
 See `src/jarvis/reply/prompts/prompts.spec.md` for full prompt architecture documentation.
 
 ### Logging and Privacy
-- Use `debug_log` for key steps: `profile`, `memory`, `planning`, and `voice` categories.
+- Use `debug_log` for key steps: `memory`, `planning`, and `voice` categories.
 - Avoid excessive logging; logs must remain readable and privacy-preserving.
 
 

@@ -1,14 +1,14 @@
 """
 Reply Engine - Main orchestrator for response generation.
 
-Handles profile selection, memory enrichment, tool planning and execution.
+Handles memory enrichment, tool planning and execution.
 """
 
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
-from ..profile.profiles import PROFILES, select_profile_llm
+from ..profile.profiles import SYSTEM_PROMPT
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
@@ -44,44 +44,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
-    # Step 2: Check for recent dialogue context first (needed for profile selection)
+    # Step 2: Check for recent dialogue context
     recent_messages = []
     is_new_conversation = True
-    previous_profile = None
-    recent_context_summary = None
 
     if dialogue_memory and dialogue_memory.has_recent_messages():
         recent_messages = dialogue_memory.get_recent_messages()
         is_new_conversation = False
-
-        # Get the previous profile used (tracked by DialogueMemory)
-        previous_profile = dialogue_memory.get_last_profile()
-
-        # Build a brief context summary (last user message + assistant response)
-        if len(recent_messages) >= 2:
-            context_parts = []
-            for msg in recent_messages[-4:]:  # Last 2 exchanges max
-                role = msg.get("role", "")
-                content = msg.get("content", "")[:150]
-                if role in ("user", "assistant") and content:
-                    context_parts.append(f"{role}: {content}")
-            if context_parts:
-                recent_context_summary = " | ".join(context_parts)
-
-    # Step 3: Profile selection (with follow-up awareness)
-    profile_name = select_profile_llm(
-        cfg.ollama_base_url,
-        cfg.ollama_chat_model,
-        cfg.active_profiles,
-        redacted,
-        timeout_sec=float(getattr(cfg, 'llm_profile_select_timeout_sec', 30.0)),
-        previous_profile=previous_profile,
-        recent_context=recent_context_summary,
-        thinking=getattr(cfg, 'llm_thinking_enabled', False),
-    )
-    print(f"  🎭 Profile selected: {profile_name}", flush=True)
-
-    system_prompt = PROFILES.get(profile_name, PROFILES["developer"]).system_prompt
 
     # Refresh MCP tools on new conversation (memory expired)
     if is_new_conversation and getattr(cfg, "mcps", {}):
@@ -176,8 +145,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model}", "planning")
 
     def _build_initial_system_message() -> str:
-        # Start with profile-specific system prompt
-        guidance = [system_prompt.strip()]
+        guidance = [SYSTEM_PROMPT.strip()]
 
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
@@ -577,7 +545,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cfg=cfg,
                 tool_name=tool_name,
                 tool_args=tool_args,
-                system_prompt=system_prompt,
+                system_prompt=SYSTEM_PROMPT,
                 original_prompt="",
                 redacted_text=redacted,
                 max_retries=1,
@@ -701,11 +669,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Print reply with appropriate header
         try:
             if not getattr(cfg, "voice_debug", False):
-                print(f"\n🤖 Jarvis ({profile_name})\n" + safe_reply + "\n", flush=True)
+                print(f"\n🤖 Jarvis\n" + safe_reply + "\n", flush=True)
             else:
-                print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
+                print(f"\n[jarvis]\n" + safe_reply + "\n", flush=True)
         except Exception:
-            print(f"\n[jarvis coach:{profile_name}]\n" + safe_reply + "\n", flush=True)
+            print(f"\n[jarvis]\n" + safe_reply + "\n", flush=True)
 
         # TTS output - callbacks handled by calling code
         if tts is not None and tts.enabled:
@@ -720,9 +688,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Add assistant reply if we have one
             if reply and reply.strip():
                 dialogue_memory.add_message("assistant", reply.strip())
-
-            # Track the profile used for follow-up detection
-            dialogue_memory.set_last_profile(profile_name)
 
             debug_log("interaction added to dialogue memory", "memory")
         except Exception as e:
