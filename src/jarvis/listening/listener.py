@@ -1563,7 +1563,7 @@ class VoiceListener(threading.Thread):
 
             # Show ready message only after stream is confirmed active
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
-            print(f"🎙️  Listening - say 'Hello {wake_word.title()}' to start!", flush=True)
+            print(f"🎙️  Ready! Try: \"{wake_word.title()}, what's the weather?\"", flush=True)
 
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
