@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtWidgets import (
@@ -330,7 +329,8 @@ class DictationHistoryWindow(QMainWindow):
     def _get_history_file_mtime(self) -> float:
         """Return the mtime of the history JSON file, or 0 if missing."""
         try:
-            p = Path.home() / ".local" / "share" / "jarvis" / "dictation_history.json"
+            from jarvis.dictation.history import _default_history_path
+            p = _default_history_path()
             return p.stat().st_mtime if p.exists() else 0.0
         except Exception:
             return 0.0
