@@ -116,9 +116,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Select tools relevant to this query (strategy controlled by config)
     from ..tools.selection import select_tools, ToolSelectionStrategy
     try:
-        strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "all"))
+        strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "embedding"))
     except ValueError:
-        strategy = ToolSelectionStrategy.ALL
+        strategy = ToolSelectionStrategy.EMBEDDING
     allowed_tools = select_tools(
         query=redacted,
         builtin_tools=BUILTIN_TOOLS,

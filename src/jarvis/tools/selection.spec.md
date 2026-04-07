@@ -18,9 +18,9 @@ Controlled by `tool_selection_strategy` in config:
 
 | Value         | Behaviour                                                           | LLM call? | Extra dependency |
 |---------------|---------------------------------------------------------------------|-----------|------------------|
-| `"all"`       | Pass every registered tool (current default).                       | No        | None             |
+| `"all"`       | Pass every registered tool.                                         | No        | None             |
 | `"keyword"`   | Score tools by keyword overlap with the query; return top matches.  | No        | None             |
-| `"embedding"` | Rank tools by cosine similarity of embeddings via nomic-embed-text. | No        | numpy            |
+| `"embedding"` | Rank tools by cosine similarity of embeddings via nomic-embed-text (default). | No | numpy      |
 | `"llm"`       | Ask a lightweight LLM call to pick relevant tool names.             | Yes       | None             |
 
 ### Always-included Tools
@@ -79,5 +79,5 @@ Called from the reply engine (Step 6) before `generate_tools_json_schema()` and 
 
 - Key: `tool_selection_strategy`
 - Type: `str` (validated against `ToolSelectionStrategy` enum values)
-- Default: `"all"` (backwards-compatible)
+- Default: `"embedding"`
 - Valid values: `"all"`, `"keyword"`, `"embedding"`, `"llm"`

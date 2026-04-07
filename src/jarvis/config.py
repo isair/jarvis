@@ -408,7 +408,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Agentic Loop
         "agentic_max_turns": 8,
-        "tool_selection_strategy": "all",
+        "tool_selection_strategy": "embedding",
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -563,7 +563,7 @@ def load_settings() -> Settings:
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "all")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
-        tool_selection_strategy = "all"
+        tool_selection_strategy = "embedding"
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
