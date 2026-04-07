@@ -139,11 +139,13 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 
 ## System Requirements
 
-| Hardware | RAM | Model |
-|----------|-----|-------|
+| Hardware | VRAM | Model |
+|----------|------|-------|
 | Most users | 8GB+ | `gemma4:e2b` (default) |
-| Better quality | 12GB+ | `gemma4:e4b` |
-| High-end | 16GB+ | `gpt-oss:20b` |
+| Better quality | 16GB+ | `gemma4:e4b` |
+| High-end | 24GB+ | `gpt-oss:20b` |
+
+> **Note:** VRAM requirements include the intent judge model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification. The default model shares this, so no extra VRAM is needed.
 
 The setup wizard will guide you through model selection and installation on first launch.
 
@@ -383,7 +385,7 @@ Get API key at [composio.dev](https://composio.dev)
 
 **Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
 
-**Responses are slow** - Ensure you have enough RAM (8GB+ for default model)
+**Responses are slow** - Ensure you have enough VRAM (8GB+ for default model; see System Requirements for other models)
 
 **Windows: App won't start** - Extract full zip first, check Windows Defender
 
