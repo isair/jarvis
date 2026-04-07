@@ -592,16 +592,23 @@ class TestThreadSafety:
 class TestListenerPauseFlag:
     """Tests for the dictation pause flag on VoiceListener."""
 
-    def test_voice_listener_has_dictation_active_flag(self):
-        """VoiceListener should initialise _dictation_active = False."""
+    @pytest.fixture()
+    def listener(self):
+        """Create a VoiceListener with mock dependencies."""
         from src.jarvis.listening.listener import VoiceListener
-        import inspect
-        source = inspect.getsource(VoiceListener.__init__)
-        assert "_dictation_active" in source
+        cfg = MagicMock()
+        cfg.sample_rate = 16000
+        cfg.vad_enabled = False
+        cfg.wake_aliases = []
+        cfg.stop_commands = ["stop"]
+        return VoiceListener(MagicMock(), cfg, MagicMock(), MagicMock())
 
-    def test_voice_listener_has_transcribe_lock(self):
-        """VoiceListener should have a transcribe_lock attribute."""
-        from src.jarvis.listening.listener import VoiceListener
-        import inspect
-        source = inspect.getsource(VoiceListener.__init__)
-        assert "transcribe_lock" in source
+    def test_voice_listener_has_dictation_active_flag(self, listener):
+        """VoiceListener should initialise _dictation_active = False."""
+        assert hasattr(listener, "_dictation_active")
+        assert listener._dictation_active is False
+
+    def test_voice_listener_has_transcribe_lock(self, listener):
+        """VoiceListener should expose a transcribe_lock."""
+        assert hasattr(listener, "transcribe_lock")
+        assert isinstance(listener.transcribe_lock, type(threading.Lock()))

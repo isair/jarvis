@@ -264,6 +264,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("tune_enabled", "Startup Tune",
       "Play startup sound",
       "features", "bool")
+    f("dictation_enabled", "Dictation Mode",
+      "Hold a hotkey to record speech, release to paste transcription into any app",
+      "features", "bool")
+    f("dictation_hotkey", "Dictation Hotkey",
+      "Key combination to hold for dictation (e.g. ctrl+cmd, ctrl+alt, ctrl+shift+d)",
+      "features", "str")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",

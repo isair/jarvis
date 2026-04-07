@@ -1463,22 +1463,28 @@ class JarvisSystemTray:
         self.dictation_history_window.raise_()
         self.dictation_history_window.activateWindow()
 
-    def _connect_dictation_history(self) -> None:
+    def _connect_dictation_history(self, retries_left: int = 3) -> None:
         """Wire dictation engine's result callback to the history window signal.
 
         Called once after daemon startup so live entries appear immediately.
+        Retries up to *retries_left* times (5 s apart) if the engine isn't ready.
         """
         try:
             from jarvis.daemon import get_dictation_engine
             engine = get_dictation_engine()
             if engine is None:
-                # Engine not ready yet — retry once more after a delay
-                QTimer.singleShot(5000, self._connect_dictation_history)
+                if retries_left > 0:
+                    QTimer.singleShot(
+                        5000,
+                        lambda: self._connect_dictation_history(retries_left - 1),
+                    )
+                else:
+                    debug_log("dictation engine never became available", "desktop")
                 return
             # Share the same DictationHistory instance
             engine.history = self._dictation_history
             # Route new-entry notifications through the Qt signal
-            engine._on_dictation_result = (
+            engine.set_on_dictation_result(
                 lambda entry: self.dictation_history_window.signals.new_entry.emit(entry)
             )
             debug_log("dictation history connected to UI", "desktop")

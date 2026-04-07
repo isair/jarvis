@@ -27,6 +27,8 @@
 
 **🧠 Never forgets** - Unlimited memory across conversations. Context-aware personalities (developer/business/life coach). Learns your preferences over time.
 
+**🎙️ Free dictation** - Hold a hotkey, speak, release — your words appear in any app as text. Like WisprFlow, but free, offline, and private. No subscription, no cloud transcription.
+
 **🔌 Extensible** - MCP integration connects Jarvis to 500+ tools: smart home, GitHub, Slack, databases, and more.
 
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
@@ -135,7 +137,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Smart Personalities** - Adapts tone: Developer (debugging), Business (planning), Life Coach (health/wellness)
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
-- **Dictation Mode** - Hold a hotkey to record speech, release to paste the transcription into any app (WisprFlow-like)
+- **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
@@ -192,33 +194,31 @@ CUDA is detected automatically — no configuration needed.
 
 </details>
 
-<details>
-<summary><strong>Dictation Mode</strong></summary>
+## Dictation Mode — Free WisprFlow Alternative
 
-Hold a hotkey to record speech, release to paste the transcription into the focused app. Completely independent from the assistant — no wake word needed.
+Hold a hotkey to record speech, release to paste the transcription into any app. Works everywhere — your editor, browser, chat, terminal. Completely local, completely free.
 
-Default hotkeys (aligned with WisprFlow):
-| Platform | Default hotkey | Config value |
-|----------|---------------|-------------|
-| **Windows** | Ctrl + Win | `"ctrl+cmd"` |
-| **macOS** | Ctrl + Option | `"ctrl+alt"` |
-| **Linux** | Ctrl + Alt | `"ctrl+alt"` |
+| Platform | Default hotkey |
+|----------|---------------|
+| **Windows** | Ctrl + Win |
+| **macOS** | Ctrl + Option |
+| **Linux** | Ctrl + Alt |
 
-Override in config:
+- 🔒 **100% offline** — your speech never leaves your machine (unlike cloud dictation services)
+- 🧠 **Shared Whisper model** — uses the same speech recognition as voice input, no extra memory
+- ⚡ **Zero latency startup** — no server round-trip, transcription starts the moment you release
+- 📋 **Universal paste** — works in any app that accepts `Ctrl+V` / `Cmd+V`
+- 🔇 **Non-intrusive** — main voice listener pauses automatically during dictation
+- 📜 **History window** — browse, copy, or delete past dictations from the system tray
+
+Customise the hotkey in Settings or `config.json`:
 ```json
 {
-  "dictation_enabled": true,
-  "dictation_hotkey": "ctrl+cmd"
+  "dictation_hotkey": "ctrl+alt"
 }
 ```
 
-- Uses the same Whisper model as voice input (no extra memory)
-- Text is pasted via clipboard (`Ctrl+V` / `Cmd+V`)
-- Main voice listener is automatically paused during dictation
-- **macOS:** Requires Accessibility permissions for `pynput`
-- **Linux:** Requires X11 (`pynput` has limited Wayland support)
-
-</details>
+> **Note:** macOS requires Accessibility permissions for the global hotkey. Linux requires X11 (limited Wayland support).
 
 <details>
 <summary><strong>Text-to-Speech</strong></summary>

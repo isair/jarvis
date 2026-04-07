@@ -303,6 +303,7 @@ class DictationEngine:
         on_dictation_end: Optional[Callable[[], None]] = None,
         transcribe_lock: Optional[threading.Lock] = None,
         on_dictation_result: Optional[Callable] = None,
+        history: Optional[DictationHistory] = None,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
@@ -312,7 +313,7 @@ class DictationEngine:
         self._on_dictation_end = on_dictation_end
         self._on_dictation_result = on_dictation_result
         self._transcribe_lock = transcribe_lock or threading.Lock()
-        self.history = DictationHistory()
+        self.history = history or DictationHistory()
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -365,6 +366,10 @@ class DictationEngine:
     @property
     def is_recording(self) -> bool:
         return self._recording
+
+    def set_on_dictation_result(self, callback: Optional[Callable]) -> None:
+        """Set the callback invoked after a successful dictation."""
+        self._on_dictation_result = callback
 
     # ------------------------------------------------------------------
     # Key event handlers

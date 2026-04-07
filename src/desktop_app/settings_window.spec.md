@@ -58,7 +58,7 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 9. Timing & Windows
 10. Memory & Dialogue
 11. Location
-12. Features
+12. Features (includes Dictation Mode toggle and hotkey)
 13. Advanced
 
 ## Hardware Device Selection

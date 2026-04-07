@@ -103,5 +103,6 @@ class DictationHistory:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("w", encoding="utf-8") as f:
                 json.dump(self._entries, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            from jarvis.debug import debug_log
+            debug_log(f"failed to save dictation history: {exc}", "dictation")
