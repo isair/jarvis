@@ -331,7 +331,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
-        QSizePolicy, QScrollArea, QLineEdit, QSlider
+        QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
@@ -461,6 +461,7 @@ class SetupWizard(QWizard):
         self.ollama_server_page = OllamaServerPage(self)
         self.models_page = ModelsPage(self)
         self.mlx_whisper_page = WhisperSetupPage(self)
+        self.dictation_page = DictationPage(self)
         self.location_page = LocationPage(self)
         self.complete_page = CompletePage(self)
 
@@ -469,6 +470,7 @@ class SetupWizard(QWizard):
         self.ollama_server_page_id = self.addPage(self.ollama_server_page)
         self.models_page_id = self.addPage(self.models_page)
         self.mlx_whisper_page_id = self.addPage(self.mlx_whisper_page)
+        self.dictation_page_id = self.addPage(self.dictation_page)
         self.location_page_id = self.addPage(self.location_page)
         self.complete_page_id = self.addPage(self.complete_page)
 
@@ -2129,14 +2131,10 @@ class WhisperSetupPage(QWizardPage):
         return True
 
     def nextId(self) -> int:
-        """Go to next incomplete step, or complete page if all done."""
+        """Go to dictation setup next."""
         wizard = self.wizard()
         if isinstance(wizard, SetupWizard):
-            # Check if location needs setup
-            if not wizard.is_location_working():
-                return wizard.location_page_id
-            # All done
-            return wizard.complete_page_id
+            return wizard.dictation_page_id
         return super().nextId()
 
 
@@ -2432,6 +2430,154 @@ class LocationPage(QWizardPage):
         """Go to complete page next."""
         wizard = self.wizard()
         if isinstance(wizard, SetupWizard):
+            return wizard.complete_page_id
+        return super().nextId()
+
+
+class DictationPage(QWizardPage):
+    """Page for configuring dictation (hold-to-dictate) settings."""
+
+    _HOTKEY_OPTIONS = [
+        ("ctrl+alt", "Ctrl + Alt (macOS / Linux default)"),
+        ("ctrl+cmd", "Ctrl + Win/Cmd (Windows default)"),
+        ("ctrl+shift+d", "Ctrl + Shift + D"),
+        ("ctrl+shift", "Ctrl + Shift"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        # Header
+        title = QLabel("🎙️ Dictation Mode")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Hold a hotkey to record speech, release to paste the transcription "
+            "into any app. A free, offline alternative to WisprFlow."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(16)
+
+        # Enabled checkbox
+        self._enabled_check = QCheckBox("Enable dictation mode")
+        self._enabled_check.setChecked(True)
+        self._enabled_check.setStyleSheet("font-size: 14px; color: #fafafa;")
+        layout.addWidget(self._enabled_check)
+
+        layout.addSpacing(8)
+
+        # Hotkey selection
+        hotkey_card = QFrame()
+        hotkey_card.setObjectName("card")
+        hotkey_layout = QVBoxLayout(hotkey_card)
+        hotkey_layout.setContentsMargins(24, 24, 24, 24)
+        hotkey_layout.setSpacing(12)
+
+        hotkey_title = QLabel("⌨️ Dictation Hotkey")
+        hotkey_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        hotkey_layout.addWidget(hotkey_title)
+
+        hotkey_desc = QLabel(
+            "Choose the key combination you hold down while speaking. "
+            "Double-tap the same hotkey for hands-free mode (continuous recording)."
+        )
+        hotkey_desc.setWordWrap(True)
+        hotkey_desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        hotkey_layout.addWidget(hotkey_desc)
+
+        self._hotkey_combo = QComboBox()
+        for value, label in self._HOTKEY_OPTIONS:
+            self._hotkey_combo.addItem(label, value)
+        self._hotkey_combo.setStyleSheet(
+            "QComboBox { padding: 8px; font-size: 14px; background: #27272a; "
+            "color: #fafafa; border: 1px solid #3f3f46; border-radius: 6px; }"
+        )
+
+        # Pre-select the current/default hotkey
+        current_hotkey = self._load_current_hotkey()
+        idx = self._hotkey_combo.findData(current_hotkey)
+        if idx >= 0:
+            self._hotkey_combo.setCurrentIndex(idx)
+
+        hotkey_layout.addWidget(self._hotkey_combo)
+        layout.addWidget(hotkey_card)
+
+        # Tips
+        tips_card = QFrame()
+        tips_card.setObjectName("card")
+        tips_layout = QVBoxLayout(tips_card)
+        tips_layout.setContentsMargins(24, 24, 24, 24)
+        tips_layout.setSpacing(8)
+
+        tips_title = QLabel("💡 How it Works")
+        tips_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        tips_layout.addWidget(tips_title)
+
+        tips = QLabel(
+            "• <b>Hold</b> the hotkey to record, <b>release</b> to transcribe and paste\n"
+            "• <b>Double-tap</b> the hotkey for hands-free mode (tap again or press Esc to stop)\n"
+            "• Uses the same Whisper model as voice input — no extra memory\n"
+            "• View past dictations from the system tray → 🎙️ Dictation History\n"
+            "• Fine-tune in Settings: filler word removal, custom dictionary, and more"
+        )
+        tips.setWordWrap(True)
+        tips.setStyleSheet("color: #d4d4d8; font-size: 13px; line-height: 1.6;")
+        tips_layout.addWidget(tips)
+
+        layout.addWidget(tips_card)
+        layout.addStretch()
+        self.setLayout(layout)
+
+    def _load_current_hotkey(self) -> str:
+        """Load the current hotkey from config, or platform default."""
+        try:
+            from jarvis.config import default_config_path, _load_json, _default_dictation_hotkey
+            config = _load_json(default_config_path())
+            if config and "dictation_hotkey" in config:
+                return config["dictation_hotkey"]
+            return _default_dictation_hotkey()
+        except Exception:
+            if sys.platform == "win32":
+                return "ctrl+cmd"
+            return "ctrl+alt"
+
+    def validatePage(self) -> bool:
+        """Save dictation settings to config before leaving page."""
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            enabled = self._enabled_check.isChecked()
+            hotkey = self._hotkey_combo.currentData()
+
+            config["dictation_enabled"] = enabled
+            if hotkey:
+                config["dictation_hotkey"] = hotkey
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def isComplete(self) -> bool:
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if isinstance(wizard, SetupWizard):
+            if not wizard.is_location_working():
+                return wizard.location_page_id
             return wizard.complete_page_id
         return super().nextId()
 

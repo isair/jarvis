@@ -268,8 +268,19 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Hold a hotkey to record speech, release to paste transcription into any app",
       "features", "bool")
     f("dictation_hotkey", "Dictation Hotkey",
-      "Key combination to hold for dictation (e.g. ctrl+cmd, ctrl+alt, ctrl+shift+d)",
-      "features", "str")
+      "Key combination to hold for dictation. Double-tap for hands-free mode.",
+      "features", "choice", choices=[
+          ("ctrl+alt", "Ctrl + Alt (macOS / Linux default)"),
+          ("ctrl+cmd", "Ctrl + Win/Cmd (Windows default)"),
+          ("ctrl+shift+d", "Ctrl + Shift + D"),
+          ("ctrl+shift", "Ctrl + Shift"),
+      ])
+    f("dictation_filler_removal", "Filler Word Removal",
+      "Use the local LLM to remove filler words (um, uh, like) from dictation output",
+      "features", "bool")
+    f("dictation_custom_dictionary", "Custom Dictionary",
+      "Correction rules for dictation, one per line. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
+      "features", "str", nullable=True)
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",
@@ -570,8 +581,13 @@ class SettingsWindow(QDialog):
                     return 16000
             return val if val != "" else None
 
-        # str
+        # str (with special handling for list-backed fields)
         text = w.text().strip()
+        if fm.key == "dictation_custom_dictionary":
+            # Convert newline-separated string back to list for config.json
+            if not text:
+                return []
+            return [line.strip() for line in text.split("\n") if line.strip()]
         if fm.nullable and text == "":
             return None
         return text
@@ -664,4 +680,7 @@ class SettingsWindow(QDialog):
                 w.setCurrentIndex(idx)
 
         else:  # str
-            w.setText(str(value) if value not in (None, "") else "")
+            if fm.key == "dictation_custom_dictionary" and isinstance(value, list):
+                w.setText("\n".join(str(v) for v in value))
+            else:
+                w.setText(str(value) if value not in (None, "") else "")

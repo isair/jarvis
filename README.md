@@ -198,6 +198,8 @@ CUDA is detected automatically — no configuration needed.
 
 Hold a hotkey to record speech, release to paste the transcription into any app. Works everywhere — your editor, browser, chat, terminal. Completely local, completely free.
 
+<!-- TODO: Add dictation window screenshot here -->
+
 | Platform | Default hotkey |
 |----------|---------------|
 | **Windows** | Ctrl + Win |
@@ -209,12 +211,21 @@ Hold a hotkey to record speech, release to paste the transcription into any app.
 - ⚡ **Zero latency startup** — no server round-trip, transcription starts the moment you release
 - 📋 **Universal paste** — works in any app that accepts `Ctrl+V` / `Cmd+V`
 - 🔇 **Non-intrusive** — main voice listener pauses automatically during dictation
+- ✋ **Hands-free mode** — double-tap the hotkey to keep recording without holding; press again or hit Escape to stop
+- 🧹 **Filler word removal** — optional LLM-powered cleanup removes "um", "uh", "like", "you know" while preserving meaning
+- 📖 **Custom dictionary** — define `"wrong -> right"` replacements for jargon, names, and technical terms
 - 📜 **History window** — browse, copy, or delete past dictations from the system tray
+- 🎛️ **Easy setup** — configure dictation during the setup wizard or anytime in Settings (hotkey dropdown, filler removal toggle, custom dictionary editor)
 
 Customise the hotkey in Settings or `config.json`:
 ```json
 {
-  "dictation_hotkey": "ctrl+alt"
+  "dictation_hotkey": "ctrl+alt",
+  "dictation_filler_removal": true,
+  "dictation_custom_dictionary": [
+    "jarvis -> Jarvis",
+    "pytorch -> PyTorch"
+  ]
 }
 ```
 

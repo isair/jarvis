@@ -427,6 +427,10 @@ def main() -> None:
                 on_dictation_start=_on_dictation_start,
                 on_dictation_end=_on_dictation_end,
                 transcribe_lock=voice_thread.transcribe_lock,
+                voice_device=getattr(cfg, "voice_device", None),
+                filler_removal=getattr(cfg, "dictation_filler_removal", False),
+                custom_dictionary=getattr(cfg, "dictation_custom_dictionary", []),
+                ollama_base_url=getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"),
             )
             dictation.start()
             _global_dictation_engine = dictation

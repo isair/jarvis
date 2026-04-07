@@ -179,6 +179,8 @@ class Settings:
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
     dictation_hotkey: str
+    dictation_filler_removal: bool
+    dictation_custom_dictionary: list
 
     # MCP Integration
     mcps: Dict[str, Any]
@@ -419,6 +421,8 @@ def get_default_config() -> Dict[str, Any]:
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
         "dictation_hotkey": _default_dictation_hotkey(),
+        "dictation_filler_removal": False,
+        "dictation_custom_dictionary": [],
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
@@ -556,6 +560,9 @@ def load_settings() -> Settings:
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     dictation_enabled = bool(merged.get("dictation_enabled", True))
     dictation_hotkey = str(merged.get("dictation_hotkey", _default_dictation_hotkey())).strip()
+    dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
+    raw_dict = merged.get("dictation_custom_dictionary", [])
+    dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
@@ -671,6 +678,8 @@ def load_settings() -> Settings:
         # Dictation
         dictation_enabled=dictation_enabled,
         dictation_hotkey=dictation_hotkey,
+        dictation_filler_removal=dictation_filler_removal,
+        dictation_custom_dictionary=dictation_custom_dictionary,
 
         # MCP Integration
         mcps=mcps,

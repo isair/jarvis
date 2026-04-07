@@ -207,6 +207,91 @@ def _clipboard_linux(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Audio resampling
+# ---------------------------------------------------------------------------
+
+def _resample(audio, from_rate: int, to_rate: int):
+    """Resample a 1-D float32 numpy array from *from_rate* to *to_rate*."""
+    if from_rate == to_rate or np is None:
+        return audio
+    duration = len(audio) / from_rate
+    target_len = int(duration * to_rate)
+    # Linear interpolation — good enough for speech fed to Whisper
+    indices = np.linspace(0, len(audio) - 1, target_len)
+    return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Custom dictionary & LLM post-processing
+# ---------------------------------------------------------------------------
+
+def _apply_custom_dictionary(text: str, dictionary: list) -> str:
+    """Apply custom dictionary corrections to transcribed text.
+
+    Each entry in *dictionary* is a string. The dictionary is used to fix
+    common mis-transcriptions (e.g. "Jarvice" → "Jarvis") by doing
+    case-insensitive replacement.  Entries can be ``"wrong -> right"`` pairs
+    or single terms that Whisper should have produced verbatim.
+    """
+    for entry in dictionary:
+        if not isinstance(entry, str):
+            continue
+        if " -> " in entry:
+            wrong, _, right = entry.partition(" -> ")
+            wrong, right = wrong.strip(), right.strip()
+            if wrong and right:
+                # Case-insensitive whole-word replacement
+                import re
+                text = re.sub(
+                    r"(?i)\b" + re.escape(wrong) + r"\b",
+                    right,
+                    text,
+                )
+    return text
+
+
+def _llm_clean_dictation(text: str, ollama_base_url: str) -> str:
+    """Use the local LLM to remove filler words and tidy dictation output.
+
+    Falls back to the original text if the LLM is unreachable or slow.
+    """
+    import json as _json
+    try:
+        import requests
+    except ImportError:
+        return text
+
+    prompt = (
+        "Clean the following dictated text. Remove filler words (um, uh, like, "
+        "you know, basically, actually, so, well, I mean, right) and fix minor "
+        "grammar issues. Keep the meaning identical. Return ONLY the cleaned "
+        "text, nothing else.\n\n"
+        f"{text}"
+    )
+
+    try:
+        resp = requests.post(
+            f"{ollama_base_url}/api/generate",
+            json={
+                "model": "gemma4:e2b",
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            cleaned = data.get("response", "").strip()
+            if cleaned:
+                debug_log(f"LLM filler removal: {text!r} → {cleaned!r}", "dictation")
+                return cleaned
+    except Exception as exc:
+        debug_log(f"LLM filler removal failed (using raw text): {exc}", "dictation")
+
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Hotkey string parsing
 # ---------------------------------------------------------------------------
 
@@ -304,16 +389,25 @@ class DictationEngine:
         transcribe_lock: Optional[threading.Lock] = None,
         on_dictation_result: Optional[Callable] = None,
         history: Optional[DictationHistory] = None,
+        voice_device: Optional[str] = None,
+        filler_removal: bool = False,
+        custom_dictionary: Optional[list] = None,
+        ollama_base_url: str = "http://127.0.0.1:11434",
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
         self._mlx_repo_ref = mlx_repo_ref
-        self._sample_rate = sample_rate
+        self._target_sample_rate = sample_rate  # Whisper expects this rate
+        self._stream_sample_rate = sample_rate  # Actual device rate (may differ)
         self._on_dictation_start = on_dictation_start
         self._on_dictation_end = on_dictation_end
         self._on_dictation_result = on_dictation_result
         self._transcribe_lock = transcribe_lock or threading.Lock()
         self.history = history or DictationHistory()
+        self._voice_device = voice_device
+        self._filler_removal = filler_removal
+        self._custom_dictionary = custom_dictionary or []
+        self._ollama_base_url = ollama_base_url
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -321,6 +415,7 @@ class DictationEngine:
 
         # State
         self._recording = False
+        self._hands_free = False  # True when in continuous (double-tap) mode
         self._audio_frames: list = []
         self._stream: Optional[Any] = None
         self._listener: Optional[Any] = None
@@ -329,6 +424,10 @@ class DictationEngine:
         self._max_frames = MAX_RECORD_SECONDS * sample_rate
         self._lock = threading.Lock()
         self._started = False
+
+        # Double-tap detection for hands-free mode
+        self._last_hotkey_release_time: float = 0.0
+        self._double_tap_window: float = 0.4  # seconds
 
     # ------------------------------------------------------------------
     # Public API
@@ -408,21 +507,39 @@ class DictationEngine:
     def _on_key_press(self, key) -> None:
         nkey = self._normalise_key(key)
 
+        # Escape always stops hands-free recording
+        if self._hands_free and self._recording:
+            if getattr(key, "name", None) == "esc" or getattr(nkey, "name", None) == "esc":
+                debug_log("hands-free stopped via Escape", "dictation")
+                self._stop_recording()
+                return
+
         # Track modifiers currently held
         if any(self._key_matches(key, nkey, m) for m in self._modifiers):
             self._pressed_modifiers.add(nkey if nkey in self._modifiers else key)
+
+        # In hands-free mode, hotkey press stops recording
+        if self._hands_free and self._recording:
+            mods_held = self._all_modifiers_held()
+            if self._trigger is not None:
+                if mods_held and self._key_matches(key, nkey, self._trigger):
+                    debug_log("hands-free stopped via hotkey", "dictation")
+                    self._stop_recording()
+                    return
+            elif mods_held and len(self._pressed_modifiers) >= len(self._modifiers):
+                debug_log("hands-free stopped via hotkey", "dictation")
+                self._stop_recording()
+                return
 
         # Check activation condition
         if not self._recording:
             mods_held = self._all_modifiers_held()
 
             if self._trigger is not None:
-                # Modifier + trigger combo: need all mods + the trigger key
                 trigger_match = self._key_matches(key, nkey, self._trigger)
                 if mods_held and trigger_match:
                     self._start_recording()
             else:
-                # Modifier-only combo (e.g. ctrl+cmd): activate when all are held
                 if mods_held and len(self._pressed_modifiers) >= len(self._modifiers):
                     self._start_recording()
 
@@ -436,13 +553,32 @@ class DictationEngine:
             if getattr(m, "name", None) == getattr(key, "name", None):
                 self._pressed_modifiers.discard(m)
 
-        # If recording and any required key released → stop
+        # In hands-free mode, key release does NOT stop recording
+        if self._hands_free:
+            return
+
+        # Normal hold-to-dictate: any required key released → stop
         if self._recording:
             trigger_released = self._key_matches(key, nkey, self._trigger)
             modifier_released = any(
                 self._key_matches(key, nkey, m) for m in self._modifiers
             )
             if trigger_released or modifier_released:
+                # Check for double-tap: if released quickly, transition to hands-free
+                now = time.time()
+                hold_duration = now - self._record_start_time
+                if hold_duration < self._double_tap_window:
+                    time_since_last = now - self._last_hotkey_release_time
+                    if time_since_last < self._double_tap_window:
+                        # Double-tap detected → switch to hands-free
+                        self._hands_free = True
+                        debug_log("hands-free mode activated (double-tap)", "dictation")
+                        self._last_hotkey_release_time = 0.0
+                        return
+                    # First quick tap — stop recording but remember the time
+                    self._last_hotkey_release_time = now
+                else:
+                    self._last_hotkey_release_time = 0.0
                 self._stop_recording()
 
     # ------------------------------------------------------------------
@@ -477,18 +613,55 @@ class DictationEngine:
         # Play start beep
         _play_beep(_get_start_beep())
 
-        # Open dedicated audio stream
+        # Open dedicated audio stream (with device + sample rate fallback)
+        stream_kwargs: dict[str, Any] = {}
+        if self._voice_device:
+            try:
+                stream_kwargs["device"] = int(self._voice_device)
+            except (ValueError, TypeError):
+                pass
+
+        rate = self._target_sample_rate
         try:
             self._stream = sd.InputStream(
-                samplerate=self._sample_rate,
+                samplerate=rate,
                 channels=1,
                 dtype="float32",
-                blocksize=int(self._sample_rate * 0.1),  # 100ms blocks
+                blocksize=int(rate * 0.1),
                 callback=self._audio_callback,
+                **stream_kwargs,
             )
+            self._stream_sample_rate = rate
+        except Exception as exc:
+            # Sample rate rejected — fall back to device native rate
+            debug_log(f"dictation stream at {rate} Hz failed: {exc}, trying native rate", "dictation")
+            try:
+                if "device" in stream_kwargs:
+                    dev_info = sd.query_devices(stream_kwargs["device"])
+                else:
+                    dev_info = sd.query_devices(kind="input")
+                native_rate = int(dev_info.get("default_samplerate", rate))
+                self._stream = sd.InputStream(
+                    samplerate=native_rate,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=int(native_rate * 0.1),
+                    callback=self._audio_callback,
+                    **stream_kwargs,
+                )
+                self._stream_sample_rate = native_rate
+                debug_log(f"dictation stream opened at native {native_rate} Hz", "dictation")
+            except Exception as exc2:
+                debug_log(f"failed to open dictation audio stream: {exc2}", "dictation")
+                self._recording = False
+                if self._on_dictation_end:
+                    self._on_dictation_end()
+                return
+
+        try:
             self._stream.start()
         except Exception as exc:
-            debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
+            debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
             self._recording = False
             if self._on_dictation_end:
                 self._on_dictation_end()
@@ -511,6 +684,7 @@ class DictationEngine:
             if not self._recording:
                 return
             self._recording = False
+            self._hands_free = False
 
         # Stop audio stream
         if self._stream is not None:
@@ -554,15 +728,27 @@ class DictationEngine:
 
             audio = np.concatenate(frames)
 
+            # Resample to target rate if stream ran at a different rate
+            if self._stream_sample_rate != self._target_sample_rate:
+                audio = _resample(audio, self._stream_sample_rate, self._target_sample_rate)
+
             # Require at least 0.3s of audio
-            if len(audio) < self._sample_rate * 0.3:
+            if len(audio) < self._target_sample_rate * 0.3:
                 debug_log("audio too short for transcription", "dictation")
                 return
 
             text = self._transcribe(audio)
 
+            # Apply custom dictionary corrections
+            if text and self._custom_dictionary:
+                text = _apply_custom_dictionary(text, self._custom_dictionary)
+
+            # LLM-based filler word removal
+            if text and self._filler_removal:
+                text = _llm_clean_dictation(text, self._ollama_base_url)
+
             if text:
-                duration = len(audio) / self._sample_rate
+                duration = len(audio) / self._target_sample_rate
                 debug_log(f"dictation result: {text!r}", "dictation")
                 _clipboard_paste(text)
                 # Persist to history
