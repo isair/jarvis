@@ -157,6 +157,15 @@ def _clipboard_paste(text: str) -> None:
     # On macOS, use CGEvent API directly — avoids pynput modifier state
     # conflicts and doesn't need separate osascript permissions.
     if system == "darwin":
+        global _accessibility_warned
+        if not _accessibility_warned and not _check_macos_accessibility():
+            _accessibility_warned = True
+            debug_log(
+                "Accessibility permission required for paste — "
+                "opened System Settings. Grant permission and restart Jarvis.",
+                "dictation",
+            )
+            return
         if _paste_cgevent():
             debug_log("paste sent via CGEvent", "dictation")
             return
@@ -231,6 +240,37 @@ def _clipboard_windows(text: str) -> None:
 def _clipboard_macos(text: str) -> None:
     import subprocess
     subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+
+
+def _check_macos_accessibility() -> bool:
+    """Check if the process has macOS Accessibility permission.
+
+    Returns True if granted, False if not. On first denial, opens
+    System Settings to the Accessibility pane so the user can grant it.
+    """
+    try:
+        import ctypes
+        ats = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+        # AXIsProcessTrusted() -> Boolean
+        ats.AXIsProcessTrusted.restype = ctypes.c_bool
+        trusted = ats.AXIsProcessTrusted()
+        if not trusted:
+            debug_log("Accessibility permission not granted — opening System Settings", "dictation")
+            import subprocess
+            subprocess.Popen([
+                "open",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ])
+        return trusted
+    except Exception as exc:
+        debug_log(f"Accessibility check failed: {exc}", "dictation")
+        return True  # Assume granted if check fails
+
+
+# Track whether we've already warned about Accessibility
+_accessibility_warned = False
 
 
 def _paste_cgevent() -> bool:

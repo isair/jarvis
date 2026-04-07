@@ -50,6 +50,9 @@ class DictationHistory:
             "duration": round(duration, 1),
         }
         with self._lock:
+            # Re-read from disk to pick up external changes (e.g. deletions
+            # made by the desktop app while the daemon runs in a subprocess).
+            self._entries = self._load()
             self._entries.append(entry)
             # Trim oldest entries if over limit
             if len(self._entries) > self._max_entries:
