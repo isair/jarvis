@@ -130,6 +130,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
     )
+    debug_log(f"  🔧 Tool selection ({strategy.value}): {len(allowed_tools)} tools selected", "planning")
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
     tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
