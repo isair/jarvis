@@ -23,13 +23,13 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "name": "Gemma 4 E4B (Better Quality)",
         "description": "Smarter, multimodal, effective 4B — ~9.6GB download",
         "size": "~9.6GB",
-        "ram": "12GB+",
+        "ram": "16GB+",
     },
     "gpt-oss:20b": {
         "name": "GPT-OSS 20B (High-end)",
         "description": "Best performance, ~12GB download",
         "size": "~12GB",
-        "ram": "16GB+",
+        "ram": "24GB+",
     },
 }
 

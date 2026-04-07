@@ -120,3 +120,28 @@ class TestModelConsistency:
         for model_id, info in SUPPORTED_CHAT_MODELS.items():
             ram = info["ram"]
             assert "GB" in ram, f"{model_id} RAM should specify GB"
+
+    def test_non_default_models_require_more_ram_than_default(self):
+        """Non-default models need more RAM because the intent judge (gemma4:e2b) runs alongside them.
+
+        The default model (gemma4:e2b) shares the intent judge, so its RAM is the baseline.
+        Other models must load both themselves AND the intent judge, so their RAM must be higher.
+        """
+        import re
+
+        def _extract_ram_gb(ram_str: str) -> int:
+            match = re.search(r"(\d+)", ram_str)
+            assert match, f"Could not parse RAM value from: {ram_str}"
+            return int(match.group(1))
+
+        default_ram = _extract_ram_gb(SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]["ram"])
+
+        for model_id, info in SUPPORTED_CHAT_MODELS.items():
+            if model_id == DEFAULT_CHAT_MODEL:
+                continue
+            model_ram = _extract_ram_gb(info["ram"])
+            assert model_ram > default_ram, (
+                f"{model_id} RAM ({info['ram']}) should be higher than default model RAM "
+                f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['ram']}) because the intent judge "
+                f"(gemma4:e2b) always runs alongside the chat model"
+            )

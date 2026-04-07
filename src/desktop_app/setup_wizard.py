@@ -1166,10 +1166,10 @@ class ModelsPage(QWizardPage):
         for model_id, info in self.MODEL_OPTIONS.items():
             btn = QPushButton()
             btn.setCheckable(True)
-            btn.setMinimumHeight(56)
-            btn.setMaximumHeight(56)
+            btn.setMinimumHeight(72)
+            btn.setMaximumHeight(72)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.setText(f"{info['name']}  —  {info['description']} • RAM: {info['ram']}")
+            btn.setText(f"{info['name']}  •  RAM: {info['ram']}\n{info['description']}")
             btn.setStyleSheet("""
                 QPushButton {
                     text-align: left;
@@ -1179,6 +1179,7 @@ class ModelsPage(QWizardPage):
                     background: #1a1d26;
                     color: #e4e4e7;
                     font-size: 13px;
+                    line-height: 1.4;
                 }
                 QPushButton:hover {
                     border-color: #f59e0b;
@@ -1192,6 +1193,15 @@ class ModelsPage(QWizardPage):
             btn.clicked.connect(lambda checked, m=model_id: self._on_model_selected(m))
             self._model_buttons[model_id] = btn
             selection_layout.addWidget(btn)
+
+        # RAM note — explains that RAM values include the always-loaded intent judge
+        ram_note = QLabel(
+            "ℹ️ RAM values include the intent judge model (gemma4:e2b) "
+            "which is always loaded for voice intent classification."
+        )
+        ram_note.setWordWrap(True)
+        ram_note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0px 4px;")
+        selection_layout.addWidget(ram_note)
 
         layout.addWidget(selection_card)
 
