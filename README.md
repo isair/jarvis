@@ -123,6 +123,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
   <img src="docs/img/setup-wizard-initial-check.png" alt="Setup - Initial Check" width="200">
   <img src="docs/img/setup-wizard-model.png" alt="Setup - Model Selection" width="200">
   <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Whisper" width="200">
+  <img src="docs/img/setup-wizard-dictation.png" alt="Setup - Dictation" width="200">
   <img src="docs/img/setup-wizard-complete.png" alt="Setup - Complete" width="200">
 </p>
 
@@ -198,7 +199,10 @@ CUDA is detected automatically — no configuration needed.
 
 Hold a hotkey to record speech, release to paste the transcription into any app. Works everywhere — your editor, browser, chat, terminal. Completely local, completely free.
 
-<!-- TODO: Add dictation window screenshot here -->
+<p align="center">
+  <img src="docs/img/dictation-history.png" alt="Dictation History" width="400">
+  <img src="docs/img/setup-wizard-dictation.png" alt="Setup Wizard - Dictation" width="400">
+</p>
 
 | Platform | Default hotkey |
 |----------|---------------|
