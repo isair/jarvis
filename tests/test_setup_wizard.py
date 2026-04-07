@@ -401,7 +401,7 @@ class TestModelOptions:
             assert "name" in info, f"Model {model_id} missing 'name'"
             assert "description" in info, f"Model {model_id} missing 'description'"
             assert "size" in info, f"Model {model_id} missing 'size'"
-            assert "ram" in info, f"Model {model_id} missing 'ram'"
+            assert "vram" in info, f"Model {model_id} missing 'vram'"
 
     def test_model_options_uses_centralized_config(self):
         """ModelsPage.MODEL_OPTIONS should reference the centralized config."""

@@ -1169,7 +1169,7 @@ class ModelsPage(QWizardPage):
             btn.setMinimumHeight(72)
             btn.setMaximumHeight(72)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.setText(f"{info['name']}  •  RAM: {info['ram']}\n{info['description']}")
+            btn.setText(f"{info['name']}  •  VRAM: {info['vram']}\n{info['description']}")
             btn.setStyleSheet("""
                 QPushButton {
                     text-align: left;
@@ -1194,9 +1194,9 @@ class ModelsPage(QWizardPage):
             self._model_buttons[model_id] = btn
             selection_layout.addWidget(btn)
 
-        # RAM note — explains that RAM values include the always-loaded intent judge
+        # VRAM note — explains that VRAM values include the always-loaded intent judge
         ram_note = QLabel(
-            "ℹ️ RAM values include the intent judge model (gemma4:e2b) "
+            "ℹ️ VRAM values include the intent judge model (gemma4:e2b) "
             "which is always loaded for voice intent classification."
         )
         ram_note.setWordWrap(True)

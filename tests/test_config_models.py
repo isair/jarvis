@@ -27,7 +27,7 @@ class TestSupportedChatModels:
 
     def test_supported_models_have_required_fields(self):
         """Each model should have name, description, size, and ram fields."""
-        required_fields = {"name", "description", "size", "ram"}
+        required_fields = {"name", "description", "size", "vram"}
         for model_id, info in SUPPORTED_CHAT_MODELS.items():
             assert isinstance(info, dict), f"{model_id} info should be a dict"
             for field in required_fields:
@@ -115,33 +115,33 @@ class TestModelConsistency:
             # Name should be longer than the ID (more descriptive)
             assert len(name) > len(model_id), f"{model_id} name should be descriptive"
 
-    def test_ram_requirements_are_specified(self):
-        """RAM requirements should follow expected format (e.g., '8GB+')."""
+    def test_vram_requirements_are_specified(self):
+        """VRAM requirements should follow expected format (e.g., '8GB+')."""
         for model_id, info in SUPPORTED_CHAT_MODELS.items():
-            ram = info["ram"]
-            assert "GB" in ram, f"{model_id} RAM should specify GB"
+            vram = info["vram"]
+            assert "GB" in vram, f"{model_id} VRAM should specify GB"
 
-    def test_non_default_models_require_more_ram_than_default(self):
-        """Non-default models need more RAM because the intent judge (gemma4:e2b) runs alongside them.
+    def test_non_default_models_require_more_vram_than_default(self):
+        """Non-default models need more VRAM because the intent judge (gemma4:e2b) runs alongside them.
 
-        The default model (gemma4:e2b) shares the intent judge, so its RAM is the baseline.
-        Other models must load both themselves AND the intent judge, so their RAM must be higher.
+        The default model (gemma4:e2b) shares the intent judge, so its VRAM is the baseline.
+        Other models must load both themselves AND the intent judge, so their VRAM must be higher.
         """
         import re
 
-        def _extract_ram_gb(ram_str: str) -> int:
-            match = re.search(r"(\d+)", ram_str)
-            assert match, f"Could not parse RAM value from: {ram_str}"
+        def _extract_vram_gb(vram_str: str) -> int:
+            match = re.search(r"(\d+)", vram_str)
+            assert match, f"Could not parse VRAM value from: {vram_str}"
             return int(match.group(1))
 
-        default_ram = _extract_ram_gb(SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]["ram"])
+        default_vram = _extract_vram_gb(SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]["vram"])
 
         for model_id, info in SUPPORTED_CHAT_MODELS.items():
             if model_id == DEFAULT_CHAT_MODEL:
                 continue
-            model_ram = _extract_ram_gb(info["ram"])
-            assert model_ram > default_ram, (
-                f"{model_id} RAM ({info['ram']}) should be higher than default model RAM "
-                f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['ram']}) because the intent judge "
+            model_vram = _extract_vram_gb(info["vram"])
+            assert model_vram > default_vram, (
+                f"{model_id} VRAM ({info['vram']}) should be higher than default model VRAM "
+                f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['vram']}) because the intent judge "
                 f"(gemma4:e2b) always runs alongside the chat model"
             )
