@@ -7,8 +7,10 @@ profiles, or TTS). Uses a shared Whisper model reference to avoid double memory.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import math
+import os
 import platform
 import struct
 import threading
@@ -120,7 +122,8 @@ def _play_beep_sd(wav_data: bytes) -> None:
     data_start = idx + 8  # skip 'data' + size u32
     pcm = wav_data[data_start:]
     samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-    sd.play(samples, samplerate=44100, blocking=True)
+    with _suppress_stderr():
+        sd.play(samples, samplerate=44100, blocking=True)
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +296,30 @@ def _clipboard_linux(text: str) -> None:
             subprocess.run(args, input=text.encode("utf-8"), check=True)
             return
     debug_log("no clipboard tool found (xclip/xsel/wl-copy)", "dictation")
+
+
+# ---------------------------------------------------------------------------
+# C-level stderr suppression (for PortAudio warnings)
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _suppress_stderr():
+    """Temporarily redirect C-level stderr to /dev/null.
+
+    PortAudio logs warnings like ``||PaMacCore (AUHAL)|| Error on line …``
+    directly to file descriptor 2. Python's contextlib.redirect_stderr only
+    catches Python-level writes, so we dup the real fd instead.
+    """
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        yield
+        os.dup2(old_stderr, 2)
+        os.close(old_stderr)
+    except Exception:
+        yield  # If fd manipulation fails, just proceed normally
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +729,10 @@ class DictationEngine:
         # Play start beep
         _play_beep(_get_start_beep())
 
-        # Open dedicated audio stream (with device + sample rate fallback)
+        # Open dedicated audio stream.
+        # Always use the device's native sample rate to avoid PortAudio errors
+        # (e.g. -50 on macOS when requesting 16 kHz on a 48 kHz device).
+        # Audio is resampled to the Whisper target rate after recording.
         stream_kwargs: dict[str, Any] = {}
         if self._voice_device:
             try:
@@ -710,26 +740,18 @@ class DictationEngine:
             except (ValueError, TypeError):
                 pass
 
-        rate = self._target_sample_rate
+        # Query native sample rate
         try:
-            self._stream = sd.InputStream(
-                samplerate=rate,
-                channels=1,
-                dtype="float32",
-                blocksize=int(rate * 0.1),
-                callback=self._audio_callback,
-                **stream_kwargs,
-            )
-            self._stream_sample_rate = rate
-        except Exception as exc:
-            # Sample rate rejected — fall back to device native rate
-            debug_log(f"dictation stream at {rate} Hz failed: {exc}, trying native rate", "dictation")
-            try:
-                if "device" in stream_kwargs:
-                    dev_info = sd.query_devices(stream_kwargs["device"])
-                else:
-                    dev_info = sd.query_devices(kind="input")
-                native_rate = int(dev_info.get("default_samplerate", rate))
+            if "device" in stream_kwargs:
+                dev_info = sd.query_devices(stream_kwargs["device"])
+            else:
+                dev_info = sd.query_devices(kind="input")
+            native_rate = int(dev_info.get("default_samplerate", self._target_sample_rate))
+        except Exception:
+            native_rate = self._target_sample_rate
+
+        try:
+            with _suppress_stderr():
                 self._stream = sd.InputStream(
                     samplerate=native_rate,
                     channels=1,
@@ -738,14 +760,15 @@ class DictationEngine:
                     callback=self._audio_callback,
                     **stream_kwargs,
                 )
-                self._stream_sample_rate = native_rate
-                debug_log(f"dictation stream opened at native {native_rate} Hz", "dictation")
-            except Exception as exc2:
-                debug_log(f"failed to open dictation audio stream: {exc2}", "dictation")
-                self._recording = False
-                if self._on_dictation_end:
-                    self._on_dictation_end()
-                return
+            self._stream_sample_rate = native_rate
+            if native_rate != self._target_sample_rate:
+                debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
+        except Exception as exc:
+            debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
+            self._recording = False
+            if self._on_dictation_end:
+                self._on_dictation_end()
+            return
 
         try:
             self._stream.start()
