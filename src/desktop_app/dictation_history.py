@@ -257,6 +257,16 @@ class DictationHistoryWindow(QMainWindow):
         super().showEvent(event)
         self._reload()
 
+    def _is_dictation_enabled(self) -> bool:
+        """Check whether dictation is enabled in config."""
+        try:
+            from jarvis.config import default_config_path, _load_json, get_default_config
+            config = _load_json(default_config_path()) or {}
+            defaults = get_default_config()
+            return bool(config.get("dictation_enabled", defaults.get("dictation_enabled", True)))
+        except Exception:
+            return True
+
     def _reload(self) -> None:
         """Rebuild the card list from history."""
         # Remove all existing cards (but keep the stretch at the end)
@@ -265,6 +275,20 @@ class DictationHistoryWindow(QMainWindow):
             w = item.widget()
             if w:
                 w.deleteLater()
+
+        # Show disabled state if dictation is off
+        if not self._is_dictation_enabled():
+            disabled_label = QLabel(
+                "Dictation mode is currently disabled.\n\n"
+                "Enable it in Settings → Features → Dictation Mode."
+            )
+            disabled_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            disabled_label.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
+            )
+            self._list_layout.insertWidget(0, disabled_label)
+            self._subtitle.setText("Disabled")
+            return
 
         if self._history is None:
             self._empty_label = self._make_empty_label()

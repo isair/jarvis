@@ -336,7 +336,7 @@ try:
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
-    from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
+    from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, _ensure_icons, _ICON_STYLESHEET_TEMPLATE
 
     # Import location utilities with crash protection for Windows native modules
     try:
@@ -505,8 +505,10 @@ class SetupWizard(QWizard):
         return self._location_working
 
     def _apply_theme(self):
-        """Apply the shared Jarvis theme."""
-        self.setStyleSheet(JARVIS_THEME_STYLESHEET + """
+        """Apply the shared Jarvis theme with SVG indicator icons."""
+        icons = _ensure_icons()
+        icon_css = _ICON_STYLESHEET_TEMPLATE.format(**icons)
+        self.setStyleSheet(JARVIS_THEME_STYLESHEET + icon_css + """
             /* Additional wizard-specific overrides */
             QLabel#title {
                 color: #fbbf24;
@@ -2468,10 +2470,26 @@ class DictationPage(QWizardPage):
         layout.addSpacing(16)
 
         # Enabled checkbox
-        self._enabled_check = QCheckBox("Enable dictation mode")
+        self._enabled_check = QCheckBox("  Enable dictation mode")
         self._enabled_check.setChecked(True)
         self._enabled_check.setStyleSheet("font-size: 14px; color: #fafafa;")
         layout.addWidget(self._enabled_check)
+
+        layout.addSpacing(4)
+
+        # Filler removal checkbox
+        self._filler_check = QCheckBox("  Remove filler words (um, uh, like) using local LLM")
+        self._filler_check.setChecked(False)
+        self._filler_check.setStyleSheet("font-size: 14px; color: #fafafa;")
+        layout.addWidget(self._filler_check)
+
+        filler_note = QLabel(
+            "Uses your chat model to clean up dictation output. "
+            "Adds a small delay (~1–3 s) after each dictation."
+        )
+        filler_note.setWordWrap(True)
+        filler_note.setStyleSheet("color: #71717a; font-size: 12px; margin-left: 28px;")
+        layout.addWidget(filler_note)
 
         layout.addSpacing(8)
 
@@ -2559,10 +2577,12 @@ class DictationPage(QWizardPage):
 
             enabled = self._enabled_check.isChecked()
             hotkey = self._hotkey_combo.currentData()
+            filler_removal = self._filler_check.isChecked()
 
             config["dictation_enabled"] = enabled
             if hotkey:
                 config["dictation_hotkey"] = hotkey
+            config["dictation_filler_removal"] = filler_removal
 
             config_path.parent.mkdir(parents=True, exist_ok=True)
             _save_json(config_path, config)
