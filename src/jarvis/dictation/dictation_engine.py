@@ -237,44 +237,50 @@ def _paste_cgevent() -> bool:
     """Use macOS CGEvent API to send Cmd+V — avoids pynput modifier conflicts."""
     try:
         import ctypes
-        import ctypes.util
 
-        carbon = ctypes.cdll.LoadLibrary(ctypes.util.find_library("Carbon"))
-        core_graphics = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
+        # Load frameworks by absolute path (find_library can miss them)
+        cg = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+        )
+        cf = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
 
-        # CGEvent functions
-        CGEventCreateKeyboardEvent = core_graphics.CGEventCreateKeyboardEvent
-        CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
-        CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+        # CGEventCreateKeyboardEvent(source, virtualKey, keyDown) -> CGEventRef
+        cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+        cg.CGEventCreateKeyboardEvent.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool,
+        ]
+        # CGEventSetFlags(event, flags)
+        cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        # CGEventPost(tap, event)
+        cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        # CFRelease(cf) — lives in CoreFoundation
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
 
-        CGEventSetFlags = core_graphics.CGEventSetFlags
-        CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
-
-        CGEventPost = core_graphics.CGEventPost
-        CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
-
-        CFRelease = core_graphics.CFRelease
-        CFRelease.argtypes = [ctypes.c_void_p]
-
-        # Virtual keycode for 'v' is 9, kCGEventFlagMaskCommand = 0x100000
         kCGHIDEventTap = 0
-        kVK_V = 9
+        kVK_V = 9  # macOS virtual keycode for 'v'
         kCGEventFlagMaskCommand = 0x100000
 
-        # Key down
-        event_down = CGEventCreateKeyboardEvent(None, kVK_V, True)
-        CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
-        CGEventPost(kCGHIDEventTap, event_down)
-        CFRelease(event_down)
+        # Key down with Cmd
+        event_down = cg.CGEventCreateKeyboardEvent(None, kVK_V, True)
+        if not event_down:
+            debug_log("CGEvent: failed to create key-down event", "dictation")
+            return False
+        cg.CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
+        cg.CGEventPost(kCGHIDEventTap, event_down)
+        cf.CFRelease(event_down)
 
-        # Small delay between down and up
         time.sleep(0.01)
 
-        # Key up
-        event_up = CGEventCreateKeyboardEvent(None, kVK_V, False)
-        CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
-        CGEventPost(kCGHIDEventTap, event_up)
-        CFRelease(event_up)
+        # Key up with Cmd
+        event_up = cg.CGEventCreateKeyboardEvent(None, kVK_V, False)
+        if not event_up:
+            debug_log("CGEvent: failed to create key-up event", "dictation")
+            return False
+        cg.CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
+        cg.CGEventPost(kCGHIDEventTap, event_up)
+        cf.CFRelease(event_up)
 
         return True
     except Exception as exc:

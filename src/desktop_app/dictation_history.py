@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtWidgets import (
@@ -16,7 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QScrollArea, QFrame, QApplication,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QFont
 
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
@@ -239,6 +240,14 @@ class DictationHistoryWindow(QMainWindow):
         )
         self._list_layout.insertWidget(0, self._empty_label)
 
+        # File-watch timer: poll the history file for changes so the window
+        # updates even when the daemon runs in a separate process.
+        self._last_file_mtime: float = 0.0
+        self._file_watch_timer = QTimer(self)
+        self._file_watch_timer.setInterval(1500)  # 1.5 s
+        self._file_watch_timer.timeout.connect(self._check_file_changed)
+        # Timer starts/stops with window visibility (see showEvent/hideEvent)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -256,6 +265,13 @@ class DictationHistoryWindow(QMainWindow):
         """Refresh the list each time the window is shown."""
         super().showEvent(event)
         self._reload()
+        self._last_file_mtime = self._get_history_file_mtime()
+        self._file_watch_timer.start()
+
+    def hideEvent(self, event) -> None:
+        """Stop polling when the window is hidden."""
+        super().hideEvent(event)
+        self._file_watch_timer.stop()
 
     def _is_dictation_enabled(self) -> bool:
         """Check whether dictation is enabled in config."""
@@ -310,6 +326,24 @@ class DictationHistoryWindow(QMainWindow):
             card.deleted.connect(self._on_delete)
             # Insert before the stretch
             self._list_layout.insertWidget(self._list_layout.count() - 1, card)
+
+    def _get_history_file_mtime(self) -> float:
+        """Return the mtime of the history JSON file, or 0 if missing."""
+        try:
+            p = Path.home() / ".local" / "share" / "jarvis" / "dictation_history.json"
+            return p.stat().st_mtime if p.exists() else 0.0
+        except Exception:
+            return 0.0
+
+    def _check_file_changed(self) -> None:
+        """Called by the timer — reload if the history file was modified."""
+        mtime = self._get_history_file_mtime()
+        if mtime > self._last_file_mtime:
+            self._last_file_mtime = mtime
+            # Re-read from disk
+            if self._history is not None:
+                self._history._entries = self._history._load()
+            self._reload()
 
     def _make_empty_label(self) -> QLabel:
         label = QLabel("Hold your dictation hotkey to start.\nTranscriptions will appear here.")
