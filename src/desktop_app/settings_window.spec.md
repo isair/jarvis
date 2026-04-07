@@ -21,7 +21,7 @@ FieldMeta (dataclass)
   ├── label: str         # Human-readable label
   ├── description: str   # Tooltip text
   ├── category: str      # Tab grouping key
-  ├── field_type: str    # "bool" | "int" | "float" | "str" | "choice" | "device"
+  ├── field_type: str    # "bool" | "int" | "float" | "str" | "choice" | "device" | "list"
   ├── choices            # For "choice"/"device": [(value, display), ...]
   ├── min_val / max_val  # Numeric bounds
   ├── step               # Increment step
@@ -40,6 +40,7 @@ FieldMeta (dataclass)
 | `str` | QLineEdit | Placeholder if nullable |
 | `choice` | QComboBox | Pre-defined options |
 | `device` | QComboBox | Dynamically populated from sounddevice |
+| `list` | QListWidget + Add/Edit/Remove buttons | Stores as JSON array in config |
 
 ## Layout
 
@@ -58,7 +59,7 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 9. Timing & Windows
 10. Memory & Dialogue
 11. Location
-12. Features
+12. Features (includes Dictation Mode toggle and hotkey)
 13. Advanced
 
 ## Hardware Device Selection

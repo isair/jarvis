@@ -16,11 +16,10 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
-# Suppress pkg_resources deprecation warning from webrtcvad in bundled apps
-if getattr(sys, 'frozen', False):
-    import warnings
-    warnings.filterwarnings('ignore', message='pkg_resources is deprecated',
-                            category=UserWarning)
+# Suppress pkg_resources deprecation warning from webrtcvad
+import warnings
+warnings.filterwarnings('ignore', message='pkg_resources is deprecated',
+                        category=UserWarning)
 
 # Note: QtWebEngine is not used on macOS bundled apps due to sandbox/bundling issues
 # The Memory Viewer opens in the system browser instead (see MemoryViewerWindow)
@@ -1182,6 +1181,12 @@ class JarvisSystemTray:
         # in the main thread, which is important for cross-thread signal delivery
         self.face_window = FaceWindow()
 
+        # Create dictation history window (hidden by default)
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+        self._dictation_history = DictationHistory()
+        self.dictation_history_window = DictationHistoryWindow(history=self._dictation_history)
+
         # Log reader threads
         self.log_reader_threads = []
 
@@ -1271,6 +1276,11 @@ class JarvisSystemTray:
         self.memory_action = QAction("🧠 Memory Viewer")
         self.memory_action.triggered.connect(self.show_memory_viewer)
         self.menu.addAction(self.memory_action)
+
+        # Dictation history action
+        self.dictation_history_action = QAction("🎙️ Dictation History")
+        self.dictation_history_action.triggered.connect(self.show_dictation_history)
+        self.menu.addAction(self.dictation_history_action)
 
         # Face window action
         self.face_action = QAction("👤 Show Face")
@@ -1445,6 +1455,40 @@ class JarvisSystemTray:
         self.memory_viewer.show()
         self.memory_viewer.raise_()
         self.memory_viewer.activateWindow()
+
+    def show_dictation_history(self) -> None:
+        """Show the dictation history window and bring it to front."""
+        self.dictation_history_window.show()
+        self.dictation_history_window.raise_()
+        self.dictation_history_window.activateWindow()
+
+    def _connect_dictation_history(self, retries_left: int = 3) -> None:
+        """Wire dictation engine's result callback to the history window signal.
+
+        Called once after daemon startup so live entries appear immediately.
+        Retries up to *retries_left* times (5 s apart) if the engine isn't ready.
+        """
+        try:
+            from jarvis.daemon import get_dictation_engine
+            engine = get_dictation_engine()
+            if engine is None:
+                if retries_left > 0:
+                    QTimer.singleShot(
+                        5000,
+                        lambda: self._connect_dictation_history(retries_left - 1),
+                    )
+                else:
+                    debug_log("dictation engine never became available", "desktop")
+                return
+            # Share the same DictationHistory instance
+            engine.history = self._dictation_history
+            # Route new-entry notifications through the Qt signal
+            engine.set_on_dictation_result(
+                lambda entry: self.dictation_history_window.signals.new_entry.emit(entry)
+            )
+            debug_log("dictation history connected to UI", "desktop")
+        except Exception as e:
+            debug_log(f"failed to connect dictation history: {e}", "desktop")
 
     def show_face_window(self) -> None:
         """Show the face window and bring it to front."""
@@ -1633,6 +1677,9 @@ class JarvisSystemTray:
                 # Connect finished signal to reset UI state
                 self.daemon_thread.finished.connect(lambda: self._on_daemon_finished())
                 self.daemon_thread.start()
+
+                # Connect dictation engine to history window once daemon is ready
+                QTimer.singleShot(3000, self._connect_dictation_history)
             else:
                 # When not bundled, use subprocess as before
                 python_exe = sys.executable

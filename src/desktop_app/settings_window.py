@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QComboBox, QScrollArea, QGroupBox, QFormLayout, QPushButton,
     QMessageBox, QSizePolicy, QListWidget, QListWidgetItem,
-    QStackedWidget, QSplitter,
+    QStackedWidget, QSplitter, QInputDialog,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
@@ -42,7 +42,7 @@ class FieldMeta:
     label: str
     description: str
     category: str
-    field_type: str  # "bool", "int", "float", "str", "choice", "device"
+    field_type: str  # "bool", "int", "float", "str", "choice", "device", "list"
     choices: Optional[List[tuple[str, str]]] = None  # [(value, display), ...]
     min_val: Optional[float] = None
     max_val: Optional[float] = None
@@ -264,6 +264,23 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("tune_enabled", "Startup Tune",
       "Play startup sound",
       "features", "bool")
+    f("dictation_enabled", "Dictation Mode",
+      "Hold a hotkey to record speech, release to paste transcription into any app",
+      "features", "bool")
+    f("dictation_hotkey", "Dictation Hotkey",
+      "Key combination to hold for dictation. Double-tap for hands-free mode.",
+      "features", "choice", choices=[
+          ("ctrl+alt", "Ctrl + Alt (macOS / Linux default)"),
+          ("ctrl+cmd", "Ctrl + Win/Cmd (Windows default)"),
+          ("ctrl+shift+d", "Ctrl + Shift + D"),
+          ("ctrl+shift", "Ctrl + Shift"),
+      ])
+    f("dictation_filler_removal", "Filler Word Removal",
+      "Use the local LLM to remove filler words (um, uh, like) from dictation output",
+      "features", "bool")
+    f("dictation_custom_dictionary", "Custom Dictionary",
+      "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
+      "features", "list")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",
@@ -492,6 +509,9 @@ class SettingsWindow(QDialog):
             w.setToolTip(fm.description)
             return w
 
+        if fm.field_type == "list":
+            return self._create_list_widget(fm, current)
+
         # Default: string field
         w = QLineEdit()
         w.setText(str(current) if current not in (None, "") else "")
@@ -534,6 +554,73 @@ class SettingsWindow(QDialog):
         container.setToolTip(fm.description)
         return container
 
+    def _create_list_widget(self, fm: FieldMeta, current: Any) -> QWidget:
+        """Create a list editor with add/remove buttons."""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        list_w = QListWidget()
+        list_w.setMinimumHeight(100)
+        list_w.setMaximumHeight(160)
+        list_w.setToolTip(fm.description)
+
+        # Populate with current values
+        if isinstance(current, list):
+            for item in current:
+                if isinstance(item, str) and item.strip():
+                    list_w.addItem(item.strip())
+
+        layout.addWidget(list_w)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add")
+        edit_btn = QPushButton("✏️ Edit")
+        remove_btn = QPushButton("− Remove")
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(edit_btn)
+        btn_layout.addWidget(remove_btn)
+        btn_layout.addStretch()
+
+        layout.addLayout(btn_layout)
+
+        def _on_add():
+            text, ok = QInputDialog.getText(
+                self, f"Add {fm.label}",
+                "Enter value (e.g. 'wrong -> right'):",
+            )
+            if ok and text.strip():
+                list_w.addItem(text.strip())
+
+        def _on_edit():
+            item = list_w.currentItem()
+            if item is None:
+                return
+            text, ok = QInputDialog.getText(
+                self, f"Edit {fm.label}",
+                "Edit value:",
+                text=item.text(),
+            )
+            if ok and text.strip():
+                item.setText(text.strip())
+
+        def _on_remove():
+            row = list_w.currentRow()
+            if row >= 0:
+                list_w.takeItem(row)
+
+        add_btn.clicked.connect(_on_add)
+        edit_btn.clicked.connect(_on_edit)
+        remove_btn.clicked.connect(_on_remove)
+
+        # Store the list widget for value extraction
+        container._list_widget = list_w  # type: ignore[attr-defined]
+        return container
+
     # -- Value extraction ---------------------------------------------------
 
     def _get_value(self, fm: FieldMeta) -> Any:
@@ -563,6 +650,10 @@ class SettingsWindow(QDialog):
                 except (TypeError, ValueError):
                     return 16000
             return val if val != "" else None
+
+        if fm.field_type == "list":
+            list_w = w._list_widget
+            return [list_w.item(i).text() for i in range(list_w.count())]
 
         # str
         text = w.text().strip()
@@ -656,6 +747,14 @@ class SettingsWindow(QDialog):
             idx = w.findData(cur_str)
             if idx >= 0:
                 w.setCurrentIndex(idx)
+
+        elif fm.field_type == "list":
+            list_w = w._list_widget
+            list_w.clear()
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str) and item.strip():
+                        list_w.addItem(item.strip())
 
         else:  # str
             w.setText(str(value) if value not in (None, "") else "")

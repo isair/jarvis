@@ -6,6 +6,19 @@ Any important point in our logical flows should have debug logs using the `debug
 
 Any code change must either adhere to our spec files perfectly or you should ask the user to confirm changes, which should also propagate to the specs themselves. Spec files follow the \*.spec.md format and live next to the code that implements them. Always search for related spec files before starting any work. When corrected about how something should work, check if there's a spec for it and whether it needs updating.
 
+### Spec File Registry
+
+| Spec file | Covers | Key principles |
+|-----------|--------|----------------|
+| `src/desktop_app/desktop_app.spec.md` | System tray app, startup flow, daemon integration, windows, theme, updates | Desktop is separate from core; jarvis has no knowledge of desktop_app |
+| `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
+| `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
+| `src/jarvis/dictation/dictation.spec.md` | Hold-to-dictate engine, hotkey, clipboard paste | Independent from assistant pipeline; shared Whisper model; pause flag on listener |
+| `src/jarvis/listening/listening.spec.md` | Voice listener, wake word detection, audio pipeline | — |
+| `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
+| `src/jarvis/reply/prompts/prompts.spec.md` | System/user prompt templates | — |
+| `src/jarvis/utils/location.spec.md` | GeoIP location detection | Privacy-first; local GeoLite2 DB only |
+
 Avoid hardcoded language patterns as this assistant needs to support an arbitrary amount of different languages.
 
 Tools define when/how to be used. Profiles define what to do after tools execute. Keep these concerns separate in `tools.py` and `profiles.py`.

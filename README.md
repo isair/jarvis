@@ -27,6 +27,8 @@
 
 **🧠 Never forgets** - Unlimited memory across conversations. Context-aware personalities (developer/business/life coach). Learns your preferences over time.
 
+**🎙️ Free dictation** - Hold a hotkey, speak, release — your words appear in any app as text. Like WisprFlow, but free, offline, and private. No subscription, no cloud transcription.
+
 **🔌 Extensible** - MCP integration connects Jarvis to 500+ tools: smart home, GitHub, Slack, databases, and more.
 
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
@@ -121,6 +123,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
   <img src="docs/img/setup-wizard-initial-check.png" alt="Setup - Initial Check" width="200">
   <img src="docs/img/setup-wizard-model.png" alt="Setup - Model Selection" width="200">
   <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Whisper" width="200">
+  <img src="docs/img/setup-wizard-dictation.png" alt="Setup - Dictation" width="200">
   <img src="docs/img/setup-wizard-complete.png" alt="Setup - Complete" width="200">
 </p>
 
@@ -135,6 +138,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Smart Personalities** - Adapts tone: Developer (debugging), Business (planning), Life Coach (health/wellness)
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
+- **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
 - **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
@@ -190,6 +194,46 @@ CUDA is detected automatically — no configuration needed.
 **LLM Intent Judge** - Jarvis uses `gemma4:e2b` for intelligent voice intent classification (echo detection, query extraction, stop commands). This model is automatically installed alongside your chosen chat model during setup. The intent judge cannot be disabled but gracefully falls back to simpler text matching if Ollama is unavailable.
 
 </details>
+
+## Dictation Mode — Free WisprFlow Alternative
+
+Hold a hotkey to record speech, release to paste the transcription into any app. Works everywhere — your editor, browser, chat, terminal. Completely local, completely free.
+
+<p align="center">
+  <img src="docs/img/dictation-history.png" alt="Dictation History" width="400">
+  <img src="docs/img/setup-wizard-dictation.png" alt="Setup Wizard - Dictation" width="400">
+</p>
+
+| Platform | Default hotkey |
+|----------|---------------|
+| **Windows** | Ctrl + Win |
+| **macOS** | Ctrl + Option |
+| **Linux** | Ctrl + Alt |
+
+- 🔒 **100% offline** — your speech never leaves your machine (unlike cloud dictation services)
+- 🧠 **Shared Whisper model** — uses the same speech recognition as voice input, no extra memory
+- ⚡ **Zero latency startup** — no server round-trip, transcription starts the moment you release
+- 📋 **Universal paste** — works in any app that accepts `Ctrl+V` / `Cmd+V`
+- 🔇 **Non-intrusive** — main voice listener pauses automatically during dictation
+- ✋ **Hands-free mode** — double-tap the hotkey to keep recording without holding; press again or hit Escape to stop
+- 🧹 **Filler word removal** — optional LLM-powered cleanup removes "um", "uh", "like", "you know" while preserving meaning
+- 📖 **Custom dictionary** — define `"wrong -> right"` replacements for jargon, names, and technical terms
+- 📜 **History window** — browse, copy, or delete past dictations from the system tray
+- 🎛️ **Easy setup** — configure dictation during the setup wizard or anytime in Settings (hotkey dropdown, filler removal toggle, custom dictionary editor)
+
+Customise the hotkey in Settings or `config.json`:
+```json
+{
+  "dictation_hotkey": "ctrl+alt",
+  "dictation_filler_removal": true,
+  "dictation_custom_dictionary": [
+    "jarvis -> Jarvis",
+    "pytorch -> PyTorch"
+  ]
+}
+```
+
+> **Note:** macOS requires Accessibility permissions for the global hotkey. Linux requires X11 (limited Wayland support).
 
 <details>
 <summary><strong>Text-to-Speech</strong></summary>

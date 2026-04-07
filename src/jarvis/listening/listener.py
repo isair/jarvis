@@ -210,11 +210,13 @@ class VoiceListener(threading.Thread):
         self.tts = tts
         self.dialogue_memory = dialogue_memory
         self._should_stop = False
+        self._dictation_active = False  # Pause flag set by dictation engine
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
         self._mlx_model_repo: Optional[str] = None  # For MLX backend
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
+        self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._pre_roll: deque = deque()
 
@@ -1156,7 +1158,7 @@ class VoiceListener(threading.Thread):
     def _on_audio(self, indata, frames, time_info, status):
         """Audio callback from sounddevice."""
         try:
-            if self._should_stop:
+            if self._should_stop or self._dictation_active:
                 return
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
@@ -1727,11 +1729,12 @@ class VoiceListener(threading.Thread):
         try:
             if self._whisper_backend == "mlx":
                 # MLX Whisper transcription
-                result = mlx_whisper.transcribe(
-                    audio,
-                    path_or_hf_repo=self._mlx_model_repo,
-                    language=None,
-                )
+                with self.transcribe_lock:
+                    result = mlx_whisper.transcribe(
+                        audio,
+                        path_or_hf_repo=self._mlx_model_repo,
+                        language=None,
+                    )
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
                 min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
@@ -1770,11 +1773,12 @@ class VoiceListener(threading.Thread):
                     text = result.get("text", "").strip()
             else:
                 # faster-whisper transcription
-                try:
-                    segments, _info = self.model.transcribe(audio, language=None, vad_filter=False)
-                except TypeError:
-                    segments, _info = self.model.transcribe(audio, language=None)
-                segments_list = list(segments)
+                with self.transcribe_lock:
+                    try:
+                        segments, _info = self.model.transcribe(audio, language=None, vad_filter=False)
+                    except TypeError:
+                        segments, _info = self.model.transcribe(audio, language=None)
+                    segments_list = list(segments)
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:
