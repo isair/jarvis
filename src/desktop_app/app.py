@@ -1331,6 +1331,13 @@ class JarvisSystemTray:
         if was_listening:
             self.stop_daemon()
 
+        # Face should look asleep while wizard is open (daemon isn't running)
+        try:
+            from desktop_app.face_widget import JarvisState, get_jarvis_state
+            get_jarvis_state().set_state(JarvisState.ASLEEP)
+        except Exception:
+            pass
+
         wizard = SetupWizard()
         result = wizard.exec()
 
@@ -1707,6 +1714,12 @@ class JarvisSystemTray:
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self.daemon_thread = None
+            # Reset face to asleep so it doesn't look ready while daemon is down
+            try:
+                from desktop_app.face_widget import JarvisState, get_jarvis_state
+                get_jarvis_state().set_state(JarvisState.ASLEEP)
+            except Exception:
+                pass
 
     def _read_daemon_logs(self) -> None:
         """Read logs from daemon subprocess in a background thread."""
