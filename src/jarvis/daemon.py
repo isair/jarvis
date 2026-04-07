@@ -431,6 +431,7 @@ def main() -> None:
                 filler_removal=getattr(cfg, "dictation_filler_removal", False),
                 custom_dictionary=getattr(cfg, "dictation_custom_dictionary", []),
                 ollama_base_url=getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"),
+                ollama_model=cfg.ollama_chat_model,
             )
             dictation.start()
             _global_dictation_engine = dictation

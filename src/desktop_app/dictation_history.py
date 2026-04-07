@@ -291,20 +291,6 @@ class DictationHistoryWindow(QMainWindow):
             if w:
                 w.deleteLater()
 
-        # Show disabled state if dictation is off
-        if not self._is_dictation_enabled():
-            disabled_label = QLabel(
-                "Dictation mode is currently disabled.\n\n"
-                "Enable it in Settings → Features → Dictation Mode."
-            )
-            disabled_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            disabled_label.setStyleSheet(
-                f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
-            )
-            self._list_layout.insertWidget(0, disabled_label)
-            self._subtitle.setText("Disabled")
-            return
-
         if self._history is None:
             self._empty_label = self._make_empty_label()
             self._list_layout.insertWidget(0, self._empty_label)
@@ -314,8 +300,19 @@ class DictationHistoryWindow(QMainWindow):
         entries = self._history.get_all()
 
         if not entries:
-            self._empty_label = self._make_empty_label()
-            self._list_layout.insertWidget(0, self._empty_label)
+            # Show a contextual hint depending on whether dictation is enabled
+            if not self._is_dictation_enabled():
+                placeholder = QLabel(
+                    "Dictation mode is currently disabled.\n\n"
+                    "Enable it in Settings \u2192 Features \u2192 Dictation Mode."
+                )
+            else:
+                placeholder = self._make_empty_label()
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
+            )
+            self._list_layout.insertWidget(0, placeholder)
             self._subtitle.setText("No dictations yet")
             return
 
@@ -340,9 +337,9 @@ class DictationHistoryWindow(QMainWindow):
         mtime = self._get_history_file_mtime()
         if mtime > self._last_file_mtime:
             self._last_file_mtime = mtime
-            # Re-read from disk
+            # Re-read from disk via the public, lock-safe method
             if self._history is not None:
-                self._history._entries = self._history._load()
+                self._history.reload_from_disk()
             self._reload()
 
     def _make_empty_label(self) -> QLabel:

@@ -15,7 +15,6 @@ import platform
 import struct
 import threading
 import time
-from collections import deque
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
@@ -361,11 +360,14 @@ def _suppress_stderr():
         old_stderr = os.dup(2)
         os.dup2(devnull, 2)
         os.close(devnull)
+    except Exception:
         yield
+        return
+    try:
+        yield
+    finally:
         os.dup2(old_stderr, 2)
         os.close(old_stderr)
-    except Exception:
-        yield  # If fd manipulation fails, just proceed normally
 
 
 # ---------------------------------------------------------------------------
@@ -412,22 +414,20 @@ def _apply_custom_dictionary(text: str, dictionary: list) -> str:
     return text
 
 
-def _llm_clean_dictation(text: str, ollama_base_url: str) -> str:
+def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e2b") -> str:
     """Use the local LLM to remove filler words and tidy dictation output.
 
     Falls back to the original text if the LLM is unreachable or slow.
     """
-    import json as _json
     try:
         import requests
     except ImportError:
         return text
 
     prompt = (
-        "Clean the following dictated text. Remove filler words (um, uh, like, "
-        "you know, basically, actually, so, well, I mean, right) and fix minor "
-        "grammar issues. Keep the meaning identical. Return ONLY the cleaned "
-        "text, nothing else.\n\n"
+        "Clean the following dictated text. Remove filler words, hesitations, "
+        "and false starts. Keep the meaning and language identical. Return ONLY "
+        "the cleaned text, nothing else.\n\n"
         f"{text}"
     )
 
@@ -435,7 +435,7 @@ def _llm_clean_dictation(text: str, ollama_base_url: str) -> str:
         resp = requests.post(
             f"{ollama_base_url}/api/generate",
             json={
-                "model": "gemma4:e2b",
+                "model": model,
                 "prompt": prompt,
                 "stream": False,
             },
@@ -459,7 +459,7 @@ def _llm_clean_dictation(text: str, ollama_base_url: str) -> str:
 
 _MODIFIER_MAP = {
     "ctrl": "ctrl_l",
-    "shift": "shift",
+    "shift": "shift_l",
     "alt": "alt_l",
     "cmd": "cmd",
     "super": "cmd",
@@ -555,6 +555,7 @@ class DictationEngine:
         filler_removal: bool = False,
         custom_dictionary: Optional[list] = None,
         ollama_base_url: str = "http://127.0.0.1:11434",
+        ollama_model: str = "gemma4:e2b",
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
@@ -570,6 +571,7 @@ class DictationEngine:
         self._filler_removal = filler_removal
         self._custom_dictionary = custom_dictionary or []
         self._ollama_base_url = ollama_base_url
+        self._ollama_model = ollama_model
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -903,7 +905,7 @@ class DictationEngine:
 
             # LLM-based filler word removal
             if text and self._filler_removal:
-                text = _llm_clean_dictation(text, self._ollama_base_url)
+                text = _llm_clean_dictation(text, self._ollama_base_url, self._ollama_model)
 
             if text:
                 duration = len(audio) / self._target_sample_rate

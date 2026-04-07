@@ -81,6 +81,15 @@ class DictationHistory:
             self._entries = []
             self._save()
 
+    def reload_from_disk(self) -> None:
+        """Re-read entries from the JSON file (thread-safe).
+
+        Useful for external consumers (e.g. the desktop app) that need to
+        pick up changes written by another process.
+        """
+        with self._lock:
+            self._entries = self._load()
+
     @property
     def count(self) -> int:
         with self._lock:

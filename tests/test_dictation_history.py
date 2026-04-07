@@ -127,6 +127,61 @@ class TestDictationHistory:
         after = time.time()
         assert before <= e["timestamp"] <= after
 
+    def test_reload_from_disk_picks_up_external_writes(self, tmp_path):
+        """reload_from_disk should refresh entries written by another process."""
+        path = tmp_path / "history.json"
+        from src.jarvis.dictation.history import DictationHistory
+
+        h = DictationHistory(path=path)
+        assert h.count == 0
+
+        # Simulate another process writing entries directly to the file
+        external_entries = [
+            {"id": "aaa", "text": "from daemon", "timestamp": 1.0, "duration": 0.5},
+        ]
+        path.write_text(json.dumps(external_entries))
+
+        # Before reload, in-memory state is stale
+        assert h.count == 0
+
+        h.reload_from_disk()
+        assert h.count == 1
+        assert h.get_all()[0]["text"] == "from daemon"
+
+    def test_reload_from_disk_is_thread_safe(self, tmp_path):
+        """reload_from_disk should acquire the lock (no crash under contention)."""
+        import threading
+        from src.jarvis.dictation.history import DictationHistory
+
+        path = tmp_path / "history.json"
+        h = DictationHistory(path=path)
+        h.add("initial")
+
+        errors = []
+
+        def writer():
+            try:
+                for i in range(20):
+                    h.add(f"entry-{i}")
+            except Exception as e:
+                errors.append(e)
+
+        def reloader():
+            try:
+                for _ in range(20):
+                    h.reload_from_disk()
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=writer)
+        t2 = threading.Thread(target=reloader)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert errors == [], f"Thread safety errors: {errors}"
+
 
 # ---------------------------------------------------------------------------
 # DictationHistoryWindow tests

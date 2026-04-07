@@ -19,7 +19,7 @@ The setup wizard is shown only when **user action is required** — it is not sh
 ## Page Flow
 
 ```
-Welcome → [Ollama Install] → [Ollama Server] → Models → [Whisper] → [Location] → Complete
+Welcome → [Ollama Install] → [Ollama Server] → Models → [Whisper] → Dictation → [Location] → Complete
 ```
 
 Pages in brackets are conditional — skipped when their prerequisite is already satisfied.
@@ -33,8 +33,9 @@ Pages in brackets are conditional — skipped when their prerequisite is already
 | 3 | **Ollama Server** | Server not running | — |
 | 4 | **Models** | Always (user selects chat model) | `ollama_chat_model` |
 | 5 | **Whisper Setup** | Always (user selects Whisper model) | `whisper_model` |
-| 6 | **Location** | Location enabled but detection failing | `location_ip_address` |
-| 7 | **Complete** | Always | — |
+| 6 | **Dictation** | Always | `dictation_enabled`, `dictation_hotkey`, `dictation_filler_removal` |
+| 7 | **Location** | Location enabled but detection failing | `location_ip_address` |
+| 8 | **Complete** | Always | — |
 
 ### Page Details
 
@@ -47,6 +48,8 @@ Pages in brackets are conditional — skipped when their prerequisite is already
 **ModelsPage** — Displays `SUPPORTED_CHAT_MODELS` as selectable cards with VRAM requirements (including always-loaded intent judge overhead). Installs: selected chat model + embedding model (`nomic-embed-text`) + intent judge (`gemma4:e2b`). Progress bar and log output during `ollama pull`. User can skip if models are already present.
 
 **WhisperSetupPage** — Language mode toggle (multilingual vs English-only), then model size selection from hardcoded options. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons.
+
+**DictationPage** — Enable/disable dictation, hotkey selection dropdown (4 presets), filler word removal toggle with delay warning. Reads current config values on open so re-running the wizard preserves user choices.
 
 **LocationPage** — Tests location auto-detection. If it fails (private/CGNAT IP), offers manual IP input with OpenDNS resolution and GeoLite2 validation.
 

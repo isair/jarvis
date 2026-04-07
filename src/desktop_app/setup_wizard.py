@@ -2479,7 +2479,7 @@ class DictationPage(QWizardPage):
 
         # Filler removal checkbox
         self._filler_check = QCheckBox("  Remove filler words (um, uh, like) using local LLM")
-        self._filler_check.setChecked(False)
+        self._filler_check.setChecked(self._load_current_filler_removal())
         self._filler_check.setStyleSheet("font-size: 14px; color: #fafafa;")
         layout.addWidget(self._filler_check)
 
@@ -2554,6 +2554,17 @@ class DictationPage(QWizardPage):
         layout.addWidget(tips_card)
         layout.addStretch()
         self.setLayout(layout)
+
+    def _load_current_filler_removal(self) -> bool:
+        """Load the current filler removal setting from config, defaulting to False."""
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path())
+            if config and "dictation_filler_removal" in config:
+                return bool(config["dictation_filler_removal"])
+            return False
+        except Exception:
+            return False
 
     def _load_current_hotkey(self) -> str:
         """Load the current hotkey from config, or platform default."""

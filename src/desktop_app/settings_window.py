@@ -579,11 +579,8 @@ class SettingsWindow(QDialog):
         btn_layout.setSpacing(6)
 
         add_btn = QPushButton("+ Add")
-        add_btn.setFixedWidth(70)
         edit_btn = QPushButton("✏️ Edit")
-        edit_btn.setFixedWidth(70)
         remove_btn = QPushButton("− Remove")
-        remove_btn.setFixedWidth(80)
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(edit_btn)
         btn_layout.addWidget(remove_btn)
