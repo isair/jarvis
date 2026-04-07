@@ -323,13 +323,15 @@ class DictationHistoryWindow(QMainWindow):
         """Slot: called (via signal) when a new dictation completes."""
         if self._history is None:
             return
-        # Remove empty label if present
+        # Remove any placeholder labels (empty state / disabled state)
+        to_remove = []
         for i in range(self._list_layout.count()):
             item = self._list_layout.itemAt(i)
             w = item.widget() if item else None
             if isinstance(w, QLabel):
-                w.deleteLater()
-                break
+                to_remove.append(w)
+        for w in to_remove:
+            w.deleteLater()
 
         card = _DictationCard(entry)
         card.deleted.connect(self._on_delete)
