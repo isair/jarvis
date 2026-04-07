@@ -135,25 +135,65 @@ def _clipboard_paste(text: str) -> None:
     system = platform.system().lower()
 
     # --- put text on clipboard ---
-    if system == "windows":
-        _clipboard_windows(text)
-    elif system == "darwin":
-        _clipboard_macos(text)
-    else:
-        _clipboard_linux(text)
+    try:
+        if system == "windows":
+            _clipboard_windows(text)
+        elif system == "darwin":
+            _clipboard_macos(text)
+        else:
+            _clipboard_linux(text)
+        debug_log(f"clipboard set ({len(text)} chars)", "dictation")
+    except Exception as exc:
+        debug_log(f"clipboard write failed: {exc}", "dictation")
+        return
 
     # --- simulate paste keystroke ---
+    # Delay to ensure all hotkey modifiers are fully released before pasting.
+    time.sleep(0.2)
+
+    # On macOS, prefer AppleScript — it's more reliable than pynput key
+    # simulation and doesn't conflict with modifier key state.
+    if system == "darwin":
+        if _paste_applescript():
+            debug_log("paste sent via AppleScript", "dictation")
+            return
+        debug_log("AppleScript paste failed, falling back to pynput", "dictation")
+
     if pynput_keyboard is None:
         debug_log("pynput unavailable — cannot simulate paste", "dictation")
         return
 
     ctrl = pynput_keyboard.Controller()
     mod = pynput_keyboard.Key.cmd if system == "darwin" else pynput_keyboard.Key.ctrl
-    # Small delay so clipboard is ready
+
+    # Explicitly release common modifiers so the OS doesn't see e.g.
+    # Ctrl+Alt+Cmd+V instead of just Cmd+V.
+    try:
+        for release_key in (
+            pynput_keyboard.Key.ctrl_l,
+            pynput_keyboard.Key.ctrl_r,
+            pynput_keyboard.Key.alt_l,
+            pynput_keyboard.Key.alt_r,
+            pynput_keyboard.Key.shift_l,
+            pynput_keyboard.Key.shift_r,
+            pynput_keyboard.Key.cmd,
+            pynput_keyboard.Key.cmd_r,
+        ):
+            try:
+                ctrl.release(release_key)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     time.sleep(0.05)
-    ctrl.press(mod)
-    ctrl.tap("v")
-    ctrl.release(mod)
+    try:
+        ctrl.press(mod)
+        ctrl.tap("v")
+        ctrl.release(mod)
+        debug_log("paste keystroke sent via pynput", "dictation")
+    except Exception as exc:
+        debug_log(f"paste keystroke failed: {exc}", "dictation")
 
 
 def _clipboard_windows(text: str) -> None:
@@ -188,6 +228,21 @@ def _clipboard_windows(text: str) -> None:
 def _clipboard_macos(text: str) -> None:
     import subprocess
     subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+
+
+def _paste_applescript() -> bool:
+    """Use AppleScript to trigger Cmd+V — more reliable than pynput on macOS."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'],
+            check=True,
+            timeout=3,
+        )
+        return True
+    except Exception as exc:
+        debug_log(f"AppleScript paste failed: {exc}", "dictation")
+        return False
 
 
 def _clipboard_linux(text: str) -> None:
