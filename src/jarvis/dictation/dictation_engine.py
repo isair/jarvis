@@ -151,13 +151,13 @@ def _clipboard_paste(text: str) -> None:
     # Delay to ensure all hotkey modifiers are fully released before pasting.
     time.sleep(0.2)
 
-    # On macOS, prefer AppleScript — it's more reliable than pynput key
-    # simulation and doesn't conflict with modifier key state.
+    # On macOS, use CGEvent API directly — avoids pynput modifier state
+    # conflicts and doesn't need separate osascript permissions.
     if system == "darwin":
-        if _paste_applescript():
-            debug_log("paste sent via AppleScript", "dictation")
+        if _paste_cgevent():
+            debug_log("paste sent via CGEvent", "dictation")
             return
-        debug_log("AppleScript paste failed, falling back to pynput", "dictation")
+        debug_log("CGEvent paste failed, falling back to pynput", "dictation")
 
     if pynput_keyboard is None:
         debug_log("pynput unavailable — cannot simulate paste", "dictation")
@@ -230,18 +230,52 @@ def _clipboard_macos(text: str) -> None:
     subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
 
 
-def _paste_applescript() -> bool:
-    """Use AppleScript to trigger Cmd+V — more reliable than pynput on macOS."""
-    import subprocess
+def _paste_cgevent() -> bool:
+    """Use macOS CGEvent API to send Cmd+V — avoids pynput modifier conflicts."""
     try:
-        subprocess.run(
-            ["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'],
-            check=True,
-            timeout=3,
-        )
+        import ctypes
+        import ctypes.util
+
+        carbon = ctypes.cdll.LoadLibrary(ctypes.util.find_library("Carbon"))
+        core_graphics = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
+
+        # CGEvent functions
+        CGEventCreateKeyboardEvent = core_graphics.CGEventCreateKeyboardEvent
+        CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+        CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+
+        CGEventSetFlags = core_graphics.CGEventSetFlags
+        CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+
+        CGEventPost = core_graphics.CGEventPost
+        CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+
+        CFRelease = core_graphics.CFRelease
+        CFRelease.argtypes = [ctypes.c_void_p]
+
+        # Virtual keycode for 'v' is 9, kCGEventFlagMaskCommand = 0x100000
+        kCGHIDEventTap = 0
+        kVK_V = 9
+        kCGEventFlagMaskCommand = 0x100000
+
+        # Key down
+        event_down = CGEventCreateKeyboardEvent(None, kVK_V, True)
+        CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
+        CGEventPost(kCGHIDEventTap, event_down)
+        CFRelease(event_down)
+
+        # Small delay between down and up
+        time.sleep(0.01)
+
+        # Key up
+        event_up = CGEventCreateKeyboardEvent(None, kVK_V, False)
+        CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
+        CGEventPost(kCGHIDEventTap, event_up)
+        CFRelease(event_up)
+
         return True
     except Exception as exc:
-        debug_log(f"AppleScript paste failed: {exc}", "dictation")
+        debug_log(f"CGEvent paste failed: {exc}", "dictation")
         return False
 
 
