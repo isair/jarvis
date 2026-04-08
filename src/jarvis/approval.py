@@ -17,54 +17,20 @@ from enum import Enum
 from typing import Dict, Any, Optional
 
 from .debug import debug_log
-
-
-class RiskLevel(Enum):
-    """Classification of action risk."""
-    SAFE = "safe"            # Read-only or clearly reversible
-    MODERATE = "moderate"   # Writes that are easily undone
-    HIGH = "high"            # Potentially destructive or hard-to-undo
-
-
-# ---------------------------------------------------------------------------
-# Risk patterns per tool
-# ---------------------------------------------------------------------------
-
-# Built-in tools and the risk level of their operations.
-# Each entry maps a tool name to either a flat RiskLevel (all operations)
-# or a dict of {operation_keyword: RiskLevel} keyed on tool argument values.
-_BUILTIN_TOOL_RISK: Dict[str, Any] = {
-    # Read-only tools are always safe
-    "screenshot":         RiskLevel.SAFE,
-    "recallConversation": RiskLevel.SAFE,
-    "fetchMeals":         RiskLevel.SAFE,
-    "webSearch":          RiskLevel.SAFE,
-    "fetchWebPage":       RiskLevel.SAFE,
-    "getWeather":         RiskLevel.SAFE,
-    "refreshMCPTools":    RiskLevel.SAFE,
-    "stop":               RiskLevel.SAFE,
-
-    # Nutrition writes
-    "logMeal":    RiskLevel.MODERATE,
-    "deleteMeal": RiskLevel.HIGH,
-
-    # Local file operations – risk depends on the requested operation
-    "localFiles": {
-        "list":   RiskLevel.SAFE,
-        "read":   RiskLevel.SAFE,
-        "write":  RiskLevel.MODERATE,
-        "append": RiskLevel.MODERATE,
-        "delete": RiskLevel.HIGH,
-    },
-}
-
-# MCP tools are treated as MODERATE by default; callers may override.
-_DEFAULT_MCP_RISK = RiskLevel.MODERATE
+# RiskLevel lives with each tool definition; re-exported here so existing
+# callers that do `from jarvis.approval import RiskLevel` continue to work.
+from .tools.types import RiskLevel  # noqa: F401
+from .tools.registry import BUILTIN_TOOLS
 
 
 def assess_risk(tool_name: Optional[str], tool_args: Optional[Dict[str, Any]]) -> RiskLevel:
     """
     Determine the risk level of a tool invocation.
+
+    Delegates to the tool's own ``assess_risk`` method so that risk
+    information stays co-located with the tool definition rather than
+    in a separate parallel mapping that can diverge when tools are added
+    or removed.
 
     Args:
         tool_name: Canonical tool identifier (camelCase or server__tool format)
@@ -76,28 +42,16 @@ def assess_risk(tool_name: Optional[str], tool_args: Optional[Dict[str, Any]]) -
     if not tool_name:
         return RiskLevel.SAFE
 
-    # MCP tools (server__toolname format)
+    # MCP tools (server__toolname format) have no local definition
     if "__" in tool_name:
-        return _DEFAULT_MCP_RISK
+        return RiskLevel.MODERATE
 
-    entry = _BUILTIN_TOOL_RISK.get(tool_name)
-    if entry is None:
-        # Unknown tool – be cautious
+    tool = BUILTIN_TOOLS.get(tool_name)
+    if tool is None:
         debug_log(f"unknown tool risk: defaulting to MODERATE for '{tool_name}'", "approval")
         return RiskLevel.MODERATE
 
-    if isinstance(entry, RiskLevel):
-        return entry
-
-    if isinstance(entry, dict):
-        operation = (tool_args or {}).get("operation", "")
-        risk = entry.get(str(operation).lower())
-        if risk is not None:
-            return risk
-        # Unknown operation for a known tool – treat as moderate
-        return RiskLevel.MODERATE
-
-    return RiskLevel.SAFE
+    return tool.assess_risk(tool_args)
 
 
 def requires_approval(tool_name: Optional[str], tool_args: Optional[Dict[str, Any]]) -> bool:

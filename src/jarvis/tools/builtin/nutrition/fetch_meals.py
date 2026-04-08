@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 
 from ....debug import debug_log
 from ...base import Tool, ToolContext
-from ...types import ToolExecutionResult
+from ...types import RiskLevel, ToolExecutionResult
 
 
 def _normalize_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
@@ -98,6 +98,9 @@ class FetchMealsTool(Tool):
             "required": []
         }
     
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the fetch meals tool."""
         context.user_print("📖 Retrieving your meals…")

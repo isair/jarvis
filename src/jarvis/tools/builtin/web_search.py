@@ -4,7 +4,7 @@ import requests
 from typing import Dict, Any, Optional, List, Tuple
 from ...debug import debug_log
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 
 def _fetch_page_content(url: str, max_chars: int = 3000) -> Optional[str]:
@@ -75,6 +75,9 @@ class WebSearchTool(Tool):
             },
             "required": ["search_query"]
         }
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute web search using DuckDuckGo."""

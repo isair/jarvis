@@ -7,7 +7,7 @@ The user will need to use the wake word again to start a new conversation.
 
 from typing import Dict, Any, Optional
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 from ...debug import debug_log
 
 
@@ -38,6 +38,9 @@ class StopTool(Tool):
             "properties": {},
             "required": []
         }
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the stop tool - signals conversation end."""

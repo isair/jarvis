@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 
 class LocalFilesTool(Tool):
@@ -31,6 +31,17 @@ class LocalFilesTool(Tool):
             },
             "required": ["operation", "path"]
         }
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        """Return the risk level for this file operation."""
+        operation = str((args or {}).get("operation", "")).lower()
+        if operation in ("list", "read"):
+            return RiskLevel.SAFE
+        if operation in ("write", "append"):
+            return RiskLevel.MODERATE
+        if operation == "delete":
+            return RiskLevel.HIGH
+        return RiskLevel.MODERATE  # Unknown operation
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the local files tool."""
