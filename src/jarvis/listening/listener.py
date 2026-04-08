@@ -410,6 +410,7 @@ class VoiceListener(threading.Thread):
                 aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
                 fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
                 if is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+                    self._wake_timestamp = utterance_start_time
                     self._start_thinking_tune()
                     self._set_face_state_listening()
                     debug_log("early beep: wake word detected", "voice")
