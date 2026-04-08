@@ -1207,31 +1207,21 @@ class ModelsPage(QWizardPage):
         ram_note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0px 4px;")
         selection_layout.addWidget(ram_note)
 
-        # Thinking mode toggle
-        selection_layout.addSpacing(8)
-        self._thinking_check = QCheckBox("  🧠 Enable thinking mode (slower but may improve quality)")
+        layout.addWidget(selection_card)
+
+        # Thinking mode toggle (outside card, consistent with dictation page style)
+        self._thinking_check = QCheckBox("  Enable thinking mode (slower but may improve quality)")
         self._thinking_check.setChecked(False)
-        self._thinking_check.setStyleSheet("""
-            QCheckBox {
-                color: #e4e4e7;
-                font-size: 13px;
-                padding: 4px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-            }
-        """)
-        selection_layout.addWidget(self._thinking_check)
+        self._thinking_check.setStyleSheet("font-size: 14px; color: #fafafa;")
+        layout.addWidget(self._thinking_check)
+
         thinking_note = QLabel(
-            "ℹ️ Some models (e.g. Gemma 4) support a thinking mode that lets the "
-            "model reason before answering. Disabling it (default) gives faster responses."
+            "Some models reason internally before answering. "
+            "Disabling this (default) gives faster responses."
         )
         thinking_note.setWordWrap(True)
-        thinking_note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0px 4px;")
-        selection_layout.addWidget(thinking_note)
-
-        layout.addWidget(selection_card)
+        thinking_note.setStyleSheet("color: #71717a; font-size: 12px; margin-left: 28px;")
+        layout.addWidget(thinking_note)
 
         # Model list card
         card = QFrame()
