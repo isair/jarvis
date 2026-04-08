@@ -215,7 +215,7 @@ class VoiceListener(threading.Thread):
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
-        self._whisper_device: Optional[str] = None  # "cpu", "cuda", or "auto" (resolved device)
+        self._whisper_device: Optional[str] = None  # "cpu" or "cuda" (resolved from CTranslate2)
         self._mlx_model_repo: Optional[str] = None  # For MLX backend
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
