@@ -1386,8 +1386,9 @@ class VoiceListener(threading.Thread):
                     )
 
                     # Resolve actual device (CTranslate2 resolves "auto" internally)
-                    resolved_device = getattr(self.model, "model", None)
-                    resolved_device = getattr(resolved_device, "device", try_device) if resolved_device else try_device
+                    # Cast to str — CTranslate2 may return an enum (e.g. Device.CPU)
+                    ct2_model = getattr(self.model, "model", None)
+                    resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
                     debug_log(f"faster-whisper initialised: name={model_name}, device={resolved_device}, compute={try_compute}, cpu_threads={cpu_threads}", "voice")
 
                     used_device = try_device
