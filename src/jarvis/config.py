@@ -462,8 +462,8 @@ def load_settings() -> Settings:
     defaults = get_default_config()
     merged: Dict[str, Any] = {**defaults, **cfg_json}
 
-    # Build Settings. Only debug comes from env vars.
-    # Debug toggles (env only): voice_debug
+    # Build Settings. Some fields support env var overrides.
+    # Env overrides: JARVIS_VOICE_DEBUG, JARVIS_WHISPER_BACKEND
     voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
 
     # Normalize/convert fields
@@ -517,7 +517,7 @@ def load_settings() -> Settings:
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
     whisper_model = str(merged.get("whisper_model", "medium"))
-    whisper_backend = str(merged.get("whisper_backend", "auto")).lower()
+    whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
     whisper_device = str(merged.get("whisper_device", "auto")).lower()

@@ -6,6 +6,7 @@ __pycache__/
 .mamba_env/
 .micromamba/
 .claude/
+!.claude/launch.json
 
 # Release artifacts
 release_output.log

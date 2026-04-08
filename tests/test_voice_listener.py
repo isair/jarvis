@@ -60,14 +60,16 @@ class TestWhisperComputeTypeFallback:
                             listener.run()
 
                             # Should have been called only once with int8
-                            mock_class.assert_called_once_with("small", device="auto", compute_type="int8")
+                            mock_class.assert_called_once()
+                            assert mock_class.call_args[1]["device"] == "auto"
+                            assert mock_class.call_args[1]["compute_type"] == "int8"
                             assert listener.model == mock_whisper_model
 
     def test_fallback_from_int8_to_float16(self):
         """When int8 fails with compute type error, falls back to float16."""
         mock_whisper_model = MagicMock()
 
-        def whisper_model_side_effect(model_name, device, compute_type):
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
             if compute_type == "int8":
                 raise RuntimeError("Requested int8 compute type, but the target device or backend do not support efficient int8 computation.")
             return mock_whisper_model
@@ -95,15 +97,17 @@ class TestWhisperComputeTypeFallback:
                             # Should have tried int8 first, then float16
                             assert mock_class.call_count == 2
                             calls = mock_class.call_args_list
-                            assert calls[0] == call("small", device="auto", compute_type="int8")
-                            assert calls[1] == call("small", device="auto", compute_type="float16")
+                            assert calls[0][1]["device"] == "auto"
+                            assert calls[0][1]["compute_type"] == "int8"
+                            assert calls[1][1]["device"] == "auto"
+                            assert calls[1][1]["compute_type"] == "float16"
                             assert listener.model == mock_whisper_model
 
     def test_fallback_from_int8_to_float32(self):
         """When int8 and float16 both fail, falls back to float32."""
         mock_whisper_model = MagicMock()
 
-        def whisper_model_side_effect(model_name, device, compute_type):
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
             if compute_type in ("int8", "float16"):
                 raise RuntimeError(f"Requested {compute_type} compute type, but not supported.")
             return mock_whisper_model
@@ -131,9 +135,12 @@ class TestWhisperComputeTypeFallback:
                             # Should have tried int8, float16, then float32
                             assert mock_class.call_count == 3
                             calls = mock_class.call_args_list
-                            assert calls[0] == call("small", device="auto", compute_type="int8")
-                            assert calls[1] == call("small", device="auto", compute_type="float16")
-                            assert calls[2] == call("small", device="auto", compute_type="float32")
+                            assert calls[0][1]["device"] == "auto"
+                            assert calls[0][1]["compute_type"] == "int8"
+                            assert calls[1][1]["device"] == "auto"
+                            assert calls[1][1]["compute_type"] == "float16"
+                            assert calls[2][1]["device"] == "auto"
+                            assert calls[2][1]["compute_type"] == "float32"
                             assert listener.model == mock_whisper_model
 
     def test_no_fallback_for_non_compute_type_errors(self):
@@ -159,12 +166,14 @@ class TestWhisperComputeTypeFallback:
                             listener.run()
 
                             # Should have only tried once - no fallback for model not found errors
-                            mock_class.assert_called_once_with("small", device="auto", compute_type="int8")
+                            mock_class.assert_called_once()
+                            assert mock_class.call_args[1]["device"] == "auto"
+                            assert mock_class.call_args[1]["compute_type"] == "int8"
                             assert listener.model is None
 
     def test_all_fallbacks_fail(self):
         """When all compute types fail, model remains None."""
-        def whisper_model_side_effect(model_name, device, compute_type):
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
             raise RuntimeError(f"Requested {compute_type} compute type, but not supported.")
 
         # Mock sys.platform to skip Windows CUDA check
@@ -193,7 +202,7 @@ class TestWhisperComputeTypeFallback:
         """When config is float16, fallback list is [float16, float32]."""
         mock_whisper_model = MagicMock()
 
-        def whisper_model_side_effect(model_name, device, compute_type):
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
             if compute_type == "float16":
                 raise RuntimeError("Requested float16 compute type, but not supported.")
             return mock_whisper_model
@@ -222,8 +231,10 @@ class TestWhisperComputeTypeFallback:
                             # Should have tried float16, then float32 (no duplicate float16)
                             assert mock_class.call_count == 2
                             calls = mock_class.call_args_list
-                            assert calls[0] == call("small", device="auto", compute_type="float16")
-                            assert calls[1] == call("small", device="auto", compute_type="float32")
+                            assert calls[0][1]["device"] == "auto"
+                            assert calls[0][1]["compute_type"] == "float16"
+                            assert calls[1][1]["device"] == "auto"
+                            assert calls[1][1]["compute_type"] == "float32"
                             assert listener.model == mock_whisper_model
 
     def test_float32_config_no_fallback_needed(self):
@@ -252,8 +263,10 @@ class TestWhisperComputeTypeFallback:
                             # Should have tried float32 on auto, then cpu fallback
                             assert mock_class.call_count == 2
                             calls = mock_class.call_args_list
-                            assert calls[0] == call("small", device="auto", compute_type="float32")
-                            assert calls[1] == call("small", device="cpu", compute_type="float32")
+                            assert calls[0][1]["device"] == "auto"
+                            assert calls[0][1]["compute_type"] == "float32"
+                            assert calls[1][1]["device"] == "cpu"
+                            assert calls[1][1]["compute_type"] == "float32"
                             assert listener.model is None
 
 
@@ -417,7 +430,8 @@ class TestLargeV3TurboFallback:
                                 listener.run()
 
                                 # Should load large-v3 instead of large-v3-turbo
-                                mock_class.assert_called_once_with("large-v3", device="auto", compute_type="int8")
+                                mock_class.assert_called_once()
+                                assert mock_class.call_args[0][0] == "large-v3"
 
         captured = capsys.readouterr()
         assert "large-v3-turbo is not supported" in captured.out
@@ -443,7 +457,8 @@ class TestLargeV3TurboFallback:
                                 listener.run()
 
                                 # Should keep large-v3-turbo
-                                mock_class.assert_called_once_with("large-v3-turbo", device="auto", compute_type="int8")
+                                mock_class.assert_called_once()
+                                assert mock_class.call_args[0][0] == "large-v3-turbo"
 
 
 class TestRepetitiveHallucinationDetection:
@@ -563,6 +578,210 @@ class TestRepetitiveHallucinationDetection:
         # "thanks" appears 4/8 words = 50% but words repeat consecutively as phrases
         text = "Thanks Thanks Thanks Thanks for watching"
         assert listener._is_repetitive_hallucination(text) is True
+
+
+class TestCpuOptimisations:
+    """Tests for faster-whisper CPU mode optimisations."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_cpu_threads_set_when_device_is_cpu(self):
+        """CPU cores are passed to WhisperModel when device resolves to cpu."""
+        mock_whisper_model = MagicMock()
+        # Simulate CTranslate2 model exposing device as string
+        mock_whisper_model.model.device = "cpu"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+                            with patch("jarvis.listening.listener.os.cpu_count", return_value=8):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_cfg = self._create_mock_config(whisper_device="cpu")
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener.run()
+
+                                assert mock_class.call_args[1]["cpu_threads"] == 8
+
+    def test_cpu_threads_set_when_device_is_auto(self):
+        """CPU cores are passed to WhisperModel when device is auto (may resolve to CPU)."""
+        mock_whisper_model = MagicMock()
+        mock_whisper_model.model.device = "cpu"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+                            with patch("jarvis.listening.listener.os.cpu_count", return_value=12):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_cfg = self._create_mock_config(whisper_device="auto")
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener.run()
+
+                                assert mock_class.call_args[1]["cpu_threads"] == 12
+
+    def test_resolved_device_stored_from_ctranslate2(self):
+        """The resolved device from CTranslate2 is stored on the listener."""
+        mock_whisper_model = MagicMock()
+        mock_whisper_model.model.device = "cpu"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_cfg = self._create_mock_config()
+                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                            listener.run()
+
+                            assert listener._whisper_device == "cpu"
+
+    def test_resolved_device_handles_enum(self):
+        """Device resolution works even if CTranslate2 returns an enum-like object."""
+        mock_whisper_model = MagicMock()
+        # Simulate an enum that str() converts to "cpu"
+        mock_device = MagicMock()
+        mock_device.__str__ = lambda self: "cpu"
+        mock_whisper_model.model.device = mock_device
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_cfg = self._create_mock_config()
+                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                            listener.run()
+
+                            assert listener._whisper_device == "cpu"
+
+    def _create_listener_for_transcribe_test(self, whisper_device):
+        """Create a VoiceListener wired up for transcription tests."""
+        import numpy as np
+
+        mock_whisper_model = MagicMock()
+        mock_segment = MagicMock()
+        mock_segment.text = "hello"
+        mock_info = MagicMock()
+        mock_whisper_model.transcribe.return_value = (iter([mock_segment]), mock_info)
+
+        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                with patch("jarvis.listening.listener.WhisperModel"):
+                    from jarvis.listening.listener import VoiceListener
+
+                    mock_cfg = MagicMock()
+                    mock_cfg.sample_rate = 16000
+                    mock_cfg.vad_enabled = False
+                    mock_cfg.echo_tolerance = 0.3
+                    mock_cfg.echo_energy_threshold = 2.0
+                    mock_cfg.hot_window_seconds = 3.0
+                    mock_cfg.voice_collect_seconds = 2.0
+                    mock_cfg.voice_max_collect_seconds = 60.0
+                    mock_cfg.tune_enabled = False
+                    mock_cfg.voice_debug = False
+                    mock_cfg.whisper_min_confidence = 0.3
+                    mock_cfg.whisper_min_audio_duration = 0.15
+
+                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                    listener.model = mock_whisper_model
+                    listener._whisper_backend = "faster-whisper"
+                    listener._whisper_device = whisper_device
+                    listener._samplerate = 16000
+
+                    # Set up state so _finalize_utterance reaches transcription
+                    listener._utterance_frames = [np.zeros(16000, dtype=np.float32)]
+                    listener.echo_detector._utterance_start_time = time.time() - 1.0
+                    listener.is_speech_active = True
+
+                    return listener, mock_whisper_model
+
+    def test_cpu_optimisations_in_transcribe(self):
+        """CPU mode passes without_timestamps and disables condition_on_previous_text."""
+        listener, mock_model = self._create_listener_for_transcribe_test("cpu")
+        listener._finalize_utterance()
+
+        mock_model.transcribe.assert_called_once()
+        call_kwargs = mock_model.transcribe.call_args[1]
+        assert call_kwargs["without_timestamps"] is True
+        assert call_kwargs["condition_on_previous_text"] is False
+
+    def test_gpu_does_not_get_cpu_optimisations(self):
+        """CUDA mode does not apply CPU-specific transcribe optimisations."""
+        listener, mock_model = self._create_listener_for_transcribe_test("cuda")
+        listener._finalize_utterance()
+
+        mock_model.transcribe.assert_called_once()
+        call_kwargs = mock_model.transcribe.call_args[1]
+        assert call_kwargs["without_timestamps"] is False
+        assert call_kwargs["condition_on_previous_text"] is True
+
+
+class TestRepetitiveHallucinationDetectionExtended:
+    """Additional tests for Whisper hallucination detection."""
+
+    def _create_mock_listener(self):
+        """Create a VoiceListener instance for testing."""
+        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                with patch("jarvis.listening.listener.WhisperModel"):
+                    with patch("jarvis.listening.listener.webrtcvad", None):
+                        from jarvis.listening.listener import VoiceListener
+
+                        mock_db = MagicMock()
+                        mock_cfg = MagicMock()
+                        mock_cfg.sample_rate = 16000
+                        mock_cfg.vad_enabled = False
+                        mock_cfg.echo_tolerance = 0.3
+                        mock_cfg.echo_energy_threshold = 2.0
+                        mock_cfg.hot_window_seconds = 3.0
+                        mock_cfg.voice_collect_seconds = 2.0
+                        mock_cfg.voice_max_collect_seconds = 60.0
+                        mock_cfg.tune_enabled = False
+                        mock_tts = MagicMock()
+                        mock_dialogue_memory = MagicMock()
+
+                        return VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
 
     def test_accepts_short_repetition(self):
         """Doesn't flag short character strings even with repetition."""
