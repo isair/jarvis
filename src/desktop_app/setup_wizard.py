@@ -1207,6 +1207,30 @@ class ModelsPage(QWizardPage):
         ram_note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0px 4px;")
         selection_layout.addWidget(ram_note)
 
+        # Thinking mode toggle
+        selection_layout.addSpacing(8)
+        self._thinking_check = QCheckBox("  🧠 Enable thinking mode (slower but may improve quality)")
+        self._thinking_check.setChecked(False)
+        self._thinking_check.setStyleSheet("""
+            QCheckBox {
+                color: #e4e4e7;
+                font-size: 13px;
+                padding: 4px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        selection_layout.addWidget(self._thinking_check)
+        thinking_note = QLabel(
+            "ℹ️ Some models (e.g. Gemma 4) support a thinking mode that lets the "
+            "model reason before answering. Disabling it (default) gives faster responses."
+        )
+        thinking_note.setWordWrap(True)
+        thinking_note.setStyleSheet("font-size: 11px; color: #71717a; padding: 0px 4px;")
+        selection_layout.addWidget(thinking_note)
+
         layout.addWidget(selection_card)
 
         # Model list card
@@ -1360,6 +1384,12 @@ class ModelsPage(QWizardPage):
 
             config["ollama_chat_model"] = self._selected_model
 
+            # Save thinking mode preference (only write if non-default)
+            if self._thinking_check.isChecked():
+                config["llm_thinking_enabled"] = True
+            else:
+                config.pop("llm_thinking_enabled", None)
+
             with config_path.open("w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
 
@@ -1369,13 +1399,16 @@ class ModelsPage(QWizardPage):
 
     def initializePage(self):
         """Initialize page with current model status."""
-        # Load the currently configured chat model
+        # Load the currently configured chat model and thinking mode
         current_chat_model = DEFAULT_CHAT_MODEL
+        thinking_enabled = False
         try:
             cfg = load_settings()
             current_chat_model = cfg.ollama_chat_model
+            thinking_enabled = bool(getattr(cfg, "llm_thinking_enabled", False))
         except Exception:
             pass
+        self._thinking_check.setChecked(thinking_enabled)
 
         # Pre-select the model if it's one of our options, otherwise default
         if current_chat_model in self.MODEL_OPTIONS:

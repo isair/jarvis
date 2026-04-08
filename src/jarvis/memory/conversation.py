@@ -240,6 +240,7 @@ def generate_conversation_summary(
     ollama_chat_model: str,
     timeout_sec: float = 30.0,
     on_token: Optional[Callable[[str], None]] = None,
+    thinking: bool = False,
 ) -> Tuple[str, str]:
     """
     Generate a concise conversation summary from recent chunks and previous summary.
@@ -300,12 +301,12 @@ TOPICS: [topic1, topic2, topic3]"""
         if on_token:
             response = call_llm_streaming(
                 ollama_base_url, ollama_chat_model, system_prompt, user_prompt,
-                on_token=on_token, timeout_sec=timeout_sec
+                on_token=on_token, timeout_sec=timeout_sec, thinking=thinking,
             )
         else:
             response = call_llm_direct(
                 ollama_base_url, ollama_chat_model, system_prompt, user_prompt,
-                timeout_sec=timeout_sec
+                timeout_sec=timeout_sec, thinking=thinking,
             )
 
         if not response:
@@ -344,6 +345,7 @@ def update_daily_conversation_summary(
     voice_debug: bool = False,
     timeout_sec: float = 30.0,
     on_token: Optional[Callable[[str], None]] = None,
+    thinking: bool = False,
 ) -> Optional[int]:
     """
     Update the conversation summary for today with new chunks.
@@ -376,7 +378,7 @@ def update_daily_conversation_summary(
         # Generate updated summary using redacted chunks
         summary, topics = generate_conversation_summary(
             redacted_chunks, previous_summary, ollama_base_url, ollama_chat_model,
-            timeout_sec=timeout_sec, on_token=on_token
+            timeout_sec=timeout_sec, on_token=on_token, thinking=thinking,
         )
 
         # Skip summarization if LLM failed
@@ -689,6 +691,7 @@ def update_diary_from_dialogue_memory(
     timeout_sec: float = 30.0,
     force: bool = False,
     on_token: Optional[Callable[[str], None]] = None,
+    thinking: bool = False,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
@@ -735,6 +738,7 @@ def update_diary_from_dialogue_memory(
             voice_debug=voice_debug,
             timeout_sec=timeout_sec,
             on_token=on_token,
+            thinking=thinking,
         )
 
         debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")

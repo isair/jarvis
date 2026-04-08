@@ -77,6 +77,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         timeout_sec=float(getattr(cfg, 'llm_profile_select_timeout_sec', 30.0)),
         previous_profile=previous_profile,
         recent_context=recent_context_summary,
+        thinking=getattr(cfg, 'llm_thinking_enabled', False),
     )
     print(f"  🎭 Profile selected: {profile_name}", flush=True)
 
@@ -97,7 +98,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     try:
         search_params = extract_search_params_for_memory(
             redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug,
-            timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0))
+            timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+            thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
         keywords = search_params.get('keywords', [])
         if keywords:
@@ -444,6 +446,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
                 tools=None if use_text_tools else tools_json_schema,
+                thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
         except ToolsNotSupportedError:
             # Model doesn't support the native tools API — switch to text-based tool calling
@@ -464,6 +467,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
                 tools=None,
+                thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")

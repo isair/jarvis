@@ -387,6 +387,7 @@ def get_default_config() -> Dict[str, Any]:
         # Audio Wake Word Detection
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
+        "llm_thinking_enabled": False,  # Enable thinking/reasoning mode (slower but may improve quality)
         "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
         "intent_judge_timeout_sec": 15.0,  # Max time to wait for intent judge response
 

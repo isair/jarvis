@@ -97,6 +97,7 @@ def select_profile_llm(
     timeout_sec: float = 10.0,
     previous_profile: str = None,
     recent_context: str = None,
+    thinking: bool = False,
 ) -> str:
     """
     Select the best profile for the user's query.
@@ -150,7 +151,7 @@ def select_profile_llm(
         "Answer with only one of: " + allowed
     )
 
-    resp = call_llm_direct(base_url, chat_model, sys_prompt, user_content, timeout_sec=timeout_sec)
+    resp = call_llm_direct(base_url, chat_model, sys_prompt, user_content, timeout_sec=timeout_sec, thinking=thinking)
     if isinstance(resp, str) and resp.strip():
         ans = resp.strip().lower()
         # Try exact match first

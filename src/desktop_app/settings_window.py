@@ -100,6 +100,9 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("intent_judge_timeout_sec", "Intent Judge Timeout",
       "Max seconds for intent judgement",
       "llm", "float", min_val=1, max_val=30, step=0.5, suffix="s")
+    f("llm_thinking_enabled", "Enable Thinking Mode",
+      "Let models think/reason before answering (slower but may improve quality)",
+      "llm", "bool")
 
     # --- Text-to-Speech ---
     f("tts_enabled", "Enable TTS", "Enable text-to-speech output",
