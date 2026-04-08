@@ -414,7 +414,7 @@ def _apply_custom_dictionary(text: str, dictionary: list) -> str:
     return text
 
 
-def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e2b") -> str:
+def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e2b", thinking: bool = False) -> str:
     """Use the local LLM to remove filler words and tidy dictation output.
 
     Falls back to the original text if the LLM is unreachable or slow.
@@ -438,6 +438,7 @@ def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
+                "think": thinking,
             },
             timeout=5,
         )
@@ -556,6 +557,7 @@ class DictationEngine:
         custom_dictionary: Optional[list] = None,
         ollama_base_url: str = "http://127.0.0.1:11434",
         ollama_model: str = "gemma4:e2b",
+        thinking: bool = False,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
@@ -572,6 +574,7 @@ class DictationEngine:
         self._custom_dictionary = custom_dictionary or []
         self._ollama_base_url = ollama_base_url
         self._ollama_model = ollama_model
+        self._thinking = thinking
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -905,7 +908,7 @@ class DictationEngine:
 
             # LLM-based filler word removal
             if text and self._filler_removal:
-                text = _llm_clean_dictation(text, self._ollama_base_url, self._ollama_model)
+                text = _llm_clean_dictation(text, self._ollama_base_url, self._ollama_model, thinking=self._thinking)
 
             if text:
                 duration = len(audio) / self._target_sample_rate

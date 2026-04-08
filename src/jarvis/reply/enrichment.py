@@ -6,8 +6,9 @@ from ..llm import call_llm_direct
 from ..debug import debug_log
 
 
-def extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str, 
-                                   voice_debug: bool = False, timeout_sec: float = 8.0) -> dict:
+def extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str,
+                                   voice_debug: bool = False, timeout_sec: float = 8.0,
+                                   thinking: bool = False) -> dict:
     """
     Extract search keywords and time parameters for memory recall.
     Preserves existing behavior using the lightweight LLM extractor.
@@ -52,7 +53,8 @@ Examples:
                 chat_model=ollama_chat_model,
                 system_prompt=formatted_prompt,
                 user_content=f"Extract search parameters from: {query}",
-                timeout_sec=timeout_sec
+                timeout_sec=timeout_sec,
+                thinking=thinking,
             )
             
             if response:

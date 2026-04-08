@@ -61,6 +61,9 @@ class MockConfig:
     location_auto_detect: bool = False
     location_cgnat_resolve_public_ip: bool = False
     dialogue_memory_timeout: int = 300
+    llm_thinking_enabled: bool = False
+    intent_judge_thinking_enabled: bool = False
+    dictation_thinking_enabled: bool = False
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
 

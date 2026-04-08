@@ -11,18 +11,19 @@ class ToolsNotSupportedError(Exception):
     pass
 
 
-def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0) -> Optional[str]:
+def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False) -> Optional[str]:
     """Direct LLM call without temporal context, location, or other ask_coach features."""
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
-    
-    payload = {
+
+    payload: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
         "stream": False,
         "options": {"num_ctx": 4096},
+        "think": thinking,
     }
     
     try:
@@ -49,6 +50,7 @@ def call_llm_streaming(
     user_content: str,
     on_token: Optional[Callable[[str], None]] = None,
     timeout_sec: float = 30.0,
+    thinking: bool = False,
 ) -> Optional[str]:
     """
     Streaming LLM call that invokes on_token callback for each token received.
@@ -60,6 +62,7 @@ def call_llm_streaming(
         user_content: User message
         on_token: Callback invoked with each token as it arrives
         timeout_sec: Request timeout
+        thinking: Enable thinking/reasoning mode
 
     Returns:
         Complete response text, or None on error
@@ -69,11 +72,12 @@ def call_llm_streaming(
         {"role": "user", "content": user_content}
     ]
 
-    payload = {
+    payload: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
         "stream": True,
         "options": {"num_ctx": 4096},
+        "think": thinking,
     }
 
     try:
@@ -145,6 +149,7 @@ def chat_with_messages(
     timeout_sec: float = 30.0,
     extra_options: Optional[Dict[str, Any]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
+    thinking: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Send an arbitrary messages array to the LLM and return the raw response JSON.
@@ -157,6 +162,7 @@ def chat_with_messages(
         timeout_sec: Request timeout
         extra_options: Additional model options
         tools: Optional list of tools in OpenAI-compatible JSON schema format for native tool calling
+        thinking: Enable thinking/reasoning mode
 
     Returns the parsed JSON response dict on success, or None on error/timeout.
     """
@@ -165,6 +171,7 @@ def chat_with_messages(
         "messages": messages,
         "stream": False,
         "options": {"num_ctx": 4096},
+        "think": thinking,
     }
     if extra_options and isinstance(extra_options, dict):
         # Merge shallowly into options
@@ -173,11 +180,6 @@ def chat_with_messages(
     # Add tools for native tool calling support (Ollama 0.4+)
     if tools and isinstance(tools, list) and len(tools) > 0:
         payload["tools"] = tools
-
-    # Disable "thinking mode" for qwen3 models (causes very slow responses)
-    # See: https://docs.ollama.com/capabilities/thinking
-    if chat_model.startswith("qwen3"):
-        payload["think"] = False
 
     try:
         resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)

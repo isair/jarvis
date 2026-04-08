@@ -44,6 +44,7 @@ class IntentJudgeConfig:
     model: str = "gemma4:e2b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     timeout_sec: float = 10.0
+    thinking: bool = False
 
     def __post_init__(self):
         if self.aliases is None:
@@ -316,6 +317,7 @@ Examples:
                     "prompt": user_prompt,
                     "system": system_prompt,
                     "stream": False,
+                    "think": self.config.thinking,
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 800,
@@ -381,6 +383,7 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
         model=model,
         ollama_base_url=ollama_base_url,
         timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
+        thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
 
     return IntentJudge(config)

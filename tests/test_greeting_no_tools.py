@@ -125,7 +125,7 @@ class TestGreetingNoTools:
             capture.record(tool_name, tool_args or {})
             return ToolExecutionResult(success=True, reply_text="Tool result")
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, thinking=False):
             return _mock_llm_response("Hello! How can I help you today?")
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
@@ -164,7 +164,7 @@ class TestGreetingNoTools:
 
         call_count = 0
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, thinking=False):
             nonlocal call_count
             call_count += 1
             if call_count == 1:

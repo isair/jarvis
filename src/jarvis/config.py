@@ -387,8 +387,10 @@ def get_default_config() -> Dict[str, Any]:
         # Audio Wake Word Detection
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
+        "llm_thinking_enabled": False,  # Enable thinking/reasoning mode for chat (slower but may improve quality)
         "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
         "intent_judge_timeout_sec": 15.0,  # Max time to wait for intent judge response
+        "intent_judge_thinking_enabled": False,  # Enable thinking for intent judge (adds latency to wake detection)
 
         # Transcript Buffer - used for both retention and context passed to intent judge
         # 120s (2 min) provides enough context for multi-person conversations
@@ -422,6 +424,7 @@ def get_default_config() -> Dict[str, Any]:
         "dictation_enabled": True,
         "dictation_hotkey": _default_dictation_hotkey(),
         "dictation_filler_removal": False,
+        "dictation_thinking_enabled": False,  # Enable thinking for dictation filler removal (adds latency)
         "dictation_custom_dictionary": [],
 
         # MCP Integration (external servers Jarvis can use). No defaults.

@@ -100,6 +100,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("intent_judge_timeout_sec", "Intent Judge Timeout",
       "Max seconds for intent judgement",
       "llm", "float", min_val=1, max_val=30, step=0.5, suffix="s")
+    f("llm_thinking_enabled", "Chat Thinking Mode",
+      "Let the chat model think/reason before answering (slower but may improve quality)",
+      "llm", "bool")
+    f("intent_judge_thinking_enabled", "Intent Judge Thinking Mode",
+      "Let the intent judge think before classifying (adds latency to wake detection)",
+      "llm", "bool")
 
     # --- Text-to-Speech ---
     f("tts_enabled", "Enable TTS", "Enable text-to-speech output",
@@ -277,6 +283,9 @@ def _build_field_metadata() -> List[FieldMeta]:
       ])
     f("dictation_filler_removal", "Filler Word Removal",
       "Use the local LLM to remove filler words (um, uh, like) from dictation output",
+      "features", "bool")
+    f("dictation_thinking_enabled", "Dictation Thinking Mode",
+      "Let the LLM think when cleaning dictation (adds latency after each dictation)",
       "features", "bool")
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",

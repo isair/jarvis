@@ -45,7 +45,7 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         "User said (redacted):\n" + original_text[:1200] + "\n\n"
         "Return ONLY JSON or the exact string NONE."
     )
-    raw = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=cfg.llm_chat_timeout_sec) or ""
+    raw = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=cfg.llm_chat_timeout_sec, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
         return None
@@ -133,7 +133,7 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
         "Be concise and specific."
     )
     follow_user = f"Logged meal: {description} | {approx}."
-    follow_text = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user, timeout_sec=cfg.llm_chat_timeout_sec) or ""
+    follow_text = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user, timeout_sec=cfg.llm_chat_timeout_sec, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
     return (follow_text or "").strip()
 
 
