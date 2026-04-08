@@ -1,0 +1,41 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Desktop App",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["scripts/run_desktop_app.sh"],
+      "port": 5050
+    },
+    {
+      "name": "Desktop App (Voice Debug)",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["scripts/run_desktop_app.sh", "--voice-debug"],
+      "port": 5050
+    },
+    {
+      "name": "Desktop App (faster-whisper)",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "JARVIS_WHISPER_BACKEND=faster-whisper JARVIS_VOICE_DEBUG=1 bash scripts/run_desktop_app.sh --voice-debug"],
+      "port": 5050
+    },
+    {
+      "name": "Jarvis Daemon",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["scripts/run_macos.sh"],
+      "port": null
+    },
+    {
+      "name": "Memory Viewer",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PYTHONPATH=src:$PYTHONPATH python -m desktop_app.memory_viewer"],
+      "port": 5050
+    },
+    {
+      "name": "Evals",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["scripts/run_evals.sh"],
+      "port": null
+    }
+  ]
+}
