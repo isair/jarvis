@@ -31,12 +31,56 @@ from .errors import (
     ToolSchemaError,
 )
 from ..task_state import begin_task, get_active_task, TaskStatus
-from ..approval import classify_request, RequestType, requires_approval, approval_prompt, assess_risk, RiskLevel
+from ..approval import (
+    classify_request, RequestType, requires_approval, approval_prompt,
+    assess_risk, RiskLevel,
+    is_undoable, pre_execution_warning, post_execution_note, build_undo_args,
+)
+from ..undo_registry import UndoEntry, push_undo, pop_last_undo, pop_undo_by_id
 import json
 import re
 import uuid
 from datetime import datetime, timezone
 from ..utils.location import get_location_context
+
+# ---------------------------------------------------------------------------
+# Undo intent detection
+# ---------------------------------------------------------------------------
+
+_UNDO_LAST_RE = re.compile(
+    r'^\s*undo\s*(?:that|this|it)?\s*$',
+    re.IGNORECASE,
+)
+_UNDO_N_RE = re.compile(
+    r'^\s*undo\s+(?:the\s+)?last\s+(\d+)\s*(?:action|step|command|thing|operation)?s?\s*$',
+    re.IGNORECASE,
+)
+_UNDO_ID_RE = re.compile(
+    r'^\s*undo\s+([0-9a-f]{8,32})\s*$',
+    re.IGNORECASE,
+)
+
+
+def _detect_undo_intent(text: str):
+    """
+    Parse a user utterance for an undo command.
+
+    Returns:
+        ('last', 1)        – "undo that" / "undo"
+        ('last', N)        – "undo last 3 actions"
+        ('id', step_id)    – "undo a1b2c3d4"
+        None               – not an undo command
+    """
+    t = (text or "").strip()
+    if _UNDO_LAST_RE.match(t):
+        return ('last', 1)
+    m = _UNDO_N_RE.match(t)
+    if m:
+        return ('last', min(int(m.group(1)), 20))
+    m = _UNDO_ID_RE.match(t)
+    if m:
+        return ('id', m.group(1))
+    return None
 
 # Policy and audit imports (gracefully degrade when not configured)
 from ..policy import engine as _policy_engine_module, models as _policy_models
@@ -65,6 +109,55 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     """
     # Step 1: Redact sensitive information
     redacted = redact(text)
+
+    # Early-exit: undo commands bypass the full agentic loop
+    _undo_intent = _detect_undo_intent(redacted)
+    if _undo_intent:
+        _undo_kind, _undo_arg = _undo_intent
+        if _undo_kind == 'last':
+            _entries = pop_last_undo(_undo_arg)
+        else:  # 'id'
+            _single = pop_undo_by_id(_undo_arg)
+            _entries = [_single] if _single else []
+        if not _entries:
+            return "There's nothing to undo right now."
+        _undo_replies = []
+        for _undo_entry in _entries:  # already in reverse-chronological order
+            debug_log(
+                f"undo: reversing '{_undo_entry.description}' "
+                f"via {_undo_entry.undo_tool}",
+                "undo",
+            )
+            try:
+                _rev_result = run_tool_with_retries(
+                    db=db,
+                    cfg=cfg,
+                    tool_name=_undo_entry.undo_tool,
+                    tool_args=_undo_entry.undo_args,
+                    system_prompt="",
+                    original_prompt="",
+                    redacted_text=redacted,
+                    max_retries=1,
+                )
+                if _rev_result.reply_text and not _rev_result.error_message:
+                    _undo_replies.append(f"Reversed: {_undo_entry.description}.")
+                    # Mark the original step as reversed if still in active task
+                    _active = get_active_task()
+                    for _s in (_active.steps if _active else []):
+                        if _s.step_id == _undo_entry.step_id:
+                            _s.mark_reversed()
+                            break
+                else:
+                    _err = _rev_result.error_message or "undo failed"
+                    _undo_replies.append(
+                        f"Couldn't reverse '{_undo_entry.description}': {_err}"
+                    )
+            except Exception as _ue:
+                debug_log(f"undo execution error: {_ue}", "undo")
+                _undo_replies.append(
+                    f"Undo failed for '{_undo_entry.description}': {_ue}"
+                )
+        return "  ".join(_undo_replies)
 
     # Step 1a: Classify request and begin task state tracking
     request_type = classify_request(redacted)
@@ -459,6 +552,32 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Transition task state to executing now that messages are built
     task.set_executing()
 
+    # Spoken warnings accumulated during this turn (prepended to final reply)
+    _pre_warnings: list = []
+    # Spoken post-notes accumulated during this turn (appended to final reply)
+    _post_notes: list = []
+
+    def _capture_snapshot(t_name: str, t_args: dict):
+        """Read current state of a resource before a destructive tool runs."""
+        if t_name == "localFiles":
+            op = str(t_args.get("operation", "")).lower()
+            if op in ("write", "append", "delete"):
+                path = t_args.get("path")
+                if path:
+                    try:
+                        snap = run_tool_with_retries(
+                            db=db, cfg=cfg,
+                            tool_name="localFiles",
+                            tool_args={"operation": "read", "path": path},
+                            system_prompt="", original_prompt="",
+                            redacted_text="", max_retries=0,
+                        )
+                        if snap.reply_text and not snap.error_message:
+                            return snap.reply_text
+                    except Exception as _se:
+                        debug_log(f"snapshot capture failed: {_se}", "undo")
+        return None
+
     # Visible progress indicator before LLM loop (helps diagnose hangs)
     print(f"  💬 Generating response...", flush=True)
     debug_log(f"Starting LLM conversation loop (max {max_turns} turns)...", "planning")
@@ -679,30 +798,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             # Legacy approval check (used when policy engine is not configured
             # or as defence-in-depth for HIGH-risk tools)
-            if requires_approval(tool_name, tool_args):
-                task.set_awaiting_approval()
-                prompt_text = approval_prompt(tool_name, tool_args)
-                debug_log(f"  🔐 approval required for {tool_name}", "planning")
+            #
+            # NEW BEHAVIOUR (voice-first undo model):
+            #   HIGH risk + undoable  → act, register undo, append "say undo" note
+            #   HIGH risk + irreversible → emit spoken warning, then act
+            #   Approval gate removed — no hard stop
+            _warn = pre_execution_warning(tool_name, tool_args)
+            if _warn:
+                _pre_warnings.append(_warn)
                 try:
-                    print(f"  🔐 {prompt_text}", flush=True)
+                    print(f"  ⚠️  {_warn}", flush=True)
                 except Exception:
                     pass
-                # Surface approval request as the reply so the TTS/voice loop
-                # returns the prompt to the user; execution does not proceed.
-                # The user must re-issue the command after confirming.
-                if _audit:
-                    try:
-                        from ..audit.models import ApprovalRecord
-                        _audit.record_approval(ApprovalRecord(
-                            task_id=_audit_task_id,
-                            step_id=_step_id,
-                            tool_name=tool_name,
-                            operation=str((tool_args or {}).get("operation", "*")),
-                            decision="requested",
-                        ))
-                    except Exception:
-                        pass
-                return prompt_text
+
+            # Capture snapshot before destructive execution (needed for undo)
+            _snapshot = None
+            if is_undoable(tool_name, tool_args):
+                _snapshot = _capture_snapshot(tool_name, tool_args)
 
             # Record step in task state before execution
             step = task.add_step(
@@ -748,6 +860,28 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Append tool result
             if result.reply_text:
                 step.complete(result.reply_text[:120])
+
+                # Register undo entry if this was a reversible operation
+                _undo_built = build_undo_args(tool_name, tool_args or {}, _snapshot)
+                if _undo_built:
+                    _u_tool, _u_args, _u_desc = _undo_built
+                    _undo_entry = UndoEntry(
+                        step_id=step.step_id,
+                        description=_u_desc,
+                        tool_name=tool_name,
+                        tool_args=tool_args or {},
+                        undo_tool=_u_tool,
+                        undo_args=_u_args,
+                        snapshot=_snapshot,
+                    )
+                    push_undo(_undo_entry)
+                    step.mark_reversible(_undo_entry.step_id)
+                    _note = post_execution_note(tool_name, tool_args)
+                    if _note:
+                        _post_notes.append(_note)
+                        debug_log(
+                            f"undo registered for {tool_name}: {_u_desc}", "undo"
+                        )
                 if use_text_tools:
                     messages.append({
                         "role": "user",
@@ -873,13 +1007,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
-    task.complete()
+    # Use set_reversible() when at least one step is still undoable
+    if task.reversible_steps:
+        task.set_reversible()
+    else:
+        task.complete()
     if _audit:
         try:
             _audit.finish_task(_audit_task_id, final_status="complete")
         except Exception:
             pass
     debug_log(task.summary(), "task")
+    # Weave pre-warnings and post-notes into the spoken reply
+    if _pre_warnings:
+        reply = "  ".join(_pre_warnings) + "  " + (reply or "")
+    if _post_notes:
+        reply = (reply or "") + "  " + "  ".join(_post_notes)
     safe_reply = reply.strip()
     if safe_reply:
         # Print reply with appropriate header

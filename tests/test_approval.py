@@ -1,4 +1,4 @@
-"""Unit tests for the approval module."""
+﻿"""Unit tests for the approval module."""
 
 import pytest
 
@@ -9,6 +9,10 @@ from jarvis.approval import (
     requires_approval,
     approval_prompt,
     classify_request,
+    is_undoable,
+    pre_execution_warning,
+    post_execution_note,
+    build_undo_args,
 )
 
 
@@ -186,3 +190,186 @@ def test_operational_without_tool_is_informational():
 def test_empty_query_is_informational():
     assert classify_request("") == RequestType.INFORMATIONAL
     assert classify_request(None) == RequestType.INFORMATIONAL
+
+
+# ---------------------------------------------------------------------------
+# is_undoable tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_local_files_write_is_undoable():
+    assert is_undoable("localFiles", {"operation": "write"}) is True
+
+
+@pytest.mark.unit
+def test_local_files_append_is_undoable():
+    assert is_undoable("localFiles", {"operation": "append"}) is True
+
+
+@pytest.mark.unit
+def test_local_files_delete_is_undoable():
+    assert is_undoable("localFiles", {"operation": "delete"}) is True
+
+
+@pytest.mark.unit
+def test_local_files_read_is_not_undoable():
+    assert is_undoable("localFiles", {"operation": "read"}) is False
+
+
+@pytest.mark.unit
+def test_local_files_list_is_not_undoable():
+    assert is_undoable("localFiles", {"operation": "list"}) is False
+
+
+@pytest.mark.unit
+def test_delete_meal_is_not_undoable():
+    assert is_undoable("deleteMeal", {"id": 42}) is False
+
+
+@pytest.mark.unit
+def test_log_meal_is_not_undoable():
+    assert is_undoable("logMeal", {"name": "apple"}) is False
+
+
+@pytest.mark.unit
+def test_unknown_tool_is_not_undoable():
+    assert is_undoable("webSearch", {"query": "hello"}) is False
+
+
+@pytest.mark.unit
+def test_none_tool_is_not_undoable():
+    assert is_undoable(None, {}) is False
+
+
+# ---------------------------------------------------------------------------
+# pre_execution_warning tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_pre_execution_warning_for_high_irreversible():
+    """deleteMeal is HIGH risk and NOT undoable -- must warn."""
+    warning = pre_execution_warning("deleteMeal", {"id": 99})
+    assert warning is not None
+    assert "deleteMeal" in warning
+
+
+@pytest.mark.unit
+def test_pre_execution_warning_none_for_high_undoable():
+    """localFiles/delete is HIGH but undoable -- no pre-warning (post-note instead)."""
+    warning = pre_execution_warning("localFiles", {"operation": "delete", "path": "notes.txt"})
+    assert warning is None
+
+
+@pytest.mark.unit
+def test_pre_execution_warning_none_for_safe_tools():
+    assert pre_execution_warning("webSearch", {"query": "weather"}) is None
+    assert pre_execution_warning("screenshot", {}) is None
+
+
+@pytest.mark.unit
+def test_pre_execution_warning_none_for_moderate_tools():
+    assert pre_execution_warning("logMeal", {"name": "salad"}) is None
+    assert pre_execution_warning("localFiles", {"operation": "write"}) is None
+
+
+# ---------------------------------------------------------------------------
+# post_execution_note tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_post_execution_note_for_high_undoable():
+    """localFiles/delete is HIGH + undoable -- should return undo hint."""
+    note = post_execution_note("localFiles", {"operation": "delete", "path": "notes.txt"})
+    assert note is not None
+    assert "undo" in note.lower()
+
+
+@pytest.mark.unit
+def test_post_execution_note_none_for_high_irreversible():
+    """deleteMeal is HIGH but not undoable -- no post-note."""
+    note = post_execution_note("deleteMeal", {"id": 5})
+    assert note is None
+
+
+@pytest.mark.unit
+def test_post_execution_note_none_for_safe_tool():
+    assert post_execution_note("webSearch", {"query": "hello"}) is None
+
+
+@pytest.mark.unit
+def test_post_execution_note_none_for_moderate_non_undoable():
+    assert post_execution_note("logMeal", {"name": "banana"}) is None
+
+
+# ---------------------------------------------------------------------------
+# build_undo_args tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_build_undo_args_write_with_snapshot():
+    result = build_undo_args(
+        "localFiles",
+        {"operation": "write", "path": "notes.txt"},
+        snapshot="original content",
+    )
+    assert result is not None
+    undo_tool, undo_args, description = result
+    assert undo_tool == "localFiles"
+    assert undo_args["operation"] == "write"
+    assert undo_args["path"] == "notes.txt"
+    assert undo_args["content"] == "original content"
+    assert "notes.txt" in description
+
+
+@pytest.mark.unit
+def test_build_undo_args_append_with_snapshot():
+    result = build_undo_args(
+        "localFiles",
+        {"operation": "append", "path": "log.txt"},
+        snapshot="before-append contents",
+    )
+    assert result is not None
+    _, undo_args, _ = result
+    assert undo_args["content"] == "before-append contents"
+
+
+@pytest.mark.unit
+def test_build_undo_args_delete_with_snapshot():
+    result = build_undo_args(
+        "localFiles",
+        {"operation": "delete", "path": "shopping_list.txt"},
+        snapshot="milk\neggs\nbread",
+    )
+    assert result is not None
+    undo_tool, undo_args, description = result
+    assert undo_tool == "localFiles"
+    assert undo_args["content"] == "milk\neggs\nbread"
+    assert "shopping_list.txt" in description
+
+
+@pytest.mark.unit
+def test_build_undo_args_write_without_snapshot_returns_none():
+    result = build_undo_args(
+        "localFiles",
+        {"operation": "write", "path": "notes.txt"},
+        snapshot=None,
+    )
+    assert result is None
+
+
+@pytest.mark.unit
+def test_build_undo_args_for_non_undoable_tool():
+    result = build_undo_args("deleteMeal", {"id": 1}, snapshot=None)
+    assert result is None
+
+
+@pytest.mark.unit
+def test_build_undo_args_for_read_operation():
+    """localFiles/read is not undoable -- should return None."""
+    result = build_undo_args(
+        "localFiles",
+        {"operation": "read", "path": "notes.txt"},
+        snapshot="some content",
+    )
+    assert result is None
+

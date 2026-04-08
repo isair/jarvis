@@ -210,3 +210,150 @@ def test_reset_task_clears_singleton():
     active = get_active_task()
     assert active.status == TaskStatus.IDLE
     assert active.intent == ""
+
+
+# ---------------------------------------------------------------------------
+# Option B — REVERSIBLE status / "act then undo" model
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_awaiting_approval_is_alias_for_reversible():
+    """Backward-compat: AWAITING_APPROVAL must equal REVERSIBLE."""
+    assert TaskStatus.AWAITING_APPROVAL == TaskStatus.REVERSIBLE
+
+
+@pytest.mark.unit
+def test_step_status_has_reversible_and_reversed():
+    assert hasattr(StepStatus, "REVERSIBLE")
+    assert hasattr(StepStatus, "REVERSED")
+
+
+@pytest.mark.unit
+def test_task_step_has_step_id():
+    step = TaskStep(description="write notes", tool_name="localFiles")
+    assert isinstance(step.step_id, str)
+    assert len(step.step_id) > 0
+
+
+@pytest.mark.unit
+def test_mark_reversible_sets_step_status():
+    step = TaskStep(description="write notes", tool_name="localFiles")
+    step.start()
+    step.complete("ok")
+    step.mark_reversible("entry-id-abc")
+    assert step.status == StepStatus.REVERSIBLE
+    assert step.reversible is True
+    assert step.undo_entry_id == "entry-id-abc"
+
+
+@pytest.mark.unit
+def test_mark_reversed_transitions_step_from_reversible():
+    step = TaskStep(description="delete report.txt", tool_name="localFiles")
+    step.start()
+    step.complete("ok")
+    step.mark_reversible("entry-xyz")
+    step.mark_reversed("restored original content")
+    assert step.status == StepStatus.REVERSED
+    assert "restored" in (step.result_summary or "")
+
+
+@pytest.mark.unit
+def test_task_set_reversible_sets_task_status():
+    state = TaskState()
+    state.begin("write a file")
+    state.set_reversible()
+    assert state.status == TaskStatus.REVERSIBLE
+
+
+@pytest.mark.unit
+def test_set_awaiting_approval_is_compat_alias():
+    """set_awaiting_approval() must delegate to set_reversible()."""
+    state = TaskState()
+    state.begin("delete file")
+    state.set_awaiting_approval()
+    assert state.status == TaskStatus.REVERSIBLE
+
+
+@pytest.mark.unit
+def test_can_undo_when_reversible_task_with_reversible_steps():
+    state = TaskState()
+    state.begin("write notes")
+    s = state.add_step("write notes.txt", tool_name="localFiles")
+    s.start()
+    s.complete("ok")
+    s.mark_reversible("entry-1")
+    state.set_reversible()
+    assert state.can_undo() is True
+
+
+@pytest.mark.unit
+def test_cannot_undo_when_done():
+    state = TaskState()
+    state.begin("simple read")
+    s = state.add_step("read file", tool_name="localFiles")
+    s.start()
+    s.complete("contents")
+    state.complete()
+    assert state.can_undo() is False
+
+
+@pytest.mark.unit
+def test_reversible_steps_property_returns_only_reversible_steps():
+    state = TaskState()
+    state.begin("multi-step")
+    s1 = state.add_step("read", tool_name="localFiles")
+    s1.start()
+    s1.complete("data")
+
+    s2 = state.add_step("write", tool_name="localFiles")
+    s2.start()
+    s2.complete("saved")
+    s2.mark_reversible("entry-2")
+
+    reversible = state.reversible_steps
+    assert len(reversible) == 1
+    assert reversible[0] is s2
+
+
+@pytest.mark.unit
+def test_completed_steps_includes_reversible_steps():
+    state = TaskState()
+    state.begin("mixed task")
+    s1 = state.add_step("search", tool_name="webSearch")
+    s1.start()
+    s1.complete("results")
+
+    s2 = state.add_step("write notes", tool_name="localFiles")
+    s2.start()
+    s2.complete("saved")
+    s2.mark_reversible("entry-w")
+
+    assert len(state.completed_steps) == 2
+    assert s2 in state.completed_steps
+
+
+@pytest.mark.unit
+def test_can_resume_false_when_reversible_status():
+    """REVERSIBLE is a terminal state; resumption should not be triggered."""
+    state = TaskState()
+    state.begin("write file")
+    s = state.add_step("write", tool_name="localFiles")
+    s.start()
+    s.complete("ok")
+    s.mark_reversible("e1")
+    state.set_reversible()
+    assert state.can_resume() is False
+
+
+@pytest.mark.unit
+def test_summary_contains_reversible_info():
+    state = TaskState()
+    state.begin("write shopping list")
+    s = state.add_step("write shopping_list.txt", tool_name="localFiles")
+    s.start()
+    s.complete("saved")
+    s.mark_reversible("e99")
+    state.set_reversible()
+    summary = state.summary()
+    # Should mention the task intent and contain some status information
+    assert "shopping list" in summary.lower() or "reversible" in summary.lower()

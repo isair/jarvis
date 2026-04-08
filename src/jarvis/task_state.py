@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
@@ -27,9 +28,12 @@ class TaskStatus(Enum):
     IDLE = "idle"
     PLANNING = "planning"
     EXECUTING = "executing"
-    AWAITING_APPROVAL = "awaiting_approval"
+    REVERSIBLE = "reversible"   # Completed; last action(s) can still be undone
     DONE = "done"
     FAILED = "failed"
+
+    # Backwards-compat alias so existing callers don't break during migration
+    AWAITING_APPROVAL = "reversible"
 
 
 class StepStatus(Enum):
@@ -37,6 +41,8 @@ class StepStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    REVERSIBLE = "reversible"   # Succeeded; registered in UndoRegistry
+    REVERSED = "reversed"       # Was undone by the user
     FAILED = "failed"
     SKIPPED = "skipped"
 
@@ -50,6 +56,11 @@ class TaskStep:
     result_summary: Optional[str] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
+    # Unique identifier — used to link this step to an UndoEntry
+    step_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Set to True when a matching UndoEntry has been pushed to the registry
+    reversible: bool = False
+    undo_entry_id: Optional[str] = None
 
     def start(self) -> None:
         self.status = StepStatus.RUNNING
@@ -59,6 +70,29 @@ class TaskStep:
         self.status = StepStatus.SUCCEEDED
         self.result_summary = result_summary
         self.finished_at = time.time()
+
+    def mark_reversible(self, undo_entry_id: str) -> None:
+        """
+        Transition a completed step to REVERSIBLE status.
+
+        Called by the engine after pushing an UndoEntry to the registry
+        so that the task log reflects that this step can still be undone.
+        """
+        self.status = StepStatus.REVERSIBLE
+        self.reversible = True
+        self.undo_entry_id = undo_entry_id
+        debug_log(f"step marked reversible: {self.description[:60]}", "task")
+
+    def mark_reversed(self, result_summary: Optional[str] = None) -> None:
+        """
+        Transition a reversible step to REVERSED status.
+
+        Called by the engine after a successful undo execution so the
+        task history accurately reflects that this step was undone.
+        """
+        self.status = StepStatus.REVERSED
+        self.result_summary = result_summary or "undone by user"
+        debug_log(f"step reversed: {self.description[:60]}", "task")
 
     def fail(self, reason: Optional[str] = None) -> None:
         self.status = StepStatus.FAILED
@@ -102,27 +136,27 @@ class TaskState:
         self.status = TaskStatus.EXECUTING
         debug_log("task executing", "task")
 
+    def set_reversible(self) -> None:
+        """
+        Mark the task as completed with at least one reversible action.
+
+        Set this instead of ``complete()`` when the engine has pushed one
+        or more ``UndoEntry`` objects to the ``UndoRegistry``.
+        """
+        self.status = TaskStatus.REVERSIBLE
+        self.finished_at = time.time()
+        debug_log("task done (reversible actions registered)", "task")
+
+    # Backwards-compat aliases
     def set_awaiting_approval(self) -> None:
-        """Pause execution pending user approval."""
-        self.status = TaskStatus.AWAITING_APPROVAL
-        debug_log("task awaiting approval", "task")
+        """Deprecated — use set_reversible() instead."""
+        self.set_reversible()
 
     def set_approved(self) -> None:
-        """
-        Resume execution after the user has granted approval.
-
-        Transitions the task from ``AWAITING_APPROVAL`` back to
-        ``EXECUTING``.  If the task is not in the approval-pending state
-        this is a no-op so callers do not need to guard the call.
-        """
-        if self.status == TaskStatus.AWAITING_APPROVAL:
+        """Deprecated — previously resumed approval-gated execution."""
+        if self.status == TaskStatus.REVERSIBLE:
             self.status = TaskStatus.EXECUTING
-            debug_log("task approved — resuming execution", "task")
-        else:
-            debug_log(
-                f"set_approved called on task in state {self.status.value} — no-op",
-                "task",
-            )
+            debug_log("task approved (compat) — resuming execution", "task")
 
     def add_step(self, description: str, tool_name: Optional[str] = None) -> TaskStep:
         """Add and return a new pending step."""
@@ -159,13 +193,30 @@ class TaskState:
         Returns True when a task was interrupted and has pending steps
         that could be continued in the same session.
         """
-        if self.status not in (TaskStatus.EXECUTING, TaskStatus.AWAITING_APPROVAL):
+        if self.status not in (TaskStatus.EXECUTING,):
             return False
         return any(s.status == StepStatus.PENDING for s in self.steps)
 
+    def can_undo(self) -> bool:
+        """
+        Returns True when the task completed with at least one reversible
+        step that has not yet been undone or expired.
+        """
+        return self.status == TaskStatus.REVERSIBLE and any(
+            s.status == StepStatus.REVERSIBLE for s in self.steps
+        )
+
     @property
     def completed_steps(self) -> List[TaskStep]:
-        return [s for s in self.steps if s.status == StepStatus.SUCCEEDED]
+        return [
+            s for s in self.steps
+            if s.status in (StepStatus.SUCCEEDED, StepStatus.REVERSIBLE)
+        ]
+
+    @property
+    def reversible_steps(self) -> List[TaskStep]:
+        """Steps that completed successfully and can still be undone."""
+        return [s for s in self.steps if s.status == StepStatus.REVERSIBLE]
 
     @property
     def failed_steps(self) -> List[TaskStep]:
@@ -176,6 +227,9 @@ class TaskState:
         parts = [f"Task: {self.intent[:60]}", f"Status: {self.status.value}"]
         if self.steps:
             parts.append(f"Steps: {len(self.completed_steps)}/{len(self.steps)} completed")
+        rev = len(self.reversible_steps)
+        if rev:
+            parts.append(f"Reversible: {rev}")
         if self.error:
             parts.append(f"Error: {self.error[:60]}")
         return " | ".join(parts)
