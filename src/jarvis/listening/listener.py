@@ -1378,7 +1378,7 @@ class VoiceListener(threading.Thread):
             used_compute = compute
             for try_device, try_compute in configs_to_try:
                 try:
-                    cpu_threads = (os.cpu_count() or 4) if try_device == "cpu" else 0
+                    cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
                     print(f"  🔄 Loading Whisper model '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
                     self.model = WhisperModel(
                         model_name, device=try_device, compute_type=try_compute,
