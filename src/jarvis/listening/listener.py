@@ -1731,6 +1731,7 @@ class VoiceListener(threading.Thread):
                     audio,
                     path_or_hf_repo=self._mlx_model_repo,
                     language=None,
+                    beam_size=1,  # greedy decoding – faster, minimal accuracy loss
                 )
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
@@ -1771,9 +1772,9 @@ class VoiceListener(threading.Thread):
             else:
                 # faster-whisper transcription
                 try:
-                    segments, _info = self.model.transcribe(audio, language=None, vad_filter=False)
+                    segments, _info = self.model.transcribe(audio, language=None, beam_size=1, vad_filter=False)
                 except TypeError:
-                    segments, _info = self.model.transcribe(audio, language=None)
+                    segments, _info = self.model.transcribe(audio, language=None, beam_size=1)
                 segments_list = list(segments)
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
