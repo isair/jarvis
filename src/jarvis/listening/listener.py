@@ -190,6 +190,55 @@ def _get_mlx_model_repo(model_name: str) -> str:
     return model_map.get(model_name, f"mlx-community/whisper-{model_name}-mlx")
 
 
+def _clear_corrupted_whisper_cache(error_message: str) -> bool:
+    """Clear a corrupted Whisper model cache directory.
+
+    Parses the CTranslate2 error message to find the snapshot directory,
+    then deletes the parent ``models--`` directory so the model can be
+    re-downloaded cleanly (including blobs that may also be corrupt).
+
+    Returns ``True`` if a cache directory was found and deleted.
+    """
+    import re
+    import shutil
+
+    # CTranslate2 error format:
+    #   "Unable to open file 'model.bin' in model '/path/to/snapshots/hash'"
+    match = re.search(
+        r"unable to open file\s+'[^']+'\s+in model\s+'([^']+)'",
+        error_message,
+        re.IGNORECASE,
+    )
+    if not match:
+        debug_log("could not parse cache path from error message", "voice")
+        return False
+
+    snapshot_path = match.group(1)
+
+    # Walk up to the models-- directory
+    # snapshot_path is e.g. .../models--Org--Name/snapshots/<hash>
+    # We want to delete .../models--Org--Name entirely
+    from pathlib import Path
+    path = Path(snapshot_path)
+    model_dir = None
+    for parent in [path] + list(path.parents):
+        if parent.name.startswith("models--"):
+            model_dir = parent
+            break
+
+    if model_dir is None or not model_dir.is_dir():
+        debug_log(f"could not locate models-- cache directory from: {snapshot_path}", "voice")
+        return False
+
+    try:
+        shutil.rmtree(model_dir)
+        debug_log(f"cleared corrupted Whisper cache: {model_dir}", "voice")
+        return True
+    except OSError as e:
+        debug_log(f"failed to clear corrupted cache: {e}", "voice")
+        return False
+
+
 class VoiceListener(threading.Thread):
     """Main voice listening thread that orchestrates all voice processing."""
 
@@ -1423,6 +1472,38 @@ class VoiceListener(threading.Thread):
                     if is_cuda_error or is_compute_error:
                         debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
                         continue
+
+                    # Check for corrupted model cache (e.g. interrupted download)
+                    is_corrupted_cache = "unable to open file" in error_str
+
+                    if is_corrupted_cache:
+                        debug_log(f"detected corrupted Whisper model cache: {e}", "voice")
+                        print("  ⚠️  Whisper model cache appears corrupted, attempting recovery...", flush=True)
+
+                        cache_cleared = _clear_corrupted_whisper_cache(str(e))
+                        if cache_cleared:
+                            try:
+                                print(f"  🔄 Re-downloading Whisper model '{model_name}'...", flush=True)
+                                self.model = WhisperModel(
+                                    model_name, device=try_device, compute_type=try_compute,
+                                    cpu_threads=cpu_threads,
+                                )
+                                ct2_model = getattr(self.model, "model", None)
+                                resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
+                                debug_log(f"faster-whisper initialised after cache recovery: name={model_name}, device={resolved_device}, compute={try_compute}", "voice")
+                                self._whisper_device = resolved_device
+                                print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device} (recovered)", flush=True)
+                                last_error = None
+                                break
+                            except Exception as retry_e:
+                                debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
+                                print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
+                                return
+                        else:
+                            debug_log("could not clear corrupted cache automatically", "voice")
+                            print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
+                            print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
+                            return
                     else:
                         # For other errors (model not found, network issues, etc.), don't try fallbacks
                         debug_log(f"failed to initialize faster-whisper: {e}", "voice")

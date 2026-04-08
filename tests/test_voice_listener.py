@@ -1237,3 +1237,183 @@ class TestSampleRateFallback:
 
                             # Should only have tried once — no fallback
                             assert mock_sd.InputStream.call_count == 1
+
+
+class TestCorruptedWhisperCacheRecovery:
+    """Tests for automatic recovery from corrupted Whisper model cache."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "medium")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_corrupted_cache_detected_and_recovered(self, tmp_path):
+        """When model.bin is corrupted, cache is cleared and model reloads."""
+        mock_whisper_model = MagicMock()
+
+        # Create a fake cache directory to be deleted
+        snapshot_dir = tmp_path / "models--Systran--faster-whisper-medium" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "model.bin").write_bytes(b"corrupted")
+
+        error_msg = f"Unable to open file 'model.bin' in model '{snapshot_dir}'"
+        call_count = 0
+
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError(error_msg)
+            return mock_whisper_model
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # Should have called WhisperModel twice: first corrupted, then retry
+                            assert mock_class.call_count == 2
+                            assert listener.model == mock_whisper_model
+
+                            # The corrupted snapshot directory should have been deleted
+                            assert not snapshot_dir.exists()
+
+    def test_corrupted_cache_retry_also_fails(self, tmp_path):
+        """When retry after cache clear also fails, model remains None."""
+        # Create a fake cache directory
+        snapshot_dir = tmp_path / "models--Systran--faster-whisper-medium" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "model.bin").write_bytes(b"corrupted")
+
+        error_msg = f"Unable to open file 'model.bin' in model '{snapshot_dir}'"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError(error_msg)
+
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # First attempt + retry = 2 calls
+                            assert mock_class.call_count == 2
+                            assert listener.model is None
+
+    def test_corrupted_cache_parent_model_dir_deleted(self, tmp_path):
+        """Cache cleanup deletes the parent models-- directory, not just snapshot."""
+        mock_whisper_model = MagicMock()
+
+        model_dir = tmp_path / "models--Systran--faster-whisper-medium"
+        snapshot_dir = model_dir / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "model.bin").write_bytes(b"corrupted")
+
+        # Also create blobs dir (like real HF cache)
+        blobs_dir = model_dir / "blobs"
+        blobs_dir.mkdir()
+        (blobs_dir / "sha256-fake").write_bytes(b"corrupted blob")
+
+        error_msg = f"Unable to open file 'model.bin' in model '{snapshot_dir}'"
+        call_count = 0
+
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError(error_msg)
+            return mock_whisper_model
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # The entire models-- directory should have been deleted (including blobs)
+                            assert not model_dir.exists()
+
+    def test_unparseable_cache_path_shows_manual_instructions(self, capsys):
+        """When error path can't be parsed, shows manual cleanup instructions."""
+        error_msg = "Unable to open file 'model.bin' somehow"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError(error_msg)
+
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # Should NOT retry (can't parse path)
+                            mock_class.assert_called_once()
+                            assert listener.model is None
+
+                            # Should show manual cleanup hint
+                            captured = capsys.readouterr()
+                            assert "manually delet" in captured.out.lower()
