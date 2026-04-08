@@ -1734,7 +1734,6 @@ class VoiceListener(threading.Thread):
                         audio,
                         path_or_hf_repo=self._mlx_model_repo,
                         language=None,
-                        beam_size=1,  # greedy decoding – faster, minimal accuracy loss
                     )
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
