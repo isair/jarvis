@@ -1209,20 +1209,6 @@ class ModelsPage(QWizardPage):
 
         layout.addWidget(selection_card)
 
-        # Thinking mode toggle (outside card, consistent with dictation page style)
-        self._thinking_check = QCheckBox("  Enable thinking mode (slower but may improve quality)")
-        self._thinking_check.setChecked(False)
-        self._thinking_check.setStyleSheet("font-size: 14px; color: #fafafa;")
-        layout.addWidget(self._thinking_check)
-
-        thinking_note = QLabel(
-            "Some models reason internally before answering. "
-            "Disabling this (default) gives faster responses."
-        )
-        thinking_note.setWordWrap(True)
-        thinking_note.setStyleSheet("color: #71717a; font-size: 12px; margin-left: 28px;")
-        layout.addWidget(thinking_note)
-
         # Model list card
         card = QFrame()
         card.setObjectName("card")
@@ -1374,12 +1360,6 @@ class ModelsPage(QWizardPage):
 
             config["ollama_chat_model"] = self._selected_model
 
-            # Save thinking mode preference (only write if non-default)
-            if self._thinking_check.isChecked():
-                config["llm_thinking_enabled"] = True
-            else:
-                config.pop("llm_thinking_enabled", None)
-
             with config_path.open("w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
 
@@ -1389,16 +1369,13 @@ class ModelsPage(QWizardPage):
 
     def initializePage(self):
         """Initialize page with current model status."""
-        # Load the currently configured chat model and thinking mode
+        # Load the currently configured chat model
         current_chat_model = DEFAULT_CHAT_MODEL
-        thinking_enabled = False
         try:
             cfg = load_settings()
             current_chat_model = cfg.ollama_chat_model
-            thinking_enabled = bool(getattr(cfg, "llm_thinking_enabled", False))
         except Exception:
             pass
-        self._thinking_check.setChecked(thinking_enabled)
 
         # Pre-select the model if it's one of our options, otherwise default
         if current_chat_model in self.MODEL_OPTIONS:
