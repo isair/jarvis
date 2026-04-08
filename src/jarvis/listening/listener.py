@@ -1378,18 +1378,21 @@ class VoiceListener(threading.Thread):
             used_compute = compute
             for try_device, try_compute in configs_to_try:
                 try:
-                    # Use all available CPU cores when running on CPU
-                    cpu_threads = (os.cpu_count() or 4) if try_device == "cpu" else 0
+                    cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
                     print(f"  🔄 Loading Whisper model '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
                     self.model = WhisperModel(
                         model_name, device=try_device, compute_type=try_compute,
                         cpu_threads=cpu_threads,
                     )
-                    debug_log(f"faster-whisper initialised: name={model_name}, device={try_device}, compute={try_compute}, cpu_threads={cpu_threads}", "voice")
+
+                    # Resolve actual device (CTranslate2 resolves "auto" internally)
+                    resolved_device = getattr(self.model, "model", None)
+                    resolved_device = getattr(resolved_device, "device", try_device) if resolved_device else try_device
+                    debug_log(f"faster-whisper initialised: name={model_name}, device={resolved_device}, compute={try_compute}, cpu_threads={cpu_threads}", "voice")
 
                     used_device = try_device
                     used_compute = try_compute
-                    self._whisper_device = try_device
+                    self._whisper_device = resolved_device
 
                     # Show warnings if we fell back to different settings
                     if try_device != device and device in ("auto", "cuda"):
@@ -1397,9 +1400,9 @@ class VoiceListener(threading.Thread):
                         print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
                     if try_compute != compute:
                         print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
-                    if try_device == "cpu":
+                    if resolved_device == "cpu":
                         print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
-                    print(f"  ✅ Whisper model '{model_name}' loaded on {try_device}", flush=True)
+                    print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}", flush=True)
                     last_error = None
                     break
                 except Exception as e:
