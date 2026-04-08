@@ -28,6 +28,27 @@ from helpers import (
 # Test Data
 # =============================================================================
 
+MOCK_WEATHER_FORECAST = """Current weather in Tbilisi, Tbilisi, Georgia:
+
+Conditions: Slight rain
+Temperature: 6.1°C (43.0°F)
+Humidity: 80%
+Wind: 10.0 km/h
+
+Today's forecast (upcoming hours):
+  15:00 — 8.0°C, Partly cloudy
+  18:00 — 6.5°C, Clear sky
+  21:00 — 4.0°C, Clear sky
+
+7-day forecast:
+  2026-04-08: 3–8°C, Slight rain
+  2026-04-09: 5–14°C, Partly cloudy
+  2026-04-10: 7–16°C, Clear sky
+  2026-04-11: 6–13°C, Overcast
+  2026-04-12: 4–11°C, Slight rain
+  2026-04-13: 5–12°C, Partly cloudy
+  2026-04-14: 6–15°C, Clear sky"""
+
 MOCK_WEATHER_SEARCH = """Web search results for 'weather London UK this week':
 1. **BBC Weather** - https://www.bbc.co.uk/weather/2643743
 2. **Met Office** - https://www.metoffice.gov.uk/weather/forecast/gcpvj0v07
@@ -189,7 +210,7 @@ class TestContextUtilization:
         mock_tool_run = create_mock_tool_run(capture, {"webSearch": MOCK_WEATHER_SEARCH})
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -244,7 +265,7 @@ class TestToolUsage:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -278,7 +299,7 @@ class TestToolUsage:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -341,7 +362,7 @@ class TestMultiStepReasoning:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -400,7 +421,7 @@ class TestMultiStepReasoning:
         call_count = 0
         has_recalled_memory = False
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count, has_recalled_memory
             call_count += 1
 
@@ -539,7 +560,7 @@ class TestMemoryEnrichment:
 
         captured_messages = []
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             captured_messages.extend(messages)
             return create_mock_llm_response(
                 "Based on your love for Italian food and goal to eat more veggies, "
@@ -589,7 +610,7 @@ class TestMemoryEnrichment:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -752,4 +773,160 @@ class TestLiveEndToEnd:
 
         print(f"   Response mentions user interests: {response_mentions_interests}")
         print(f"   ✅ Personalized query handling: PASS")
+
+
+# =============================================================================
+# Helpfulness Evaluations (Anti-Deflection)
+# =============================================================================
+
+# Phrases that indicate the agent is deflecting instead of using its tools
+DEFLECTION_PHRASES = [
+    "check a weather app",
+    "check a local weather",
+    "check a dedicated weather",
+    "use a weather app",
+    "try a weather app",
+    "visit a weather",
+    "check online",
+    "i don't have",
+    "i do not have",
+    "i cannot check",
+    "i can't check",
+    "i'm unable to",
+    "i am unable to",
+    "beyond my capabilities",
+    "outside my capabilities",
+    "i can only check",
+    "only for today",
+    "not able to provide",
+    "unable to provide",
+    "don't have access to",
+    "do not have access to",
+    "recommend checking",
+    "suggest checking",
+]
+
+
+def _response_is_deflection(response: str) -> bool:
+    """Check if the response deflects the user to another app/service."""
+    if not response:
+        return True
+    response_lower = response.lower()
+    return any(phrase in response_lower for phrase in DEFLECTION_PHRASES)
+
+
+class TestHelpfulness:
+    """
+    Tests that the agent uses its tools proactively instead of deflecting.
+
+    The agent should NEVER tell users to "check a weather app" or "I can't do that"
+    when it has tools available to fulfil the request.
+    """
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    @pytest.mark.parametrize("query", [
+        pytest.param(
+            "how's the weather going to be later today?",
+            id="No deflection: forecast later today"
+        ),
+        pytest.param(
+            "what's the weather tomorrow?",
+            id="No deflection: tomorrow weather"
+        ),
+        pytest.param(
+            "will it rain this week?",
+            id="No deflection: weekly rain forecast"
+        ),
+        pytest.param(
+            "what's the weather going to be like on Friday?",
+            id="No deflection: specific day forecast"
+        ),
+    ])
+    def test_no_deflection_for_weather_forecast_live(
+        self, query, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """Live eval: agent should use tools for forecast queries, never deflect."""
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        capture = ToolCallCapture()
+        mock_tool_run = create_mock_tool_run(capture, {
+            "getWeather": MOCK_WEATHER_FORECAST,
+            "webSearch": "Weather forecast: partly cloudy, 14°C tomorrow.",
+            "fetchWebPage": "Detailed 7-day forecast...",
+        })
+
+        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
+             patch('jarvis.reply.engine.get_location_context', return_value="Location: Tbilisi, Georgia"):
+
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory
+            )
+
+        tools_used = capture.tool_names()
+
+        print(f"\n📊 Anti-Deflection (Weather Forecast):")
+        print(f"   Query: {query}")
+        print(f"   Tools called: {tools_used}")
+        print(f"   Response: {(response or '')[:150]}...")
+
+        # Must have used at least one tool
+        assert capture.has_any_tool(), \
+            f"Agent should use tools for weather forecast, not respond from knowledge. " \
+            f"Response: {(response or '')[:200]}"
+
+        # Must NOT deflect
+        assert not _response_is_deflection(response or ""), \
+            f"Agent deflected instead of using its tools. Response: {(response or '')[:300]}"
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    @pytest.mark.parametrize("query", [
+        pytest.param(
+            "what's the latest news in tech?",
+            id="No deflection: tech news"
+        ),
+        pytest.param(
+            "what time is it in Tokyo?",
+            id="No deflection: time query"
+        ),
+    ])
+    def test_no_deflection_for_answerable_queries_live(
+        self, query, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """Live eval: agent should use tools for answerable queries, never deflect."""
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        capture = ToolCallCapture()
+        mock_tool_run = create_mock_tool_run(capture, {
+            "webSearch": "Top tech news: AI advances, new chip announcements.",
+            "fetchWebPage": "Detailed article about tech trends...",
+            "getWeather": "Current time info...",
+        })
+
+        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
+             patch('jarvis.reply.engine.get_location_context', return_value="Location: Tbilisi, Georgia"):
+
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory
+            )
+
+        print(f"\n📊 Anti-Deflection (General):")
+        print(f"   Query: {query}")
+        print(f"   Tools called: {capture.tool_names()}")
+        print(f"   Response: {(response or '')[:150]}...")
+
+        # Should not deflect for queries the agent can handle
+        assert not _response_is_deflection(response or ""), \
+            f"Agent deflected instead of being helpful. Response: {(response or '')[:300]}"
 

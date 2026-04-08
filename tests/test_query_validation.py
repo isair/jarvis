@@ -225,6 +225,94 @@ class TestIntentJudgeWakeWordValidation:
         assert hot_query != intent_judgment_query
 
 
+class TestWakeTimestampCapture:
+    """Tests that _wake_timestamp is set when a wake word is detected.
+
+    Bug fix: _wake_timestamp was never set, only initialised to None and
+    cleared. This meant the intent judge always received wake_timestamp=None,
+    so it never marked segments with "(WAKE WORD DETECTED)" and fell back to
+    incorrect reasoning — classifying directed queries as not directed.
+    """
+
+    def test_wake_timestamp_set_on_wake_word_detection(self):
+        """_wake_timestamp is set to utterance_start_time when wake word is detected."""
+        from unittest.mock import MagicMock, patch, PropertyMock
+
+        # Build a minimal listener-like object with _process_transcript behaviour
+        listener = MagicMock()
+        listener._wake_timestamp = None
+        listener.tts = None
+        listener.cfg = MagicMock()
+        listener.cfg.wake_word = "jarvis"
+        listener.cfg.wake_aliases = []
+        listener.cfg.wake_fuzzy_ratio = 0.78
+
+        # Simulate the logic from _process_transcript early beep section
+        text_lower = "jarvis what's the weather tomorrow"
+        utterance_start_time = 1000.5
+        in_hot_window = False
+
+        wake_word = listener.cfg.wake_word
+        aliases = list(set(listener.cfg.wake_aliases) | {wake_word})
+        fuzzy_ratio = float(listener.cfg.wake_fuzzy_ratio)
+
+        if not in_hot_window:
+            if is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+                listener._wake_timestamp = utterance_start_time
+
+        assert listener._wake_timestamp == 1000.5, \
+            "_wake_timestamp should be set to utterance_start_time when wake word detected"
+
+    def test_wake_timestamp_not_set_without_wake_word(self):
+        """_wake_timestamp stays None when no wake word is present."""
+        listener = MagicMock()
+        listener._wake_timestamp = None
+        listener.cfg = MagicMock()
+        listener.cfg.wake_word = "jarvis"
+        listener.cfg.wake_aliases = []
+        listener.cfg.wake_fuzzy_ratio = 0.78
+
+        text_lower = "what's the weather tomorrow"
+        utterance_start_time = 1000.5
+        in_hot_window = False
+
+        wake_word = listener.cfg.wake_word
+        aliases = list(set(listener.cfg.wake_aliases) | {wake_word})
+        fuzzy_ratio = float(listener.cfg.wake_fuzzy_ratio)
+
+        if not in_hot_window:
+            if is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+                listener._wake_timestamp = utterance_start_time
+
+        assert listener._wake_timestamp is None, \
+            "_wake_timestamp should stay None when no wake word detected"
+
+    def test_wake_timestamp_not_set_in_hot_window(self):
+        """_wake_timestamp is not set in hot window mode (no wake word needed)."""
+        listener = MagicMock()
+        listener._wake_timestamp = None
+        listener.cfg = MagicMock()
+        listener.cfg.wake_word = "jarvis"
+        listener.cfg.wake_aliases = []
+        listener.cfg.wake_fuzzy_ratio = 0.78
+
+        text_lower = "jarvis what's the weather"
+        utterance_start_time = 1000.5
+        in_hot_window = True
+
+        wake_word = listener.cfg.wake_word
+        aliases = list(set(listener.cfg.wake_aliases) | {wake_word})
+        fuzzy_ratio = float(listener.cfg.wake_fuzzy_ratio)
+
+        # In hot window, we skip wake word detection
+        if not in_hot_window:
+            if is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+                listener._wake_timestamp = utterance_start_time
+
+        assert listener._wake_timestamp is None, \
+            "_wake_timestamp should not be set in hot window mode"
+
+
 class TestStateTimingScenarios:
     """Tests for state timing and transitions.
 

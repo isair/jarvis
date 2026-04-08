@@ -51,7 +51,11 @@ class WeatherTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Get current weather conditions. If no location specified, uses the user's current location automatically."
+        return (
+            "Get current weather conditions and forecast (hourly for today, daily for the next week). "
+            "Use this for ANY weather question — current, later today, tomorrow, this week, etc. "
+            "If no location specified, uses the user's current location automatically."
+        )
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
@@ -181,12 +185,15 @@ class WeatherTool(Tool):
                 location_display = user_loc["display_name"]
                 debug_log(f"    📍 using detected location: {location_display} ({lat}, {lon})", "tools")
 
-            # Step 2: Get current weather
+            # Step 2: Get current weather + forecast
             weather_url = "https://api.open-meteo.com/v1/forecast"
             weather_params = {
                 "latitude": lat,
                 "longitude": lon,
                 "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_gusts_10m",
+                "hourly": "temperature_2m,weather_code",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                "forecast_days": 7,
                 "temperature_unit": "celsius",
                 "wind_speed_unit": "kmh",
                 "timezone": "auto"
@@ -203,7 +210,7 @@ class WeatherTool(Tool):
                     reply_text=f"Weather data temporarily unavailable for {location_display}."
                 )
 
-            # Extract weather values
+            # Extract current weather values
             temp_c = current.get("temperature_2m")
             feels_like_c = current.get("apparent_temperature")
             humidity = current.get("relative_humidity_2m")
@@ -218,7 +225,7 @@ class WeatherTool(Tool):
             # Get weather description
             weather_desc = WMO_CODES.get(weather_code, "Unknown conditions")
 
-            # Build response text
+            # Build response text — current conditions
             lines = [
                 f"Current weather in {location_display}:",
                 f"",
@@ -239,6 +246,50 @@ class WeatherTool(Tool):
                 if wind_gusts and wind_gusts > wind_speed:
                     wind_info += f" (gusts up to {wind_gusts} km/h)"
                 lines.append(wind_info)
+
+            # Append today's hourly forecast (remaining hours)
+            hourly = weather_data.get("hourly", {})
+            hourly_times = hourly.get("time", [])
+            hourly_temps = hourly.get("temperature_2m", [])
+            hourly_codes = hourly.get("weather_code", [])
+
+            if hourly_times and hourly_temps:
+                # Get current hour from the current time field
+                current_time = current.get("time", "")
+                current_hour_str = current_time[11:13] if len(current_time) >= 13 else ""
+                current_hour = int(current_hour_str) if current_hour_str.isdigit() else 0
+                today_prefix = current_time[:10] if len(current_time) >= 10 else ""
+
+                hourly_lines = []
+                for i, t in enumerate(hourly_times):
+                    if not t.startswith(today_prefix):
+                        continue
+                    hour_str = t[11:13] if len(t) >= 13 else ""
+                    hour = int(hour_str) if hour_str.isdigit() else -1
+                    # Show every 3 hours from now onwards
+                    if hour > current_hour and hour % 3 == 0 and i < len(hourly_temps) and i < len(hourly_codes):
+                        desc = WMO_CODES.get(hourly_codes[i], "")
+                        hourly_lines.append(f"  {hour:02d}:00 — {hourly_temps[i]}°C, {desc}")
+
+                if hourly_lines:
+                    lines.append("")
+                    lines.append("Today's forecast (upcoming hours):")
+                    lines.extend(hourly_lines)
+
+            # Append daily forecast
+            daily = weather_data.get("daily", {})
+            daily_dates = daily.get("time", [])
+            daily_codes = daily.get("weather_code", [])
+            daily_max = daily.get("temperature_2m_max", [])
+            daily_min = daily.get("temperature_2m_min", [])
+
+            if daily_dates and daily_max and daily_min:
+                lines.append("")
+                lines.append("7-day forecast:")
+                for i, date_str in enumerate(daily_dates):
+                    if i < len(daily_max) and i < len(daily_min) and i < len(daily_codes):
+                        desc = WMO_CODES.get(daily_codes[i], "")
+                        lines.append(f"  {date_str}: {daily_min[i]}–{daily_max[i]}°C, {desc}")
 
             reply_text = "\n".join(lines)
 

@@ -30,7 +30,7 @@ class TestWeatherTool:
 
     @patch('requests.get')
     def test_run_success(self, mock_get):
-        """Test successful weather retrieval."""
+        """Test successful weather retrieval with current + forecast data."""
         # First call: geocoding
         geo_response = Mock()
         geo_response.status_code = 200
@@ -45,18 +45,30 @@ class TestWeatherTool:
         }
         geo_response.raise_for_status = Mock()
 
-        # Second call: weather
+        # Second call: weather (now includes hourly + daily forecast)
         weather_response = Mock()
         weather_response.status_code = 200
         weather_response.json.return_value = {
             "current": {
+                "time": "2026-04-08T14:00",
                 "temperature_2m": 15.5,
                 "apparent_temperature": 14.0,
                 "relative_humidity_2m": 65,
                 "weather_code": 2,
                 "wind_speed_10m": 12.0,
                 "wind_gusts_10m": 20.0
-            }
+            },
+            "hourly": {
+                "time": [f"2026-04-08T{h:02d}:00" for h in range(24)],
+                "temperature_2m": [10 + h * 0.5 for h in range(24)],
+                "weather_code": [2] * 24,
+            },
+            "daily": {
+                "time": [f"2026-04-{8+d:02d}" for d in range(7)],
+                "weather_code": [2, 3, 61, 0, 1, 2, 3],
+                "temperature_2m_max": [16, 14, 12, 17, 18, 15, 13],
+                "temperature_2m_min": [8, 7, 5, 9, 10, 8, 6],
+            },
         }
         weather_response.raise_for_status = Mock()
 
@@ -71,6 +83,9 @@ class TestWeatherTool:
         assert "15.5°C" in result.reply_text
         assert "Partly cloudy" in result.reply_text  # WMO code 2
         assert "65%" in result.reply_text  # humidity
+        # Verify forecast sections are present
+        assert "Today's forecast" in result.reply_text
+        assert "7-day forecast" in result.reply_text
         self.context.user_print.assert_called()
 
     @patch('requests.get')
@@ -206,6 +221,65 @@ class TestWeatherTool:
         assert WMO_CODES[95] == "Thunderstorm"
         # Ensure there are many codes covered
         assert len(WMO_CODES) >= 20
+
+    @patch('requests.get')
+    def test_forecast_includes_hourly_and_daily(self, mock_get):
+        """Test that forecast data includes today's hourly and 7-day daily sections."""
+        geo_response = Mock()
+        geo_response.status_code = 200
+        geo_response.json.return_value = {
+            "results": [{
+                "latitude": 41.6938,
+                "longitude": 44.8015,
+                "name": "Tbilisi",
+                "country": "Georgia",
+                "admin1": "Tbilisi"
+            }]
+        }
+        geo_response.raise_for_status = Mock()
+
+        weather_response = Mock()
+        weather_response.status_code = 200
+        weather_response.json.return_value = {
+            "current": {
+                "time": "2026-04-08T10:00",
+                "temperature_2m": 12.0,
+                "apparent_temperature": 10.0,
+                "relative_humidity_2m": 70,
+                "weather_code": 61,
+                "wind_speed_10m": 8.0,
+                "wind_gusts_10m": 15.0
+            },
+            "hourly": {
+                "time": [f"2026-04-08T{h:02d}:00" for h in range(24)],
+                "temperature_2m": [8, 8, 7, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 16, 15, 14, 13, 12, 11, 10, 9, 9, 8],
+                "weather_code": [61] * 12 + [2] * 12,
+            },
+            "daily": {
+                "time": [f"2026-04-{8+d:02d}" for d in range(7)],
+                "weather_code": [61, 3, 0, 1, 2, 61, 0],
+                "temperature_2m_max": [16, 18, 20, 19, 17, 14, 21],
+                "temperature_2m_min": [7, 8, 10, 9, 8, 6, 11],
+            },
+        }
+        weather_response.raise_for_status = Mock()
+
+        mock_get.side_effect = [geo_response, weather_response]
+
+        result = self.tool.run({"location": "Tbilisi"}, self.context)
+
+        assert result.success is True
+        # Current conditions
+        assert "12" in result.reply_text
+        assert "Slight rain" in result.reply_text
+        # Hourly forecast for remaining hours (every 3 hours after hour 10)
+        assert "Today's forecast" in result.reply_text
+        assert "12:00" in result.reply_text
+        assert "15:00" in result.reply_text
+        # Daily forecast
+        assert "7-day forecast" in result.reply_text
+        assert "2026-04-09" in result.reply_text
+        assert "2026-04-14" in result.reply_text
 
     @patch('requests.get')
     def test_temperature_conversion(self, mock_get):
