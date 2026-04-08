@@ -626,8 +626,8 @@ class TestCpuOptimisations:
 
                                 assert mock_class.call_args[1]["cpu_threads"] == 8
 
-    def test_cpu_threads_set_when_device_is_auto(self):
-        """CPU cores are passed to WhisperModel when device is auto (may resolve to CPU)."""
+    def test_cpu_threads_default_when_device_is_auto(self):
+        """Auto device uses default cpu_threads (0) — CTranslate2 decides the device."""
         mock_whisper_model = MagicMock()
         mock_whisper_model.model.device = "cpu"
 
@@ -639,14 +639,15 @@ class TestCpuOptimisations:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
                             mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
-                            with patch("jarvis.listening.listener.os.cpu_count", return_value=12):
-                                from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config(whisper_device="auto")
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
-                                listener.run()
+                            from jarvis.listening.listener import VoiceListener
 
-                                assert mock_class.call_args[1]["cpu_threads"] == 12
+                            mock_cfg = self._create_mock_config(whisper_device="auto")
+                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                            listener.run()
+
+                            # auto doesn't set cpu_threads — avoids oversubscription if it resolves to CUDA
+                            assert mock_class.call_args[1]["cpu_threads"] == 0
 
     def test_resolved_device_stored_from_ctranslate2(self):
         """The resolved device from CTranslate2 is stored on the listener."""
