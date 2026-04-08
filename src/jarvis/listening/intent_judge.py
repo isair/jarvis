@@ -383,7 +383,7 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
         model=model,
         ollama_base_url=ollama_base_url,
         timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
-        thinking=bool(getattr(cfg, "llm_thinking_enabled", False)),
+        thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
 
     return IntentJudge(config)

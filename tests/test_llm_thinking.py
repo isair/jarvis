@@ -19,13 +19,25 @@ from jarvis.config import get_default_config
 # ---------------------------------------------------------------------------
 
 class TestThinkingConfig:
-    """Config layer tests for llm_thinking_enabled."""
+    """Config layer tests for thinking settings."""
 
-    def test_default_config_has_thinking_disabled(self):
+    def test_default_config_has_chat_thinking_disabled(self):
         """llm_thinking_enabled should default to False."""
         config = get_default_config()
         assert "llm_thinking_enabled" in config
         assert config["llm_thinking_enabled"] is False
+
+    def test_default_config_has_intent_judge_thinking_disabled(self):
+        """intent_judge_thinking_enabled should default to False."""
+        config = get_default_config()
+        assert "intent_judge_thinking_enabled" in config
+        assert config["intent_judge_thinking_enabled"] is False
+
+    def test_default_config_has_dictation_thinking_disabled(self):
+        """dictation_thinking_enabled should default to False."""
+        config = get_default_config()
+        assert "dictation_thinking_enabled" in config
+        assert config["dictation_thinking_enabled"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +158,23 @@ class TestIntentJudgeThinking:
         assert config.thinking is True
 
     def test_create_intent_judge_passes_thinking(self):
-        """create_intent_judge should read llm_thinking_enabled from cfg."""
+        """create_intent_judge should read intent_judge_thinking_enabled from cfg."""
+        from jarvis.listening.intent_judge import create_intent_judge
+
+        cfg = MagicMock()
+        cfg.wake_word = "jarvis"
+        cfg.wake_aliases = []
+        cfg.intent_judge_model = "gemma4:e2b"
+        cfg.ollama_base_url = "http://localhost:11434"
+        cfg.intent_judge_timeout_sec = 10.0
+        cfg.intent_judge_thinking_enabled = True
+
+        judge = create_intent_judge(cfg)
+        assert judge is not None
+        assert judge.config.thinking is True
+
+    def test_create_intent_judge_independent_from_chat_thinking(self):
+        """Intent judge thinking should be independent from chat thinking."""
         from jarvis.listening.intent_judge import create_intent_judge
 
         cfg = MagicMock()
@@ -156,10 +184,10 @@ class TestIntentJudgeThinking:
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.intent_judge_timeout_sec = 10.0
         cfg.llm_thinking_enabled = True
+        cfg.intent_judge_thinking_enabled = False
 
         judge = create_intent_judge(cfg)
-        assert judge is not None
-        assert judge.config.thinking is True
+        assert judge.config.thinking is False
 
 
 # ---------------------------------------------------------------------------
@@ -215,19 +243,37 @@ class TestDictationThinking:
 # ---------------------------------------------------------------------------
 
 class TestSettingsWindowThinking:
-    """Settings window includes the thinking field."""
+    """Settings window includes all three thinking fields."""
 
-    def test_field_metadata_includes_thinking(self):
+    def test_field_metadata_includes_chat_thinking(self):
         from desktop_app.settings_window import FIELD_METADATA
         keys = [fm.key for fm in FIELD_METADATA]
         assert "llm_thinking_enabled" in keys
 
-    def test_thinking_field_is_bool_type(self):
+    def test_chat_thinking_field_is_bool_in_llm_category(self):
         from desktop_app.settings_window import FIELD_METADATA
         field = next(fm for fm in FIELD_METADATA if fm.key == "llm_thinking_enabled")
         assert field.field_type == "bool"
-
-    def test_thinking_field_in_llm_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "llm_thinking_enabled")
         assert field.category == "llm"
+
+    def test_field_metadata_includes_intent_judge_thinking(self):
+        from desktop_app.settings_window import FIELD_METADATA
+        keys = [fm.key for fm in FIELD_METADATA]
+        assert "intent_judge_thinking_enabled" in keys
+
+    def test_intent_judge_thinking_field_is_bool_in_llm_category(self):
+        from desktop_app.settings_window import FIELD_METADATA
+        field = next(fm for fm in FIELD_METADATA if fm.key == "intent_judge_thinking_enabled")
+        assert field.field_type == "bool"
+        assert field.category == "llm"
+
+    def test_field_metadata_includes_dictation_thinking(self):
+        from desktop_app.settings_window import FIELD_METADATA
+        keys = [fm.key for fm in FIELD_METADATA]
+        assert "dictation_thinking_enabled" in keys
+
+    def test_dictation_thinking_field_is_bool_in_features_category(self):
+        from desktop_app.settings_window import FIELD_METADATA
+        field = next(fm for fm in FIELD_METADATA if fm.key == "dictation_thinking_enabled")
+        assert field.field_type == "bool"
+        assert field.category == "features"

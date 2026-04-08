@@ -433,7 +433,7 @@ def main() -> None:
                 custom_dictionary=getattr(cfg, "dictation_custom_dictionary", []),
                 ollama_base_url=getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"),
                 ollama_model=cfg.ollama_chat_model,
-                thinking=getattr(cfg, "llm_thinking_enabled", False),
+                thinking=getattr(cfg, "dictation_thinking_enabled", False),
             )
             dictation.start()
             _global_dictation_engine = dictation
