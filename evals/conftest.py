@@ -76,6 +76,7 @@ CLASS_DESCRIPTIONS = {
     "TestFollowUpContext": "Tests context retention for follow-up questions",
     "TestMultiTurnExtended": "Extended multi-turn scenarios with longer conversations",
     "TestGreetingNoToolsLive": "Live tests that greetings don't trigger tool calls",
+    "TestHelpfulness": "Tests that agent uses tools proactively instead of deflecting",
 }
 
 # Descriptions for non-parametrized tests
@@ -110,6 +111,9 @@ TEST_DESCRIPTIONS = {
     "test_greeting_no_tools_live": "Live: greeting should not trigger tool calls",
     "test_user_instructions_no_tools_live": "Live: user instructions don't trigger tool calls",
     "test_weather_still_triggers_tools_live": "Live: weather query triggers tools",
+    # Helpfulness / anti-deflection tests
+    "test_no_deflection_for_weather_forecast_live": "Live: no deflection for weather forecasts",
+    "test_no_deflection_for_answerable_queries_live": "Live: no deflection for answerable queries",
 }
 
 
