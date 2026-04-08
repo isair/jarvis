@@ -31,7 +31,7 @@ The default branch is `develop`. All PRs and feature branches must target `devel
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages and PR titles (e.g. `fix:`, `feat:`, `refactor:`, `docs:`, `test:`, `chore:`).
 
-When pushing commits to a PR, always update the PR title and body to cover the entire changeset — not just the latest commit.
+When pushing commits to a PR, always update the PR title and body to cover the entire changeset.
 
 ## Development Environment
 
