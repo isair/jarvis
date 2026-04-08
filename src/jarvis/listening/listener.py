@@ -5,6 +5,7 @@ Coordinates audio capture, speech recognition, echo detection, and state managem
 """
 
 from __future__ import annotations
+import os
 import threading
 import time
 import queue
@@ -214,6 +215,7 @@ class VoiceListener(threading.Thread):
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
+        self._whisper_device: Optional[str] = None  # "cpu", "cuda", or "auto" (resolved device)
         self._mlx_model_repo: Optional[str] = None  # For MLX backend
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
@@ -1376,12 +1378,18 @@ class VoiceListener(threading.Thread):
             used_compute = compute
             for try_device, try_compute in configs_to_try:
                 try:
+                    # Use all available CPU cores when running on CPU
+                    cpu_threads = (os.cpu_count() or 4) if try_device == "cpu" else 0
                     print(f"  🔄 Loading Whisper model '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
-                    self.model = WhisperModel(model_name, device=try_device, compute_type=try_compute)
-                    debug_log(f"faster-whisper initialized: name={model_name}, device={try_device}, compute={try_compute}", "voice")
+                    self.model = WhisperModel(
+                        model_name, device=try_device, compute_type=try_compute,
+                        cpu_threads=cpu_threads,
+                    )
+                    debug_log(f"faster-whisper initialised: name={model_name}, device={try_device}, compute={try_compute}, cpu_threads={cpu_threads}", "voice")
 
                     used_device = try_device
                     used_compute = try_compute
+                    self._whisper_device = try_device
 
                     # Show warnings if we fell back to different settings
                     if try_device != device and device in ("auto", "cuda"):
@@ -1389,6 +1397,8 @@ class VoiceListener(threading.Thread):
                         print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
                     if try_compute != compute:
                         print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+                    if try_device == "cpu":
+                        print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
                     print(f"  ✅ Whisper model '{model_name}' loaded on {try_device}", flush=True)
                     last_error = None
                     break
@@ -1773,9 +1783,15 @@ class VoiceListener(threading.Thread):
                     text = result.get("text", "").strip()
             else:
                 # faster-whisper transcription
+                # CPU mode: skip timestamps and disable context carry-over for speed
+                cpu_mode = self._whisper_device == "cpu"
                 with self.transcribe_lock:
                     try:
-                        segments, _info = self.model.transcribe(audio, language=None, vad_filter=False)
+                        segments, _info = self.model.transcribe(
+                            audio, language=None, vad_filter=False,
+                            condition_on_previous_text=not cpu_mode,
+                            without_timestamps=cpu_mode,
+                        )
                     except TypeError:
                         segments, _info = self.model.transcribe(audio, language=None)
                     segments_list = list(segments)
