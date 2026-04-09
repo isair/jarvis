@@ -61,7 +61,8 @@ TOOL_INCENTIVES_LARGE = (
     "Proactively use available tools to provide better, more accurate responses. "
     "Prefer tools over guessing when you can get definitive, current, or personalized information. "
     "Tools enhance your capabilities - use them confidently to deliver superior assistance. "
-    "Always try tools before asking the user for information you might already be able to get via them."
+    "Always try tools before asking the user for information you might already be able to get via them. "
+    "When you decide to use a tool, call it immediately in the same response - never say you will use a tool without actually calling it."
 )
 
 TOOL_GUIDANCE_LARGE = (
@@ -80,7 +81,8 @@ TOOL_INCENTIVES_SMALL = (
     "Use tools when they can provide better, more accurate responses. "
     "Follow each tool's description to decide when to use it. "
     "For current information, real-time data, or external lookups - use tools confidently. "
-    "For greetings and small talk - respond directly without tools."
+    "For greetings and small talk - respond directly without tools. "
+    "When you decide to use a tool, call it immediately in the same response - never say you will use a tool without actually calling it."
 )
 
 TOOL_GUIDANCE_SMALL = (

@@ -79,6 +79,13 @@ When the user gives you instructions about how to behave or respond (e.g., "use 
 - It does NOT prevent tools from being used for legitimate tasks
 - Small models should still use tools when the user asks about news, weather, etc.
 
+### Anti-Narration Instruction
+
+Both model sizes include an instruction to call tools immediately rather than narrating intent:
+> "When you decide to use a tool, call it immediately in the same response - never say you will use a tool without actually calling it."
+
+This prevents a common failure mode where the LLM generates text like "I will try checking the weather now" without actually producing a `tool_calls` field. The engine treats such responses as final text, causing the assistant to appear to promise an action it never takes.
+
 ### Integration with Reply Engine
 
 The reply engine detects model size early and passes it to `_build_initial_system_message()`:

@@ -804,6 +804,10 @@ DEFLECTION_PHRASES = [
     "do not have access to",
     "recommend checking",
     "suggest checking",
+    "i will try checking",
+    "i will try to check",
+    "i'll try checking",
+    "i'll try to check",
 ]
 
 
