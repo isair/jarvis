@@ -1516,8 +1516,55 @@ class VoiceListener(threading.Thread):
                             print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
                             print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
                             return
+                    # Check for rate limiting (HTTP 429)
+                    is_rate_limited = any(x in error_str for x in [
+                        "429", "too many requests", "rate limit",
+                    ])
+
+                    if is_rate_limited:
+                        _max_retries = 4
+                        _backoff = 2
+                        debug_log(f"rate limited loading Whisper model: {e}", "voice")
+                        retry_succeeded = False
+                        for retry_num in range(1, _max_retries + 1):
+                            wait = _backoff ** retry_num
+                            print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
+                            time.sleep(wait)
+                            try:
+                                self.model = WhisperModel(
+                                    model_name, device=try_device, compute_type=try_compute,
+                                    cpu_threads=cpu_threads,
+                                )
+                                ct2_model = getattr(self.model, "model", None)
+                                resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
+                                debug_log(f"faster-whisper initialised after rate-limit retry: name={model_name}, device={resolved_device}, compute={try_compute}", "voice")
+
+                                used_device = try_device
+                                used_compute = try_compute
+                                self._whisper_device = resolved_device
+
+                                if try_device != device and device in ("auto", "cuda"):
+                                    print("  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
+                                    print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+                                if try_compute != compute:
+                                    print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+                                if resolved_device == "cpu":
+                                    print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
+                                print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}", flush=True)
+                                last_error = None
+                                retry_succeeded = True
+                                break
+                            except Exception as retry_e:
+                                debug_log(f"rate-limit retry {retry_num} failed: {retry_e}", "voice")
+                                last_error = retry_e
+                        if retry_succeeded:
+                            break
+                        debug_log(f"gave up after {_max_retries} rate-limit retries", "voice")
+                        print(f"  ❌ Failed to load Whisper model after {_max_retries} retries: {last_error}", flush=True)
+                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                        return
                     else:
-                        # For other errors (model not found, network issues, etc.), don't try fallbacks
+                        # For other errors (model not found, etc.), don't try fallbacks
                         debug_log(f"failed to initialize faster-whisper: {e}", "voice")
                         print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
                         return

@@ -1484,3 +1484,119 @@ class TestCorruptedWhisperCacheRecovery:
                             # No retry — _clear_corrupted_whisper_cache returns False
                             mock_class.assert_called_once()
                             assert listener.model is None
+
+
+class TestWhisperRateLimitRetry:
+    """Tests for retry logic when HuggingFace returns 429 Too Many Requests."""
+
+    def _create_mock_config(self, **kwargs):
+        """Create a mock config object with default values."""
+        mock_cfg = MagicMock()
+        mock_cfg.whisper_model = kwargs.get("whisper_model", "medium")
+        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
+        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+        mock_cfg.voice_device = kwargs.get("voice_device", None)
+        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+        return mock_cfg
+
+    def test_429_retried_then_succeeds(self):
+        """WhisperModel loading retries on 429 and succeeds."""
+        mock_whisper_model = MagicMock()
+        call_count = 0
+
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Got: HfHubHTTPError: 429 Too Many Requests for url: https://huggingface.co/api/models/Systran/faster-whisper-medium")
+            return mock_whisper_model
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            with patch("jarvis.listening.listener.time.sleep"):  # Skip actual sleep
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_db = MagicMock()
+                                mock_cfg = self._create_mock_config()
+                                mock_tts = MagicMock()
+                                mock_dialogue_memory = MagicMock()
+
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener.run()
+
+                                assert mock_class.call_count == 2
+                                assert listener.model == mock_whisper_model
+
+    def test_429_gives_up_after_max_retries(self):
+        """WhisperModel loading gives up after exhausting 429 retries."""
+        error_msg = "429 Too Many Requests for url: https://huggingface.co/api/models/Systran/faster-whisper-medium"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError(error_msg)
+
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+
+                            with patch("jarvis.listening.listener.time.sleep"):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_db = MagicMock()
+                                mock_cfg = self._create_mock_config()
+                                mock_tts = MagicMock()
+                                mock_dialogue_memory = MagicMock()
+
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener.run()
+
+                                # Should have retried multiple times then given up
+                                assert mock_class.call_count > 1
+                                assert listener.model is None
+
+    def test_non_429_error_not_retried(self):
+        """Non-rate-limit errors are not retried."""
+        error_msg = "Model not found: invalid_model"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError(error_msg)
+
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # Should have only tried once — no retry
+                            mock_class.assert_called_once()
+                            assert listener.model is None
