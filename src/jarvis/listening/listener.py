@@ -1491,7 +1491,19 @@ class VoiceListener(threading.Thread):
                                 ct2_model = getattr(self.model, "model", None)
                                 resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
                                 debug_log(f"faster-whisper initialised after cache recovery: name={model_name}, device={resolved_device}, compute={try_compute}", "voice")
+
+                                used_device = try_device
+                                used_compute = try_compute
                                 self._whisper_device = resolved_device
+
+                                # Show warnings if we fell back to different settings
+                                if try_device != device and device in ("auto", "cuda"):
+                                    print(f"  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
+                                    print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+                                if try_compute != compute:
+                                    print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+                                if resolved_device == "cpu":
+                                    print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
                                 print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device} (recovered)", flush=True)
                                 last_error = None
                                 break

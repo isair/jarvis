@@ -1416,4 +1416,71 @@ class TestCorruptedWhisperCacheRecovery:
 
                             # Should show manual cleanup hint
                             captured = capsys.readouterr()
-                            assert "manually delet" in captured.out.lower()
+                            assert "whisper model cache" in captured.out.lower()
+
+    def test_rmtree_oserror_prevents_retry(self, tmp_path):
+        """When shutil.rmtree raises OSError, model stays None and no retry occurs."""
+        snapshot_dir = tmp_path / "models--Systran--faster-whisper-medium" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "model.bin").write_bytes(b"corrupted")
+
+        error_msg = f"Unable to open file 'model.bin' in model '{snapshot_dir}'"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError(error_msg)
+
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+
+                            # Make shutil.rmtree raise OSError
+                            with patch("shutil.rmtree", side_effect=OSError("Permission denied")):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_db = MagicMock()
+                                mock_cfg = self._create_mock_config()
+                                mock_tts = MagicMock()
+                                mock_dialogue_memory = MagicMock()
+
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener.run()
+
+                                # Only the initial attempt — no retry since cache could not be cleared
+                                mock_class.assert_called_once()
+                                assert listener.model is None
+
+    def test_no_models_ancestor_prevents_cache_clear(self, tmp_path):
+        """When error path has no models-- ancestor, cache is not cleared and model stays None."""
+        # Create a path without a models-- segment
+        plain_dir = tmp_path / "some" / "random" / "path"
+        plain_dir.mkdir(parents=True)
+        (plain_dir / "model.bin").write_bytes(b"corrupted")
+
+        error_msg = f"Unable to open file 'model.bin' in model '{plain_dir}'"
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel") as mock_class:
+                        mock_class.side_effect = RuntimeError(error_msg)
+
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = self._create_mock_config()
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # No retry — _clear_corrupted_whisper_cache returns False
+                            mock_class.assert_called_once()
+                            assert listener.model is None
