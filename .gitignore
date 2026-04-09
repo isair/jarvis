@@ -5,8 +5,9 @@ __pycache__/
 .pytest_cache/
 .mamba_env/
 .micromamba/
-.claude/
+.claude/*
 !.claude/launch.json
+!.claude/skills/
 
 # Release artifacts
 release_output.log
