@@ -434,8 +434,8 @@ class TestDialogueMemoryEdgeCases:
         # Manually adjust the message timestamp to be old
         with dm._lock:
             ts, role, content = dm._messages[0]
-            # Make it 11 minutes old (beyond MAX_UNSAVED_AGE_SEC of 10 minutes)
-            old_ts = time.time() - (DialogueMemory.MAX_UNSAVED_AGE_SEC + 60)
+            # Make it older than MAX_UNSAVED_AGE_SEC (which equals inactivity_timeout)
+            old_ts = time.time() - (dm.MAX_UNSAVED_AGE_SEC + 60)
             dm._messages[0] = (old_ts, role, content)
 
         # Should trigger diary update even though user is "active" (recent _last_activity_time)
@@ -465,7 +465,7 @@ class TestDialogueMemoryEdgeCases:
 
         # Manually make messages old (beyond RECENT_WINDOW_SEC)
         with dm._lock:
-            old_ts = time.time() - (DialogueMemory.RECENT_WINDOW_SEC + 60)
+            old_ts = time.time() - (dm.RECENT_WINDOW_SEC + 60)
             dm._messages = [
                 (old_ts, role, content) for _, role, content in dm._messages
             ]
@@ -483,7 +483,7 @@ class TestDialogueMemoryEdgeCases:
 
         # Manually make message old but don't mark as saved
         with dm._lock:
-            old_ts = time.time() - (DialogueMemory.RECENT_WINDOW_SEC + 60)
+            old_ts = time.time() - (dm.RECENT_WINDOW_SEC + 60)
             dm._messages = [
                 (old_ts, role, content) for _, role, content in dm._messages
             ]
@@ -563,20 +563,30 @@ class TestDialogueMemoryEdgeCases:
 
 
 @pytest.mark.unit
-class TestDialogueMemoryConstants:
-    """Test that DialogueMemory constants are reasonable."""
+class TestDialogueMemoryUnifiedDurations:
+    """Test that DialogueMemory durations are unified from inactivity_timeout."""
 
-    def test_recent_window_is_5_minutes(self):
-        """Verify RECENT_WINDOW_SEC is 5 minutes (300 seconds)."""
-        assert DialogueMemory.RECENT_WINDOW_SEC == 300.0
+    def test_recent_window_matches_inactivity_timeout(self):
+        """Verify RECENT_WINDOW_SEC equals inactivity_timeout."""
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        assert dm.RECENT_WINDOW_SEC == 300.0
 
-    def test_max_unsaved_age_is_10_minutes(self):
-        """Verify MAX_UNSAVED_AGE_SEC is 10 minutes (600 seconds)."""
-        assert DialogueMemory.MAX_UNSAVED_AGE_SEC == 600.0
+    def test_max_unsaved_age_matches_inactivity_timeout(self):
+        """Verify MAX_UNSAVED_AGE_SEC equals inactivity_timeout."""
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        assert dm.MAX_UNSAVED_AGE_SEC == 300.0
 
-    def test_max_unsaved_age_exceeds_recent_window(self):
-        """Verify MAX_UNSAVED_AGE_SEC > RECENT_WINDOW_SEC (otherwise data loss possible)."""
-        assert DialogueMemory.MAX_UNSAVED_AGE_SEC > DialogueMemory.RECENT_WINDOW_SEC
+    def test_all_durations_unified(self):
+        """Verify all durations match the configured inactivity_timeout."""
+        dm = DialogueMemory(inactivity_timeout=600.0)
+        assert dm.RECENT_WINDOW_SEC == 600.0
+        assert dm.MAX_UNSAVED_AGE_SEC == 600.0
+
+    def test_custom_timeout_propagates(self):
+        """Verify a custom timeout drives all durations."""
+        dm = DialogueMemory(inactivity_timeout=120.0)
+        assert dm.RECENT_WINDOW_SEC == 120.0
+        assert dm.MAX_UNSAVED_AGE_SEC == 120.0
 
 
 @pytest.mark.unit

@@ -229,12 +229,12 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Duration of follow-up window",
       "timing", "float", min_val=1.0, max_val=30.0, step=0.5, suffix="s")
     f("transcript_buffer_duration_sec", "Transcript Buffer",
-      "Duration of rolling transcript history",
+      "Duration of rolling transcript history for intent judging",
       "timing", "float", min_val=10, max_val=600, step=10, suffix="s")
 
     # --- Memory & Dialogue ---
-    f("dialogue_memory_timeout", "Dialogue Timeout",
-      "Seconds before conversation context resets",
+    f("dialogue_memory_timeout", "Memory & Diary Window",
+      "Duration for dialogue memory and forced diary updates",
       "memory", "float", min_val=30, max_val=3600, step=30, suffix="s")
     f("memory_enrichment_max_results", "Enrichment Results",
       "Max memory results for context enrichment",

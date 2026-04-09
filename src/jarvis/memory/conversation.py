@@ -62,23 +62,33 @@ def _filter_contexts_by_time(
 class DialogueMemory:
     """
     In-memory storage for recent dialogue interactions.
-    Provides short-term context for the last 5 minutes of conversation.
+    Provides short-term context for the configured dialogue memory window.
 
     Thread-safe: uses a lock to protect against concurrent diary updates.
     Tracks saved messages by timestamp to prevent data loss when new messages
     arrive during diary update.
+
+    The dialogue memory window and the forced diary update interval share the
+    same duration (dialogue_memory_timeout). After a diary update, saved messages
+    older than this window are cleaned up; the enrichment feature retrieves any
+    relevant earlier context from the diary. The rolling transcript buffer is
+    separate (ambient speech for intent judging).
     """
 
-    # How long messages are kept in memory for context (5 minutes)
-    RECENT_WINDOW_SEC = 300.0
-    # How old messages can get before forcing a diary update even during active conversation
-    MAX_UNSAVED_AGE_SEC = 600.0  # 10 minutes
-
     def __init__(self, inactivity_timeout: float = 300.0, max_interactions: int = 20):
-        """Initialize dialogue memory."""
+        """Initialize dialogue memory.
+
+        The inactivity_timeout drives two unified durations:
+        - RECENT_WINDOW_SEC: how long messages are kept in memory for context
+        - MAX_UNSAVED_AGE_SEC: how old unsaved messages can get before forcing
+          a diary update (same as the window, since enrichment covers older context)
+        """
         self._messages: List[Tuple[float, str, str]] = []  # (timestamp, role, content)
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
+        # Unified window: context retention = forced diary update interval
+        self.RECENT_WINDOW_SEC = inactivity_timeout
+        self.MAX_UNSAVED_AGE_SEC = inactivity_timeout
         # Track the timestamp up to which messages have been saved to diary
         # Messages with timestamp <= this value have been processed
         self._last_saved_timestamp: float = 0.0
