@@ -316,6 +316,18 @@ When components are unavailable, the system degrades gracefully:
 | 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
+## Download Recovery
+
+Whisper model loading handles transient download failures automatically:
+
+### Corrupted Cache Recovery
+
+If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. If the retry also fails, a message guides the user to manually delete the cache.
+
+### Rate Limit Retry (HTTP 429)
+
+When HuggingFace returns HTTP 429 (Too Many Requests), both faster-whisper and MLX Whisper backends retry up to 4 times with exponential backoff (2s, 4s, 8s, 16s). Progress messages inform the user of each retry attempt. If all retries are exhausted, the user is advised to wait and restart.
+
 ## Future: Acoustic Echo Cancellation
 
 Currently, echo is handled at the transcript level via fuzzy text matching and the intent judge. True acoustic echo cancellation (AEC) would:

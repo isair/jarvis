@@ -102,6 +102,7 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
                     response.raise_for_status()
                     break  # Success
                 except requests.exceptions.HTTPError as http_err:
+                    response.close()
                     status = getattr(http_err.response, "status_code", None)
                     if status == 429 and attempt < max_retries:
                         wait = 2 ** (attempt + 1)

@@ -245,7 +245,7 @@ class VoiceListener(threading.Thread):
     def __init__(self, db: "Database", cfg, tts: Optional[Any],
                  dialogue_memory: "DialogueMemory"):
         """
-        Initialize voice listener.
+        Initialise voice listener.
 
         Args:
             db: Database instance for storage
@@ -283,14 +283,14 @@ class VoiceListener(threading.Thread):
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
         self._vad: Optional = None
 
-        # Initialize VAD if available
+        # Initialise VAD if available
         if webrtcvad is not None and bool(getattr(self.cfg, "vad_enabled", True)):
             try:
                 self._vad = webrtcvad.Vad(int(getattr(self.cfg, "vad_aggressiveness", 2)))
             except Exception:
                 self._vad = None
 
-        # Initialize modular components
+        # Initialise modular components
         self.echo_detector = EchoDetector(
             echo_tolerance=float(getattr(self.cfg, "echo_tolerance", 0.3)),
             energy_spike_threshold=float(getattr(self.cfg, "echo_energy_threshold", 2.0))
@@ -313,12 +313,12 @@ class VoiceListener(threading.Thread):
         # Used for both retention and context passed to intent judge
         self._buffer_duration = float(getattr(self.cfg, "transcript_buffer_duration_sec", 120.0))
         self._transcript_buffer = TranscriptBuffer(max_duration_sec=self._buffer_duration)
-        debug_log(f"transcript buffer initialized ({self._buffer_duration}s)", "voice")
+        debug_log(f"transcript buffer initialised ({self._buffer_duration}s)", "voice")
 
         # Intent judge (full context, larger model) - always used when available
         self._intent_judge = create_intent_judge(self.cfg)
         if self._intent_judge is not None:
-            debug_log(f"intent judge initialized (model: {self._intent_judge.config.model})", "voice")
+            debug_log(f"intent judge initialised (model: {self._intent_judge.config.model})", "voice")
         else:
             debug_log("intent judge unavailable, using simple wake word detection", "voice")
 
@@ -1240,6 +1240,37 @@ class VoiceListener(threading.Thread):
 
         return "faster-whisper"
 
+    def _apply_whisper_load_success(
+        self, model_name: str, try_device: str, try_compute: str,
+        device: str, compute: str, cpu_threads: int,
+        context: str = "",
+    ) -> str:
+        """Record state and print diagnostics after a successful Whisper model load.
+
+        Returns the resolved device string.
+        """
+        ct2_model = getattr(self.model, "model", None)
+        resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
+        debug_log(
+            f"faster-whisper initialised{context}: name={model_name}, "
+            f"device={resolved_device}, compute={try_compute}, "
+            f"cpu_threads={cpu_threads}",
+            "voice",
+        )
+        self._whisper_device = resolved_device
+
+        if try_device != device and device in ("auto", "cuda"):
+            print("  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
+            print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+        if try_compute != compute:
+            print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+        if resolved_device == "cpu":
+            print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
+
+        suffix = f" ({context})" if context else ""
+        print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
+        return resolved_device
+
     def run(self) -> None:
         """Main voice listening loop."""
         if sd is None:
@@ -1251,7 +1282,7 @@ class VoiceListener(threading.Thread):
         try:
             devices = sd.query_devices()
             input_devices = [d for d in devices if d.get('max_input_channels', 0) > 0]
-            debug_log(f"PortAudio initialized: {len(input_devices)} input device(s) found", "voice")
+            debug_log(f"PortAudio initialised: {len(input_devices)} input device(s) found", "voice")
             if not input_devices:
                 print("  ❌ No microphone found. Please connect a microphone.", flush=True)
                 return
@@ -1294,7 +1325,7 @@ class VoiceListener(threading.Thread):
                     print("", flush=True)
                 return
 
-        # Determine and initialize Whisper backend
+        # Determine and initialise Whisper backend
         self._whisper_backend = self._determine_whisper_backend()
         model_name = getattr(self.cfg, "whisper_model", "small")
 
@@ -1317,26 +1348,41 @@ class VoiceListener(threading.Thread):
                 print("  ❌ MLX Whisper not available. Install with: pip install mlx-whisper", flush=True)
                 return
 
-            try:
-                self._mlx_model_repo = _get_mlx_model_repo(model_name)
-                print(f"  🔄 Loading MLX Whisper model '{model_name}' (Apple Silicon GPU)...", flush=True)
+            self._mlx_model_repo = _get_mlx_model_repo(model_name)
+            print(f"  🔄 Loading MLX Whisper model '{model_name}' (Apple Silicon GPU)...", flush=True)
 
-                # Pre-load the model by doing a warmup transcription with silent audio
-                # This triggers the model download before we need it for real transcription
-                if np is not None:
-                    warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
-                    _ = mlx_whisper.transcribe(
-                        warmup_audio,
-                        path_or_hf_repo=self._mlx_model_repo,
-                        language=None,
-                    )
-                    debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
+            max_retries = 4
+            for attempt in range(max_retries + 1):
+                try:
+                    # Pre-load the model by doing a warmup transcription with silent audio
+                    # This triggers the model download before we need it for real transcription
+                    if np is not None:
+                        warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
+                        _ = mlx_whisper.transcribe(
+                            warmup_audio,
+                            path_or_hf_repo=self._mlx_model_repo,
+                            language=None,
+                        )
+                        debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
 
-                print(f"  ✅ MLX Whisper '{model_name}' ready (Apple Silicon GPU acceleration)", flush=True)
-            except Exception as e:
-                debug_log(f"failed to initialize MLX Whisper: {e}", "voice")
-                print(f"  ❌ Failed to initialize MLX Whisper: {e}", flush=True)
-                return
+                    print(f"  ✅ MLX Whisper '{model_name}' ready (Apple Silicon GPU acceleration)", flush=True)
+                    break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    is_rate_limited = any(x in error_str for x in [
+                        "429", "too many requests", "rate limit",
+                    ])
+                    if is_rate_limited and attempt < max_retries:
+                        wait = 2 ** (attempt + 1)
+                        debug_log(f"rate limited loading MLX Whisper (attempt {attempt + 1}): {e}", "voice")
+                        print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({attempt + 1}/{max_retries})...", flush=True)
+                        time.sleep(wait)
+                        continue
+                    debug_log(f"failed to initialise MLX Whisper: {e}", "voice")
+                    print(f"  ❌ Failed to initialise MLX Whisper: {e}", flush=True)
+                    if is_rate_limited:
+                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                    return
         else:
             # faster-whisper backend
             if not FASTER_WHISPER_AVAILABLE:
@@ -1434,26 +1480,12 @@ class VoiceListener(threading.Thread):
                         model_name, device=try_device, compute_type=try_compute,
                         cpu_threads=cpu_threads,
                     )
-
-                    # Resolve actual device (CTranslate2 resolves "auto" internally)
-                    # Cast to str — CTranslate2 may return an enum (e.g. Device.CPU)
-                    ct2_model = getattr(self.model, "model", None)
-                    resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
-                    debug_log(f"faster-whisper initialised: name={model_name}, device={resolved_device}, compute={try_compute}, cpu_threads={cpu_threads}", "voice")
-
+                    self._apply_whisper_load_success(
+                        model_name, try_device, try_compute,
+                        device, compute, cpu_threads,
+                    )
                     used_device = try_device
                     used_compute = try_compute
-                    self._whisper_device = resolved_device
-
-                    # Show warnings if we fell back to different settings
-                    if try_device != device and device in ("auto", "cuda"):
-                        print(f"  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
-                        print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
-                    if try_compute != compute:
-                        print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
-                    if resolved_device == "cpu":
-                        print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
-                    print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}", flush=True)
                     last_error = None
                     break
                 except Exception as e:
@@ -1488,23 +1520,13 @@ class VoiceListener(threading.Thread):
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
                                 )
-                                ct2_model = getattr(self.model, "model", None)
-                                resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
-                                debug_log(f"faster-whisper initialised after cache recovery: name={model_name}, device={resolved_device}, compute={try_compute}", "voice")
-
+                                self._apply_whisper_load_success(
+                                    model_name, try_device, try_compute,
+                                    device, compute, cpu_threads,
+                                    context="recovered",
+                                )
                                 used_device = try_device
                                 used_compute = try_compute
-                                self._whisper_device = resolved_device
-
-                                # Show warnings if we fell back to different settings
-                                if try_device != device and device in ("auto", "cuda"):
-                                    print(f"  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
-                                    print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
-                                if try_compute != compute:
-                                    print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
-                                if resolved_device == "cpu":
-                                    print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
-                                print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device} (recovered)", flush=True)
                                 last_error = None
                                 break
                             except Exception as retry_e:
@@ -1535,22 +1557,13 @@ class VoiceListener(threading.Thread):
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
                                 )
-                                ct2_model = getattr(self.model, "model", None)
-                                resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
-                                debug_log(f"faster-whisper initialised after rate-limit retry: name={model_name}, device={resolved_device}, compute={try_compute}", "voice")
-
+                                self._apply_whisper_load_success(
+                                    model_name, try_device, try_compute,
+                                    device, compute, cpu_threads,
+                                    context="rate-limit retry",
+                                )
                                 used_device = try_device
                                 used_compute = try_compute
-                                self._whisper_device = resolved_device
-
-                                if try_device != device and device in ("auto", "cuda"):
-                                    print("  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
-                                    print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
-                                if try_compute != compute:
-                                    print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
-                                if resolved_device == "cpu":
-                                    print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
-                                print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}", flush=True)
                                 last_error = None
                                 retry_succeeded = True
                                 break
@@ -1565,12 +1578,12 @@ class VoiceListener(threading.Thread):
                         return
                     else:
                         # For other errors (model not found, etc.), don't try fallbacks
-                        debug_log(f"failed to initialize faster-whisper: {e}", "voice")
+                        debug_log(f"failed to initialise faster-whisper: {e}", "voice")
                         print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
                         return
 
             if last_error is not None:
-                debug_log(f"failed to initialize faster-whisper with any config: {last_error}", "voice")
+                debug_log(f"failed to initialise faster-whisper with any config: {last_error}", "voice")
                 print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
                 return
 

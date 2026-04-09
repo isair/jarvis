@@ -574,11 +574,14 @@ class TestPiperVoiceDownloadRetry:
 
         with patch("requests.get", side_effect=mock_get):
             with patch("src.jarvis.output.tts._get_piper_models_dir", return_value=tmp_path):
-                with patch("src.jarvis.output.tts.time.sleep"):  # Skip actual sleep
+                with patch("src.jarvis.output.tts.time.sleep") as mock_sleep:
                     result = _download_piper_voice("en_GB-alan-medium")
 
         assert result is not None
         assert (tmp_path / "en_GB-alan-medium.onnx").exists()
+        # Verify exponential backoff: 2^1=2s for the onnx 429, 2^1=2s for the json 429
+        sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
+        assert all(v == 2 for v in sleep_values)
 
     def test_429_gives_up_after_max_retries(self, tmp_path):
         """Download gives up after exhausting retries on persistent 429."""
@@ -596,10 +599,13 @@ class TestPiperVoiceDownloadRetry:
 
         with patch("requests.get", side_effect=mock_get):
             with patch("src.jarvis.output.tts._get_piper_models_dir", return_value=tmp_path):
-                with patch("src.jarvis.output.tts.time.sleep"):
+                with patch("src.jarvis.output.tts.time.sleep") as mock_sleep:
                     result = _download_piper_voice("en_GB-alan-medium")
 
         assert result is None
+        # Verify exponential backoff sequence: 2, 4, 8, 16
+        sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
+        assert sleep_values == [2, 4, 8, 16]
 
     def test_non_429_error_not_retried(self, tmp_path):
         """Download does not retry on non-429 HTTP errors (e.g. 404)."""

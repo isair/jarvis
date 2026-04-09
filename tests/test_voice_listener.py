@@ -9,28 +9,29 @@ import time
 import pytest
 
 
+def _create_mock_config(**kwargs):
+    """Create a mock config object with default values for voice listener tests."""
+    mock_cfg = MagicMock()
+    mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
+    mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
+    mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
+    mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
+    mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
+    mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
+    mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
+    mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
+    mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
+    mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
+    mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
+    mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
+    mock_cfg.voice_device = kwargs.get("voice_device", None)
+    mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+    mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+    return mock_cfg
+
+
 class TestWhisperComputeTypeFallback:
     """Tests for Whisper compute type fallback mechanism."""
-
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
 
     def test_successful_load_with_int8(self):
         """When int8 is supported, loads successfully without fallback."""
@@ -50,7 +51,7 @@ class TestWhisperComputeTypeFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_cfg = _create_mock_config(whisper_compute_type="int8")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -87,7 +88,7 @@ class TestWhisperComputeTypeFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_cfg = _create_mock_config(whisper_compute_type="int8")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -125,7 +126,7 @@ class TestWhisperComputeTypeFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_cfg = _create_mock_config(whisper_compute_type="int8")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -158,7 +159,7 @@ class TestWhisperComputeTypeFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_cfg = _create_mock_config(whisper_compute_type="int8")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -187,7 +188,7 @@ class TestWhisperComputeTypeFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config(whisper_compute_type="int8")
+                            mock_cfg = _create_mock_config(whisper_compute_type="int8")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -221,7 +222,7 @@ class TestWhisperComputeTypeFallback:
 
                             mock_db = MagicMock()
                             # Config specifies float16 instead of int8
-                            mock_cfg = self._create_mock_config(whisper_compute_type="float16")
+                            mock_cfg = _create_mock_config(whisper_compute_type="float16")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -253,7 +254,7 @@ class TestWhisperComputeTypeFallback:
 
                             mock_db = MagicMock()
                             # Config specifies float32
-                            mock_cfg = self._create_mock_config(whisper_compute_type="float32")
+                            mock_cfg = _create_mock_config(whisper_compute_type="float32")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -272,26 +273,6 @@ class TestWhisperComputeTypeFallback:
 
 class TestWindowsCudaDetection:
     """Tests for Windows CUDA detection logic."""
-
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
 
     def test_cuda_detected_when_all_dlls_present(self):
         """When cuBLAS and cuDNN DLLs are found, GPU mode is used."""
@@ -313,7 +294,7 @@ class TestWindowsCudaDetection:
                                 with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
                                     from jarvis.listening.listener import VoiceListener
 
-                                    mock_cfg = self._create_mock_config()
+                                    mock_cfg = _create_mock_config()
                                     listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                     listener.run()
 
@@ -340,7 +321,7 @@ class TestWindowsCudaDetection:
                                 with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
                                     from jarvis.listening.listener import VoiceListener
 
-                                    mock_cfg = self._create_mock_config()
+                                    mock_cfg = _create_mock_config()
                                     listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                     listener.run()
 
@@ -389,26 +370,6 @@ class TestWindowsCudaDetection:
 class TestLargeV3TurboFallback:
     """Tests for large-v3-turbo runtime fallback when faster-whisper is too old."""
 
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
-
     def test_turbo_falls_back_to_large_v3_when_unsupported(self, capsys):
         """large-v3-turbo config falls back to large-v3 when faster-whisper < 1.1.0."""
         mock_whisper_model = MagicMock()
@@ -425,7 +386,7 @@ class TestLargeV3TurboFallback:
 
                                 from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config(whisper_model="large-v3-turbo")
+                                mock_cfg = _create_mock_config(whisper_model="large-v3-turbo")
                                 listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                 listener.run()
 
@@ -452,7 +413,7 @@ class TestLargeV3TurboFallback:
 
                                 from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config(whisper_model="large-v3-turbo")
+                                mock_cfg = _create_mock_config(whisper_model="large-v3-turbo")
                                 listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                 listener.run()
 
@@ -583,26 +544,6 @@ class TestRepetitiveHallucinationDetection:
 class TestCpuOptimisations:
     """Tests for faster-whisper CPU mode optimisations."""
 
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
-
     def test_cpu_threads_set_when_device_is_cpu(self):
         """CPU cores are passed to WhisperModel when device resolves to cpu."""
         mock_whisper_model = MagicMock()
@@ -620,7 +561,7 @@ class TestCpuOptimisations:
                             with patch("jarvis.listening.listener.os.cpu_count", return_value=8):
                                 from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config(whisper_device="cpu")
+                                mock_cfg = _create_mock_config(whisper_device="cpu")
                                 listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                 listener.run()
 
@@ -642,7 +583,7 @@ class TestCpuOptimisations:
                             with patch("jarvis.listening.listener.os.cpu_count", return_value=12):
                                 from jarvis.listening.listener import VoiceListener
 
-                                mock_cfg = self._create_mock_config(whisper_device="auto")
+                                mock_cfg = _create_mock_config(whisper_device="auto")
                                 listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                 listener.run()
 
@@ -664,7 +605,7 @@ class TestCpuOptimisations:
 
                             from jarvis.listening.listener import VoiceListener
 
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                             listener.run()
 
@@ -689,7 +630,7 @@ class TestCpuOptimisations:
 
                             from jarvis.listening.listener import VoiceListener
 
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                             listener.run()
 
@@ -862,26 +803,6 @@ class TestMicPermissionHint:
 class TestCrossPlatformDeviceLogging:
     """Tests for cross-platform audio device name logging."""
 
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
-
     def test_device_name_printed_on_linux(self, capsys):
         """Device name is printed on Linux, not just Windows."""
         mock_whisper_model = MagicMock()
@@ -908,7 +829,7 @@ class TestCrossPlatformDeviceLogging:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -944,7 +865,7 @@ class TestCrossPlatformDeviceLogging:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -958,26 +879,6 @@ class TestCrossPlatformDeviceLogging:
 
 class TestCrossPlatformAudioHealthWarning:
     """Tests for cross-platform audio health monitoring."""
-
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
 
     def test_health_warning_fires_on_linux(self, capsys):
         """Audio health warning fires on Linux when no audio received after 5s."""
@@ -1011,7 +912,7 @@ class TestCrossPlatformAudioHealthWarning:
                             import queue as q
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1116,26 +1017,6 @@ class TestResample:
 class TestSampleRateFallback:
     """Tests for InputStream sample rate fallback on Linux."""
 
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
-
     def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys):
         """Falls back to device native rate when 16 kHz is rejected."""
         mock_whisper_model = MagicMock()
@@ -1176,7 +1057,7 @@ class TestSampleRateFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1228,7 +1109,7 @@ class TestSampleRateFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config()
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1241,26 +1122,6 @@ class TestSampleRateFallback:
 
 class TestCorruptedWhisperCacheRecovery:
     """Tests for automatic recovery from corrupted Whisper model cache."""
-
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "medium")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
 
     def test_corrupted_cache_detected_and_recovered(self, tmp_path):
         """When model.bin is corrupted, cache is cleared and model reloads."""
@@ -1293,7 +1154,7 @@ class TestCorruptedWhisperCacheRecovery:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1329,7 +1190,7 @@ class TestCorruptedWhisperCacheRecovery:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1376,7 +1237,7 @@ class TestCorruptedWhisperCacheRecovery:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1403,7 +1264,7 @@ class TestCorruptedWhisperCacheRecovery:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1441,7 +1302,7 @@ class TestCorruptedWhisperCacheRecovery:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_db = MagicMock()
-                                mock_cfg = self._create_mock_config()
+                                mock_cfg = _create_mock_config(whisper_model="medium")
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
@@ -1474,7 +1335,7 @@ class TestCorruptedWhisperCacheRecovery:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
@@ -1488,26 +1349,6 @@ class TestCorruptedWhisperCacheRecovery:
 
 class TestWhisperRateLimitRetry:
     """Tests for retry logic when HuggingFace returns 429 Too Many Requests."""
-
-    def _create_mock_config(self, **kwargs):
-        """Create a mock config object with default values."""
-        mock_cfg = MagicMock()
-        mock_cfg.whisper_model = kwargs.get("whisper_model", "medium")
-        mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
-        mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
-        mock_cfg.whisper_backend = kwargs.get("whisper_backend", "faster-whisper")
-        mock_cfg.sample_rate = kwargs.get("sample_rate", 16000)
-        mock_cfg.vad_enabled = kwargs.get("vad_enabled", True)
-        mock_cfg.vad_aggressiveness = kwargs.get("vad_aggressiveness", 2)
-        mock_cfg.echo_tolerance = kwargs.get("echo_tolerance", 0.3)
-        mock_cfg.echo_energy_threshold = kwargs.get("echo_energy_threshold", 2.0)
-        mock_cfg.hot_window_seconds = kwargs.get("hot_window_seconds", 3.0)
-        mock_cfg.voice_collect_seconds = kwargs.get("voice_collect_seconds", 2.0)
-        mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
-        mock_cfg.voice_device = kwargs.get("voice_device", None)
-        mock_cfg.voice_debug = kwargs.get("voice_debug", False)
-        mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
-        return mock_cfg
 
     def test_429_retried_then_succeeds(self):
         """WhisperModel loading retries on 429 and succeeds."""
@@ -1534,7 +1375,7 @@ class TestWhisperRateLimitRetry:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_db = MagicMock()
-                                mock_cfg = self._create_mock_config()
+                                mock_cfg = _create_mock_config(whisper_model="medium")
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
@@ -1558,11 +1399,11 @@ class TestWhisperRateLimitRetry:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
                             mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
 
-                            with patch("jarvis.listening.listener.time.sleep"):
+                            with patch("jarvis.listening.listener.time.sleep") as mock_sleep:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_db = MagicMock()
-                                mock_cfg = self._create_mock_config()
+                                mock_cfg = _create_mock_config(whisper_model="medium")
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
@@ -1572,6 +1413,10 @@ class TestWhisperRateLimitRetry:
                                 # Should have retried multiple times then given up
                                 assert mock_class.call_count > 1
                                 assert listener.model is None
+
+                                # Verify exponential backoff: 2, 4, 8, 16
+                                sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
+                                assert sleep_values == [2, 4, 8, 16]
 
     def test_non_429_error_not_retried(self):
         """Non-rate-limit errors are not retried."""
@@ -1590,7 +1435,7 @@ class TestWhisperRateLimitRetry:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = self._create_mock_config()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
