@@ -6,12 +6,14 @@ from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer, TranscriptSegment
 from .intent_judge import IntentJudge, IntentJudgment, create_intent_judge
+from .shush_detector import ShushDetector
 
 __all__ = [
     "VoiceListener",
     "EchoDetector",
     "StateManager",
     "ListeningState",
+    "ShushDetector",
     "is_wake_word_detected",
     "extract_query_after_wake",
     "is_stop_command",

@@ -408,6 +408,12 @@ def get_default_config() -> Dict[str, Any]:
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
 
+        # Acoustic Shush Detection (spectral fricative detector)
+        "shush_detection_enabled": True,
+        "shush_high_low_ratio": 3.0,
+        "shush_energy_floor": 0.002,
+        "shush_consecutive_frames": 15,
+
         # Location Services
         "location_enabled": True,
         "location_cache_minutes": 60,

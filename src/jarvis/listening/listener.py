@@ -21,6 +21,7 @@ from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, create_intent_judge
+from .shush_detector import ShushDetector
 from ..debug import debug_log
 
 if TYPE_CHECKING:
@@ -295,6 +296,20 @@ class VoiceListener(threading.Thread):
             echo_tolerance=float(getattr(self.cfg, "echo_tolerance", 0.3)),
             energy_spike_threshold=float(getattr(self.cfg, "echo_energy_threshold", 2.0))
         )
+
+        # Acoustic shush detector — runs on raw frames during TTS for
+        # sub-200 ms "shhh" detection without waiting for Whisper.
+        shush_enabled = bool(getattr(self.cfg, "shush_detection_enabled", True))
+        if shush_enabled:
+            self._shush_detector: ShushDetector | None = ShushDetector(
+                sample_rate=int(getattr(self.cfg, "sample_rate", 16000)),
+                high_low_ratio=float(getattr(self.cfg, "shush_high_low_ratio", 3.0)),
+                energy_floor=float(getattr(self.cfg, "shush_energy_floor", 0.002)),
+                consecutive_frames=int(getattr(self.cfg, "shush_consecutive_frames", 15)),
+            )
+            debug_log("shush detector enabled", "voice")
+        else:
+            self._shush_detector = None
 
         self.state_manager = StateManager(
             hot_window_seconds=float(getattr(self.cfg, "hot_window_seconds", 3.0)),
@@ -1793,6 +1808,32 @@ class VoiceListener(threading.Thread):
 
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
+
+                    # Acoustic shush detection — runs on every frame during
+                    # TTS for near-instant "shhh" interruption without
+                    # waiting for Whisper transcription.
+                    tts_active = self.tts and self.tts.is_speaking()
+                    if tts_active and self._shush_detector is not None:
+                        if self._shush_detector.feed(frame):
+                            debug_log("acoustic shush detected — interrupting TTS", "voice")
+                            print("  🤫 Shush detected — stopping speech", flush=True)
+                            self.tts.interrupt()
+                            self._shush_detector.reset()
+                            # Discard accumulated utterance frames (they're just the shush)
+                            self.is_speech_active = False
+                            self._silence_frames = 0
+                            self._utterance_frames = []
+                            try:
+                                while not self._audio_q.empty():
+                                    self._audio_q.get_nowait()
+                            except Exception:
+                                pass
+                            break  # Exit frame loop, start fresh
+                    elif not tts_active and self._shush_detector is not None:
+                        # Reset streak when TTS is not playing so stale
+                        # counts don't carry across TTS sessions.
+                        if self._shush_detector._streak > 0:
+                            self._shush_detector.reset()
 
                     if not self.is_speech_active:
                         if is_voice:
