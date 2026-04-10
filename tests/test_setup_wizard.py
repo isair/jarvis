@@ -17,7 +17,9 @@ from desktop_app.setup_wizard import (
     check_ollama_status,
     should_show_setup_wizard,
     OllamaStatus,
+    MCPPage,
 )
+from desktop_app.mcp_catalogue import get_wizard_entries
 from jarvis.config import DEFAULT_CHAT_MODEL
 from jarvis.utils.location import (
     get_location_context,
@@ -594,4 +596,99 @@ class TestWhisperModelOptions:
             assert desc, "Model description should not be empty"
             # English-only models should have .en suffix
             assert model_id.endswith(".en"), f"English model should end with .en: {model_id}"
+
+
+class TestMCPPage:
+    """Tests for the MCP servers wizard page."""
+
+    def test_mcp_page_is_always_complete(self):
+        """MCP page should always be completeable (nothing is required)."""
+        # MCPPage.isComplete is hardcoded to True — the page is always optional
+        page = MCPPage.__new__(MCPPage)
+        assert page.isComplete() is True
+
+    def test_is_already_configured_returns_false_on_empty_config(self):
+        """When config has no mcps key, returns False."""
+        with patch("jarvis.config._load_json", return_value={}):
+            assert MCPPage._is_already_configured("filesystem") is False
+
+    def test_is_already_configured_returns_true_when_present(self):
+        """When the server name exists in config.mcps, returns True."""
+        mock_config = {"mcps": {"filesystem": {"transport": "stdio"}}}
+        with patch("jarvis.config._load_json", return_value=mock_config):
+            assert MCPPage._is_already_configured("filesystem") is True
+
+    def test_is_already_configured_handles_exception(self):
+        """Returns False if config loading fails."""
+        with patch("jarvis.config._load_json", side_effect=Exception("boom")):
+            assert MCPPage._is_already_configured("filesystem") is False
+
+    def test_wizard_entries_available(self):
+        """Wizard-featured catalogue entries are available for the MCP page."""
+        entries = get_wizard_entries()
+        assert len(entries) >= 1
+        # All entries should have display names and descriptions
+        for e in entries:
+            assert e.display_name
+            assert e.description
+
+    def test_validate_page_saves_selected_mcps(self):
+        """validatePage writes selected MCPs to config."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump({}, f)
+            cfg_path = Path(f.name)
+
+        try:
+            page = MCPPage.__new__(MCPPage)
+            entries = get_wizard_entries()
+            # Simulate checkboxes: first entry checked, rest unchecked
+            page._checkboxes = {}
+            for i, entry in enumerate(entries):
+                cb = MagicMock()
+                cb.isChecked.return_value = (i == 0)
+                page._checkboxes[entry.name] = cb
+
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                result = page.validatePage()
+
+            assert result is True
+            saved = _load_json(cfg_path)
+            first_entry = entries[0]
+            assert first_entry.name in saved.get("mcps", {})
+            assert saved["mcps"][first_entry.name]["command"] == first_entry.command
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_validate_page_preserves_existing_non_wizard_mcps(self):
+        """validatePage must not remove MCPs that aren't in the wizard catalogue."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump({"mcps": {"custom-server": {"transport": "stdio", "command": "node", "args": []}}}, f)
+            cfg_path = Path(f.name)
+
+        try:
+            page = MCPPage.__new__(MCPPage)
+            entries = get_wizard_entries()
+            page._checkboxes = {}
+            for entry in entries:
+                cb = MagicMock()
+                cb.isChecked.return_value = False
+                page._checkboxes[entry.name] = cb
+
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.validatePage()
+
+            saved = _load_json(cfg_path)
+            assert "custom-server" in saved.get("mcps", {}), "Custom MCP server was removed"
+        finally:
+            cfg_path.unlink(missing_ok=True)
 

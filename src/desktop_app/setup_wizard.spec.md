@@ -19,7 +19,7 @@ The setup wizard is shown only when **user action is required** — it is not sh
 ## Page Flow
 
 ```
-Welcome → [Ollama Install] → [Ollama Server] → Models → [Whisper] → Dictation → [Location] → Complete
+Welcome → [Ollama Install] → [Ollama Server] → Models → [Whisper] → Dictation → MCP Servers → [Location] → Complete
 ```
 
 Pages in brackets are conditional — skipped when their prerequisite is already satisfied.
@@ -34,8 +34,9 @@ Pages in brackets are conditional — skipped when their prerequisite is already
 | 4 | **Models** | Always (user selects chat model) | `ollama_chat_model` |
 | 5 | **Whisper Setup** | Always (user selects Whisper model) | `whisper_model` |
 | 6 | **Dictation** | Always | `dictation_enabled`, `dictation_hotkey`, `dictation_filler_removal` |
-| 7 | **Location** | Location enabled but detection failing | `location_ip_address` |
-| 8 | **Complete** | Always | — |
+| 7 | **MCP Servers** | Always | `mcps` |
+| 8 | **Location** | Location enabled but detection failing | `location_ip_address` |
+| 9 | **Complete** | Always | — |
 
 ### Page Details
 
@@ -50,6 +51,8 @@ Pages in brackets are conditional — skipped when their prerequisite is already
 **WhisperSetupPage** — Language mode toggle (multilingual vs English-only), then model size selection from hardcoded options. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons.
 
 **DictationPage** — Enable/disable dictation, hotkey selection dropdown (4 presets), filler word removal toggle with delay warning. Reads current config values on open so re-running the wizard preserves user choices.
+
+**MCPPage** — Shows wizard-featured entries from `mcp_catalogue.py` as selectable cards (checkbox + name + description). Already-configured servers start checked. On validate, selected servers are added to `config.mcps` and deselected wizard entries are removed. Includes a tip pointing users to Settings → MCP Servers for the full catalogue and custom servers.
 
 **LocationPage** — Tests location auto-detection. If it fails (private/CGNAT IP), offers manual IP input with OpenDNS resolution and GeoLite2 validation.
 
@@ -80,5 +83,5 @@ The wizard is deliberately limited to prerequisites. These are configured via th
 - VAD / timing parameters
 - Wake word customisation
 - Dictation hotkey
-- MCP integrations
+- Full MCP catalogue and custom MCP servers (wizard only shows featured entries)
 - All advanced parameters

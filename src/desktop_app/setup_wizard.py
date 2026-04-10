@@ -337,6 +337,7 @@ try:
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
     from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, _ensure_icons, _ICON_STYLESHEET_TEMPLATE
+    from desktop_app.mcp_catalogue import get_wizard_entries, MCPEntry
 
     # Import location utilities with crash protection for Windows native modules
     try:
@@ -462,6 +463,7 @@ class SetupWizard(QWizard):
         self.models_page = ModelsPage(self)
         self.mlx_whisper_page = WhisperSetupPage(self)
         self.dictation_page = DictationPage(self)
+        self.mcp_page = MCPPage(self)
         self.location_page = LocationPage(self)
         self.complete_page = CompletePage(self)
 
@@ -471,6 +473,7 @@ class SetupWizard(QWizard):
         self.models_page_id = self.addPage(self.models_page)
         self.mlx_whisper_page_id = self.addPage(self.mlx_whisper_page)
         self.dictation_page_id = self.addPage(self.dictation_page)
+        self.mcp_page_id = self.addPage(self.mcp_page)
         self.location_page_id = self.addPage(self.location_page)
         self.complete_page_id = self.addPage(self.complete_page)
 
@@ -2594,6 +2597,137 @@ class DictationPage(QWizardPage):
             if hotkey:
                 config["dictation_hotkey"] = hotkey
             config["dictation_filler_removal"] = filler_removal
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def isComplete(self) -> bool:
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if isinstance(wizard, SetupWizard):
+            return wizard.mcp_page_id
+        return super().nextId()
+
+
+class MCPPage(QWizardPage):
+    """Page for selecting popular MCP servers to enable."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        # Header
+        title = QLabel("🔌 MCP Servers")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "MCP (Model Context Protocol) servers give Jarvis extra abilities. "
+            "Select any you'd like to enable — you can always change these later in Settings."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(8)
+
+        # Scrollable cards for wizard-featured entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setSpacing(10)
+
+        self._checkboxes: Dict[str, QCheckBox] = {}
+        for entry in get_wizard_entries():
+            card = QFrame()
+            card.setObjectName("card")
+            card_layout = QHBoxLayout(card)
+            card_layout.setContentsMargins(16, 14, 16, 14)
+            card_layout.setSpacing(14)
+
+            cb = QCheckBox()
+            cb.setChecked(self._is_already_configured(entry.name))
+            self._checkboxes[entry.name] = cb
+            card_layout.addWidget(cb)
+
+            text_layout = QVBoxLayout()
+            text_layout.setSpacing(2)
+
+            name_label = QLabel(entry.display_name)
+            name_label.setStyleSheet("font-size: 15px; font-weight: bold;")
+            text_layout.addWidget(name_label)
+
+            desc_label = QLabel(entry.description)
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+            text_layout.addWidget(desc_label)
+
+            card_layout.addLayout(text_layout, 1)
+            inner_layout.addWidget(card)
+
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, 1)
+
+        # Tip about more MCPs in settings
+        tip = QLabel(
+            "💡  Many more MCP servers are available in <b>Settings → 🔌 MCP Servers</b>, "
+            "including Brave Search, GitHub, SQLite, and custom servers."
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 rgba(245, 158, 11, 0.12), stop:1 rgba(139, 92, 246, 0.08));"
+            "border: 1px solid rgba(245, 158, 11, 0.25);"
+            "border-radius: 8px; padding: 12px 16px; color: #fbbf24; font-size: 13px;"
+        )
+        layout.addWidget(tip)
+
+        self.setLayout(layout)
+
+    @staticmethod
+    def _is_already_configured(name: str) -> bool:
+        """Check if an MCP server is already in the user's config."""
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path())
+            return name in (config.get("mcps") or {})
+        except Exception:
+            return False
+
+    def validatePage(self) -> bool:
+        """Save selected MCPs to config before leaving page."""
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            mcps = config.get("mcps", {})
+            if not isinstance(mcps, dict):
+                mcps = {}
+
+            for entry in get_wizard_entries():
+                cb = self._checkboxes.get(entry.name)
+                if cb and cb.isChecked() and entry.name not in mcps:
+                    mcps[entry.name] = entry.to_config()
+                elif cb and not cb.isChecked() and entry.name in mcps:
+                    del mcps[entry.name]
+
+            if mcps:
+                config["mcps"] = mcps
+            else:
+                config.pop("mcps", None)
 
             config_path.parent.mkdir(parents=True, exist_ok=True)
             _save_json(config_path, config)
