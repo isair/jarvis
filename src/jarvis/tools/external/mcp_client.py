@@ -11,6 +11,7 @@ from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
 
 import glob as _glob
+import io as _io
 import sys as _sys
 
 # Static directories to search when a command isn't on the daemon's PATH.
@@ -120,7 +121,9 @@ class MCPClient:
         else:
             env = None  # inherit parent env as-is
         params = StdioServerParameters(command=command, args=args, env=env)
-        return stdio_client(params)
+        # Suppress MCP server stderr noise (npm warnings, usage banners, etc.)
+        # from polluting the daemon's log output
+        return stdio_client(params, errlog=_io.StringIO())
 
     @asynccontextmanager
     async def _session(self, server_name: str):

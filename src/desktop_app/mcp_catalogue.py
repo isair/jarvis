@@ -72,17 +72,17 @@ CATALOGUE: List[MCPEntry] = [
         description="Extract and summarise transcripts from any YouTube video — "
                     "just paste a link and ask Jarvis about the content",
         command="npx",
-        args=["-y", "mcp-youtube-transcript"],
+        args=["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
         wizard_featured=True,
         category="media",
     ),
     MCPEntry(
         name="macos",
         display_name="🖥️ macOS Automation",
-        description="Control your Mac by voice — launch apps, manage windows, "
-                    "clipboard access, volume control, and Finder operations",
+        description="Control your Mac by voice — run AppleScript and JavaScript automations "
+                    "to launch apps, manage windows, and automate system tasks",
         command="npx",
-        args=["-y", "mcp-server-macos"],
+        args=["-y", "@steipete/macos-automator-mcp"],
         wizard_featured=True,
         category="automation",
     ),

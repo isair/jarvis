@@ -49,7 +49,7 @@ def test_absolute_path_command_skips_which(monkeypatch, tmp_path):
         async def __aexit__(self, *a):
             return False
 
-    monkeypatch.setattr("jarvis.tools.external.mcp_client.stdio_client", lambda params: FakeCM())
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.stdio_client", lambda params, **kw: FakeCM())
     monkeypatch.setattr("jarvis.tools.external.mcp_client.ClientSession", FakeSession)
 
     try:
@@ -148,7 +148,7 @@ def test_mcp_client_list_and_invoke(monkeypatch):
             return False
 
     # Patch public imports inside the module (observable seams)
-    monkeypatch.setattr("jarvis.tools.external.mcp_client.stdio_client", lambda params: FakeCM(FakeSession()))
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.stdio_client", lambda params, **kw: FakeCM(FakeSession()))
     monkeypatch.setattr("jarvis.tools.external.mcp_client.ClientSession", FakeClientSession)
     # Avoid PATH check failing in _connect_stdio
     monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: cmd)
@@ -281,7 +281,7 @@ class TestConnectStdioPathInjection:
 
         captured_params = {}
 
-        def fake_stdio_client(params):
+        def fake_stdio_client(params, **kw):
             captured_params["env"] = params.env
             captured_params["command"] = params.command
             return None
@@ -316,7 +316,7 @@ class TestConnectStdioPathInjection:
 
         captured_params = {}
 
-        def fake_stdio_client(params):
+        def fake_stdio_client(params, **kw):
             captured_params["env"] = params.env
             return None
 
@@ -348,7 +348,7 @@ class TestConnectStdioPathInjection:
 
         captured_params = {}
 
-        def fake_stdio_client(params):
+        def fake_stdio_client(params, **kw):
             captured_params["env"] = params.env
             return None
 
