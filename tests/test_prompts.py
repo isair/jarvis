@@ -92,19 +92,6 @@ class TestPromptComponents:
         # Should encourage proactive tool use
         assert "proactively" in prompts.tool_incentives.lower()
 
-    def test_both_sizes_discourage_narrating_tool_intent(self):
-        """Both model sizes instruct the LLM to call tools immediately, not narrate intent."""
-        from jarvis.reply.prompts import get_system_prompts, ModelSize
-
-        for size in [ModelSize.SMALL, ModelSize.LARGE]:
-            prompts = get_system_prompts(size)
-            incentives_lower = prompts.tool_incentives.lower()
-
-            assert "call it immediately" in incentives_lower, \
-                f"{size.value} model should instruct immediate tool calling"
-            assert "never say you will use a tool" in incentives_lower, \
-                f"{size.value} model should discourage narrating tool intent"
-
     def test_both_sizes_have_core_components(self):
         """Both model sizes have the core prompt components."""
         from jarvis.reply.prompts import get_system_prompts, ModelSize

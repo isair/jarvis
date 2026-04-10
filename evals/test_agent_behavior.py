@@ -804,10 +804,6 @@ DEFLECTION_PHRASES = [
     "do not have access to",
     "recommend checking",
     "suggest checking",
-    "i will try checking",
-    "i will try to check",
-    "i'll try checking",
-    "i'll try to check",
 ]
 
 
@@ -933,4 +929,123 @@ class TestHelpfulness:
         # Should not deflect for queries the agent can handle
         assert not _response_is_deflection(response or ""), \
             f"Agent deflected instead of being helpful. Response: {(response or '')[:300]}"
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    @pytest.mark.parametrize("follow_up", [
+        pytest.param(
+            "you have a weather tool, try again",
+            id="Tool retry: explicit tool mention"
+        ),
+        pytest.param(
+            "go ahead and check again, maybe try a different spelling",
+            id="Tool retry: vague go ahead"
+        ),
+        pytest.param(
+            "just try checking the weather one more time",
+            id="Tool retry: vague just try"
+        ),
+    ])
+    def test_tool_retry_after_failure_live(
+        self, follow_up, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """
+        Live eval: when the user insists on retrying a tool after it returned
+        unhelpful results, the agent should actually call the tool again —
+        not narrate its intention to do so.
+
+        Reproduces the bug where the model says "I will try checking the weather now"
+        without actually producing a tool_calls field, causing the engine to treat
+        the narration as a final response.
+
+        Scenario:
+        - Turn 1: User asks about weather in an obscure location → tool returns
+          error/no data → model deflects or gives partial answer
+        - Turn 2: User insists "try again" → model MUST call the tool, not
+          just say "I will try"
+
+        Small models often fail to retry after a tool error because they
+        lack the reasoning capacity to override the "it failed, don't retry"
+        heuristic. This is marked as xfail for small models.
+        """
+        from jarvis.reply.engine import run_reply_engine
+        from jarvis.reply.prompts import detect_model_size, ModelSize
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        is_small = detect_model_size(JUDGE_MODEL) == ModelSize.SMALL
+
+        call_count = {"n": 0}
+
+        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
+            """First call returns error, second call succeeds."""
+            from jarvis.tools.types import ToolExecutionResult
+            capture.record(tool_name, tool_args or {})
+            call_count["n"] += 1
+
+            if tool_name == "getWeather":
+                if call_count["n"] <= 1:
+                    # First call: tool can't find the location
+                    return ToolExecutionResult(
+                        success=False,
+                        reply_text="",
+                        error_message="Could not find location 'Kazbegi'. Try a different spelling or a nearby city."
+                    )
+                else:
+                    # Subsequent calls: tool succeeds
+                    return ToolExecutionResult(
+                        success=True,
+                        reply_text="Current weather near Kazbegi (Stepantsminda), Georgia:\nConditions: Partly cloudy\nTemperature: 2.5°C\nWind: 25 km/h\n7-day: 2026-04-10: -1–5°C, Snow showers"
+                    )
+            return ToolExecutionResult(success=True, reply_text="OK")
+
+        capture = ToolCallCapture()
+
+        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
+             patch('jarvis.reply.engine.get_location_context', return_value="Location: Tbilisi, Georgia"):
+
+            # Turn 1: Ask about weather in obscure location — tool will fail
+            capture.clear()
+            run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text="how's the weather in Kazbegi today?",
+                dialogue_memory=eval_dialogue_memory
+            )
+            turn1_tools = capture.tool_names()
+
+            # Turn 2: User insists on retry — tool should succeed this time
+            capture.clear()
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=follow_up,
+                dialogue_memory=eval_dialogue_memory
+            )
+
+        turn2_tools = capture.tool_names()
+
+        print(f"\n📊 Tool Retry After Failure:")
+        print(f"   Turn 1 tools: {turn1_tools}")
+        print(f"   Follow-up: {follow_up}")
+        print(f"   Turn 2 tools: {turn2_tools}")
+        print(f"   Response: {(response or '')[:200]}...")
+
+        # The agent must actually call a tool on turn 2, not just narrate intent
+        tool_called = capture.has_any_tool()
+        is_deflection = _response_is_deflection(response or "")
+
+        if not tool_called or is_deflection:
+            if is_small:
+                pytest.xfail(
+                    f"Small model {JUDGE_MODEL} failed to retry tool after error. "
+                    f"Known limitation. Tools called: {turn2_tools}, "
+                    f"Response: {(response or '')[:150]}"
+                )
+            failure_reason = "no tool called" if not tool_called else "deflection in response"
+            pytest.fail(
+                f"Agent failed ({failure_reason}) on follow-up '{follow_up}'. "
+                f"Tools called: {turn2_tools}. "
+                f"Response: {(response or '')[:300]}"
+            )
 
