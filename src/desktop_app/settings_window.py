@@ -171,10 +171,13 @@ def _build_field_metadata() -> List[FieldMeta]:
       "wake", "float", min_val=0.5, max_val=1.0, step=0.01)
     # --- Whisper ---
     f("whisper_model", "Model Size",
-      "Whisper model size (tiny/base/small/medium/large)",
+      "Whisper model variant",
       "whisper", "choice",
-      choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3")])
+      choices=[("tiny", "Tiny"), ("tiny.en", "Tiny (English)"),
+               ("base", "Base"), ("base.en", "Base (English)"),
+               ("small", "Small"), ("small.en", "Small (English)"),
+               ("medium", "Medium"), ("medium.en", "Medium (English)"),
+               ("large-v3", "Large v3")])
     f("whisper_backend", "Backend",
       "Speech recognition backend",
       "whisper", "choice",

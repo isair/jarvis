@@ -5,6 +5,7 @@ Each tool is implemented using the common Tool interface for consistency.
 """
 
 # Import all tool classes
+from .applescript import AppleScriptTool
 from .screenshot import ScreenshotTool
 from .web_search import WebSearchTool
 from .local_files import LocalFilesTool
@@ -20,6 +21,7 @@ from .stop import StopTool
 
 __all__ = [
     # Tool classes
+    'AppleScriptTool',
     'ScreenshotTool',
     'WebSearchTool',
     'LocalFilesTool',

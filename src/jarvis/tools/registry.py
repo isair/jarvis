@@ -10,6 +10,7 @@ from pathlib import Path
 import os
 
 from .builtin.screenshot import ScreenshotTool
+from .builtin.applescript import AppleScriptTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
 from .builtin.fetch_web_page import FetchWebPageTool
@@ -29,6 +30,7 @@ from ..debug import debug_log
 
 # Registry of all builtin tools
 BUILTIN_TOOLS = {
+    "appleScript": AppleScriptTool(),
     "screenshot": ScreenshotTool(),
     "webSearch": WebSearchTool(),
     "localFiles": LocalFilesTool(),
@@ -350,5 +352,4 @@ def run_tool_with_retries(
     # Unknown tool
     debug_log(f"unknown tool requested: {tool_name}", "tools")
     return ToolExecutionResult(success=False, reply_text=None, error_message=f"Unknown tool: {tool_name}")
-
 

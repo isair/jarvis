@@ -1710,8 +1710,8 @@ class WhisperSetupPage(QWizardPage):
 
         layout.addWidget(selection_card)
 
-        # Store selected model (default to medium for best balance)
-        self._selected_whisper_model: str = "medium"
+        # Store selected model (default to medium.en for the best English-only balance)
+        self._selected_whisper_model: str = "medium.en"
 
         # Build initial slider UI
         self._rebuild_slider_ui()
@@ -1976,7 +1976,7 @@ class WhisperSetupPage(QWizardPage):
     def initializePage(self):
         """Check status when page is shown."""
         # Load the currently configured whisper model
-        current_whisper_model = "medium"  # Default to medium multilingual
+        current_whisper_model = "medium.en"  # Default to medium English-only
         try:
             cfg = load_settings()
             current_whisper_model = cfg.whisper_model
@@ -2728,4 +2728,3 @@ if __name__ == "__main__":
     result = wizard.exec()
     print(f"Wizard result: {result}")
     sys.exit(0)
-

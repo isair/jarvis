@@ -338,10 +338,10 @@ def get_default_config() -> Dict[str, Any]:
         # Piper TTS
         "tts_piper_model_path": None,  # Path to .onnx voice model
         "tts_piper_speaker": None,  # Speaker ID for multi-speaker models
-        "tts_piper_length_scale": 0.65,  # Speed: <1.0 faster, >1.0 slower (0.65 = ~30% faster)
+        "tts_piper_length_scale": 0.78,  # Slightly slower, more measured delivery
         "tts_piper_noise_scale": 0.8,  # Audio variation (higher = more expressive)
         "tts_piper_noise_w": 1.0,  # Phoneme width variation (higher = more lively)
-        "tts_piper_sentence_silence": 0.2,  # Post-sentence silence in seconds
+        "tts_piper_sentence_silence": 0.3,  # Post-sentence silence in seconds
 
         # Voice Input & Audio
         "voice_device": None,
@@ -354,12 +354,12 @@ def get_default_config() -> Dict[str, Any]:
         "voice_max_collect_seconds": 180.0,
 
         # Wake Word Detection
-        "wake_word": "jarvis",
-        "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst"],
-        "wake_fuzzy_ratio": 0.78,
+        "wake_word": "alfred",
+        "wake_aliases": ["alfrid", "alferd", "alford", "all fred", "al fred", "alfred's", "halfred", "el fred"],
+        "wake_fuzzy_ratio": 0.75,
 
         # Whisper Speech Recognition
-        "whisper_model": "medium",
+        "whisper_model": "medium.en",
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
@@ -506,20 +506,20 @@ def load_settings() -> Settings:
         tts_piper_speaker = None if tts_piper_speaker_val in (None, "", "null") else int(tts_piper_speaker_val)
     except Exception:
         tts_piper_speaker = None
-    tts_piper_length_scale = float(merged.get("tts_piper_length_scale", 0.65))
+    tts_piper_length_scale = float(merged.get("tts_piper_length_scale", 0.78))
     tts_piper_noise_scale = float(merged.get("tts_piper_noise_scale", 0.8))
     tts_piper_noise_w = float(merged.get("tts_piper_noise_w", 1.0))
-    tts_piper_sentence_silence = float(merged.get("tts_piper_sentence_silence", 0.2))
+    tts_piper_sentence_silence = float(merged.get("tts_piper_sentence_silence", 0.3))
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
     voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
     voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
     voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 60.0))
-    wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
+    wake_word = str(merged.get("wake_word", "alfred")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
-    wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "medium"))
+    wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.75))
+    whisper_model = str(merged.get("whisper_model", "medium.en"))
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
