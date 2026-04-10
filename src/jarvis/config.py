@@ -155,10 +155,11 @@ class Settings:
     intent_judge_model: str
     intent_judge_timeout_sec: float
 
-    # Transcript Buffer - duration for both retention and context passed to intent judge
+    # Transcript Buffer - ambient speech context for intent judge
     transcript_buffer_duration_sec: float
 
     # Memory & Dialogue
+    # Drives both the short-term memory window and forced diary update interval
     dialogue_memory_timeout: float
     memory_enrichment_max_results: int
     memory_search_max_results: int
@@ -393,10 +394,13 @@ def get_default_config() -> Dict[str, Any]:
         "intent_judge_thinking_enabled": False,  # Enable thinking for intent judge (adds latency to wake detection)
 
         # Transcript Buffer - used for both retention and context passed to intent judge
-        # 120s (2 min) provides enough context for multi-person conversations
+        # 120s (2 min) provides enough ambient speech context for intent judging
+        # in group conversations. Separate from dialogue memory.
         "transcript_buffer_duration_sec": 120.0,
 
         # Memory & Dialogue
+        # dialogue_memory_timeout drives the short-term memory window AND the forced
+        # diary update interval. After a diary update, enrichment retrieves older context.
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 10,
         "memory_search_max_results": 15,
@@ -547,9 +551,10 @@ def load_settings() -> Settings:
     intent_judge_model = str(merged.get("intent_judge_model", "gemma4:e2b"))
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 10.0))
 
-    # Transcript Buffer - used for both retention and context passed to intent judge
+    # Transcript Buffer - ambient speech context for intent judge (separate from dialogue)
     transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 120.0))
 
+    # Dialogue memory window and forced diary update share this duration
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))

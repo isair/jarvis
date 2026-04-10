@@ -143,15 +143,14 @@ class TranscriptSegment:
     is_during_tts: bool    # Whether TTS was playing during this segment
 
 class TranscriptBuffer:
-    max_duration_sec: float = 120.0  # 2 minutes - enough for multi-person conversation context
+    max_duration_sec: float = 120.0  # Ambient speech context for intent judging
 ```
 
 ### Memory Alignment
 
-The transcript buffer serves as the "live" portion of short-term memory:
-- **Transcript buffer:** Last 2 minutes of raw speech (before processing)
-- **Short-term memory:** Processed conversation turns (user queries + assistant responses)
-- **Long-term memory (diary):** Summarized memories
+- **Transcript buffer** (`transcript_buffer_duration_sec`): Rolling raw ambient speech. Separate and potentially longer — in group conversations, 2+ minutes of context lets the intent judge synthesise a complete query with relevant information when someone decides to involve Jarvis later in the conversation.
+- **Short-term memory** (`dialogue_memory_timeout`): Processed Jarvis interactions (user queries + assistant responses). This window also drives the forced diary update interval.
+- **Long-term memory (diary):** Forced update when unsaved messages reach `dialogue_memory_timeout` age. Enrichment retrieves any relevant earlier context from the diary.
 
 ### Methods
 
@@ -253,7 +252,7 @@ If the intent judge later rejects the query (and no hot window override applies)
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for transcript buffer. Used for both retention and context passed to intent judge. 2 minutes provides good context for multi-person conversations. |
+| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
