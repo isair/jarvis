@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ...memory.conversation import search_conversation_memory
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 
 class RecallConversationTool(Tool):
@@ -43,6 +43,13 @@ class RecallConversationTool(Tool):
             },
             "required": ["search_query"]
         }
+
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        return ToolClass.INFORMATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the recall conversation tool."""

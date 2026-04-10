@@ -515,6 +515,7 @@ Verify: `sudo lsof -i -n -P | grep jarvis` (should only show 127.0.0.1 to Ollama
 - **100% offline** - No cloud services required
 - **Auto-redaction** - Emails, tokens, passwords automatically removed
 - **Local storage** - Everything in `~/.local/share/jarvis`
+- **Audit log** - When the audit feature is enabled, tool usage is recorded to `audit.db` (a SQLite file stored alongside the main database). The log contains already-redacted user intent and tool decisions — no raw personal data is written. You can disable auditing by leaving `audit_db_path` unset in your config.
 
 ## License
 

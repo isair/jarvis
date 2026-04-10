@@ -301,6 +301,51 @@ def main() -> None:
     print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
+    # Initialise runtime health registry, policy engine, and audit recorder.
+    # Each init is graceful: a failure degrades the service but does not abort startup.
+    try:
+        from .runtime.health import configure as _configure_health
+        _health = _configure_health()
+        debug_log("health registry configured", "runtime")
+    except Exception as _he:
+        debug_log(f"health registry init failed (non-fatal): {_he}", "runtime")
+        _health = None
+
+    try:
+        from .policy.approvals import ApprovalStore as _ApprovalStore
+        from .policy.engine import configure as _configure_policy
+        _approval_store = _ApprovalStore()
+        _configure_policy(cfg, _approval_store)
+        debug_log(f"policy engine configured: mode={getattr(cfg, 'policy_mode', 'ask_destructive')}", "runtime")
+        if _health:
+            _health.ready("policy", f"mode={getattr(cfg, 'policy_mode', 'ask_destructive')}")
+    except Exception as _pe:
+        debug_log(f"policy init failed (non-fatal): {_pe}", "runtime")
+        if _health:
+            try:
+                _health.degraded("policy", "policy engine unavailable", error=str(_pe))
+            except Exception:
+                pass
+
+    try:
+        from .audit.recorder import configure as _configure_audit
+        from pathlib import Path as _Path
+        _audit_db_path = getattr(cfg, "audit_db_path", None)
+        if _audit_db_path:
+            _configure_audit(_audit_db_path)
+            debug_log(f"audit recorder configured: {_audit_db_path}", "runtime")
+            if _health:
+                _health.ready("audit", _audit_db_path)
+        else:
+            debug_log("audit recorder disabled (audit_db_path not set)", "runtime")
+    except Exception as _ae:
+        debug_log(f"audit init failed (non-fatal): {_ae}", "runtime")
+        if _health:
+            try:
+                _health.degraded("audit", "audit db unavailable", error=str(_ae))
+            except Exception:
+                pass
+
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}
     if mcps:

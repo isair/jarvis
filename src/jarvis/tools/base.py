@@ -6,7 +6,8 @@ ensuring consistency with MCP tool format and enabling dictionary-based executio
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
-from .types import ToolExecutionResult
+from .types import RiskLevel, ToolExecutionResult
+from ..policy.models import ToolClass
 
 
 class ToolContext:
@@ -62,6 +63,35 @@ class Tool(ABC):
     def inputSchema(self) -> Dict[str, Any]:
         """JSON Schema for tool arguments (matches MCP format)."""
         pass
+
+    def classify(self, args: Optional[Dict[str, Any]] = None) -> ToolClass:
+        """Return the :class:`ToolClass` for this tool with the given args.
+
+        The default implementation returns ``ToolClass.WRITE_OPERATIONAL``.
+        Override in subclasses whose classification differs or varies by
+        argument (e.g. ``localFiles`` read vs write).
+        """
+        return ToolClass.WRITE_OPERATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        """Return the risk level for executing this tool with the given args.
+
+        The default implementation returns ``RiskLevel.MODERATE``.  Tools that
+        are known to be read-only should override this to return
+        ``RiskLevel.SAFE``; tools whose risk depends on a particular argument
+        value (e.g. the ``operation`` field of ``localFiles``) should inspect
+        ``args`` and return the appropriate level.
+
+        Keeping risk information here ensures it stays co-located with the tool
+        that owns it and is not duplicated in a separate mapping elsewhere.
+
+        Args:
+            args: Arguments that will be passed to ``run``, or ``None``.
+
+        Returns:
+            RiskLevel for this tool/args combination.
+        """
+        return RiskLevel.MODERATE
 
     @abstractmethod
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:

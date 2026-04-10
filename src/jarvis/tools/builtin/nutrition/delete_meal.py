@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, Callable
 
 from ....debug import debug_log
 from ...base import Tool, ToolContext
-from ...types import ToolExecutionResult
+from ...types import RiskLevel, ToolExecutionResult
 
 
 class DeleteMealTool(Tool):
@@ -28,6 +28,13 @@ class DeleteMealTool(Tool):
             "required": ["id"]
         }
     
+    def classify(self, args=None):
+        from ....policy.models import ToolClass
+        return ToolClass.DESTRUCTIVE
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.HIGH
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the delete meal tool."""
         context.user_print("🗑️ Deleting the meal…")

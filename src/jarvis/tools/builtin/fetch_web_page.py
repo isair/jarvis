@@ -4,7 +4,7 @@ import requests
 from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 
 class FetchWebPageTool(Tool):
@@ -28,6 +28,13 @@ class FetchWebPageTool(Tool):
             },
             "required": ["url"]
         }
+
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        return ToolClass.READ_ONLY_OPERATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Fetch and extract content from a web page."""

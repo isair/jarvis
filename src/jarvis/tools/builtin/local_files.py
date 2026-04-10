@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
+from ...policy.path_guard import resolve_and_validate_path
+from ...policy.models import AccessMode, PolicyDeniedError
 
 
 class LocalFilesTool(Tool):
-    """Tool for safe local file operations within user's home directory."""
+    """Tool for safe local file operations, constrained to configured workspace roots."""
 
     @property
     def name(self) -> str:
@@ -16,7 +18,7 @@ class LocalFilesTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Safely read, write, list, append, or delete files within your home directory."
+        return "Safely read, write, list, append, or delete files within configured workspace roots."
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
@@ -24,7 +26,7 @@ class LocalFilesTool(Tool):
             "type": "object",
             "properties": {
                 "operation": {"type": "string", "description": "Operation to perform: list, read, write, append, delete"},
-                "path": {"type": "string", "description": "File or directory path (relative to home directory)"},
+                "path": {"type": "string", "description": "File or directory path (relative to home directory or absolute workspace path)"},
                 "content": {"type": "string", "description": "Content to write/append (for write/append operations)"},
                 "glob": {"type": "string", "description": "Glob pattern for listing (default: *)"},
                 "recursive": {"type": "boolean", "description": "Whether to search recursively (for list operation)"}
@@ -32,30 +34,49 @@ class LocalFilesTool(Tool):
             "required": ["operation", "path"]
         }
 
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        operation = str((args or {}).get("operation", "")).lower()
+        _op_class = {
+            "list": ToolClass.INFORMATIONAL,
+            "read": ToolClass.INFORMATIONAL,
+            "write": ToolClass.WRITE_OPERATIONAL,
+            "append": ToolClass.WRITE_OPERATIONAL,
+            "delete": ToolClass.DESTRUCTIVE,
+        }
+        return _op_class.get(operation, ToolClass.WRITE_OPERATIONAL)
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        """Return the risk level for this file operation."""
+        operation = str((args or {}).get("operation", "")).lower()
+        if operation in ("list", "read"):
+            return RiskLevel.SAFE
+        if operation in ("write", "append"):
+            return RiskLevel.MODERATE
+        if operation == "delete":
+            return RiskLevel.HIGH
+        return RiskLevel.MODERATE  # Unknown operation
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the local files tool."""
         try:
-            # Safety: restrict to user's home directory by default
-            home_root = Path(os.path.expanduser("~")).resolve()
+            cfg = context.cfg if context else None
 
-            def _expand_user_path(p: str) -> str:
-                if not isinstance(p, str):
-                    return str(p)
-                if p == "~":
-                    return os.path.expanduser("~")
-                if p.startswith("~/") or p.startswith("~\\"):
-                    return os.path.join(os.path.expanduser("~"), p[2:])
-                return os.path.expanduser(p)
-
-            def _resolve_safe(p: str) -> Path:
-                resolved = Path(_expand_user_path(p)).resolve()
+            def _resolve_safe(p: str, access_mode: AccessMode) -> Path:
+                """Resolve path via the policy path guard using current config."""
                 try:
-                    # Allow exactly the home root or its descendants
-                    if resolved == home_root or str(resolved).startswith(str(home_root) + os.sep):
-                        return resolved
-                except Exception:
-                    pass
-                raise PermissionError(f"Path not allowed: {resolved}")
+                    return resolve_and_validate_path(
+                        p,
+                        access_mode,
+                        workspace_roots=getattr(cfg, "workspace_roots", None),
+                        blocked_roots=getattr(cfg, "blocked_roots", None),
+                        read_only_roots=getattr(cfg, "read_only_roots", None),
+                        local_files_mode=getattr(cfg, "local_files_mode", "home_only"),
+                    )
+                except PolicyDeniedError:
+                    raise
+                except Exception as exc:
+                    raise PermissionError(str(exc)) from exc
 
             if not (args and isinstance(args, dict)):
                 return ToolExecutionResult(success=False, reply_text="localFiles requires a JSON object with at least 'operation' and 'path'.")
@@ -65,7 +86,15 @@ class LocalFilesTool(Tool):
             if not operation or not path_arg:
                 return ToolExecutionResult(success=False, reply_text="localFiles requires 'operation' and 'path'.")
 
-            target = _resolve_safe(str(path_arg))
+            _OP_ACCESS_MAP = {
+                "list":   AccessMode.LIST,
+                "read":   AccessMode.READ,
+                "write":  AccessMode.WRITE,
+                "append": AccessMode.WRITE,
+                "delete": AccessMode.DELETE,
+            }
+            access_mode = _OP_ACCESS_MAP.get(operation, AccessMode.READ)
+            target = _resolve_safe(str(path_arg), access_mode)
 
             # list
             if operation == "list":
@@ -149,6 +178,8 @@ class LocalFilesTool(Tool):
                     return ToolExecutionResult(success=False, reply_text=f"Delete failed: {e}")
 
             return ToolExecutionResult(success=False, reply_text=f"Unknown localFiles operation: {operation}")
+        except PolicyDeniedError as pde:
+            return ToolExecutionResult(success=False, reply_text=f"Access denied by policy: {pde}")
         except PermissionError as pe:
             return ToolExecutionResult(success=False, reply_text=f"Permission error: {pe}")
         except Exception as e:

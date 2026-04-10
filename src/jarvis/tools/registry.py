@@ -20,6 +20,7 @@ from .builtin.nutrition.delete_meal import DeleteMealTool
 from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .builtin.weather import WeatherTool
 from .builtin.stop import StopTool
+from .builtin.undo import UndoTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -40,6 +41,7 @@ BUILTIN_TOOLS = {
     "refreshMCPTools": RefreshMCPToolsTool(),
     "getWeather": WeatherTool(),
     "stop": StopTool(),
+    "undo": UndoTool(),
 }
 
 # Global MCP tools cache

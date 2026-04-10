@@ -19,6 +19,13 @@ class TestLocalFilesTool:
         self.tool = LocalFilesTool()
         self.context = Mock(spec=ToolContext)
         self.context.user_print = Mock()
+        # Community PRs added policy path guard which reads cfg from context
+        mock_cfg = Mock()
+        mock_cfg.workspace_roots = []
+        mock_cfg.blocked_roots = []
+        mock_cfg.read_only_roots = []
+        mock_cfg.local_files_mode = "unrestricted"
+        self.context.cfg = mock_cfg
 
     def test_tool_properties(self):
         """Test tool metadata properties."""
@@ -109,7 +116,7 @@ class TestLocalFilesTool:
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "not allowed" in result.reply_text.lower()
+        assert "denied" in result.reply_text.lower() or "not allowed" in result.reply_text.lower()
 
     def test_run_unknown_operation(self):
         """Test with unknown operation."""

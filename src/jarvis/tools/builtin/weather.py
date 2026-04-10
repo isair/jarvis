@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ...utils.location import get_location_info
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 
 # WMO Weather interpretation codes
@@ -113,6 +113,13 @@ class WeatherTool(Tool):
         except Exception as e:
             debug_log(f"    ⚠️ location detection error: {e}", "tools")
             return None
+
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        return ToolClass.READ_ONLY_OPERATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Get current weather for a location."""
