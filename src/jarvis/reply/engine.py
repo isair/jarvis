@@ -971,7 +971,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         task.fail("no reply generated")
         if _audit:
             try:
-                _audit.finish_task(_audit_task_id, final_status="failed", error="no reply generated")
+                _audit.finish_task(_audit_task_id, final_status="failed", error="no reply generated", started_at=task.started_at)
             except Exception:
                 pass
 
@@ -1000,7 +1000,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         task.complete()
     if _audit:
         try:
-            _audit.finish_task(_audit_task_id, final_status="done")
+            _audit.finish_task(_audit_task_id, final_status="done", started_at=task.started_at)
         except Exception:
             pass
     debug_log(task.summary(), "task")
