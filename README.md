@@ -1,6 +1,6 @@
 # Jarvis
 
-**A private AI voice assistant that lives on your computer** - not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence ("what do you think, Jarvis?" or "Jarvis, look at this error") and get thoughtful, contextual responses. It remembers your preferences, helps with code, tracks your health goals, searches the web, and connects to 500+ tools via MCP.
+**A private AI voice assistant that lives on your computer** - not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence ("what do you think, Jarvis?" or "Jarvis, look at this error") and get thoughtful, contextual responses. It remembers your preferences, helps with code, tracks your health goals, searches the web, and connects to thousands of tools via MCP.
 
 🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info.
 
@@ -25,11 +25,11 @@
 
 **🗣️ A third person in the room** - Unlike voice assistants that only respond to rigid commands, Jarvis understands conversations. It maintains a short temporary rolling context of what's being discussed, so when you ask "Jarvis, what do you think?" it knows exactly what you're talking about. Have it chime into discussions with friends, help debug code while you talk through problems, or weigh in on decisions.
 
-**🧠 Never forgets** - Unlimited memory across conversations. Context-aware personalities (developer/business/life coach). Learns your preferences over time.
+**🧠 Never forgets** - Unlimited memory across conversations. Adapts tone naturally to the topic. Learns your preferences over time.
 
 **🎙️ Free dictation** - Hold a hotkey, speak, release — your words appear in any app as text. Like WisprFlow, but free, offline, and private. No subscription, no cloud transcription.
 
-**🔌 Extensible** - MCP integration connects Jarvis to 500+ tools: smart home, GitHub, Slack, databases, and more.
+**🔌 Extensible** - MCP integration connects Jarvis to thousands of tools: smart home, GitHub, Slack, databases, and more. Smart tool selection means adding more tools won't slow things down.
 
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
 
@@ -50,7 +50,7 @@
 ✨ Working on it: what do you think about the weather tomorrow for the picnic
 🧰 Tool: getWeather…
 
-🤖 Jarvis (life)
+🤖 Jarvis
 Tomorrow looks great for a picnic! Sunny with highs around 72°F...
 ```
 Jarvis understood the entire conversation and gave a contextual answer - no need to repeat the question.
@@ -61,7 +61,7 @@ Jarvis understood the entire conversation and gave a contextual answer - no need
 🧰 Tool: screenshot…
 🧰 MCP: vscode:findReferences…
 
-🤖 Jarvis (developer)
+🤖 Jarvis
 I can see the error on your screen - "Cannot return null for non-nullable field".
 Your User type has `email: String!` but the resolver is returning null...
 ```
@@ -71,7 +71,7 @@ Your User type has `email: String!` but the resolver is returning null...
 ✨ Working on it: should i order pizza tonight considering my health goals
 🧰 Tool: fetchMeals…
 
-🤖 Jarvis (life)
+🤖 Jarvis
 Looking at your week - you mentioned wanting to lose 10 pounds by March...
 Today you've had about 860 calories so far. Given your 1,800 calorie target,
 you've got room for pizza! But maybe consider thin crust to save calories.
@@ -83,7 +83,7 @@ you've got room for pizza! But maybe consider thin crust to save calories.
   🧠 Looking back at our past conversations…
   🌐 Searching the web…
 
-🤖 Jarvis (business)
+🤖 Jarvis
 Here's a quick snapshot of today's headlines...
 ```
 
@@ -92,7 +92,7 @@ Here's a quick snapshot of today's headlines...
 👂 Heard: give me a random topic to discuss jarvis
 ✨ Working on it: give me a random topic to discuss
 
-🤖 Jarvis (life)
+🤖 Jarvis
 How about the Fermi Paradox? Given the vast number of stars...
 ```
 
@@ -135,11 +135,12 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 
 - **Conversational Awareness** - Understands ongoing discussions. Ask "Jarvis, what do you think?" and it knows what you're talking about. Works naturally in multi-person conversations.
 - **Unlimited Memory** - Never forgets. Searches across all your conversation history. Memory Viewer GUI included.
-- **Smart Personalities** - Adapts tone: Developer (debugging), Business (planning), Life Coach (health/wellness)
+- **Adaptive Tone** - Automatically surgical for code, pragmatic for business, encouraging for wellbeing — no manual mode switching
+- **Smart Tool Selection** - Embedding-based relevance filtering picks only the tools needed per query — add unlimited MCP tools without performance degradation
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
-- **MCP Integration** - Connect to 500+ external tools (Home Assistant, GitHub, Slack, etc.)
+- **MCP Integration** - Connect to thousands of external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
 
