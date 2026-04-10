@@ -77,6 +77,8 @@ Tests should verify mechanisms, not current values. Assert against config-driven
 
 Run evals after finalising a change that can affect agent accuracy.
 
+Any change to LLM prompts (system prompts, tool incentives, constraints, etc.) must be verified against a relevant eval case. If no eval exists for the behaviour being changed, write one first. The eval should demonstrate the improvement — i.e. it should fail or show worse results before the prompt change and pass or improve after.
+
 Commit your changes when you finish a fix or feature before moving on to the next task.
 
 Before running `git commit --amend`, always check `git log --oneline -3` first to verify you're amending the correct commit.
