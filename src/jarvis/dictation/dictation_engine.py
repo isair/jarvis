@@ -13,6 +13,7 @@ import math
 import os
 import platform
 import struct
+import sys
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -610,6 +611,29 @@ class DictationEngine:
             return
         if self._started:
             return
+
+        # macOS 26+ enforces that TSM (Text Services Manager) calls happen on
+        # the main dispatch queue.  pynput's keyboard Listener runs a CGEventTap
+        # on a background thread whose callback triggers TSM input-source
+        # queries, violating this assertion and crashing the process (SIGTRAP).
+        # Disable pynput on macOS 26+ until an alternative backend is available.
+        if sys.platform == "darwin":
+            try:
+                mac_ver = platform.mac_ver()[0]
+                major = int(mac_ver.split(".")[0]) if mac_ver else 0
+            except (ValueError, IndexError):
+                major = 0
+            if major >= 26:
+                debug_log(
+                    f"pynput disabled on macOS {mac_ver} "
+                    "(TSM main-thread assertion)", "dictation",
+                )
+                print(
+                    "  ⚠️  Dictation is not available on macOS 26+ "
+                    "(pynput keyboard listener incompatibility)",
+                    flush=True,
+                )
+                return
 
         self._listener = pynput_keyboard.Listener(
             on_press=self._on_key_press,
