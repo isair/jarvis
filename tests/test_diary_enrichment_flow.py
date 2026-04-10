@@ -1,22 +1,20 @@
 """
-Diary-to-Enrichment Flow Evals
+Diary-to-Enrichment Flow Integration Tests
 
 Tests the critical flow where dialogue memory is saved to the diary, cleaned
-up from in-memory, and then retrieved via enrichment on a follow-up query.
+up from in-memory, and then retrieved via FTS search on a follow-up query.
 
 This validates that after the unified RECENT_WINDOW_SEC = MAX_UNSAVED_AGE_SEC
 change, context is not lost when messages are cleaned from memory — the
-enrichment pipeline successfully retrieves just-saved diary entries.
+FTS pipeline successfully retrieves just-saved diary entries.
 """
 
 import time
 import pytest
-from unittest.mock import patch, MagicMock
-
-from helpers import MockConfig
+from unittest.mock import patch
 
 
-@pytest.mark.eval
+@pytest.mark.integration
 class TestDiaryToEnrichmentFlow:
     """Test the full diary save → cleanup → enrichment retrieval pipeline."""
 
@@ -35,7 +33,7 @@ class TestDiaryToEnrichmentFlow:
             ]
             dm._last_activity_time = now - age_seconds
 
-    def test_diary_save_then_enrichment_retrieval_fts(self, eval_db):
+    def test_diary_save_then_enrichment_retrieval_fts(self, db):
         """After diary save + cleanup, FTS enrichment finds the saved context.
 
         This is the core scenario: user discusses a topic, diary update fires,
@@ -72,7 +70,7 @@ class TestDiaryToEnrichmentFlow:
             return_value=(mock_summary, mock_topics),
         ):
             summary_id = update_diary_from_dialogue_memory(
-                db=eval_db,
+                db=db,
                 dialogue_memory=dm,
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test",
@@ -95,7 +93,7 @@ class TestDiaryToEnrichmentFlow:
 
         # Step 4: Search via FTS (no embeddings — simulates fallback path)
         results = search_conversation_memory_by_keywords(
-            db=eval_db,
+            db=db,
             keywords=["asyncio", "database", "migration"],
             max_results=5,
         )
@@ -118,7 +116,7 @@ class TestDiaryToEnrichmentFlow:
         )
         print("  ✅ Enrichment successfully retrieved diary context after cleanup")
 
-    def test_followup_query_finds_recent_diary_entry(self, eval_db):
+    def test_followup_query_finds_recent_diary_entry(self, db):
         """Simulate the exact flow: conversation → diary save → follow-up query.
 
         The follow-up query exercises the enrichment keyword extraction
@@ -151,7 +149,7 @@ class TestDiaryToEnrichmentFlow:
             return_value=(mock_summary, mock_topics),
         ):
             summary_id = update_diary_from_dialogue_memory(
-                db=eval_db,
+                db=db,
                 dialogue_memory=dm,
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test",
@@ -171,7 +169,7 @@ class TestDiaryToEnrichmentFlow:
         followup_keywords = ["tokyo", "trip", "travel"]
 
         results = search_conversation_memory_by_keywords(
-            db=eval_db,
+            db=db,
             keywords=followup_keywords,
             max_results=5,
         )
@@ -191,7 +189,7 @@ class TestDiaryToEnrichmentFlow:
         )
         print("  ✅ Follow-up successfully retrieved trip plans from diary")
 
-    def test_multiple_diary_entries_searchable(self, eval_db):
+    def test_multiple_diary_entries_searchable(self, db):
         """Multiple diary entries from different conversations are all searchable."""
         from jarvis.memory.conversation import (
             DialogueMemory,
@@ -213,7 +211,7 @@ class TestDiaryToEnrichmentFlow:
             ),
         ):
             id1 = update_diary_from_dialogue_memory(
-                db=eval_db, dialogue_memory=dm,
+                db=db, dialogue_memory=dm,
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test", ollama_embed_model="test",
                 force=True,
@@ -237,7 +235,7 @@ class TestDiaryToEnrichmentFlow:
             ),
         ):
             id2 = update_diary_from_dialogue_memory(
-                db=eval_db, dialogue_memory=dm,
+                db=db, dialogue_memory=dm,
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test", ollama_embed_model="test",
                 force=True,
@@ -252,14 +250,14 @@ class TestDiaryToEnrichmentFlow:
 
         # Search for cooking — should find first entry
         cooking_results = search_conversation_memory_by_keywords(
-            db=eval_db, keywords=["pasta", "recipe", "cooking"], max_results=5,
+            db=db, keywords=["pasta", "recipe", "cooking"], max_results=5,
         )
         assert len(cooking_results) > 0, "Should find cooking diary entry"
         assert "carbonara" in " ".join(cooking_results).lower()
 
         # Search for fitness — should find second entry
         fitness_results = search_conversation_memory_by_keywords(
-            db=eval_db, keywords=["strength", "training", "exercise"], max_results=5,
+            db=db, keywords=["strength", "training", "exercise"], max_results=5,
         )
         assert len(fitness_results) > 0, "Should find fitness diary entry"
         assert any(kw in " ".join(fitness_results).lower() for kw in ["squat", "deadlift", "bench"])
@@ -269,7 +267,7 @@ class TestDiaryToEnrichmentFlow:
         print(f"  🔍 Fitness search: {len(fitness_results)} results")
         print("  ✅ Multiple diary entries independently searchable after cleanup")
 
-    def test_concurrent_message_during_diary_update_preserved(self, eval_db):
+    def test_concurrent_message_during_diary_update_preserved(self, db):
         """Messages arriving during diary update are NOT lost.
 
         While the diary update (slow LLM call) is processing, new messages
@@ -304,7 +302,7 @@ class TestDiaryToEnrichmentFlow:
             ),
         ):
             summary_id = update_daily_conversation_summary(
-                db=eval_db,
+                db=db,
                 new_chunks=pending_chunks,
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test",
