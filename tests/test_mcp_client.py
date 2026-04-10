@@ -186,6 +186,7 @@ class TestResolveCommand:
             "jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS",
             [str(tmp_path)],
         )
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_GLOBS", [])
         # Skip login shell fallback
         monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "win32")
 
@@ -198,6 +199,7 @@ class TestResolveCommand:
 
         monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: None)
         monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS", [])
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_GLOBS", [])
         monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "darwin")
 
         mock_result = type("R", (), {"returncode": 0, "stdout": "/opt/homebrew/bin/npx\n"})()
@@ -207,11 +209,37 @@ class TestResolveCommand:
         )
         assert _resolve_command("npx") == "/opt/homebrew/bin/npx"
 
+    def test_finds_command_via_nvm_glob(self, monkeypatch, tmp_path):
+        """When shutil.which and static dirs fail, probes nvm-style version dirs."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+        monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS", [])
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "win32")
+
+        # Create nvm-style version dirs with npx
+        v18 = tmp_path / "v18.0.0" / "bin"
+        v22 = tmp_path / "v22.22.0" / "bin"
+        v18.mkdir(parents=True)
+        v22.mkdir(parents=True)
+        (v18 / "npx").write_text("#!/bin/sh")
+        (v18 / "npx").chmod(0o755)
+        (v22 / "npx").write_text("#!/bin/sh")
+        (v22 / "npx").chmod(0o755)
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client._EXTRA_PATH_GLOBS",
+            [str(tmp_path / "*/bin")],
+        )
+        # Should prefer the highest version (v22) due to reverse sort
+        result = _resolve_command("npx")
+        assert "v22.22.0" in result
+
     def test_raises_when_not_found_anywhere(self, monkeypatch):
         """When all resolution methods fail, raises FileNotFoundError."""
         from jarvis.tools.external.mcp_client import _resolve_command
         monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: None)
         monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS", [])
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_GLOBS", [])
         monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "win32")
 
         with pytest.raises(FileNotFoundError, match="not found on PATH"):

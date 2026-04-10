@@ -10,18 +10,29 @@ from mcp import ClientSession  # type: ignore
 from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
 
+import glob as _glob
 import sys as _sys
 
-# Extra directories to search when a command isn't on the daemon's PATH.
+# Static directories to search when a command isn't on the daemon's PATH.
 # macOS GUI-launched processes often miss Homebrew, nvm, fnm, and Volta paths.
 _EXTRA_PATH_DIRS: List[str] = [
     "/opt/homebrew/bin",           # Homebrew (Apple Silicon)
     "/usr/local/bin",              # Homebrew (Intel) / manual installs
-    os.path.expanduser("~/.nvm/current/bin"),      # nvm
-    os.path.expanduser("~/.fnm/current/bin"),      # fnm (via alias)
     os.path.expanduser("~/.volta/bin"),             # Volta
     os.path.expanduser("~/.local/bin"),             # pipx / uvx
 ]
+
+# Glob patterns for version-managed directories (nvm, fnm).
+# Sorted in reverse so the highest version is preferred.
+_EXTRA_PATH_GLOBS: List[str] = [
+    os.path.expanduser("~/.nvm/versions/node/*/bin"),   # nvm
+    os.path.expanduser("~/.fnm/node-versions/*/installation/bin"),  # fnm
+]
+
+
+def _get_user_shell() -> str:
+    """Return the user's login shell, falling back to /bin/bash."""
+    return os.environ.get("SHELL", "/bin/bash")
 
 
 def _resolve_command(command: str) -> str:
@@ -29,7 +40,8 @@ def _resolve_command(command: str) -> str:
 
     First checks the current PATH via ``shutil.which``.  If that fails,
     probes a list of common directories that GUI-launched daemons on macOS
-    typically miss (Homebrew, nvm, fnm, Volta, etc.).
+    typically miss (Homebrew, nvm, fnm, Volta, etc.).  As a final fallback,
+    spawns the user's login shell to resolve the command.
 
     Returns the resolved absolute path, or raises ``FileNotFoundError``.
     """
@@ -44,18 +56,27 @@ def _resolve_command(command: str) -> str:
     if found:
         return found
 
-    # Probe extra directories (macOS daemon PATH gap)
+    # Probe static extra directories
     for d in _EXTRA_PATH_DIRS:
         candidate = os.path.join(d, command)
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
 
-    # Also try resolving via a login shell (catches custom PATH additions)
+    # Probe version-managed directories (nvm, fnm) — prefer highest version
+    for pattern in _EXTRA_PATH_GLOBS:
+        dirs = sorted(_glob.glob(pattern), reverse=True)
+        for d in dirs:
+            candidate = os.path.join(d, command)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+
+    # Fallback: ask the user's login shell (catches all custom PATH additions)
     if _sys.platform != "win32":
         try:
             import subprocess
+            shell = _get_user_shell()
             result = subprocess.run(
-                ["bash", "-lc", f"which {command}"],
+                [shell, "-lc", f"which {command}"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
