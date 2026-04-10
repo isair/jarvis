@@ -1,6 +1,6 @@
 # Jarvis
 
-**A private AI voice assistant that lives on your computer** — not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence and get thoughtful, contextual responses. It listens to conversations, remembers everything, searches the web, reads your screen, tracks your nutrition, checks the weather, and connects to thousands of external tools via MCP — all while keeping your data entirely on your machine.
+**A private AI voice assistant that lives on your computer** — not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence and get thoughtful, contextual responses. It remembers everything, can join ongoing conversations, searches the web, reads your screen, tracks your nutrition, checks the weather, and connects to thousands of external tools via MCP — all while keeping your data entirely on your machine.
 
 🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info. Free offline dictation included.
 
