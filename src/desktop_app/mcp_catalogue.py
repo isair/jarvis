@@ -57,16 +57,6 @@ class MCPEntry:
 CATALOGUE: List[MCPEntry] = [
     # -- Wizard-featured (zero-config, genuinely novel capabilities) --
     MCPEntry(
-        name="time",
-        display_name="🕐 Time & Timezone",
-        description="Get current time across time zones and convert between them — "
-                    "great for scheduling across regions",
-        command="npx",
-        args=["-y", "@modelcontextprotocol/server-time"],
-        wizard_featured=True,
-        category="productivity",
-    ),
-    MCPEntry(
         name="puppeteer",
         display_name="🎭 Browser Automation",
         description="Control a real browser — fill forms, click buttons, take screenshots, "
@@ -155,6 +145,17 @@ CATALOGUE: List[MCPEntry] = [
         command="npx",
         args=["-y", "@modelcontextprotocol/server-sqlite"],
         category="dev",
+    ),
+    MCPEntry(
+        name="whatsapp",
+        display_name="💬 WhatsApp",
+        description="Search chats, send messages, share media and voice notes — "
+                    "all locally via WhatsApp Web bridge (QR code auth)",
+        command="uvx",
+        args=["whatsapp-mcp-server"],
+        api_key_hint="Requires Go, UV, and a one-time QR code scan. "
+                     "See https://github.com/lharries/whatsapp-mcp",
+        category="comms",
     ),
     MCPEntry(
         name="everything",
