@@ -1418,6 +1418,47 @@ class TestWhisperRateLimitRetry:
                                 sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
                                 assert sleep_values == [2, 4, 8, 16]
 
+    def test_hfhub_429_via_response_status_code_retried(self):
+        """HfHubHTTPError with response.status_code=429 is retried even when '429' is absent from str(e)."""
+        mock_whisper_model = MagicMock()
+        call_count = 0
+
+        class _FakeHfHubHTTPError(Exception):
+            """Minimal stand-in for HfHubHTTPError: no '429' in str(), but status_code on response."""
+            def __init__(self):
+                super().__init__("Request quota exceeded. Please retry later.")
+                self.response = MagicMock(status_code=429)
+
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise _FakeHfHubHTTPError()
+            return mock_whisper_model
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            with patch("jarvis.listening.listener.time.sleep"):
+                                from jarvis.listening.listener import VoiceListener
+
+                                mock_db = MagicMock()
+                                mock_cfg = _create_mock_config(whisper_model="medium")
+                                mock_tts = MagicMock()
+                                mock_dialogue_memory = MagicMock()
+
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener.run()
+
+                                assert mock_class.call_count == 2
+                                assert listener.model == mock_whisper_model
+
     def test_non_429_error_not_retried(self):
         """Non-rate-limit errors are not retried."""
         error_msg = "Model not found: invalid_model"

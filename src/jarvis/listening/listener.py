@@ -1369,9 +1369,10 @@ class VoiceListener(threading.Thread):
                     break
                 except Exception as e:
                     error_str = str(e).lower()
-                    is_rate_limited = any(x in error_str for x in [
-                        "429", "too many requests", "rate limit",
-                    ])
+                    is_rate_limited = (
+                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
+                        or getattr(getattr(e, "response", None), "status_code", None) == 429
+                    )
                     if is_rate_limited and attempt < max_retries:
                         wait = 2 ** (attempt + 1)
                         debug_log(f"rate limited loading MLX Whisper (attempt {attempt + 1}): {e}", "voice")
@@ -1538,10 +1539,12 @@ class VoiceListener(threading.Thread):
                             print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
                             print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
                             return
-                    # Check for rate limiting (HTTP 429)
-                    is_rate_limited = any(x in error_str for x in [
-                        "429", "too many requests", "rate limit",
-                    ])
+                    # Check for rate limiting (HTTP 429) — check string and response status code
+                    # (HfHubHTTPError may carry the status on .response without "429" in str(e))
+                    is_rate_limited = (
+                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
+                        or getattr(getattr(e, "response", None), "status_code", None) == 429
+                    )
 
                     if is_rate_limited:
                         _max_retries = 4
