@@ -86,6 +86,7 @@ After transcription, text passes through these stages in order:
 | Empty transcription       | No paste occurs                                    |
 | Concurrent with assistant | Dictation works independently; pauses listener     |
 | macOS permissions         | `pynput` requires Accessibility permissions        |
+| macOS 26+ (Tahoe)         | `pynput` disabled — TSM main-thread assertion crash |
 | Linux / Wayland           | `pynput` requires X11 (limited Wayland support)    |
 | Audio rate mismatch       | Resample via linear interpolation to Whisper rate  |
 | LLM filler removal fails  | Falls back to raw transcription (5 s timeout)     |

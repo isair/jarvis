@@ -37,6 +37,7 @@
 - Voice-only for now—no text chat interface yet ([#35](https://github.com/isair/jarvis/issues/35))
 - No mobile apps ([#17](https://github.com/isair/jarvis/issues/17))
 - "Stop" commands during speech sometimes get filtered as echo ([#24](https://github.com/isair/jarvis/issues/24))
+- Dictation is not available on macOS 26+ (Tahoe) due to a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172))
 
 <details>
 <summary><strong>See it in action</strong> (example conversations)</summary>
