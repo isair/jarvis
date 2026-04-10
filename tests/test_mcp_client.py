@@ -161,3 +161,76 @@ def test_mcp_client_list_and_invoke(monkeypatch):
     assert res.get("isError") is False
 
 
+@pytest.mark.unit
+class TestResolveCommand:
+    """Tests for _resolve_command PATH fallback logic."""
+
+    def test_finds_command_on_path(self, monkeypatch):
+        """When shutil.which succeeds, returns that path."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+        monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: "/usr/bin/npx")
+        assert _resolve_command("npx") == "/usr/bin/npx"
+
+    def test_finds_command_in_extra_dirs(self, monkeypatch, tmp_path):
+        """When shutil.which fails, probes extra directories."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+        monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: None)
+
+        # Create a fake executable in a temp dir
+        fake_npx = tmp_path / "npx"
+        fake_npx.write_text("#!/bin/sh")
+        fake_npx.chmod(0o755)
+
+        # Inject our temp dir into the extra paths list
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS",
+            [str(tmp_path)],
+        )
+        # Skip login shell fallback
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "win32")
+
+        assert _resolve_command("npx") == str(fake_npx)
+
+    def test_falls_back_to_login_shell(self, monkeypatch):
+        """When extra dirs fail, tries bash -lc which."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+        import subprocess
+
+        monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS", [])
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "darwin")
+
+        mock_result = type("R", (), {"returncode": 0, "stdout": "/opt/homebrew/bin/npx\n"})()
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *a, **kw: mock_result,
+        )
+        assert _resolve_command("npx") == "/opt/homebrew/bin/npx"
+
+    def test_raises_when_not_found_anywhere(self, monkeypatch):
+        """When all resolution methods fail, raises FileNotFoundError."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+        monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._EXTRA_PATH_DIRS", [])
+        monkeypatch.setattr("jarvis.tools.external.mcp_client._sys.platform", "win32")
+
+        with pytest.raises(FileNotFoundError, match="not found on PATH"):
+            _resolve_command("nonexistent-command")
+
+    def test_absolute_path_verified_directly(self, tmp_path):
+        """Absolute paths bypass PATH lookup entirely."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+
+        fake = tmp_path / "my-server"
+        fake.write_text("#!/bin/sh")
+        fake.chmod(0o755)
+        assert _resolve_command(str(fake)) == str(fake)
+
+    def test_absolute_path_missing_raises(self, tmp_path):
+        """Non-existent absolute path raises FileNotFoundError."""
+        from jarvis.tools.external.mcp_client import _resolve_command
+
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            _resolve_command(str(tmp_path / "nope"))
+
+

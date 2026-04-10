@@ -10,6 +10,65 @@ from mcp import ClientSession  # type: ignore
 from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
 
+import sys as _sys
+
+# Extra directories to search when a command isn't on the daemon's PATH.
+# macOS GUI-launched processes often miss Homebrew, nvm, fnm, and Volta paths.
+_EXTRA_PATH_DIRS: List[str] = [
+    "/opt/homebrew/bin",           # Homebrew (Apple Silicon)
+    "/usr/local/bin",              # Homebrew (Intel) / manual installs
+    os.path.expanduser("~/.nvm/current/bin"),      # nvm
+    os.path.expanduser("~/.fnm/current/bin"),      # fnm (via alias)
+    os.path.expanduser("~/.volta/bin"),             # Volta
+    os.path.expanduser("~/.local/bin"),             # pipx / uvx
+]
+
+
+def _resolve_command(command: str) -> str:
+    """Resolve a command name to an absolute path.
+
+    First checks the current PATH via ``shutil.which``.  If that fails,
+    probes a list of common directories that GUI-launched daemons on macOS
+    typically miss (Homebrew, nvm, fnm, Volta, etc.).
+
+    Returns the resolved absolute path, or raises ``FileNotFoundError``.
+    """
+    # Already absolute — just verify it exists
+    if os.path.isabs(command):
+        if os.path.isfile(command):
+            return command
+        raise FileNotFoundError(f"MCP server command does not exist: {command}")
+
+    # Try standard PATH first
+    found = shutil.which(command)
+    if found:
+        return found
+
+    # Probe extra directories (macOS daemon PATH gap)
+    for d in _EXTRA_PATH_DIRS:
+        candidate = os.path.join(d, command)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
+    # Also try resolving via a login shell (catches custom PATH additions)
+    if _sys.platform != "win32":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["bash", "-lc", f"which {command}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception:
+            pass
+
+    raise FileNotFoundError(
+        f"MCP server command not found on PATH: {command}. "
+        "Ensure Node.js and npx are installed and available."
+    )
+
+
 class MCPClient:
     """Lightweight manager to connect to external MCP servers and call tools."""
 
@@ -21,12 +80,8 @@ class MCPClient:
         # Windows compatibility: prefer npx.cmd when requested
         if os.name == "nt" and command.lower() == "npx":
             command = "npx.cmd"
-        # Verify command exists — absolute paths checked directly, relative names resolved via PATH
-        if os.path.isabs(command):
-            if not os.path.isfile(command):
-                raise FileNotFoundError(f"MCP server command does not exist: {command}")
-        elif shutil.which(command) is None:
-            raise FileNotFoundError(f"MCP server command not found on PATH: {command}. Ensure Node.js and npx are installed and available.")
+        # Resolve command to an absolute path
+        command = _resolve_command(command)
         # Expand user (~) in args for filesystem paths
         raw_args = server_cfg.get("args") or []
         args = [os.path.expanduser(str(a)) if isinstance(a, str) else a for a in raw_args]
