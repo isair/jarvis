@@ -67,14 +67,24 @@ CATALOGUE: List[MCPEntry] = [
         category="automation",
     ),
     MCPEntry(
-        name="sequential-thinking",
-        display_name="🧩 Sequential Thinking",
-        description="Dynamic problem-solving through structured thought chains — "
-                    "helps Jarvis reason through complex multi-step questions",
+        name="youtube-transcript",
+        display_name="📺 YouTube Transcripts",
+        description="Extract and summarise transcripts from any YouTube video — "
+                    "just paste a link and ask Jarvis about the content",
         command="npx",
-        args=["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        args=["-y", "mcp-youtube-transcript"],
         wizard_featured=True,
-        category="reasoning",
+        category="media",
+    ),
+    MCPEntry(
+        name="macos",
+        display_name="🖥️ macOS Automation",
+        description="Control your Mac by voice — launch apps, manage windows, "
+                    "clipboard access, volume control, and Finder operations",
+        command="npx",
+        args=["-y", "mcp-server-macos"],
+        wizard_featured=True,
+        category="automation",
     ),
 
     # -- Available in settings (may need API keys or extra config) --
