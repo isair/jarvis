@@ -30,8 +30,6 @@ if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         pass
 
 from typing import Optional
-from faster_whisper import WhisperModel
-
 from .config import load_settings
 from .memory.db import Database
 from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memory

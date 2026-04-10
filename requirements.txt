@@ -6,7 +6,9 @@ lxml>=4.9.0
 html2text>=2020.1.16
 playwright>=1.40.0
 numpy<2.0.0
-faster-whisper==1.0.3
+# Apple Silicon uses mlx-whisper by default; faster-whisper drags in av, which
+# does not currently build cleanly against FFmpeg 8 on this platform.
+faster-whisper==1.0.3; sys_platform != "darwin" or platform_machine != "arm64"
 setuptools<81
 sounddevice==0.4.7
 pytesseract==0.3.13
@@ -19,7 +21,9 @@ miniupnpc==2.2.8
 pytest==8.3.2
 pytest-repeat==0.9.3
 mcp==1.13.1
-chatterbox-tts==0.1.2
+# Chatterbox currently depends on torch wheels that are not published for Python 3.14.
+# Piper remains the default TTS engine, so keep Chatterbox optional on 3.14+.
+chatterbox-tts==0.1.2; python_version < "3.14"
 piper-tts>=1.3.0
 pygame>=2.1.0
 faiss-cpu>=1.7.4
