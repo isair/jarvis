@@ -93,9 +93,23 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
 
             log(f"  Downloading {desc}...")
 
-            # Stream download for large files
-            response = requests.get(url, stream=True, timeout=60)
-            response.raise_for_status()
+            # Stream download with retry on rate limiting (HTTP 429)
+            max_retries = 4
+            response = None
+            for attempt in range(max_retries + 1):
+                response = requests.get(url, stream=True, timeout=60)
+                try:
+                    response.raise_for_status()
+                    break  # Success
+                except requests.exceptions.HTTPError as http_err:
+                    response.close()
+                    status = getattr(http_err.response, "status_code", None)
+                    if status == 429 and attempt < max_retries:
+                        wait = 2 ** (attempt + 1)
+                        log(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({attempt + 1}/{max_retries})...")
+                        time.sleep(wait)
+                        continue
+                    raise  # Non-429 or retries exhausted
 
             total_size = int(response.headers.get("content-length", 0))
             downloaded = 0

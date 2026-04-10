@@ -190,13 +190,62 @@ def _get_mlx_model_repo(model_name: str) -> str:
     return model_map.get(model_name, f"mlx-community/whisper-{model_name}-mlx")
 
 
+def _clear_corrupted_whisper_cache(error_message: str) -> bool:
+    """Clear a corrupted Whisper model cache directory.
+
+    Parses the CTranslate2 error message to find the snapshot directory,
+    then deletes the parent ``models--`` directory so the model can be
+    re-downloaded cleanly (including blobs that may also be corrupt).
+
+    Returns ``True`` if a cache directory was found and deleted.
+    """
+    import re
+    import shutil
+
+    # CTranslate2 error format:
+    #   "Unable to open file 'model.bin' in model '/path/to/snapshots/hash'"
+    match = re.search(
+        r"unable to open file\s+'[^']+'\s+in model\s+'([^']+)'",
+        error_message,
+        re.IGNORECASE,
+    )
+    if not match:
+        debug_log("could not parse cache path from error message", "voice")
+        return False
+
+    snapshot_path = match.group(1)
+
+    # Walk up to the models-- directory
+    # snapshot_path is e.g. .../models--Org--Name/snapshots/<hash>
+    # We want to delete .../models--Org--Name entirely
+    from pathlib import Path
+    path = Path(snapshot_path)
+    model_dir = None
+    for parent in [path] + list(path.parents):
+        if parent.name.startswith("models--"):
+            model_dir = parent
+            break
+
+    if model_dir is None or not model_dir.is_dir():
+        debug_log(f"could not locate models-- cache directory from: {snapshot_path}", "voice")
+        return False
+
+    try:
+        shutil.rmtree(model_dir)
+        debug_log(f"cleared corrupted Whisper cache: {model_dir}", "voice")
+        return True
+    except OSError as e:
+        debug_log(f"failed to clear corrupted cache: {e}", "voice")
+        return False
+
+
 class VoiceListener(threading.Thread):
     """Main voice listening thread that orchestrates all voice processing."""
 
     def __init__(self, db: "Database", cfg, tts: Optional[Any],
                  dialogue_memory: "DialogueMemory"):
         """
-        Initialize voice listener.
+        Initialise voice listener.
 
         Args:
             db: Database instance for storage
@@ -234,14 +283,14 @@ class VoiceListener(threading.Thread):
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
         self._vad: Optional = None
 
-        # Initialize VAD if available
+        # Initialise VAD if available
         if webrtcvad is not None and bool(getattr(self.cfg, "vad_enabled", True)):
             try:
                 self._vad = webrtcvad.Vad(int(getattr(self.cfg, "vad_aggressiveness", 2)))
             except Exception:
                 self._vad = None
 
-        # Initialize modular components
+        # Initialise modular components
         self.echo_detector = EchoDetector(
             echo_tolerance=float(getattr(self.cfg, "echo_tolerance", 0.3)),
             energy_spike_threshold=float(getattr(self.cfg, "echo_energy_threshold", 2.0))
@@ -264,12 +313,12 @@ class VoiceListener(threading.Thread):
         # Used for both retention and context passed to intent judge
         self._buffer_duration = float(getattr(self.cfg, "transcript_buffer_duration_sec", 120.0))
         self._transcript_buffer = TranscriptBuffer(max_duration_sec=self._buffer_duration)
-        debug_log(f"transcript buffer initialized ({self._buffer_duration}s)", "voice")
+        debug_log(f"transcript buffer initialised ({self._buffer_duration}s)", "voice")
 
         # Intent judge (full context, larger model) - always used when available
         self._intent_judge = create_intent_judge(self.cfg)
         if self._intent_judge is not None:
-            debug_log(f"intent judge initialized (model: {self._intent_judge.config.model})", "voice")
+            debug_log(f"intent judge initialised (model: {self._intent_judge.config.model})", "voice")
         else:
             debug_log("intent judge unavailable, using simple wake word detection", "voice")
 
@@ -1191,6 +1240,37 @@ class VoiceListener(threading.Thread):
 
         return "faster-whisper"
 
+    def _apply_whisper_load_success(
+        self, model_name: str, try_device: str, try_compute: str,
+        device: str, compute: str, cpu_threads: int,
+        context: str = "",
+    ) -> str:
+        """Record state and print diagnostics after a successful Whisper model load.
+
+        Returns the resolved device string.
+        """
+        ct2_model = getattr(self.model, "model", None)
+        resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
+        debug_log(
+            f"faster-whisper initialised{context}: name={model_name}, "
+            f"device={resolved_device}, compute={try_compute}, "
+            f"cpu_threads={cpu_threads}",
+            "voice",
+        )
+        self._whisper_device = resolved_device
+
+        if try_device != device and device in ("auto", "cuda"):
+            print("  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
+            print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+        if try_compute != compute:
+            print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+        if resolved_device == "cpu":
+            print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
+
+        suffix = f" ({context})" if context else ""
+        print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
+        return resolved_device
+
     def run(self) -> None:
         """Main voice listening loop."""
         if sd is None:
@@ -1202,7 +1282,7 @@ class VoiceListener(threading.Thread):
         try:
             devices = sd.query_devices()
             input_devices = [d for d in devices if d.get('max_input_channels', 0) > 0]
-            debug_log(f"PortAudio initialized: {len(input_devices)} input device(s) found", "voice")
+            debug_log(f"PortAudio initialised: {len(input_devices)} input device(s) found", "voice")
             if not input_devices:
                 print("  ❌ No microphone found. Please connect a microphone.", flush=True)
                 return
@@ -1245,7 +1325,7 @@ class VoiceListener(threading.Thread):
                     print("", flush=True)
                 return
 
-        # Determine and initialize Whisper backend
+        # Determine and initialise Whisper backend
         self._whisper_backend = self._determine_whisper_backend()
         model_name = getattr(self.cfg, "whisper_model", "small")
 
@@ -1268,26 +1348,41 @@ class VoiceListener(threading.Thread):
                 print("  ❌ MLX Whisper not available. Install with: pip install mlx-whisper", flush=True)
                 return
 
-            try:
-                self._mlx_model_repo = _get_mlx_model_repo(model_name)
-                print(f"  🔄 Loading MLX Whisper model '{model_name}' (Apple Silicon GPU)...", flush=True)
+            self._mlx_model_repo = _get_mlx_model_repo(model_name)
+            print(f"  🔄 Loading MLX Whisper model '{model_name}' (Apple Silicon GPU)...", flush=True)
 
-                # Pre-load the model by doing a warmup transcription with silent audio
-                # This triggers the model download before we need it for real transcription
-                if np is not None:
-                    warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
-                    _ = mlx_whisper.transcribe(
-                        warmup_audio,
-                        path_or_hf_repo=self._mlx_model_repo,
-                        language=None,
-                    )
-                    debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
+            max_retries = 4
+            for attempt in range(max_retries + 1):
+                try:
+                    # Pre-load the model by doing a warmup transcription with silent audio
+                    # This triggers the model download before we need it for real transcription
+                    if np is not None:
+                        warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
+                        _ = mlx_whisper.transcribe(
+                            warmup_audio,
+                            path_or_hf_repo=self._mlx_model_repo,
+                            language=None,
+                        )
+                        debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
 
-                print(f"  ✅ MLX Whisper '{model_name}' ready (Apple Silicon GPU acceleration)", flush=True)
-            except Exception as e:
-                debug_log(f"failed to initialize MLX Whisper: {e}", "voice")
-                print(f"  ❌ Failed to initialize MLX Whisper: {e}", flush=True)
-                return
+                    print(f"  ✅ MLX Whisper '{model_name}' ready (Apple Silicon GPU acceleration)", flush=True)
+                    break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    is_rate_limited = any(x in error_str for x in [
+                        "429", "too many requests", "rate limit",
+                    ])
+                    if is_rate_limited and attempt < max_retries:
+                        wait = 2 ** (attempt + 1)
+                        debug_log(f"rate limited loading MLX Whisper (attempt {attempt + 1}): {e}", "voice")
+                        print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({attempt + 1}/{max_retries})...", flush=True)
+                        time.sleep(wait)
+                        continue
+                    debug_log(f"failed to initialise MLX Whisper: {e}", "voice")
+                    print(f"  ❌ Failed to initialise MLX Whisper: {e}", flush=True)
+                    if is_rate_limited:
+                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                    return
         else:
             # faster-whisper backend
             if not FASTER_WHISPER_AVAILABLE:
@@ -1385,26 +1480,12 @@ class VoiceListener(threading.Thread):
                         model_name, device=try_device, compute_type=try_compute,
                         cpu_threads=cpu_threads,
                     )
-
-                    # Resolve actual device (CTranslate2 resolves "auto" internally)
-                    # Cast to str — CTranslate2 may return an enum (e.g. Device.CPU)
-                    ct2_model = getattr(self.model, "model", None)
-                    resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
-                    debug_log(f"faster-whisper initialised: name={model_name}, device={resolved_device}, compute={try_compute}, cpu_threads={cpu_threads}", "voice")
-
+                    self._apply_whisper_load_success(
+                        model_name, try_device, try_compute,
+                        device, compute, cpu_threads,
+                    )
                     used_device = try_device
                     used_compute = try_compute
-                    self._whisper_device = resolved_device
-
-                    # Show warnings if we fell back to different settings
-                    if try_device != device and device in ("auto", "cuda"):
-                        print(f"  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
-                        print(f"  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
-                    if try_compute != compute:
-                        print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
-                    if resolved_device == "cpu":
-                        print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
-                    print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}", flush=True)
                     last_error = None
                     break
                 except Exception as e:
@@ -1423,14 +1504,86 @@ class VoiceListener(threading.Thread):
                     if is_cuda_error or is_compute_error:
                         debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
                         continue
+
+                    # Check for corrupted model cache (e.g. interrupted download)
+                    is_corrupted_cache = "unable to open file" in error_str
+
+                    if is_corrupted_cache:
+                        debug_log(f"detected corrupted Whisper model cache: {e}", "voice")
+                        print("  ⚠️  Whisper model cache appears corrupted, attempting recovery...", flush=True)
+
+                        cache_cleared = _clear_corrupted_whisper_cache(str(e))
+                        if cache_cleared:
+                            try:
+                                print(f"  🔄 Re-downloading Whisper model '{model_name}'...", flush=True)
+                                self.model = WhisperModel(
+                                    model_name, device=try_device, compute_type=try_compute,
+                                    cpu_threads=cpu_threads,
+                                )
+                                self._apply_whisper_load_success(
+                                    model_name, try_device, try_compute,
+                                    device, compute, cpu_threads,
+                                    context="recovered",
+                                )
+                                used_device = try_device
+                                used_compute = try_compute
+                                last_error = None
+                                break
+                            except Exception as retry_e:
+                                debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
+                                print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
+                                return
+                        else:
+                            debug_log("could not clear corrupted cache automatically", "voice")
+                            print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
+                            print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
+                            return
+                    # Check for rate limiting (HTTP 429)
+                    is_rate_limited = any(x in error_str for x in [
+                        "429", "too many requests", "rate limit",
+                    ])
+
+                    if is_rate_limited:
+                        _max_retries = 4
+                        _backoff = 2
+                        debug_log(f"rate limited loading Whisper model: {e}", "voice")
+                        retry_succeeded = False
+                        for retry_num in range(1, _max_retries + 1):
+                            wait = _backoff ** retry_num
+                            print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
+                            time.sleep(wait)
+                            try:
+                                self.model = WhisperModel(
+                                    model_name, device=try_device, compute_type=try_compute,
+                                    cpu_threads=cpu_threads,
+                                )
+                                self._apply_whisper_load_success(
+                                    model_name, try_device, try_compute,
+                                    device, compute, cpu_threads,
+                                    context="rate-limit retry",
+                                )
+                                used_device = try_device
+                                used_compute = try_compute
+                                last_error = None
+                                retry_succeeded = True
+                                break
+                            except Exception as retry_e:
+                                debug_log(f"rate-limit retry {retry_num} failed: {retry_e}", "voice")
+                                last_error = retry_e
+                        if retry_succeeded:
+                            break
+                        debug_log(f"gave up after {_max_retries} rate-limit retries", "voice")
+                        print(f"  ❌ Failed to load Whisper model after {_max_retries} retries: {last_error}", flush=True)
+                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                        return
                     else:
-                        # For other errors (model not found, network issues, etc.), don't try fallbacks
-                        debug_log(f"failed to initialize faster-whisper: {e}", "voice")
+                        # For other errors (model not found, etc.), don't try fallbacks
+                        debug_log(f"failed to initialise faster-whisper: {e}", "voice")
                         print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
                         return
 
             if last_error is not None:
-                debug_log(f"failed to initialize faster-whisper with any config: {last_error}", "voice")
+                debug_log(f"failed to initialise faster-whisper with any config: {last_error}", "voice")
                 print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
                 return
 
