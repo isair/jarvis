@@ -106,8 +106,15 @@ class MCPClient:
         # Expand user (~) in args for filesystem paths
         raw_args = server_cfg.get("args") or []
         args = [os.path.expanduser(str(a)) if isinstance(a, str) else a for a in raw_args]
-        env = server_cfg.get("env") or None
-        params = StdioServerParameters(command=command, args=args, env=env)
+        env = dict(server_cfg.get("env") or {})
+        # Ensure the resolved command's directory is on PATH so that
+        # shebangs like #!/usr/bin/env node can find sibling binaries
+        cmd_dir = os.path.dirname(command)
+        if cmd_dir:
+            existing_path = env.get("PATH") or os.environ.get("PATH", "")
+            if cmd_dir not in existing_path.split(os.pathsep):
+                env["PATH"] = cmd_dir + os.pathsep + existing_path if existing_path else cmd_dir
+        params = StdioServerParameters(command=command, args=args, env=env or None)
         return stdio_client(params)
 
     @asynccontextmanager

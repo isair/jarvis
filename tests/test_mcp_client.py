@@ -262,3 +262,72 @@ class TestResolveCommand:
             _resolve_command(str(tmp_path / "nope"))
 
 
+@pytest.mark.unit
+class TestConnectStdioPathInjection:
+    """Tests that _connect_stdio injects the resolved command's dir into PATH."""
+
+    def test_command_dir_added_to_env_path(self, monkeypatch, tmp_path):
+        """The directory of the resolved command should be prepended to env PATH."""
+        from jarvis.tools.external.mcp_client import MCPClient, StdioServerParameters
+
+        fake_npx = tmp_path / "npx"
+        fake_npx.write_text("#!/bin/sh")
+        fake_npx.chmod(0o755)
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client._resolve_command",
+            lambda cmd: str(fake_npx),
+        )
+
+        captured_params = {}
+
+        def fake_stdio_client(params):
+            captured_params["env"] = params.env
+            captured_params["command"] = params.command
+            return None  # We won't actually use the result
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client.stdio_client",
+            fake_stdio_client,
+        )
+
+        client = MCPClient({"test": {"command": "npx", "args": ["-y", "server"]}})
+        client._connect_stdio(client.server_configs["test"])
+
+        env = captured_params["env"]
+        assert env is not None
+        path_dirs = env["PATH"].split(os.pathsep)
+        assert str(tmp_path) == path_dirs[0], "Command dir should be first in PATH"
+
+    def test_user_env_preserved_alongside_path(self, monkeypatch, tmp_path):
+        """User-supplied env vars should be preserved when PATH is injected."""
+        from jarvis.tools.external.mcp_client import MCPClient
+
+        fake_npx = tmp_path / "npx"
+        fake_npx.write_text("#!/bin/sh")
+        fake_npx.chmod(0o755)
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client._resolve_command",
+            lambda cmd: str(fake_npx),
+        )
+
+        captured_params = {}
+
+        def fake_stdio_client(params):
+            captured_params["env"] = params.env
+            return None
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client.stdio_client",
+            fake_stdio_client,
+        )
+
+        cfg = {"command": "npx", "args": [], "env": {"MY_TOKEN": "secret"}}
+        client = MCPClient({"test": cfg})
+        client._connect_stdio(client.server_configs["test"])
+
+        env = captured_params["env"]
+        assert env["MY_TOKEN"] == "secret"
+        assert str(tmp_path) in env["PATH"]
+
