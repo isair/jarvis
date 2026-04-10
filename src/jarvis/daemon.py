@@ -439,8 +439,9 @@ def main() -> None:
             )
             dictation.start()
             _global_dictation_engine = dictation
-            hotkey_display = cfg.dictation_hotkey
-            print(f"🎙️ Dictation enabled (hold {hotkey_display} to dictate)", flush=True)
+            if dictation._started:
+                hotkey_display = cfg.dictation_hotkey
+                print(f"🎙️ Dictation enabled (hold {hotkey_display} to dictate)", flush=True)
         except Exception as e:
             debug_log(f"dictation engine init failed: {e}", "dictation")
             print(f"  ⚠ Dictation not available: {e}", flush=True)
