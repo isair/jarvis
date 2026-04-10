@@ -342,8 +342,8 @@ class SettingsWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙️ Jarvis Settings")
-        self.setMinimumSize(680, 560)
-        self.resize(740, 620)
+        self.setMinimumSize(780, 560)
+        self.resize(840, 620)
         self._widgets: Dict[str, Any] = {}  # key -> widget
         self._config_path = default_config_path()
         self._current_config = _load_json(self._config_path)
