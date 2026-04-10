@@ -9,6 +9,7 @@ from jarvis.tools.selection import (
     _tokenise,
     _build_tool_keywords,
     _ALWAYS_INCLUDED,
+    _RELATIVE_THRESHOLD,
 )
 
 
@@ -274,6 +275,73 @@ class TestEmbeddingStrategy:
             )
         # Should still have at least _MIN_SELECTED + stop
         assert len(result) >= 3
+
+    @pytest.mark.unit
+    def test_relative_threshold_filters_low_similarity(self):
+        """Relative threshold keeps only tools near the top score, not everything."""
+        import math
+
+        # Simulate realistic scores with a clear top cluster and a weak tail.
+        # query = [1, 0, 0, 0]
+        # strong  → cos_sim ≈ 0.90   (getWeather)
+        # good    → cos_sim ≈ 0.88   (webSearch — within 85% of top)
+        # weak    → cos_sim ≈ 0.40   (everything else — well below cutoff)
+        #
+        # cutoff = 0.90 * 0.85 = 0.765
+        # strong (0.90) and good (0.88) pass; weak (0.40) do not.
+        # With _MIN_SELECTED=3, top-3 would apply if <3 passed, but 2 pass + stop = 3 total.
+
+        strong = [0.9, 0.436, 0, 0]
+        s_norm = math.sqrt(sum(x*x for x in strong))
+        strong = [x / s_norm for x in strong]
+
+        good = [0.88, 0.475, 0, 0]
+        g_norm = math.sqrt(sum(x*x for x in good))
+        good = [x / g_norm for x in good]
+
+        weak = [0.4, 0.917, 0, 0]
+        w_norm = math.sqrt(sum(x*x for x in weak))
+        weak = [x / w_norm for x in weak]
+
+        mock_map = {
+            "weather": [1.0, 0.0, 0.0, 0.0],     # query
+            "get weather": strong,                  # getWeather → high sim
+            "web search": good,                     # webSearch → just above cutoff
+            "log meal": weak,                       # logMeal → low sim
+            "fetch meals": weak,                    # fetchMeals → low sim
+            "screen": weak,                         # screenshot → low sim
+            "file": weak,                           # localFiles → low sim
+        }
+
+        def mock_embed(text, base_url, model, timeout_sec=10.0):
+            text_lower = text.lower()
+            for key, vec in mock_map.items():
+                if key in text_lower:
+                    return vec
+            return [0.0] * 4
+
+        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
+            result = select_tools(
+                "what's the weather",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.EMBEDDING,
+                llm_base_url="http://localhost",
+                embed_model="nomic-embed-text",
+            )
+
+        # Strong and good matches must be included
+        assert "getWeather" in result
+        assert "webSearch" in result
+
+        # stop is always included
+        assert "stop" in result
+
+        # Fewer tools than total — the relative threshold actually filtered
+        total_non_stop = len([t for t in _builtin() if t != "stop"])
+        selected_non_stop = len([t for t in result if t != "stop"])
+        assert selected_non_stop < total_non_stop, (
+            f"Expected fewer than {total_non_stop} tools but got {selected_non_stop}: {result}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,12 @@ _ALWAYS_INCLUDED = {"stop"}
 # Prevents overly aggressive filtering that would leave the model with nothing useful.
 _MIN_SELECTED = 3
 
+# Relative similarity threshold for embedding strategy.
+# A tool is kept when its cosine similarity >= top_score * _RELATIVE_THRESHOLD.
+# This adapts to the actual score distribution rather than using a fixed cutoff
+# that either passes everything (too low) or nothing (too high).
+_RELATIVE_THRESHOLD = 0.85
+
 # Common English stop-words excluded from keyword matching.
 _STOP_WORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -185,9 +191,13 @@ def _select_embedding(
     # Sort by similarity descending.
     similarities.sort(key=lambda x: x[1], reverse=True)
 
-    # Select tools above a similarity threshold, with a minimum count.
-    threshold = 0.3
-    selected = [name for name, sim in similarities if sim >= threshold]
+    # Select tools using a relative threshold: keep tools whose similarity is
+    # within _RELATIVE_THRESHOLD of the best match.  This adapts to the actual
+    # score distribution — a flat 0.3 cutoff lets everything through because
+    # nomic-embed-text gives high baseline similarity across all tools.
+    top_sim = similarities[0][1]
+    cutoff = top_sim * _RELATIVE_THRESHOLD
+    selected = [name for name, sim in similarities if sim >= cutoff]
 
     # Always return at least _MIN_SELECTED tools (the top-N by similarity).
     if len(selected) < _MIN_SELECTED:
@@ -197,7 +207,7 @@ def _select_embedding(
 
     debug_log(
         f"Embedding tool selection: {len(selected)}/{len(builtin_tools) + len(mcp_tools)} tools "
-        f"(top sim={similarities[0][1]:.3f})",
+        f"(top sim={top_sim:.3f}, cutoff={cutoff:.3f})",
         "planning",
     )
     return selected

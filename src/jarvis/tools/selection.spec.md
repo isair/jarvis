@@ -41,7 +41,7 @@ Regardless of strategy, these tools are **always** included:
 1. Embed the user query using `get_embedding()` (calls Ollama `/api/embeddings` with the configured embed model).
 2. For each tool (excluding always-included), build a summary string from the tool name (camelCase split) and description, then embed it.
 3. Compute cosine similarity between the query embedding and each tool embedding.
-4. Select tools with similarity >= 0.3 threshold.
+4. Select tools using a **relative threshold**: keep tools whose similarity >= `top_score * _RELATIVE_THRESHOLD` (0.85). This adapts to the actual score distribution rather than a fixed cutoff that either passes everything or nothing.
 5. If fewer than `_MIN_SELECTED` (3) tools pass the threshold, return the top 3 by similarity.
 6. Append always-included tools.
 7. If the query embedding fails, fall back to returning all tools.
