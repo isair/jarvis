@@ -123,8 +123,9 @@ class MCPClient:
         # Suppress MCP server stderr noise (npm warnings, usage banners, etc.)
         # from polluting the daemon's log output.
         # Must use a real file (not StringIO) because the subprocess needs fileno().
-        self._devnull = open(os.devnull, "w")
-        return stdio_client(params, errlog=self._devnull)
+        # Each connection needs its own file handle — don't store on self.
+        devnull = open(os.devnull, "w")
+        return stdio_client(params, errlog=devnull)
 
     @asynccontextmanager
     async def _session(self, server_name: str):
