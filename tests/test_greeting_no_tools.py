@@ -200,7 +200,7 @@ class TestGreetingNoTools:
         mock_config.ollama_chat_model = "gemma4:12b"
         call_count = 0
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, thinking=False):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -242,7 +242,7 @@ class TestGreetingNoTools:
 
         call_count = 0
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None):
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, thinking=False):
             nonlocal call_count
             call_count += 1
             if call_count == 1:

@@ -561,7 +561,7 @@ def load_settings() -> Settings:
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
-    tool_selection_strategy = str(merged.get("tool_selection_strategy", "all")).lower()
+    tool_selection_strategy = str(merged.get("tool_selection_strategy", "embedding")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
         tool_selection_strategy = "embedding"
     location_enabled = bool(merged.get("location_enabled", True))
