@@ -2699,7 +2699,7 @@ class MCPPage(QWizardPage):
         # Tip about more MCPs in settings
         tip = QLabel(
             "💡  Many more MCP servers are available in <b>Settings → 🔌 MCP Servers</b>, "
-            "including Brave Search, GitHub, SQLite, and custom servers."
+            "including GitHub, Slack, Spotify, and custom servers."
         )
         tip.setWordWrap(True)
         tip.setStyleSheet(

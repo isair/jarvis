@@ -57,12 +57,12 @@ class MCPEntry:
 CATALOGUE: List[MCPEntry] = [
     # -- Wizard-featured (zero-config, genuinely novel capabilities) --
     MCPEntry(
-        name="puppeteer",
-        display_name="🎭 Browser Automation",
-        description="Control a real browser — fill forms, click buttons, take screenshots, "
-                    "and automate web tasks that simple page fetching can't handle",
+        name="chrome-devtools",
+        display_name="🌐 Chrome Automation",
+        description="Control Chrome by voice — navigate pages, fill forms, click buttons, "
+                    "inspect network traffic, and read console logs. Uses your existing Chrome installation",
         command="npx",
-        args=["-y", "@modelcontextprotocol/server-puppeteer"],
+        args=["-y", "chrome-devtools-mcp@latest"],
         wizard_featured=True,
         category="automation",
     ),
