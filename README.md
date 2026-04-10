@@ -1,8 +1,8 @@
 # Jarvis
 
-**A private AI voice assistant that lives on your computer** - not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence ("what do you think, Jarvis?" or "Jarvis, look at this error") and get thoughtful, contextual responses. It remembers your preferences, helps with code, tracks your health goals, searches the web, and connects to thousands of tools via MCP.
+**A private AI voice assistant that lives on your computer** — not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence and get thoughtful, contextual responses. It listens to conversations, remembers everything, searches the web, reads your screen, tracks your nutrition, checks the weather, and connects to thousands of external tools via MCP — all while keeping your data entirely on your machine.
 
-🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info.
+🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info. Free offline dictation included.
 
 ---
 
@@ -124,6 +124,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
   <img src="docs/img/setup-wizard-model.png" alt="Setup - Model Selection" width="200">
   <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Whisper" width="200">
   <img src="docs/img/setup-wizard-dictation.png" alt="Setup - Dictation" width="200">
+  <img src="docs/img/setup-wizard-mcp.png" alt="Setup - MCP Servers" width="200">
   <img src="docs/img/setup-wizard-complete.png" alt="Setup - Complete" width="200">
 </p>
 
@@ -160,6 +161,7 @@ Most users won't need to change anything. Open **⚙️ Settings** from the tray
 
 <p align="center">
   <img src="docs/img/settings-window.png" alt="Settings Window" width="500">
+  <img src="docs/img/settings-mcp.png" alt="Settings - MCP Servers" width="500">
 </p>
 
 <details>

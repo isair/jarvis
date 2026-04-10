@@ -18,6 +18,7 @@ from desktop_app.settings_window import (
     FieldMeta,
     get_input_devices,
     _build_field_metadata,
+    _MCPCatalogueDialog,
     _MCPEditDialog,
 )
 from desktop_app.mcp_catalogue import CATALOGUE_BY_NAME
@@ -333,6 +334,20 @@ class TestMCPEditDialogLogic:
 
         _, cfg = dlg.get_result()
         assert cfg["env"] == {"A": "1", "B": "two", "C": "three=four"}
+
+
+class TestMCPCatalogueDialogLogic:
+    """Tests for the MCP catalogue dialog's Node.js detection (no GUI)."""
+
+    def test_is_node_available_returns_true_when_found(self):
+        """_is_node_available returns True when _resolve_command succeeds."""
+        with patch("jarvis.tools.external.mcp_client._resolve_command", return_value="/usr/bin/npx"):
+            assert _MCPCatalogueDialog._is_node_available() is True
+
+    def test_is_node_available_returns_false_when_missing(self):
+        """_is_node_available returns False when _resolve_command raises."""
+        with patch("jarvis.tools.external.mcp_client._resolve_command", side_effect=FileNotFoundError("not found")):
+            assert _MCPCatalogueDialog._is_node_available() is False
 
 
 class TestMCPConfigSaveLogic:

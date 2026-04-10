@@ -664,6 +664,16 @@ class TestMCPPage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
+    def test_is_node_available_returns_true_when_npx_found(self):
+        """_is_node_available returns True when _resolve_command succeeds."""
+        with patch("jarvis.tools.external.mcp_client._resolve_command", return_value="/usr/bin/npx"):
+            assert MCPPage._is_node_available() is True
+
+    def test_is_node_available_returns_false_when_npx_missing(self):
+        """_is_node_available returns False when _resolve_command raises."""
+        with patch("jarvis.tools.external.mcp_client._resolve_command", side_effect=FileNotFoundError("not found")):
+            assert MCPPage._is_node_available() is False
+
     def test_validate_page_preserves_existing_non_wizard_mcps(self):
         """validatePage must not remove MCPs that aren't in the wizard catalogue."""
         import json

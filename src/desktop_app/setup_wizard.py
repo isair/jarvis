@@ -2640,6 +2640,22 @@ class MCPPage(QWizardPage):
 
         layout.addSpacing(8)
 
+        # Node.js availability warning
+        self._node_warning = QLabel(
+            "⚠️  <b>Node.js not found.</b> The MCP servers below require Node.js to run. "
+            "<a href='https://nodejs.org/' style='color: #f59e0b;'>Download Node.js</a> "
+            "and restart Jarvis, or skip this page for now."
+        )
+        self._node_warning.setOpenExternalLinks(True)
+        self._node_warning.setWordWrap(True)
+        self._node_warning.setStyleSheet(
+            "background: rgba(239, 68, 68, 0.12);"
+            "border: 1px solid rgba(239, 68, 68, 0.35);"
+            "border-radius: 8px; padding: 12px 16px; color: #fca5a5; font-size: 13px;"
+        )
+        self._node_warning.setVisible(not self._is_node_available())
+        layout.addWidget(self._node_warning)
+
         # Scrollable cards for wizard-featured entries
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -2695,6 +2711,16 @@ class MCPPage(QWizardPage):
         layout.addWidget(tip)
 
         self.setLayout(layout)
+
+    @staticmethod
+    def _is_node_available() -> bool:
+        """Check if Node.js (npx) is available on the system."""
+        try:
+            from jarvis.tools.external.mcp_client import _resolve_command
+            _resolve_command("npx")
+            return True
+        except (FileNotFoundError, Exception):
+            return False
 
     @staticmethod
     def _is_already_configured(name: str) -> bool:

@@ -964,6 +964,22 @@ class _MCPCatalogueDialog(QDialog):
         desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
         layout.addWidget(desc)
 
+        # Node.js availability warning
+        node_warning = QLabel(
+            "⚠️  <b>Node.js not found.</b> Most MCP servers require Node.js. "
+            "<a href='https://nodejs.org/' style='color: #f59e0b;'>Download Node.js</a> "
+            "and restart Jarvis to use them."
+        )
+        node_warning.setOpenExternalLinks(True)
+        node_warning.setWordWrap(True)
+        node_warning.setStyleSheet(
+            "background: rgba(239, 68, 68, 0.12);"
+            "border: 1px solid rgba(239, 68, 68, 0.35);"
+            "border-radius: 8px; padding: 10px 14px; color: #fca5a5; font-size: 12px;"
+        )
+        node_warning.setVisible(not self._is_node_available())
+        layout.addWidget(node_warning)
+
         # Scrollable list of catalogue entries
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1042,6 +1058,16 @@ class _MCPCatalogueDialog(QDialog):
                     self._checkboxes[entry.name].setChecked(False)
                     continue
         self.accept()
+
+    @staticmethod
+    def _is_node_available() -> bool:
+        """Check if Node.js (npx) is available on the system."""
+        try:
+            from jarvis.tools.external.mcp_client import _resolve_command
+            _resolve_command("npx")
+            return True
+        except (FileNotFoundError, Exception):
+            return False
 
     def _selected_new_entries(self) -> List[MCPEntry]:
         """Return catalogue entries the user selected (excluding already-configured)."""
