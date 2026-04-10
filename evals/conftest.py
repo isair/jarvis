@@ -114,6 +114,7 @@ TEST_DESCRIPTIONS = {
     # Helpfulness / anti-deflection tests
     "test_no_deflection_for_weather_forecast_live": "Live: no deflection for weather forecasts",
     "test_no_deflection_for_answerable_queries_live": "Live: no deflection for answerable queries",
+    "test_tool_retry_after_failure_live": "Live: tool retry after initial failure",
 }
 
 
