@@ -148,7 +148,7 @@ class TranscriptBuffer:
 
 ### Memory Alignment
 
-- **Transcript buffer** (`transcript_buffer_duration_sec`): Rolling raw ambient speech for intent judging. Separate and potentially longer — in group conversations, 2+ minutes of context helps the intent judge decide if someone is addressing Jarvis.
+- **Transcript buffer** (`transcript_buffer_duration_sec`): Rolling raw ambient speech. Separate and potentially longer — in group conversations, 2+ minutes of context lets the intent judge synthesise a complete query with relevant information when someone decides to involve Jarvis later in the conversation.
 - **Short-term memory** (`dialogue_memory_timeout`): Processed Jarvis interactions (user queries + assistant responses). This window also drives the forced diary update interval.
 - **Long-term memory (diary):** Forced update when unsaved messages reach `dialogue_memory_timeout` age. Enrichment retrieves any relevant earlier context from the diary.
 
@@ -252,7 +252,7 @@ If the intent judge later rejects the query (and no hot window override applies)
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Used for intent judge context. Separate from dialogue memory — 2 minutes provides good context for group conversations. |
+| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
