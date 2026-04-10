@@ -58,6 +58,12 @@ After transcription, text passes through these stages in order:
 ## Architecture
 
 - **`pynput`** for global hotkey detection (cross-platform).
+- **Subprocess isolation** on macOS 26+ — a dedicated helper process
+  (`_hotkey_helper.py`) runs pynput's keyboard listener on its main thread,
+  satisfying the TSM main-dispatch-queue requirement. The helper communicates
+  semantic events (`hotkey_press`, `hotkey_release`, `escape`) to the parent
+  via JSON lines on stdout. The parent retains all recording state, double-tap
+  detection, and hands-free logic.
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
@@ -86,7 +92,7 @@ After transcription, text passes through these stages in order:
 | Empty transcription       | No paste occurs                                    |
 | Concurrent with assistant | Dictation works independently; pauses listener     |
 | macOS permissions         | `pynput` requires Accessibility permissions        |
-| macOS 26+ (Tahoe)         | `pynput` disabled — TSM main-thread assertion crash |
+| macOS 26+ (Tahoe)         | pynput isolated in subprocess helper (TSM workaround) |
 | Linux / Wayland           | `pynput` requires X11 (limited Wayland support)    |
 | Audio rate mismatch       | Resample via linear interpolation to Whisper rate  |
 | LLM filler removal fails  | Falls back to raw transcription (5 s timeout)     |

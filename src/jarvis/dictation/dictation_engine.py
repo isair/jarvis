@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import math
 import os
 import platform
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -597,6 +599,10 @@ class DictationEngine:
         self._last_hotkey_release_time: float = 0.0
         self._double_tap_window: float = 0.4  # seconds
 
+        # Subprocess helper (macOS 26+ workaround)
+        self._helper_proc: Optional[subprocess.Popen] = None
+        self._helper_thread: Optional[threading.Thread] = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -616,24 +622,26 @@ class DictationEngine:
         # the main dispatch queue.  pynput's keyboard Listener runs a CGEventTap
         # on a background thread whose callback triggers TSM input-source
         # queries, violating this assertion and crashing the process (SIGTRAP).
-        # Disable pynput on macOS 26+ until an alternative backend is available.
-        if sys.platform == "darwin":
-            try:
-                mac_ver = platform.mac_ver()[0]
-                major = int(mac_ver.split(".")[0]) if mac_ver else 0
-            except (ValueError, IndexError):
-                major = 0
-            if major >= 26:
+        # Workaround: run pynput in a dedicated subprocess whose main thread
+        # hosts the listener, satisfying the dispatch-queue requirement.
+        if sys.platform == "darwin" and self._needs_subprocess_helper():
+            if self._start_subprocess_helper():
+                self._started = True
                 debug_log(
-                    f"pynput disabled on macOS {mac_ver} "
-                    "(TSM main-thread assertion)", "dictation",
-                )
-                print(
-                    "  ⚠️  Dictation is not available on macOS 26+ "
-                    "(pynput keyboard listener incompatibility)",
-                    flush=True,
+                    f"dictation engine started via subprocess helper "
+                    f"(hotkey: {self._hotkey_str})", "dictation",
                 )
                 return
+            debug_log(
+                "subprocess helper failed to start — dictation disabled",
+                "dictation",
+            )
+            print(
+                "  ⚠️  Dictation is not available on macOS 26+ "
+                "(subprocess helper failed to start)",
+                flush=True,
+            )
+            return
 
         self._listener = pynput_keyboard.Listener(
             on_press=self._on_key_press,
@@ -650,6 +658,7 @@ class DictationEngine:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+        self._stop_subprocess_helper()
         self._started = False
         debug_log("dictation engine stopped", "dictation")
 
@@ -660,6 +669,142 @@ class DictationEngine:
     def set_on_dictation_result(self, callback: Optional[Callable]) -> None:
         """Set the callback invoked after a successful dictation."""
         self._on_dictation_result = callback
+
+    # ------------------------------------------------------------------
+    # Subprocess helper (macOS 26+ TSM workaround)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _needs_subprocess_helper() -> bool:
+        """Return True when pynput must be isolated in a subprocess."""
+        try:
+            mac_ver = platform.mac_ver()[0]
+            major = int(mac_ver.split(".")[0]) if mac_ver else 0
+        except (ValueError, IndexError):
+            major = 0
+        return major >= 26
+
+    def _start_subprocess_helper(self) -> bool:
+        """Spawn ``_hotkey_helper`` and start reading its events."""
+        helper_module = "src.jarvis.dictation._hotkey_helper"
+        try:
+            self._helper_proc = subprocess.Popen(
+                [sys.executable, "-m", helper_module, self._hotkey_str],
+                stdout=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except Exception as exc:
+            debug_log(f"failed to spawn hotkey helper: {exc}", "dictation")
+            return False
+
+        # Wait for the "ready" event (up to 5 s).
+        try:
+            first_line = self._helper_proc.stdout.readline()
+            if not first_line:
+                debug_log("hotkey helper exited before sending ready", "dictation")
+                self._helper_proc = None
+                return False
+            msg = json.loads(first_line)
+            if msg.get("type") == "error":
+                debug_log(f"hotkey helper error: {msg.get('msg')}", "dictation")
+                self._helper_proc = None
+                return False
+            if msg.get("type") != "ready":
+                debug_log(f"unexpected first message from helper: {msg}", "dictation")
+                self._helper_proc = None
+                return False
+        except Exception as exc:
+            debug_log(f"hotkey helper handshake failed: {exc}", "dictation")
+            self._helper_proc = None
+            return False
+
+        # Read events in a background thread.
+        self._helper_thread = threading.Thread(
+            target=self._read_helper_events,
+            daemon=True,
+        )
+        self._helper_thread.start()
+        debug_log("hotkey subprocess helper started", "dictation")
+        return True
+
+    def _stop_subprocess_helper(self) -> None:
+        """Terminate the helper subprocess (if running)."""
+        proc = self._helper_proc
+        if proc is None:
+            return
+        self._helper_proc = None
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _read_helper_events(self) -> None:
+        """Background thread — read JSON events from the helper subprocess."""
+        proc = self._helper_proc
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                event_type = msg.get("type")
+                if event_type:
+                    self._on_helper_event(event_type)
+        except Exception as exc:
+            debug_log(f"helper event reader stopped: {exc}", "dictation")
+
+    def _on_helper_event(self, event_type: str) -> None:
+        """Handle a semantic event from the subprocess helper."""
+        if event_type == "escape":
+            if self._hands_free and self._recording:
+                debug_log("hands-free stopped via Escape (subprocess)", "dictation")
+                self._stop_recording()
+
+        elif event_type == "hotkey_press":
+            if self._hands_free and self._recording:
+                debug_log("hands-free stopped via hotkey (subprocess)", "dictation")
+                self._stop_recording()
+            elif not self._recording:
+                self._start_recording()
+
+        elif event_type == "hotkey_release":
+            # In hands-free mode, key release does NOT stop recording.
+            if self._hands_free:
+                return
+            if self._recording:
+                now = time.time()
+                hold_duration = now - self._record_start_time
+                if hold_duration < self._double_tap_window:
+                    time_since_last = now - self._last_hotkey_release_time
+                    if time_since_last < self._double_tap_window:
+                        # Double-tap detected → switch to hands-free
+                        self._hands_free = True
+                        debug_log(
+                            "hands-free mode activated (double-tap, subprocess)",
+                            "dictation",
+                        )
+                        self._last_hotkey_release_time = 0.0
+                        return
+                    # First quick tap — remember the time
+                    self._last_hotkey_release_time = now
+                else:
+                    self._last_hotkey_release_time = 0.0
+                self._stop_recording()
 
     # ------------------------------------------------------------------
     # Key event handlers
