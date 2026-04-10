@@ -152,9 +152,14 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec]
                         inputSchema=input_schema
                     )
 
-            except Exception as e:
-                debug_log(f"Failed to discover tools from MCP server '{server_name}': {e}", "mcp")
-                errors[server_name] = str(e)
+            except BaseException as e:
+                # ExceptionGroups (from anyio TaskGroup) wrap the real cause;
+                # extract the first sub-exception for a useful error message.
+                cause = e
+                if hasattr(e, "exceptions") and e.exceptions:
+                    cause = e.exceptions[0]
+                debug_log(f"Failed to discover tools from MCP server '{server_name}': {cause}", "mcp")
+                errors[server_name] = str(cause)
                 continue
 
         return discovered_tools, errors
