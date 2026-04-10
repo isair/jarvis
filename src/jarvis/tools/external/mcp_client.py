@@ -10,6 +10,86 @@ from mcp import ClientSession  # type: ignore
 from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
 
+import glob as _glob
+import sys as _sys
+
+# Static directories to search when a command isn't on the daemon's PATH.
+# macOS GUI-launched processes often miss Homebrew, nvm, fnm, and Volta paths.
+_EXTRA_PATH_DIRS: List[str] = [
+    "/opt/homebrew/bin",           # Homebrew (Apple Silicon)
+    "/usr/local/bin",              # Homebrew (Intel) / manual installs
+    os.path.expanduser("~/.volta/bin"),             # Volta
+    os.path.expanduser("~/.local/bin"),             # pipx / uvx
+]
+
+# Glob patterns for version-managed directories (nvm, fnm).
+# Sorted in reverse so the highest version is preferred.
+_EXTRA_PATH_GLOBS: List[str] = [
+    os.path.expanduser("~/.nvm/versions/node/*/bin"),   # nvm
+    os.path.expanduser("~/.fnm/node-versions/*/installation/bin"),  # fnm
+]
+
+
+def _get_user_shell() -> str:
+    """Return the user's login shell, falling back to /bin/bash."""
+    return os.environ.get("SHELL", "/bin/bash")
+
+
+def _resolve_command(command: str) -> str:
+    """Resolve a command name to an absolute path.
+
+    First checks the current PATH via ``shutil.which``.  If that fails,
+    probes a list of common directories that GUI-launched daemons on macOS
+    typically miss (Homebrew, nvm, fnm, Volta, etc.).  As a final fallback,
+    spawns the user's login shell to resolve the command.
+
+    Returns the resolved absolute path, or raises ``FileNotFoundError``.
+    """
+    # Already absolute — just verify it exists
+    if os.path.isabs(command):
+        if os.path.isfile(command):
+            return command
+        raise FileNotFoundError(f"MCP server command does not exist: {command}")
+
+    # Try standard PATH first
+    found = shutil.which(command)
+    if found:
+        return found
+
+    # Probe static extra directories
+    for d in _EXTRA_PATH_DIRS:
+        candidate = os.path.join(d, command)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
+    # Probe version-managed directories (nvm, fnm) — prefer highest version
+    for pattern in _EXTRA_PATH_GLOBS:
+        dirs = sorted(_glob.glob(pattern), reverse=True)
+        for d in dirs:
+            candidate = os.path.join(d, command)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+
+    # Fallback: ask the user's login shell (catches all custom PATH additions)
+    if _sys.platform != "win32":
+        try:
+            import subprocess
+            shell = _get_user_shell()
+            result = subprocess.run(
+                [shell, "-lc", f"which {command}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception:
+            pass
+
+    raise FileNotFoundError(
+        f"MCP server command not found on PATH: {command}. "
+        "Ensure Node.js and npx are installed and available."
+    )
+
+
 class MCPClient:
     """Lightweight manager to connect to external MCP servers and call tools."""
 
@@ -21,18 +101,30 @@ class MCPClient:
         # Windows compatibility: prefer npx.cmd when requested
         if os.name == "nt" and command.lower() == "npx":
             command = "npx.cmd"
-        # Verify command exists — absolute paths checked directly, relative names resolved via PATH
-        if os.path.isabs(command):
-            if not os.path.isfile(command):
-                raise FileNotFoundError(f"MCP server command does not exist: {command}")
-        elif shutil.which(command) is None:
-            raise FileNotFoundError(f"MCP server command not found on PATH: {command}. Ensure Node.js and npx are installed and available.")
+        # Resolve command to an absolute path
+        command = _resolve_command(command)
         # Expand user (~) in args for filesystem paths
         raw_args = server_cfg.get("args") or []
         args = [os.path.expanduser(str(a)) if isinstance(a, str) else a for a in raw_args]
-        env = server_cfg.get("env") or None
+        user_env = server_cfg.get("env") or {}
+        # Ensure the resolved command's directory is on PATH so that
+        # shebangs like #!/usr/bin/env node can find sibling binaries.
+        # We must pass the full environment because StdioServerParameters
+        # replaces (not merges) the parent env when env is not None.
+        cmd_dir = os.path.dirname(command)
+        current_path = os.environ.get("PATH", "")
+        if cmd_dir and cmd_dir not in current_path.split(os.pathsep):
+            env = {**os.environ, **user_env, "PATH": cmd_dir + os.pathsep + current_path}
+        elif user_env:
+            env = {**os.environ, **user_env}
+        else:
+            env = None  # inherit parent env as-is
         params = StdioServerParameters(command=command, args=args, env=env)
-        return stdio_client(params)
+        # Suppress MCP server stderr noise (npm warnings, usage banners, etc.)
+        # from polluting the daemon's log output.
+        # Must use a real file (not StringIO) because the subprocess needs fileno().
+        devnull = open(os.devnull, "w")
+        return stdio_client(params, errlog=devnull)
 
     @asynccontextmanager
     async def _session(self, server_name: str):

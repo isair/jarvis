@@ -1,8 +1,8 @@
 # Jarvis
 
-**A private AI voice assistant that lives on your computer** - not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence ("what do you think, Jarvis?" or "Jarvis, look at this error") and get thoughtful, contextual responses. It remembers your preferences, helps with code, tracks your health goals, searches the web, and connects to thousands of tools via MCP.
+**A private AI voice assistant that lives on your computer** — not in someone else's cloud. Leave it running 24/7 and treat it like a third person in the room: say "Jarvis" anywhere in your sentence and get thoughtful, contextual responses. It remembers everything, can join ongoing conversations, searches the web, reads your screen, tracks your nutrition, checks the weather, and connects to thousands of external tools via MCP — all while keeping your data entirely on your machine.
 
-🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info.
+🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info. Free offline dictation included.
 
 ---
 
@@ -46,42 +46,54 @@
 👤 Alice: I wonder what the weather will be like tomorrow
 👤 Bob: Yeah, we should check before planning the picnic
 👤 Alice: Jarvis, what do you think?
+  📝 Heard: "What do you think Jarvis?"
+  🧠 Intent (wake word): directed → "what do you think about the weather for the picnic"
 
-✨ Working on it: what do you think about the weather tomorrow for the picnic
-🧰 Tool: getWeather…
-
-🤖 Jarvis
-Tomorrow looks great for a picnic! Sunny with highs around 72°F...
-```
-Jarvis understood the entire conversation and gave a contextual answer - no need to repeat the question.
-
-**Debugging with screen analysis:**
-```
-✨ Working on it: i'm getting this weird graphql error
-🧰 Tool: screenshot…
-🧰 MCP: vscode:findReferences…
+✨ Working on it: what do you think about the weather for the picnic
+  🧰 Tool: getWeather…
+  💬 Generating response...
 
 🤖 Jarvis
-I can see the error on your screen - "Cannot return null for non-nullable field".
-Your User type has `email: String!` but the resolver is returning null...
+Tomorrow looks great for a picnic! Sunny with highs around 22°C...
+```
+Jarvis understood the entire conversation and gave a contextual answer — no need to repeat the question.
+
+**Browser automation via MCP:**
+```
+  📝 Heard: "Open YouTube Jarvis."
+  🧠 Intent (wake word): directed → "open YouTube"
+
+✨ Working on it: open YouTube
+  💬 Generating response...
+
+🤖 Jarvis
+I have opened YouTube for you.
 ```
 
 **Health-aware advice:**
 ```
-✨ Working on it: should i order pizza tonight considering my health goals
-🧰 Tool: fetchMeals…
+  📝 Heard: "Should I order pizza tonight considering my health goals Jarvis?"
+  🧠 Intent (wake word): directed → "should I order pizza tonight considering my health goals"
+
+✨ Working on it: should I order pizza tonight considering my health goals
+  🧰 Tool: fetchMeals…
+  💬 Generating response...
 
 🤖 Jarvis
-Looking at your week - you mentioned wanting to lose 10 pounds by March...
+Looking at your week — you mentioned wanting to lose 5kg by June...
 Today you've had about 860 calories so far. Given your 1,800 calorie target,
 you've got room for pizza! But maybe consider thin crust to save calories.
 ```
 
-**Personalized news search:**
+**Personalised news search:**
 ```
-✨ Working on it: what are some news from today that might interest me?
-  🧠 Looking back at our past conversations…
-  🌐 Searching the web…
+  📝 Heard: "What are some news from today that might interest me Jarvis?"
+  🧠 Intent (wake word): directed → "what are some news from today that might interest me"
+
+✨ Working on it: what are some news from today that might interest me
+  🧰 Tool: searchMemory…
+  🧰 Tool: webSearch…
+  💬 Generating response...
 
 🤖 Jarvis
 Here's a quick snapshot of today's headlines...
@@ -89,11 +101,25 @@ Here's a quick snapshot of today's headlines...
 
 **Natural wake word placement** (say "Jarvis" anywhere):
 ```
-👂 Heard: give me a random topic to discuss jarvis
+  📝 Heard: "Give me a random topic to discuss Jarvis."
+  🧠 Intent (wake word): directed → "give me a random topic to discuss"
+
 ✨ Working on it: give me a random topic to discuss
+  💬 Generating response...
 
 🤖 Jarvis
 How about the Fermi Paradox? Given the vast number of stars...
+```
+
+**Echo detection** (Jarvis ignores its own speech):
+```
+🤖 Jarvis
+I have opened YouTube for you.
+
+👂 Listening for follow-up (3s)...
+  📝 Heard: "I have opened YouTube for you."
+  🔇 Heard (echo): "i have opened youtube for you."
+💤 Returning to wake word mode
 ```
 
 </details>
@@ -124,6 +150,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
   <img src="docs/img/setup-wizard-model.png" alt="Setup - Model Selection" width="200">
   <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Whisper" width="200">
   <img src="docs/img/setup-wizard-dictation.png" alt="Setup - Dictation" width="200">
+  <img src="docs/img/setup-wizard-mcp.png" alt="Setup - MCP Servers" width="200">
   <img src="docs/img/setup-wizard-complete.png" alt="Setup - Complete" width="200">
 </p>
 
@@ -160,6 +187,7 @@ Most users won't need to change anything. Open **⚙️ Settings** from the tray
 
 <p align="center">
   <img src="docs/img/settings-window.png" alt="Settings Window" width="500">
+  <img src="docs/img/settings-mcp.png" alt="Settings - MCP Servers" width="500">
 </p>
 
 <details>

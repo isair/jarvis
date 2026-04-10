@@ -60,7 +60,8 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 10. Memory & Dialogue
 11. Location
 12. Features (includes Dictation Mode toggle and hotkey)
-13. Advanced
+13. MCP Servers
+14. Advanced
 
 ## Hardware Device Selection
 
@@ -85,6 +86,37 @@ The Voice Input tab includes a device dropdown populated at window open time via
 - Opens as a modal QDialog.
 - Lazy-imported to avoid loading sounddevice at startup.
 
+## MCP Servers Section
+
+The MCP Servers category is **not** metadata-driven — it uses a custom page because `mcps` is a complex dict structure.
+
+### Layout
+
+- Description label explaining what MCP servers are
+- List widget showing configured servers (display name from catalogue if recognised, otherwise `🔌 {name}`)
+- Buttons: **Add from Catalogue**, **Add Custom**, **Edit**, **Remove**
+- Detail panel showing the selected server's name, command, args, and env vars
+
+### Add from Catalogue
+
+Opens `_MCPCatalogueDialog` showing all entries from `mcp_catalogue.CATALOGUE`. Already-configured servers appear checked and disabled. Servers that require an API key show a 🔑 badge. When the user confirms, they're prompted for any needed API keys.
+
+### Add Custom
+
+Opens `_MCPEditDialog` with fields for name, command, args (space-separated), and env vars (KEY=VALUE pairs). Validates that name and command are non-empty.
+
+### Edit
+
+Opens `_MCPEditDialog` pre-filled with the selected server's config. Name is read-only during edit.
+
+### Remove
+
+Prompts for confirmation, then removes the server from the in-memory dict.
+
+### Save Behaviour
+
+On save, the `mcps` dict is written to config.json if non-empty, or removed entirely if empty. On reset, all MCPs are cleared.
+
 ## Fields NOT Exposed in UI
 
 These fields are managed elsewhere or are too complex for a simple form:
@@ -95,7 +127,6 @@ These fields are managed elsewhere or are too complex for a simple form:
 - `wake_aliases` — list of strings (complex editing)
 - `stop_commands` / `stop_command_fuzzy_ratio` — list of strings
 - `use_stdin` — developer/CLI flag
-- `mcps` — complex dict structure
 - `voice_debug` — environment variable only
 - `whisper_min_audio_duration` / `whisper_min_word_length` — rarely changed advanced params
 - `vad_frame_ms` / `vad_pre_roll_ms` — low-level VAD timing

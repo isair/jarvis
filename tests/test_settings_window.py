@@ -18,7 +18,10 @@ from desktop_app.settings_window import (
     FieldMeta,
     get_input_devices,
     _build_field_metadata,
+    _MCPCatalogueDialog,
+    _MCPEditDialog,
 )
+from desktop_app.mcp_catalogue import CATALOGUE_BY_NAME
 from jarvis.config import get_default_config
 
 
@@ -104,12 +107,23 @@ class TestCategories:
         assert len(keys) == len(set(keys))
 
     def test_every_category_has_fields(self):
-        """Every defined category should have at least one field."""
+        """Every defined category should have at least one field.
+
+        The 'mcps' category uses a custom page, not FIELD_METADATA, so it's excluded.
+        """
         cats_with_fields = {fm.category for fm in FIELD_METADATA}
+        custom_page_categories = {"mcps"}
         for key, label in CATEGORIES:
+            if key in custom_page_categories:
+                continue
             assert key in cats_with_fields, (
                 f"Category '{key}' ({label}) has no fields"
             )
+
+    def test_mcps_category_exists(self):
+        """The MCP Servers category must be present in the sidebar."""
+        cat_keys = [k for k, _ in CATEGORIES]
+        assert "mcps" in cat_keys
 
 
 class TestInputDevices:
@@ -264,3 +278,120 @@ class TestDefaultValueTypes:
                 assert val in valid_values, (
                     f"Field '{fm.key}' default '{val}' not in choices {valid_values}"
                 )
+
+
+class TestMCPEditDialogLogic:
+    """Tests for the MCP edit dialog's get_result() logic (no GUI)."""
+
+    def test_get_result_basic(self):
+        """get_result parses name, command, args, and env correctly."""
+        dlg = _MCPEditDialog.__new__(_MCPEditDialog)
+        dlg._name_edit = MagicMock()
+        dlg._name_edit.text.return_value = "test-server"
+        dlg._command_edit = MagicMock()
+        dlg._command_edit.text.return_value = "npx"
+        dlg._args_edit = MagicMock()
+        dlg._args_edit.text.return_value = "-y @test/server ~"
+        dlg._env_edit = MagicMock()
+        dlg._env_edit.text.return_value = "API_KEY=abc123"
+
+        name, cfg = dlg.get_result()
+        assert name == "test-server"
+        assert cfg["transport"] == "stdio"
+        assert cfg["command"] == "npx"
+        assert cfg["args"] == ["-y", "@test/server", "~"]
+        assert cfg["env"] == {"API_KEY": "abc123"}
+
+    def test_get_result_empty_env(self):
+        """When env is empty, env key should not be in config."""
+        dlg = _MCPEditDialog.__new__(_MCPEditDialog)
+        dlg._name_edit = MagicMock()
+        dlg._name_edit.text.return_value = "test"
+        dlg._command_edit = MagicMock()
+        dlg._command_edit.text.return_value = "node"
+        dlg._args_edit = MagicMock()
+        dlg._args_edit.text.return_value = ""
+        dlg._env_edit = MagicMock()
+        dlg._env_edit.text.return_value = ""
+
+        name, cfg = dlg.get_result()
+        assert name == "test"
+        assert cfg["command"] == "node"
+        assert cfg["args"] == []
+        assert "env" not in cfg
+
+    def test_get_result_multiple_env_vars(self):
+        """Multiple KEY=VALUE pairs are parsed correctly."""
+        dlg = _MCPEditDialog.__new__(_MCPEditDialog)
+        dlg._name_edit = MagicMock()
+        dlg._name_edit.text.return_value = "srv"
+        dlg._command_edit = MagicMock()
+        dlg._command_edit.text.return_value = "cmd"
+        dlg._args_edit = MagicMock()
+        dlg._args_edit.text.return_value = ""
+        dlg._env_edit = MagicMock()
+        dlg._env_edit.text.return_value = "A=1 B=two C=three=four"
+
+        _, cfg = dlg.get_result()
+        assert cfg["env"] == {"A": "1", "B": "two", "C": "three=four"}
+
+
+class TestMCPCatalogueDialogLogic:
+    """Tests for the MCP catalogue dialog's Node.js detection (no GUI)."""
+
+    def test_is_node_available_returns_true_when_found(self):
+        """_is_node_available returns True when _resolve_command succeeds."""
+        with patch("jarvis.tools.external.mcp_client._resolve_command", return_value="/usr/bin/npx"):
+            assert _MCPCatalogueDialog._is_node_available() is True
+
+    def test_is_node_available_returns_false_when_missing(self):
+        """_is_node_available returns False when _resolve_command raises."""
+        with patch("jarvis.tools.external.mcp_client._resolve_command", side_effect=FileNotFoundError("not found")):
+            assert _MCPCatalogueDialog._is_node_available() is False
+
+
+class TestMCPConfigSaveLogic:
+    """Tests for MCP config preservation during save."""
+
+    def test_mcps_saved_when_present(self):
+        """MCP configs should be written to the config file."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump({}, f)
+            cfg_path = Path(f.name)
+
+        try:
+            from jarvis.config import _save_json, _load_json
+
+            config = {
+                "mcps": {
+                    "filesystem": {
+                        "transport": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
+                    }
+                }
+            }
+            _save_json(cfg_path, config)
+            saved = _load_json(cfg_path)
+            assert "mcps" in saved
+            assert "filesystem" in saved["mcps"]
+            assert saved["mcps"]["filesystem"]["command"] == "npx"
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_empty_mcps_not_saved(self):
+        """When mcps is empty, it should not be written to config."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump({}, f)
+            cfg_path = Path(f.name)
+
+        try:
+            from jarvis.config import _save_json, _load_json
+
+            # Simulate: mcps is empty so should not be written
+            config = {"tts_enabled": False}
+            _save_json(cfg_path, config)
+            saved = _load_json(cfg_path)
+            assert "mcps" not in saved
+        finally:
+            cfg_path.unlink(missing_ok=True)

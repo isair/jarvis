@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QComboBox, QScrollArea, QGroupBox, QFormLayout, QPushButton,
     QMessageBox, QSizePolicy, QListWidget, QListWidgetItem,
-    QStackedWidget, QSplitter, QInputDialog,
+    QStackedWidget, QSplitter, QInputDialog, QFrame,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
@@ -29,6 +29,7 @@ from jarvis.config import (
 )
 from jarvis.debug import debug_log
 from desktop_app.themes import apply_theme
+from desktop_app.mcp_catalogue import CATALOGUE, CATALOGUE_BY_NAME, MCPEntry
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,7 @@ CATEGORIES = [
     ("memory", "🧠 Memory & Dialogue"),
     ("location", "📍 Location"),
     ("features", "✨ Features"),
+    ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
 
@@ -340,8 +342,8 @@ class SettingsWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙️ Jarvis Settings")
-        self.setMinimumSize(680, 560)
-        self.resize(740, 620)
+        self.setMinimumSize(780, 560)
+        self.resize(840, 620)
         self._widgets: Dict[str, Any] = {}  # key -> widget
         self._config_path = default_config_path()
         self._current_config = _load_json(self._config_path)
@@ -387,10 +389,13 @@ class SettingsWindow(QDialog):
             fields_by_cat.setdefault(fm.category, []).append(fm)
 
         for cat_key, cat_label in CATEGORIES:
-            cat_fields = fields_by_cat.get(cat_key, [])
-            if not cat_fields:
-                continue
-            page = self._build_category_tab(cat_fields)
+            if cat_key == "mcps":
+                page = self._build_mcp_page()
+            else:
+                cat_fields = fields_by_cat.get(cat_key, [])
+                if not cat_fields:
+                    continue
+                page = self._build_category_tab(cat_fields)
             self._pages.addWidget(page)
 
             item = QListWidgetItem(cat_label)
@@ -630,6 +635,161 @@ class SettingsWindow(QDialog):
         container._list_widget = list_w  # type: ignore[attr-defined]
         return container
 
+    # -- MCP management page ------------------------------------------------
+
+    def _build_mcp_page(self) -> QWidget:
+        """Build the MCP servers management page."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # Header
+        desc = QLabel(
+            "MCP (Model Context Protocol) servers give Jarvis extra tools — "
+            "file access, web search, databases, and more."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        layout.addWidget(desc)
+
+        # Server list
+        self._mcp_list = QListWidget()
+        self._mcp_list.setMinimumHeight(180)
+        self._mcp_list.setMaximumHeight(300)
+        layout.addWidget(self._mcp_list)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(6)
+
+        add_catalogue_btn = QPushButton("📦 Add from Catalogue")
+        add_catalogue_btn.setToolTip("Pick from a list of popular MCP servers")
+        add_catalogue_btn.clicked.connect(self._on_mcp_add_catalogue)
+        btn_layout.addWidget(add_catalogue_btn)
+
+        add_custom_btn = QPushButton("+ Add Custom")
+        add_custom_btn.setToolTip("Manually configure an MCP server")
+        add_custom_btn.clicked.connect(self._on_mcp_add_custom)
+        btn_layout.addWidget(add_custom_btn)
+
+        edit_btn = QPushButton("✏️ Edit")
+        edit_btn.clicked.connect(self._on_mcp_edit)
+        btn_layout.addWidget(edit_btn)
+
+        remove_btn = QPushButton("− Remove")
+        remove_btn.clicked.connect(self._on_mcp_remove)
+        btn_layout.addWidget(remove_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        # Details panel for selected server
+        self._mcp_detail = QLabel("")
+        self._mcp_detail.setWordWrap(True)
+        self._mcp_detail.setStyleSheet(
+            "background-color: #12141a; border: 1px solid #27272a; "
+            "border-radius: 8px; padding: 12px; color: #a1a1aa; font-size: 12px;"
+        )
+        self._mcp_detail.setMinimumHeight(60)
+        layout.addWidget(self._mcp_detail)
+
+        self._mcp_list.currentRowChanged.connect(self._on_mcp_selection_changed)
+
+        # Populate from current config
+        self._mcp_configs: Dict[str, Dict] = dict(self._merged.get("mcps", {}) or {})
+        self._refresh_mcp_list()
+
+        layout.addStretch()
+        scroll.setWidget(container)
+        return scroll
+
+    def _refresh_mcp_list(self) -> None:
+        """Refresh the MCP server list widget from the in-memory dict."""
+        self._mcp_list.clear()
+        for name, cfg in self._mcp_configs.items():
+            catalogue_entry = CATALOGUE_BY_NAME.get(name)
+            if catalogue_entry:
+                display = f"{catalogue_entry.display_name}  ({name})"
+            else:
+                display = f"🔌 {name}"
+            self._mcp_list.addItem(display)
+        if self._mcp_list.count() == 0:
+            self._mcp_detail.setText("No MCP servers configured. Add one to extend Jarvis's capabilities.")
+        else:
+            self._mcp_list.setCurrentRow(0)
+
+    def _on_mcp_selection_changed(self, row: int) -> None:
+        """Update the detail panel when an MCP server is selected."""
+        if row < 0 or row >= len(self._mcp_configs):
+            self._mcp_detail.setText("")
+            return
+        name = list(self._mcp_configs.keys())[row]
+        cfg = self._mcp_configs[name]
+        command = cfg.get("command", "")
+        args = " ".join(str(a) for a in cfg.get("args", []))
+        env_keys = ", ".join(cfg.get("env", {}).keys()) if cfg.get("env") else "none"
+        self._mcp_detail.setText(
+            f"<b>Name:</b> {name}<br>"
+            f"<b>Command:</b> {command}<br>"
+            f"<b>Args:</b> {args}<br>"
+            f"<b>Env vars:</b> {env_keys}"
+        )
+
+    def _on_mcp_add_catalogue(self) -> None:
+        """Show a dialog to pick from the curated catalogue."""
+        dlg = _MCPCatalogueDialog(self._mcp_configs, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            for entry, extra_env in dlg.selected_entries_with_env():
+                self._mcp_configs[entry.name] = entry.to_config(extra_env=extra_env)
+            self._refresh_mcp_list()
+
+    def _on_mcp_add_custom(self) -> None:
+        """Show a dialog to manually add an MCP server."""
+        dlg = _MCPEditDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            name, cfg = dlg.get_result()
+            if name:
+                self._mcp_configs[name] = cfg
+                self._refresh_mcp_list()
+
+    def _on_mcp_edit(self) -> None:
+        """Edit the selected MCP server."""
+        row = self._mcp_list.currentRow()
+        if row < 0:
+            return
+        name = list(self._mcp_configs.keys())[row]
+        cfg = self._mcp_configs[name]
+        dlg = _MCPEditDialog(name=name, config=cfg, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_name, new_cfg = dlg.get_result()
+            if new_name:
+                if new_name != name:
+                    del self._mcp_configs[name]
+                self._mcp_configs[new_name] = new_cfg
+                self._refresh_mcp_list()
+
+    def _on_mcp_remove(self) -> None:
+        """Remove the selected MCP server."""
+        row = self._mcp_list.currentRow()
+        if row < 0:
+            return
+        name = list(self._mcp_configs.keys())[row]
+        reply = QMessageBox.question(
+            self, "🔌 Remove MCP Server",
+            f"Remove '{name}'?\n\nYou can always re-add it later.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            del self._mcp_configs[name]
+            self._refresh_mcp_list()
+
     # -- Value extraction ---------------------------------------------------
 
     def _get_value(self, fm: FieldMeta) -> Any:
@@ -674,7 +834,7 @@ class SettingsWindow(QDialog):
 
     def _on_save(self) -> None:
         """Collect values from widgets and save to config.json."""
-        # Start from existing config (preserves keys we don't show in UI, e.g. mcps)
+        # Start from existing config (preserves keys we don't show in UI)
         config = dict(self._current_config)
 
         for fm in FIELD_METADATA:
@@ -686,6 +846,12 @@ class SettingsWindow(QDialog):
                 config.pop(fm.key, None)
             else:
                 config[fm.key] = val
+
+        # Save MCP configs (empty dict = no MCPs, omit from config)
+        if self._mcp_configs:
+            config["mcps"] = dict(self._mcp_configs)
+        else:
+            config.pop("mcps", None)
 
         if _save_json(self._config_path, config):
             debug_log("settings saved to config.json", "settings")
@@ -718,6 +884,10 @@ class SettingsWindow(QDialog):
         # Refresh all widgets
         for fm in FIELD_METADATA:
             self._set_widget_value(fm, self._defaults.get(fm.key))
+
+        # Clear MCP configs
+        self._mcp_configs = {}
+        self._refresh_mcp_list()
 
         debug_log("settings reset to defaults", "settings")
 
@@ -767,3 +937,237 @@ class SettingsWindow(QDialog):
 
         else:  # str
             w.setText(str(value) if value not in (None, "") else "")
+
+
+# ---------------------------------------------------------------------------
+# MCP dialogue windows
+# ---------------------------------------------------------------------------
+
+class _MCPCatalogueDialog(QDialog):
+    """Dialog for picking MCP servers from the curated catalogue."""
+
+    def __init__(self, existing: Dict[str, Dict], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("📦 MCP Server Catalogue")
+        self.setMinimumSize(480, 420)
+        apply_theme(self)
+
+        self._existing = existing
+        self._checkboxes: Dict[str, QCheckBox] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        desc = QLabel("Select MCP servers to add. Already-configured servers are shown as checked.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        layout.addWidget(desc)
+
+        # Node.js availability warning
+        node_warning = QLabel(
+            "⚠️  <b>Node.js not found.</b> Most MCP servers require Node.js. "
+            "<a href='https://nodejs.org/' style='color: #f59e0b;'>Download Node.js</a> "
+            "and restart Jarvis to use them."
+        )
+        node_warning.setOpenExternalLinks(True)
+        node_warning.setWordWrap(True)
+        node_warning.setStyleSheet(
+            "background: rgba(239, 68, 68, 0.12);"
+            "border: 1px solid rgba(239, 68, 68, 0.35);"
+            "border-radius: 8px; padding: 10px 14px; color: #fca5a5; font-size: 12px;"
+        )
+        node_warning.setVisible(not self._is_node_available())
+        layout.addWidget(node_warning)
+
+        # Scrollable list of catalogue entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setSpacing(8)
+
+        for entry in CATALOGUE:
+            card = QFrame()
+            card.setObjectName("card")
+            card_layout = QHBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(12)
+
+            cb = QCheckBox()
+            already_added = entry.name in existing
+            cb.setChecked(already_added)
+            if already_added:
+                cb.setEnabled(False)
+                cb.setToolTip("Already configured")
+            self._checkboxes[entry.name] = cb
+            card_layout.addWidget(cb)
+
+            text_layout = QVBoxLayout()
+            text_layout.setSpacing(2)
+
+            name_label = QLabel(entry.display_name)
+            name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+            text_layout.addWidget(name_label)
+
+            desc_label = QLabel(entry.description)
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet("color: #a1a1aa; font-size: 12px;")
+            text_layout.addWidget(desc_label)
+
+            if entry.needs_api_key:
+                key_label = QLabel(f"🔑 Requires {entry.api_key_env_var}")
+                key_label.setStyleSheet("color: #fbbf24; font-size: 11px;")
+                text_layout.addWidget(key_label)
+
+            card_layout.addLayout(text_layout, 1)
+            inner_layout.addWidget(card)
+
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, 1)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        add_btn = QPushButton("🔌 Add Selected")
+        add_btn.setObjectName("primary")
+        add_btn.clicked.connect(self._on_add)
+        btn_layout.addWidget(add_btn)
+        layout.addLayout(btn_layout)
+
+    def _on_add(self) -> None:
+        """Prompt for API keys if needed, then accept."""
+        self._collected_env: Dict[str, Dict[str, str]] = {}
+        for entry in self._selected_new_entries():
+            if entry.needs_api_key and entry.api_key_env_var:
+                key, ok = QInputDialog.getText(
+                    self,
+                    f"🔑 {entry.display_name} API Key",
+                    f"Enter your {entry.api_key_env_var}:\n"
+                    f"({entry.api_key_hint or ''})",
+                )
+                if ok and key.strip():
+                    self._collected_env[entry.name] = {entry.api_key_env_var: key.strip()}
+                else:
+                    # User cancelled key entry — skip this entry
+                    self._checkboxes[entry.name].setChecked(False)
+                    continue
+        self.accept()
+
+    @staticmethod
+    def _is_node_available() -> bool:
+        """Check if Node.js (npx) is available on the system."""
+        try:
+            from jarvis.tools.external.mcp_client import _resolve_command
+            _resolve_command("npx")
+            return True
+        except (FileNotFoundError, Exception):
+            return False
+
+    def _selected_new_entries(self) -> List[MCPEntry]:
+        """Return catalogue entries the user selected (excluding already-configured)."""
+        result = []
+        for name, cb in self._checkboxes.items():
+            if cb.isChecked() and cb.isEnabled():
+                result.append(CATALOGUE_BY_NAME[name])
+        return result
+
+    def selected_entries_with_env(self) -> List[tuple]:
+        """Return list of (MCPEntry, extra_env_dict) for each selected entry."""
+        collected = getattr(self, "_collected_env", {})
+        return [
+            (entry, collected.get(entry.name, {}))
+            for entry in self._selected_new_entries()
+        ]
+
+
+class _MCPEditDialog(QDialog):
+    """Dialog for adding or editing a single MCP server configuration."""
+
+    def __init__(self, name: str = "", config: Optional[Dict] = None, parent=None):
+        super().__init__(parent)
+        self._is_edit = bool(name)
+        self.setWindowTitle("✏️ Edit MCP Server" if self._is_edit else "🔌 Add Custom MCP Server")
+        self.setMinimumSize(440, 340)
+        apply_theme(self)
+
+        config = config or {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self._name_edit = QLineEdit(name)
+        self._name_edit.setPlaceholderText("e.g. filesystem, my-server")
+        if self._is_edit:
+            self._name_edit.setEnabled(False)
+        form.addRow("Name", self._name_edit)
+
+        self._command_edit = QLineEdit(str(config.get("command", "")))
+        self._command_edit.setPlaceholderText("e.g. npx, node, python")
+        form.addRow("Command", self._command_edit)
+
+        self._args_edit = QLineEdit(" ".join(str(a) for a in config.get("args", [])))
+        self._args_edit.setPlaceholderText("e.g. -y @modelcontextprotocol/server-filesystem ~")
+        self._args_edit.setToolTip("Space-separated arguments")
+        form.addRow("Args", self._args_edit)
+
+        env = config.get("env") or {}
+        env_str = " ".join(f"{k}={v}" for k, v in env.items())
+        self._env_edit = QLineEdit(env_str)
+        self._env_edit.setPlaceholderText("e.g. API_KEY=abc123 (space-separated KEY=VALUE)")
+        form.addRow("Env vars", self._env_edit)
+
+        layout.addLayout(form)
+        layout.addStretch()
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        save_btn = QPushButton("💾 Save")
+        save_btn.setObjectName("primary")
+        save_btn.clicked.connect(self._on_save)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
+
+    def _on_save(self) -> None:
+        name = self._name_edit.text().strip()
+        command = self._command_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "⚠️ Missing Name", "Please enter a server name.")
+            return
+        if not command:
+            QMessageBox.warning(self, "⚠️ Missing Command", "Please enter a command.")
+            return
+        self.accept()
+
+    def get_result(self) -> tuple:
+        """Return (name, config_dict) from the dialog fields."""
+        name = self._name_edit.text().strip()
+        command = self._command_edit.text().strip()
+        args_text = self._args_edit.text().strip()
+        args = args_text.split() if args_text else []
+        env_text = self._env_edit.text().strip()
+        env = {}
+        if env_text:
+            for pair in env_text.split():
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    env[k] = v
+
+        cfg = {"transport": "stdio", "command": command, "args": args}
+        if env:
+            cfg["env"] = env
+        return name, cfg
