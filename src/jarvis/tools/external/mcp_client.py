@@ -120,7 +120,11 @@ class MCPClient:
         else:
             env = None  # inherit parent env as-is
         params = StdioServerParameters(command=command, args=args, env=env)
-        return stdio_client(params)
+        # Suppress MCP server stderr noise (npm warnings, usage banners, etc.)
+        # from polluting the daemon's log output.
+        # Must use a real file (not StringIO) because the subprocess needs fileno().
+        devnull = open(os.devnull, "w")
+        return stdio_client(params, errlog=devnull)
 
     @asynccontextmanager
     async def _session(self, server_name: str):
