@@ -466,7 +466,7 @@ def get_default_config() -> Dict[str, Any]:
         "mcps": {},
 
         # Policy & workspace confinement
-        "policy_mode": "ask_destructive",
+        "policy_mode": "active",
         "workspace_roots": [],
         "blocked_roots": (
             ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]
@@ -629,7 +629,7 @@ def load_settings() -> Settings:
     mcps = _ensure_dict(merged.get("mcps"))
 
     # Policy & workspace confinement
-    policy_mode = str(merged.get("policy_mode", "ask_destructive"))
+    policy_mode = str(merged.get("policy_mode", "active"))
     workspace_roots = _ensure_list(merged.get("workspace_roots", []))
     blocked_roots = _ensure_list(merged.get("blocked_roots", []))
     read_only_roots = _ensure_list(merged.get("read_only_roots", []))

@@ -316,9 +316,9 @@ def main() -> None:
         from .policy.engine import configure as _configure_policy
         _approval_store = _ApprovalStore()
         _configure_policy(cfg, _approval_store)
-        debug_log(f"policy engine configured: mode={getattr(cfg, 'policy_mode', 'ask_destructive')}", "runtime")
+        debug_log(f"policy engine configured: mode={getattr(cfg, 'policy_mode', 'active')}", "runtime")
         if _health:
-            _health.ready("policy", f"mode={getattr(cfg, 'policy_mode', 'ask_destructive')}")
+            _health.ready("policy", f"mode={getattr(cfg, 'policy_mode', 'active')}")
     except Exception as _pe:
         debug_log(f"policy init failed (non-fatal): {_pe}", "runtime")
         if _health:

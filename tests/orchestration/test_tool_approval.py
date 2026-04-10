@@ -1,7 +1,8 @@
-"""Orchestration tests — policy engine evaluation and tool approval flow (spec 5.1).
+"""Orchestration tests — policy engine evaluation under voice-first undo model.
 
-Tests that PolicyEngine.evaluate() correctly gates tool invocations
-under different policy modes.
+Tests that PolicyEngine.evaluate() correctly handles the ACTIVE and DENY
+policy modes.  Approval gates have been removed — Jarvis uses act-then-undo
+for reversible actions and spoken warnings for irreversible ones.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from unittest.mock import MagicMock, patch
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_engine(mode: str = "ask_destructive"):
+def _make_engine(mode: str = "active"):
     """Return a configured PolicyEngine for the given mode."""
     from jarvis.policy.approvals import ApprovalStore
     from jarvis.policy.engine import PolicyEngine
@@ -34,89 +35,82 @@ def _make_engine(mode: str = "ask_destructive"):
 
 
 # ---------------------------------------------------------------------------
-# ALWAYS_ALLOW mode
+# ACTIVE mode (default) — act-then-undo, no blocking gates
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-def test_always_allow_permits_destructive():
-    """ALWAYS_ALLOW mode permits destructive tools without approval."""
-    engine = _make_engine("always_allow")
+def test_active_permits_destructive():
+    """ACTIVE mode permits destructive tools (undo model handles risk)."""
+    engine = _make_engine("active")
     decision = engine.evaluate("localFiles", {"operation": "delete", "path": "/tmp/x.txt"})
     assert decision.allowed is True
     assert decision.approval_required is False
 
 
 @pytest.mark.unit
-def test_always_allow_permits_informational():
-    """ALWAYS_ALLOW mode permits informational tools."""
-    engine = _make_engine("always_allow")
+def test_active_permits_informational():
+    """ACTIVE mode permits informational tools."""
+    engine = _make_engine("active")
     decision = engine.evaluate("getWeather", {})
     assert decision.allowed is True
 
 
+@pytest.mark.unit
+def test_active_permits_write():
+    """ACTIVE mode permits write operations (undo model handles risk)."""
+    engine = _make_engine("active")
+    decision = engine.evaluate("localFiles", {"operation": "write", "path": "/tmp/x.txt"})
+    assert decision.allowed is True
+
+
 # ---------------------------------------------------------------------------
-# DENY_ALL mode
+# Legacy mode names map to ACTIVE
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-def test_deny_all_blocks_any_tool():
-    """DENY_ALL mode blocks every tool call."""
-    engine = _make_engine("deny_all")
+def test_legacy_always_allow_maps_to_active():
+    """Legacy 'always_allow' config value maps to ACTIVE mode."""
+    engine = _make_engine("always_allow")
+    decision = engine.evaluate("localFiles", {"operation": "delete", "path": "/tmp/x.txt"})
+    assert decision.allowed is True
+
+
+@pytest.mark.unit
+def test_legacy_ask_destructive_maps_to_active():
+    """Legacy 'ask_destructive' config value maps to ACTIVE mode."""
+    engine = _make_engine("ask_destructive")
+    decision = engine.evaluate("getWeather", {})
+    assert decision.allowed is True
+    assert decision.approval_required is False
+
+
+# ---------------------------------------------------------------------------
+# DENY mode (kill-switch)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_deny_blocks_any_tool():
+    """DENY mode blocks every tool call."""
+    engine = _make_engine("deny")
     decision = engine.evaluate("getWeather", {})
     assert decision.allowed is False
     assert decision.denied_reason
 
 
 @pytest.mark.unit
-def test_deny_all_blocks_write_tool():
-    """DENY_ALL mode blocks write operations."""
-    engine = _make_engine("deny_all")
+def test_deny_blocks_write_tool():
+    """DENY mode blocks write operations."""
+    engine = _make_engine("deny")
     decision = engine.evaluate("localFiles", {"operation": "write", "path": "/tmp/x.txt"})
     assert decision.allowed is False
 
 
-# ---------------------------------------------------------------------------
-# ASK_DESTRUCTIVE mode
-# ---------------------------------------------------------------------------
-
 @pytest.mark.unit
-def test_ask_destructive_allows_read_tool(tmp_path):
-    """ASK_DESTRUCTIVE permits read-only operations without approval."""
-    from jarvis.policy.approvals import ApprovalStore
-    from jarvis.policy.engine import PolicyEngine
-
-    target = tmp_path / "notes.txt"
-    target.write_text("data")
-
-    class _FakeCfg:
-        policy_mode = "ask_destructive"
-        workspace_roots = [str(tmp_path)]
-        blocked_roots: list = []
-        read_only_roots: list = []
-        local_files_mode = "workspace_only"
-        mcps: dict = {}
-
-    engine = PolicyEngine(_FakeCfg(), ApprovalStore())
-    decision = engine.evaluate("localFiles", {"operation": "read", "path": str(target)})
-    assert decision.allowed is True
-
-
-@pytest.mark.unit
-def test_ask_destructive_flags_delete_for_approval():
-    """ASK_DESTRUCTIVE marks delete operations as requiring approval."""
-    engine = _make_engine("ask_destructive")
-    decision = engine.evaluate("localFiles", {"operation": "delete", "path": "/tmp/x.txt"})
-    # Either denied outright or flagged for approval
-    assert not decision.allowed or decision.approval_required
-
-
-@pytest.mark.unit
-def test_ask_destructive_allows_informational():
-    """ASK_DESTRUCTIVE permits informational tools (weather, web search etc.)."""
-    engine = _make_engine("ask_destructive")
-    for tool in ("getWeather", "webSearch", "screenshot"):
-        decision = engine.evaluate(tool, {})
-        assert decision.allowed is True, f"Expected {tool} to be allowed"
+def test_legacy_deny_all_maps_to_deny():
+    """Legacy 'deny_all' config value maps to DENY mode."""
+    engine = _make_engine("deny_all")
+    decision = engine.evaluate("getWeather", {})
+    assert decision.allowed is False
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +120,7 @@ def test_ask_destructive_allows_informational():
 @pytest.mark.unit
 def test_decision_has_audit_id():
     """Every PolicyDecision carries a non-empty audit_id."""
-    engine = _make_engine("ask_destructive")
+    engine = _make_engine("active")
     decision = engine.evaluate("getWeather", {})
     assert decision.audit_id and len(decision.audit_id) > 0
 
@@ -135,7 +129,7 @@ def test_decision_has_audit_id():
 def test_decision_has_tool_class():
     """Every PolicyDecision carries a ToolClass classification."""
     from jarvis.policy.models import ToolClass
-    engine = _make_engine("ask_destructive")
+    engine = _make_engine("active")
     decision = engine.evaluate("getWeather", {})
     assert isinstance(decision.tool_class, ToolClass)
 
@@ -165,7 +159,7 @@ def test_configure_returns_engine():
     from jarvis.policy.approvals import ApprovalStore
 
     class _Cfg:
-        policy_mode = "ask_destructive"
+        policy_mode = "active"
         workspace_roots: list = []
         blocked_roots: list = []
         read_only_roots: list = []
