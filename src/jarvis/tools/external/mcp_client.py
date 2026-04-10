@@ -21,8 +21,11 @@ class MCPClient:
         # Windows compatibility: prefer npx.cmd when requested
         if os.name == "nt" and command.lower() == "npx":
             command = "npx.cmd"
-        # Verify command is resolvable on PATH
-        if shutil.which(command) is None:
+        # Verify command exists — absolute paths checked directly, relative names resolved via PATH
+        if os.path.isabs(command):
+            if not os.path.isfile(command):
+                raise FileNotFoundError(f"MCP server command does not exist: {command}")
+        elif shutil.which(command) is None:
             raise FileNotFoundError(f"MCP server command not found on PATH: {command}. Ensure Node.js and npx are installed and available.")
         # Expand user (~) in args for filesystem paths
         raw_args = server_cfg.get("args") or []

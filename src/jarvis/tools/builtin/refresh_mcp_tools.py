@@ -41,12 +41,16 @@ class RefreshMCPToolsTool(Tool):
             context.user_print("🔄 Refreshing MCP tools...")
 
             # Refresh the cache
-            mcp_tools = refresh_mcp_tools(verbose=False)
+            mcp_tools, mcp_errors = refresh_mcp_tools(verbose=False)
 
             if not mcp_tools:
+                error_details = ""
+                if mcp_errors:
+                    error_lines = [f"  {srv}: {err}" for srv, err in mcp_errors.items()]
+                    error_details = "\nServer errors:\n" + "\n".join(error_lines)
                 return ToolExecutionResult(
                     success=True,
-                    reply_text="No MCP tools discovered. Check that MCP servers are configured and running.",
+                    reply_text=f"No MCP tools discovered. Check that MCP servers are configured and running.{error_details}",
                     error_message=None
                 )
 

@@ -25,8 +25,9 @@ class DummyDB:
 @pytest.mark.unit
 def test_discover_mcp_tools_empty_config():
     """Test that empty MCP config returns empty tools dict."""
-    result = discover_mcp_tools({})
+    result, errors = discover_mcp_tools({})
     assert result == {}
+    assert errors == {}
 
 
 @pytest.mark.unit
@@ -56,7 +57,7 @@ def test_discover_mcp_tools_with_fake_server(monkeypatch):
         }
     }
 
-    result = discover_mcp_tools(mcps_config)
+    result, errors = discover_mcp_tools(mcps_config)
 
     # Should create tools with server__toolname format
     expected_tools = {
@@ -95,11 +96,35 @@ def test_discover_mcp_tools_handles_server_errors(monkeypatch):
         "bad-server": {"command": "bad"}
     }
 
-    result = discover_mcp_tools(mcps_config)
+    result, errors = discover_mcp_tools(mcps_config)
 
     # Should still get tools from the good server
     assert "good-server__tool1" in result
     assert len(result) == 1
+
+    # Should report the error for the bad server
+    assert "bad-server" in errors
+    assert "Server failed" in errors["bad-server"]
+
+
+@pytest.mark.unit
+def test_discover_mcp_tools_returns_empty_errors_on_success(monkeypatch):
+    """Test that successful discovery returns empty errors dict."""
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+        def list_tools(self, server_name):
+            return [{"name": "tool1", "description": "A tool"}]
+
+    import jarvis.tools.registry as registry_mod
+    monkeypatch.setattr(registry_mod, "MCPClient", FakeClient)
+
+    mcps_config = {"server": {"command": "cmd"}}
+    result, errors = discover_mcp_tools(mcps_config)
+
+    assert len(result) == 1
+    assert errors == {}
 
 
 @pytest.mark.unit

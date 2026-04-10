@@ -48,7 +48,7 @@ _mcp_tools_cache_lock = threading.Lock()
 _mcp_config_cache: Dict[str, Any] = {}
 
 
-def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> Dict[str, "ToolSpec"]:
+def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict[str, str]]:
     """
     Initialize MCP tools cache at startup.
 
@@ -57,18 +57,18 @@ def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> D
         verbose: Whether to print status messages
 
     Returns:
-        Dictionary of discovered MCP tools
+        Tuple of (discovered_tools, errors) where errors maps server name to error message.
     """
     global _mcp_tools_cache, _mcp_config_cache
 
     with _mcp_tools_cache_lock:
         _mcp_config_cache = mcps_config or {}
-        _mcp_tools_cache = discover_mcp_tools(mcps_config)
+        _mcp_tools_cache, errors = discover_mcp_tools(mcps_config)
 
         if verbose and _mcp_tools_cache:
             debug_log(f"MCP tools cache initialized with {len(_mcp_tools_cache)} tools", "mcp")
 
-        return _mcp_tools_cache.copy()
+        return _mcp_tools_cache.copy(), errors
 
 
 def get_cached_mcp_tools() -> Dict[str, "ToolSpec"]:
@@ -77,30 +77,30 @@ def get_cached_mcp_tools() -> Dict[str, "ToolSpec"]:
         return _mcp_tools_cache.copy()
 
 
-def refresh_mcp_tools(verbose: bool = True) -> Dict[str, "ToolSpec"]:
+def refresh_mcp_tools(verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict[str, str]]:
     """
     Refresh MCP tools cache by rediscovering all tools.
 
     Returns:
-        Dictionary of discovered MCP tools
+        Tuple of (discovered_tools, errors) where errors maps server name to error message.
     """
     global _mcp_tools_cache
 
     with _mcp_tools_cache_lock:
         if not _mcp_config_cache:
             debug_log("No MCP config cached, skipping refresh", "mcp")
-            return {}
+            return {}, {}
 
         if verbose:
             print("🔄 Refreshing MCP tools...", flush=True)
 
-        _mcp_tools_cache = discover_mcp_tools(_mcp_config_cache)
+        _mcp_tools_cache, errors = discover_mcp_tools(_mcp_config_cache)
 
         if verbose:
             print(f"  ✅ Found {len(_mcp_tools_cache)} MCP tools", flush=True)
 
         debug_log(f"MCP tools cache refreshed with {len(_mcp_tools_cache)} tools", "mcp")
-        return _mcp_tools_cache.copy()
+        return _mcp_tools_cache.copy(), errors
 
 
 def is_mcp_cache_initialized() -> bool:
@@ -118,14 +118,19 @@ class ToolSpec:
     inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
 
 
-def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
-    """Discover all tools from configured MCP servers and create ToolSpec entries for them."""
+def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec], Dict[str, str]]:
+    """Discover all tools from configured MCP servers and create ToolSpec entries for them.
+
+    Returns:
+        Tuple of (discovered_tools, errors) where errors maps server name to error message.
+    """
     if not mcps_config:
-        return {}
+        return {}, {}
 
     try:
         client = MCPClient(mcps_config)
         discovered_tools = {}
+        errors: Dict[str, str] = {}
 
         for server_name in mcps_config.keys():
             try:
@@ -149,13 +154,14 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, ToolSpec]:
 
             except Exception as e:
                 debug_log(f"Failed to discover tools from MCP server '{server_name}': {e}", "mcp")
+                errors[server_name] = str(e)
                 continue
 
-        return discovered_tools
+        return discovered_tools, errors
 
     except Exception as e:
         debug_log(f"Failed to discover MCP tools: {e}", "mcp")
-        return {}
+        return {}, {"_global": str(e)}
 
 
 def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> List[Dict[str, Any]]:
