@@ -166,6 +166,7 @@ class Settings:
 
     # Agentic Loop
     agentic_max_turns: int
+    tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
 
     # Location Services
     location_enabled: bool
@@ -407,6 +408,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Agentic Loop
         "agentic_max_turns": 8,
+        "tool_selection_strategy": "embedding",
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -559,6 +561,9 @@ def load_settings() -> Settings:
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
+    tool_selection_strategy = str(merged.get("tool_selection_strategy", "embedding")).lower()
+    if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
+        tool_selection_strategy = "embedding"
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -672,6 +677,7 @@ def load_settings() -> Settings:
         memory_enrichment_max_results=memory_enrichment_max_results,
         memory_search_max_results=memory_search_max_results,
         agentic_max_turns=agentic_max_turns,
+        tool_selection_strategy=tool_selection_strategy,
 
         # Location Services
         location_enabled=location_enabled,

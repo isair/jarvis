@@ -12,14 +12,13 @@ from unittest.mock import Mock, patch
 @pytest.mark.integration
 def test_mcp_tools_integrated_with_reply_engine():
     """Test that MCP tools are properly integrated with the reply engine's tool discovery."""
-    from jarvis.tools.registry import discover_mcp_tools, generate_tools_description
-    from jarvis.profile.profiles import PROFILE_ALLOWED_TOOLS
-    
+    from jarvis.tools.registry import discover_mcp_tools, generate_tools_description, BUILTIN_TOOLS
+
     # Mock MCP client
     class FakeMCPClient:
         def __init__(self, config):
             pass
-            
+
         def list_tools(self, server_name):
             if server_name == "test-server":
                 return [
@@ -27,18 +26,18 @@ def test_mcp_tools_integrated_with_reply_engine():
                     {"name": "tool2", "description": "Test tool 2"}
                 ]
             return []
-    
+
     with patch('jarvis.tools.registry.MCPClient', FakeMCPClient):
         # Test discovery
         mcps_config = {"test-server": {"command": "fake"}}
         mcp_tools, _errors = discover_mcp_tools(mcps_config)
-        
+
         # Test tool registration (simulate what reply engine does)
-        allowed_tools = PROFILE_ALLOWED_TOOLS.get("developer", []).copy()
+        allowed_tools = list(BUILTIN_TOOLS.keys())
         for mcp_tool_name in mcp_tools.keys():
             if mcp_tool_name not in allowed_tools:
                 allowed_tools.append(mcp_tool_name)
-        
+
         # Test tool descriptions include MCP tools
         description = generate_tools_description(allowed_tools, mcp_tools)
         
