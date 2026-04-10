@@ -31,7 +31,7 @@ def test_mcp_tools_integrated_with_reply_engine():
     with patch('jarvis.tools.registry.MCPClient', FakeMCPClient):
         # Test discovery
         mcps_config = {"test-server": {"command": "fake"}}
-        mcp_tools = discover_mcp_tools(mcps_config)
+        mcp_tools, _errors = discover_mcp_tools(mcps_config)
         
         # Test tool registration (simulate what reply engine does)
         allowed_tools = PROFILE_ALLOWED_TOOLS.get("developer", []).copy()

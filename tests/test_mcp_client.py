@@ -1,5 +1,82 @@
 import asyncio
+import os
 import pytest
+
+
+@pytest.mark.unit
+def test_absolute_path_command_skips_which(monkeypatch, tmp_path):
+    """Absolute paths to executables should use os.path.isfile, not shutil.which."""
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    # Create a fake executable file at an absolute path
+    fake_exe = tmp_path / "node.exe"
+    fake_exe.write_text("fake")
+    fake_exe.chmod(0o755)
+
+    mcps = {
+        "test": {
+            "command": str(fake_exe),
+            "args": ["server.js"],
+        }
+    }
+
+    client = MCPClient(mcps)
+
+    # shutil.which should NOT be called for absolute paths
+    which_called = False
+    original_which = __import__("shutil").which
+
+    def tracking_which(cmd):
+        nonlocal which_called
+        which_called = True
+        return original_which(cmd)
+
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.shutil.which", tracking_which)
+
+    # We need to mock stdio_client to avoid actually connecting
+    class FakeCM:
+        async def __aenter__(self):
+            return object(), object()
+        async def __aexit__(self, *a):
+            return False
+
+    class FakeSession:
+        def __init__(self, r, w):
+            pass
+        async def __aenter__(self):
+            s = type("S", (), {"initialize": lambda self: asyncio.sleep(0), "list_tools": lambda self: asyncio.sleep(0)})()
+            return s
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.stdio_client", lambda params: FakeCM())
+    monkeypatch.setattr("jarvis.tools.external.mcp_client.ClientSession", FakeSession)
+
+    try:
+        asyncio.run(client.list_tools_async("test"))
+    except Exception:
+        pass  # We only care that the path validation passed
+
+    assert not which_called, "shutil.which should not be called for absolute paths"
+
+
+@pytest.mark.unit
+def test_absolute_path_not_found_gives_clear_error(tmp_path):
+    """Non-existent absolute path should raise FileNotFoundError with clear message."""
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    fake_path = str(tmp_path / "nonexistent" / "node.exe")
+    mcps = {
+        "test": {
+            "command": fake_path,
+            "args": [],
+        }
+    }
+
+    client = MCPClient(mcps)
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        client._connect_stdio(mcps["test"])
 
 
 @pytest.mark.unit

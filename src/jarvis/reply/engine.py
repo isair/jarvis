@@ -89,7 +89,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             from ..tools.registry import refresh_mcp_tools, is_mcp_cache_initialized
             if is_mcp_cache_initialized():
                 debug_log("New conversation detected, refreshing MCP tools", "mcp")
-                refresh_mcp_tools(verbose=False)
+                _tools, _errors = refresh_mcp_tools(verbose=False)
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 

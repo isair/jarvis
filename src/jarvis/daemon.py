@@ -306,7 +306,7 @@ def main() -> None:
     if mcps:
         print(f"📡 Discovering MCP tools from {len(mcps)} server(s)...", flush=True)
         try:
-            mcp_tools = initialize_mcp_tools(mcps, verbose=False)
+            mcp_tools, mcp_errors = initialize_mcp_tools(mcps, verbose=False)
 
             # Group tools by server for display
             tools_by_server: dict = {}
@@ -320,14 +320,16 @@ def main() -> None:
             for server_name in mcps.keys():
                 count = len(tools_by_server.get(server_name, []))
                 if count > 0:
-                    print(f"  ✓ {server_name}: {count} tools available", flush=True)
+                    print(f"  ✅ {server_name}: {count} tools available", flush=True)
+                elif server_name in mcp_errors:
+                    print(f"  ❌ {server_name}: {mcp_errors[server_name]}", flush=True)
                 else:
-                    print(f"  ⚠ {server_name}: no tools discovered", flush=True)
+                    print(f"  ⚠️ {server_name}: no tools discovered", flush=True)
 
             debug_log(f"MCP tools cached: {len(mcp_tools)} total", "mcp")
         except Exception as e:
             debug_log(f"MCP discovery failed: {e}", "mcp")
-            print(f"  ⚠ MCP discovery failed: {e}", flush=True)
+            print(f"  ⚠️ MCP discovery failed: {e}", flush=True)
     else:
         print("📡 No MCP servers configured", flush=True)
 

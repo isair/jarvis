@@ -77,7 +77,7 @@ def test_mcp_discovery_with_mock():
 
     try:
         with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
-            mcp_tools = discover_mcp_tools(fake_mcps)
+            mcp_tools, _errors = discover_mcp_tools(fake_mcps)
 
         expected_tools = {
             "test-server__read",
@@ -171,7 +171,7 @@ def test_tool_name_format():
     try:
         with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
             mcps_config = {"my-server": {"command": "test"}}
-            mcp_tools = discover_mcp_tools(mcps_config)
+            mcp_tools, _errors = discover_mcp_tools(mcps_config)
 
         expected_names = {
             "my-server__tool_with_underscores",
@@ -216,7 +216,7 @@ def test_error_handling():
                 "bad-server": {"command": "bad"},
                 "empty-server": {"command": "empty"}
             }
-            mcp_tools = discover_mcp_tools(mcps_config)
+            mcp_tools, mcp_errors = discover_mcp_tools(mcps_config)
 
         # Should only get tools from the good server
         if len(mcp_tools) == 1 and "good-server__working_tool" in mcp_tools:
