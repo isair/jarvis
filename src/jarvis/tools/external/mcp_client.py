@@ -106,15 +106,20 @@ class MCPClient:
         # Expand user (~) in args for filesystem paths
         raw_args = server_cfg.get("args") or []
         args = [os.path.expanduser(str(a)) if isinstance(a, str) else a for a in raw_args]
-        env = dict(server_cfg.get("env") or {})
+        user_env = server_cfg.get("env") or {}
         # Ensure the resolved command's directory is on PATH so that
-        # shebangs like #!/usr/bin/env node can find sibling binaries
+        # shebangs like #!/usr/bin/env node can find sibling binaries.
+        # We must pass the full environment because StdioServerParameters
+        # replaces (not merges) the parent env when env is not None.
         cmd_dir = os.path.dirname(command)
-        if cmd_dir:
-            existing_path = env.get("PATH") or os.environ.get("PATH", "")
-            if cmd_dir not in existing_path.split(os.pathsep):
-                env["PATH"] = cmd_dir + os.pathsep + existing_path if existing_path else cmd_dir
-        params = StdioServerParameters(command=command, args=args, env=env or None)
+        current_path = os.environ.get("PATH", "")
+        if cmd_dir and cmd_dir not in current_path.split(os.pathsep):
+            env = {**os.environ, **user_env, "PATH": cmd_dir + os.pathsep + current_path}
+        elif user_env:
+            env = {**os.environ, **user_env}
+        else:
+            env = None  # inherit parent env as-is
+        params = StdioServerParameters(command=command, args=args, env=env)
         return stdio_client(params)
 
     @asynccontextmanager

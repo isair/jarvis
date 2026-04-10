@@ -268,7 +268,7 @@ class TestConnectStdioPathInjection:
 
     def test_command_dir_added_to_env_path(self, monkeypatch, tmp_path):
         """The directory of the resolved command should be prepended to env PATH."""
-        from jarvis.tools.external.mcp_client import MCPClient, StdioServerParameters
+        from jarvis.tools.external.mcp_client import MCPClient
 
         fake_npx = tmp_path / "npx"
         fake_npx.write_text("#!/bin/sh")
@@ -284,7 +284,7 @@ class TestConnectStdioPathInjection:
         def fake_stdio_client(params):
             captured_params["env"] = params.env
             captured_params["command"] = params.command
-            return None  # We won't actually use the result
+            return None
 
         monkeypatch.setattr(
             "jarvis.tools.external.mcp_client.stdio_client",
@@ -298,6 +298,8 @@ class TestConnectStdioPathInjection:
         assert env is not None
         path_dirs = env["PATH"].split(os.pathsep)
         assert str(tmp_path) == path_dirs[0], "Command dir should be first in PATH"
+        # Full parent environment should also be present
+        assert "HOME" in env or "USER" in env, "Parent env vars should be inherited"
 
     def test_user_env_preserved_alongside_path(self, monkeypatch, tmp_path):
         """User-supplied env vars should be preserved when PATH is injected."""
@@ -330,4 +332,33 @@ class TestConnectStdioPathInjection:
         env = captured_params["env"]
         assert env["MY_TOKEN"] == "secret"
         assert str(tmp_path) in env["PATH"]
+
+    def test_no_env_override_when_command_already_on_path(self, monkeypatch):
+        """When command dir is already on PATH and no user env, env should be None."""
+        from jarvis.tools.external.mcp_client import MCPClient
+
+        # Resolve to a path that's already on the system PATH
+        system_path_dir = os.environ.get("PATH", "").split(os.pathsep)[0]
+        fake_cmd = os.path.join(system_path_dir, "fake-cmd")
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client._resolve_command",
+            lambda cmd: fake_cmd,
+        )
+
+        captured_params = {}
+
+        def fake_stdio_client(params):
+            captured_params["env"] = params.env
+            return None
+
+        monkeypatch.setattr(
+            "jarvis.tools.external.mcp_client.stdio_client",
+            fake_stdio_client,
+        )
+
+        client = MCPClient({"test": {"command": "fake-cmd", "args": []}})
+        client._connect_stdio(client.server_configs["test"])
+
+        assert captured_params["env"] is None, "No env override needed when dir already on PATH"
 
