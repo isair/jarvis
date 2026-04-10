@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QComboBox, QScrollArea, QGroupBox, QFormLayout, QPushButton,
     QMessageBox, QSizePolicy, QListWidget, QListWidgetItem,
-    QStackedWidget, QSplitter, QInputDialog,
+    QStackedWidget, QSplitter, QInputDialog, QFrame,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
@@ -745,8 +745,8 @@ class SettingsWindow(QDialog):
         """Show a dialog to pick from the curated catalogue."""
         dlg = _MCPCatalogueDialog(self._mcp_configs, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            for entry in dlg.selected_entries():
-                self._mcp_configs[entry.name] = entry.to_config()
+            for entry, extra_env in dlg.selected_entries_with_env():
+                self._mcp_configs[entry.name] = entry.to_config(extra_env=extra_env)
             self._refresh_mcp_list()
 
     def _on_mcp_add_custom(self) -> None:
@@ -1026,7 +1026,8 @@ class _MCPCatalogueDialog(QDialog):
 
     def _on_add(self) -> None:
         """Prompt for API keys if needed, then accept."""
-        for entry in self.selected_entries():
+        self._collected_env: Dict[str, Dict[str, str]] = {}
+        for entry in self._selected_new_entries():
             if entry.needs_api_key and entry.api_key_env_var:
                 key, ok = QInputDialog.getText(
                     self,
@@ -1035,20 +1036,28 @@ class _MCPCatalogueDialog(QDialog):
                     f"({entry.api_key_hint or ''})",
                 )
                 if ok and key.strip():
-                    entry.env[entry.api_key_env_var] = key.strip()
+                    self._collected_env[entry.name] = {entry.api_key_env_var: key.strip()}
                 else:
                     # User cancelled key entry — skip this entry
                     self._checkboxes[entry.name].setChecked(False)
                     continue
         self.accept()
 
-    def selected_entries(self) -> List[MCPEntry]:
+    def _selected_new_entries(self) -> List[MCPEntry]:
         """Return catalogue entries the user selected (excluding already-configured)."""
         result = []
         for name, cb in self._checkboxes.items():
             if cb.isChecked() and cb.isEnabled():
                 result.append(CATALOGUE_BY_NAME[name])
         return result
+
+    def selected_entries_with_env(self) -> List[tuple]:
+        """Return list of (MCPEntry, extra_env_dict) for each selected entry."""
+        collected = getattr(self, "_collected_env", {})
+        return [
+            (entry, collected.get(entry.name, {}))
+            for entry in self._selected_new_entries()
+        ]
 
 
 class _MCPEditDialog(QDialog):
