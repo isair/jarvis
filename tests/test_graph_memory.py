@@ -299,3 +299,72 @@ class TestGraphVisualisation:
         assert store.get_node_count() == 1
         store.create_node(name="A", description="a", parent_id="root")
         assert store.get_node_count() == 2
+
+
+@pytest.mark.unit
+class TestSafetyGuards:
+    """Cycle protection, FK enforcement, and input validation."""
+
+    def test_create_node_with_invalid_parent_raises(self, store):
+        """Creating a node with a non-existent parent_id must raise."""
+        with pytest.raises(ValueError, match="does not exist"):
+            store.create_node(name="Orphan", description="d", parent_id="nonexistent")
+
+    def test_get_ancestors_handles_cycle(self, store):
+        """get_ancestors must not infinite loop on a cyclic parent chain."""
+        # Create two nodes then manually force a cycle via raw SQL
+        a = store.create_node(name="A", description="a", parent_id="root")
+        b = store.create_node(name="B", description="b", parent_id=a.id)
+
+        # Force a cycle: A -> B -> A (bypass normal validation)
+        with store._lock:
+            store.conn.execute(
+                "UPDATE memory_nodes SET parent_id = ? WHERE id = ?",
+                (b.id, a.id),
+            )
+            store.conn.commit()
+
+        # Should terminate without hanging, returning partial ancestors
+        ancestors = store.get_ancestors(b.id)
+        assert len(ancestors) <= 10  # bounded by MAX_TRAVERSAL_DEPTH + 1
+
+    def test_get_ancestors_deep_chain(self, store):
+        """Ancestors traversal works correctly for deep but acyclic chains."""
+        parent_id = "root"
+        for i in range(6):
+            node = store.create_node(
+                name=f"Level{i}", description=f"depth {i}", parent_id=parent_id
+            )
+            parent_id = node.id
+
+        ancestors = store.get_ancestors(parent_id)
+        # root + 6 levels = 7 ancestors
+        assert len(ancestors) == 7
+        assert ancestors[0].id == "root"
+        assert ancestors[-1].id == parent_id
+
+    def test_unicode_node_names(self, store):
+        """Nodes with unicode names, emoji, and CJK characters."""
+        node = store.create_node(
+            name="友達 🎉",
+            description="Japanese friend with emoji",
+            data="アリスは友達です。She loves 日本語。",
+            parent_id="root",
+        )
+        fetched = store.get_node(node.id)
+        assert fetched.name == "友達 🎉"
+        assert "アリスは友達です" in fetched.data
+
+    def test_sql_special_chars_in_data(self, store):
+        """SQL metacharacters in data must round-trip safely."""
+        dangerous = "Robert'); DROP TABLE memory_nodes;--"
+        node = store.create_node(
+            name="Bobby Tables",
+            description="Test SQL injection",
+            data=dangerous,
+            parent_id="root",
+        )
+        fetched = store.get_node(node.id)
+        assert fetched.data == dangerous
+        # Table must still exist
+        assert store.get_node_count() >= 2

@@ -400,10 +400,12 @@ def graph_update_node(node_id: str) -> Response:
             kwargs["description"] = body["description"]
         if "data" in body:
             kwargs["data"] = body["data"]
+        if "parent_id" in body:
+            kwargs["parent_id"] = body["parent_id"]
 
         node = store.update_node(node_id, **kwargs)
         if node is None:
-            return jsonify({"error": "Node not found"}), 404
+            return jsonify({"error": "Node not found or invalid parent"}), 404
 
         return jsonify({"node": node.to_dict()})
     except Exception as e:
@@ -1912,25 +1914,39 @@ def index() -> str:
         // Load data
         async function loadMemories() {
             memoriesContent.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-            const { memories } = await fetchMemories();
-            renderMemories(memories);
+            try {
+                const { memories } = await fetchMemories();
+                renderMemories(memories);
+            } catch (e) {
+                memoriesContent.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Failed to load memories</div></div>';
+            }
         }
 
         async function loadMeals() {
             mealsContent.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-            const { meals } = await fetchMeals();
-            renderMeals(meals);
+            try {
+                const { meals } = await fetchMeals();
+                renderMeals(meals);
+            } catch (e) {
+                mealsContent.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Failed to load meals</div></div>';
+            }
         }
 
         async function loadTopics() {
-            const { topics } = await fetchTopics();
-            renderTopics(topics);
+            try {
+                const { topics } = await fetchTopics();
+                renderTopics(topics);
+            } catch (e) {
+                topicsCloud.innerHTML = '<div class="empty-state"><p>Failed to load topics</p></div>';
+            }
         }
 
         async function loadStats() {
-            const stats = await fetchStats();
-            document.getElementById('stats-memories').textContent = stats.total_memories || 0;
-            document.getElementById('stats-meals').textContent = stats.total_meals || 0;
+            try {
+                const stats = await fetchStats();
+                document.getElementById('stats-memories').textContent = stats.total_memories || 0;
+                document.getElementById('stats-meals').textContent = stats.total_meals || 0;
+            } catch (e) {}
 
             // Load graph stats separately
             try {
@@ -2400,7 +2416,7 @@ def index() -> str:
 
             const breadcrumb = ancestors.map((a, i) => {
                 const isLast = i === ancestors.length - 1;
-                return `<span onclick="selectNode('${a.id}')">${a.name}</span>` +
+                return `<span onclick="selectNode('${a.id}')">${escapeHtml(a.name)}</span>` +
                        (isLast ? '' : '<span class="sep"> › </span>');
             }).join('');
 
@@ -2408,7 +2424,7 @@ def index() -> str:
                 ? children.map(c => `
                     <div class="detail-child" onclick="selectNode('${c.id}')">
                         <span>${c.has_children || c.data_token_count > 0 ? '📁' : '📄'}</span>
-                        <span class="detail-child-name">${c.name}</span>
+                        <span class="detail-child-name">${escapeHtml(c.name)}</span>
                         <span class="tree-node-count">${c.data_token_count}t</span>
                     </div>
                 `).join('')

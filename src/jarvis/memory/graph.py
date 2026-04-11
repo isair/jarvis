@@ -5,9 +5,10 @@ A self-organising node graph that dynamically structures memories by topic
 relevance. Three fast-access entry points (recent nodes, top nodes, root node)
 ensure the most relevant memories are always reachable without exhaustive search.
 
-When a node's data grows beyond SPLIT_THRESHOLD, it is automatically split into
-children with the parent holding a summary. Summaries cascade upward on every
-write so the root always reflects the full state of the graph.
+Current: CRUD operations, access tracking, tree/graph queries, UI explorer.
+Future: LLM-powered auto-split when data exceeds SPLIT_THRESHOLD, summary
+cascade upward on writes, auto-merge for sparse subtrees, and periodic
+housekeeping. See graph.spec.md for the full roadmap.
 """
 
 from __future__ import annotations
@@ -81,6 +82,8 @@ def _estimate_tokens(text: str) -> int:
 # ── Schema ──────────────────────────────────────────────────────────────────
 
 _GRAPH_SCHEMA_SQL = """
+PRAGMA foreign_keys = ON;
+
 CREATE TABLE IF NOT EXISTS memory_nodes (
     id               TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
@@ -91,7 +94,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
     last_accessed    TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL,
-    data_token_count INTEGER NOT NULL DEFAULT 0
+    data_token_count INTEGER NOT NULL DEFAULT 0,
+    CHECK(parent_id IS NULL OR parent_id != id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON memory_nodes(parent_id);
@@ -125,6 +129,7 @@ class GraphMemoryStore:
 
     def _init_schema(self) -> None:
         with self._lock:
+            self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.executescript(_GRAPH_SCHEMA_SQL)
             self.conn.commit()
 
@@ -183,7 +188,15 @@ class GraphMemoryStore:
         data: str = "",
         parent_id: Optional[str] = None,
     ) -> MemoryNode:
-        """Create a new node and return it."""
+        """Create a new node and return it.
+
+        Raises ValueError if parent_id references a non-existent node.
+        """
+        if parent_id is not None:
+            parent = self.get_node(parent_id)
+            if parent is None:
+                raise ValueError(f"Parent node '{parent_id}' does not exist")
+
         node_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         token_count = _estimate_tokens(data)
@@ -335,8 +348,13 @@ class GraphMemoryStore:
     def get_ancestors(self, node_id: str) -> list[MemoryNode]:
         """Return the path from root to this node (inclusive), root first."""
         ancestors: list[MemoryNode] = []
+        visited: set[str] = set()
         current = self.get_node(node_id)
         while current is not None:
+            if current.id in visited or len(ancestors) > MAX_TRAVERSAL_DEPTH:
+                debug_log(f"Cycle or depth limit hit in get_ancestors for {node_id}", "memory")
+                break
+            visited.add(current.id)
             ancestors.append(current)
             if current.parent_id is None:
                 break
