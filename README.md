@@ -15,8 +15,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/img/memory-viewer-memories.png" alt="Memory Viewer - Conversations" width="400">
-  <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Nutrition" width="400">
+  <img src="docs/img/memory-viewer-diary.png" alt="Memory Viewer - Diary" width="280">
+  <img src="docs/img/memory-viewer-knowledge.png" alt="Memory Viewer - Knowledge Graph" width="280">
+  <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Meals" width="280">
 </p>
 
 ## Why Jarvis?
@@ -166,6 +167,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Adaptive Tone** - Automatically surgical for code, pragmatic for business, encouraging for wellbeing — no manual mode switching
 - **Smart Tool Selection** - Embedding-based relevance filtering picks only the tools needed per query — add unlimited MCP tools without performance degradation
 - **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
+- **Knowledge Graph Memory** - Self-organising memory that learns from conversations, auto-splits by topic, and surfaces relevant knowledge automatically
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
 - **MCP Integration** - Connect to thousands of external tools (Home Assistant, GitHub, Slack, etc.)

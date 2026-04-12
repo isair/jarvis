@@ -376,7 +376,7 @@ class Database:
         """Get conversation summaries from the last N days."""
         from datetime import datetime, timedelta, timezone
         cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
-        
+
         with self._lock:
             cur = self.conn.cursor()
             rows = cur.execute(
@@ -386,6 +386,22 @@ class Database:
                 ORDER BY date_utc DESC
                 """,
                 (cutoff_date,),
+            ).fetchall()
+            return rows
+
+    def get_all_conversation_summaries(self) -> list[sqlite3.Row]:
+        """Get all conversation summaries, ordered by date ascending (oldest first).
+
+        Used for bulk import into graph memory — processes diary entries
+        chronologically so the graph builds up naturally.
+        """
+        with self._lock:
+            cur = self.conn.cursor()
+            rows = cur.execute(
+                """
+                SELECT * FROM conversation_summaries
+                ORDER BY date_utc ASC
+                """,
             ).fetchall()
             return rows
 
