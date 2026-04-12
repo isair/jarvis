@@ -81,6 +81,9 @@ CLASS_DESCRIPTIONS = {
     "TestMultiTurnExtended": "Extended multi-turn scenarios with longer conversations",
     "TestGreetingNoToolsLive": "Live tests that greetings don't trigger tool calls",
     "TestHelpfulness": "Tests that agent uses tools proactively instead of deflecting",
+    "TestDiaryRecencyOrder": "Tests that diary search returns newer entries before older ones",
+    "TestGraphRecencySuperseding": "Tests that graph handles contradicting facts with date context",
+    "TestRecencyJudge": "LLM judge evaluates whether newer information is preferred over older",
 }
 
 # Descriptions for non-parametrized tests

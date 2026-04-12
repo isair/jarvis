@@ -499,14 +499,23 @@ def search_conversation_memory_by_keywords(
             # No embedding service available, use FTS-only
             search_results = db.search_hybrid(fts_query, None, top_k=max_results)
 
-        # Collect results
+        # Collect results with scores and dates for recency-aware ordering
+        scored_results: list[tuple[float, str, str]] = []  # (score, date, text)
         for result in search_results:
             if isinstance(result, dict):
                 result_text = result.get('text', '')
+                score = result.get('score', 0.0)
             else:
                 result_text = result[2] if len(result) > 2 else ''
+                score = result[1] if len(result) > 1 else 0.0
             if isinstance(result_text, str) and result_text:
-                contexts.append(result_text)
+                # Extract date from "[YYYY-MM-DD] ..." prefix for recency tiebreaking
+                date_str = result_text[1:11] if result_text.startswith('[') and len(result_text) > 11 else ''
+                scored_results.append((float(score) if score else 0.0, date_str, result_text))
+
+        # Sort by relevance score DESC, then date DESC (newer wins ties)
+        scored_results.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        contexts = [text for _, _, text in scored_results]
 
         debug_log(f"      ✅ found {len(contexts)} keyword search results", "memory")
         if contexts:
@@ -761,6 +770,8 @@ def update_diary_from_dialogue_memory(
 
             # Graph memory (v2): extract facts and store in the node graph.
             # Non-blocking — if this fails, the diary update still succeeded.
+            # Uses a dedicated timeout (30s) rather than the diary chat timeout,
+            # so graph updates don't inflate the diary flush wall time.
             try:
                 from .graph import GraphMemoryStore
                 from .graph_ops import update_graph_from_dialogue
@@ -772,12 +783,16 @@ def update_diary_from_dialogue_memory(
                 summary_text = existing['summary'] if existing else None
 
                 if summary_text:
+                    # Use a shorter timeout for graph operations — extraction (30s),
+                    # placement (15s/fact), and split (45s) each have their own budgets
+                    # inside update_graph_from_dialogue.
+                    graph_timeout = min(timeout_sec, 30.0)
                     stored = update_graph_from_dialogue(
                         store=graph_store,
                         summary=summary_text,
                         ollama_base_url=ollama_base_url,
                         ollama_chat_model=ollama_chat_model,
-                        timeout_sec=timeout_sec,
+                        timeout_sec=graph_timeout,
                         thinking=thinking,
                         date_utc=today,
                     )
