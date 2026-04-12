@@ -64,7 +64,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
-    enrichment_source = getattr(cfg, "memory_enrichment_source", "all")
+    enrichment_source = getattr(cfg, "memory_enrichment_source", "diary")
     conversation_context = ""
     keywords = []
 

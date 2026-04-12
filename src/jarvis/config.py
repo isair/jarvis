@@ -406,7 +406,7 @@ def get_default_config() -> Dict[str, Any]:
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 10,
         "memory_search_max_results": 15,
-        "memory_enrichment_source": "all",  # "all", "diary", or "graph"
+        "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
 
         # Agentic Loop
         "agentic_max_turns": 8,
@@ -562,7 +562,7 @@ def load_settings() -> Settings:
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
-    memory_enrichment_source = str(merged.get("memory_enrichment_source", "all")).lower()
+    memory_enrichment_source = str(merged.get("memory_enrichment_source", "diary")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
         memory_enrichment_source = "all"
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
