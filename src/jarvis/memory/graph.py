@@ -215,6 +215,10 @@ class GraphMemoryStore:
             if parent is None:
                 raise ValueError(f"Parent node '{parent_id}' does not exist")
 
+        # Enforce description length limit from spec
+        if len(description) > SUMMARY_MAX_LENGTH:
+            description = description[:SUMMARY_MAX_LENGTH]
+
         node_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         token_count = _estimate_tokens(data)
@@ -262,6 +266,8 @@ class GraphMemoryStore:
         if name is not None:
             node.name = name
         if description is not None:
+            if len(description) > SUMMARY_MAX_LENGTH:
+                description = description[:SUMMARY_MAX_LENGTH]
             node.description = description
         if data is not None:
             node.data = data
@@ -433,11 +439,13 @@ class GraphMemoryStore:
         score_parts: list[str] = []
         params: list[str] = []
         for kw in keywords:
-            pattern = f"%{kw}%"
+            # Escape LIKE wildcards so literal %, _, \ are matched exactly
+            escaped = kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
             score_parts.append(
-                "(CASE WHEN name LIKE ? THEN 1 ELSE 0 END"
-                " + CASE WHEN description LIKE ? THEN 1 ELSE 0 END"
-                " + CASE WHEN data LIKE ? THEN 1 ELSE 0 END)"
+                "(CASE WHEN name LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END"
+                " + CASE WHEN description LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END"
+                " + CASE WHEN data LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)"
             )
             params.extend([pattern, pattern, pattern])
 

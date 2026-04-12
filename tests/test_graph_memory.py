@@ -298,8 +298,17 @@ class TestGraphVisualisation:
 
     def test_node_count(self, store):
         assert store.get_node_count() == 1
-        store.create_node(name="A", description="a", parent_id="root")
+        node = store.create_node(name="A", description="a", parent_id="root")
         assert store.get_node_count() == 2
+
+    def test_node_count_after_delete(self, store):
+        a = store.create_node(name="A", description="a", parent_id="root")
+        b = store.create_node(name="B", description="b", parent_id="root")
+        assert store.get_node_count() == 3  # root + A + B
+        store.delete_node(a.id)
+        assert store.get_node_count() == 2  # root + B
+        store.delete_node(b.id)
+        assert store.get_node_count() == 1  # root only
 
 
 @pytest.mark.unit
@@ -369,6 +378,34 @@ class TestSafetyGuards:
         assert fetched.data == dangerous
         # Table must still exist
         assert store.get_node_count() >= 2
+
+    def test_search_escapes_like_wildcards(self, store):
+        """Searching for literal % or _ must not behave as SQL LIKE wildcards."""
+        store.create_node(
+            name="100% Protein", description="Supplement", data="", parent_id="root"
+        )
+        store.create_node(
+            name="Boring Node", description="Nothing special", data="plain", parent_id="root"
+        )
+
+        # Searching for "100%" should only match the node with literal "100%"
+        results = store.search_nodes("100%")
+        assert len(results) == 1
+        assert results[0].name == "100% Protein"
+
+    def test_description_truncated_to_max_length(self, store):
+        """Descriptions exceeding SUMMARY_MAX_LENGTH are truncated on create and update."""
+        from jarvis.memory.graph import SUMMARY_MAX_LENGTH
+
+        long_desc = "a" * (SUMMARY_MAX_LENGTH + 100)
+        node = store.create_node(
+            name="Long", description=long_desc, parent_id="root"
+        )
+        assert len(node.description) == SUMMARY_MAX_LENGTH
+
+        # Also truncated on update
+        updated = store.update_node(node.id, description=long_desc)
+        assert len(updated.description) == SUMMARY_MAX_LENGTH
 
 
 @pytest.mark.unit

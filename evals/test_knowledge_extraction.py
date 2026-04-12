@@ -110,6 +110,20 @@ GOOD_EXTRACTION_CASES = [
         ),
         id="Novel knowledge: corrected business hours",
     ),
+    pytest.param(
+        ExtractionTestCase(
+            summary=(
+                "Kullanıcı Kadıköy'deki Çiya Sofrası restoranını sordu. "
+                "Öğle yemeği menüsü 250 TL civarında, özellikle kuzu tandır "
+                "ve enginar yemeği çok beğeniliyormuş. Kullanıcı İstanbul'da "
+                "Kadıköy semtinde yaşıyor ve haftada 3 kez dışarıda yemek yiyor."
+            ),
+            date_utc="2026-04-11",
+            should_extract_keywords=["Çiya", "Kadıköy"],
+            min_facts=2,
+        ),
+        id="Novel knowledge: non-English summary (Turkish)",
+    ),
 ]
 
 

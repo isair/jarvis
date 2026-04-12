@@ -373,11 +373,20 @@ def graph_create_node() -> Response:
         if not body or not body.get("name"):
             return jsonify({"error": "name is required"}), 400
 
+        # Validate field types
+        name = body["name"]
+        description = body.get("description", "")
+        data = body.get("data", "")
+        parent_id = body.get("parent_id", "root")
+        if not isinstance(name, str) or not isinstance(description, str) \
+                or not isinstance(data, str) or not isinstance(parent_id, str):
+            return jsonify({"error": "name, description, data, and parent_id must be strings"}), 400
+
         node = store.create_node(
-            name=body["name"],
-            description=body.get("description", ""),
-            data=body.get("data", ""),
-            parent_id=body.get("parent_id", "root"),
+            name=name,
+            description=description,
+            data=data,
+            parent_id=parent_id,
         )
         return jsonify({"node": node.to_dict()}), 201
     except Exception as e:
@@ -394,14 +403,11 @@ def graph_update_node(node_id: str) -> Response:
             return jsonify({"error": "Request body is required"}), 400
 
         kwargs = {}
-        if "name" in body:
-            kwargs["name"] = body["name"]
-        if "description" in body:
-            kwargs["description"] = body["description"]
-        if "data" in body:
-            kwargs["data"] = body["data"]
-        if "parent_id" in body:
-            kwargs["parent_id"] = body["parent_id"]
+        for field in ("name", "description", "data", "parent_id"):
+            if field in body:
+                if not isinstance(body[field], str):
+                    return jsonify({"error": f"{field} must be a string"}), 400
+                kwargs[field] = body[field]
 
         node = store.update_node(node_id, **kwargs)
         if node is None:
@@ -1776,6 +1782,13 @@ def index() -> str:
         const graphContent = document.getElementById('graph-content');
         const tabs = document.querySelectorAll('.tab');
 
+        // Shared utilities
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                      .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
         // API calls
         async function fetchMemories() {
             const params = new URLSearchParams();
@@ -1826,8 +1839,8 @@ def index() -> str:
 
             topicsCloud.innerHTML = topics.map(topic => `
                 <button class="topic-tag ${selectedTopics.has(topic.name) ? 'active' : ''}"
-                        data-topic="${topic.name}">
-                    ${topic.name}
+                        data-topic="${escapeHtml(topic.name)}">
+                    ${escapeHtml(topic.name)}
                     <span class="topic-count">${topic.count}</span>
                 </button>
             `).join('');
@@ -1887,10 +1900,10 @@ def index() -> str:
                             <button class="action-btn delete" title="Delete memory">🗑️</button>
                         </div>
                     </div>
-                    <p class="memory-summary">${memory.summary}</p>
+                    <p class="memory-summary">${escapeHtml(memory.summary)}</p>
                     ${memory.topics_list.length ? `
                         <div class="memory-topics">
-                            ${memory.topics_list.map(t => `<span class="memory-topic">${t}</span>`).join('')}
+                            ${memory.topics_list.map(t => `<span class="memory-topic">${escapeHtml(t)}</span>`).join('')}
                         </div>
                     ` : ''}
                 </article>
@@ -2569,12 +2582,6 @@ def index() -> str:
                     ${node.id !== 'root' ? `<button class="detail-action-btn delete" onclick="deleteNode('${node.id}')">🗑️ Delete</button>` : ''}
                 </div>
             `;
-        }
-
-        function escapeHtml(str) {
-            if (!str) return '';
-            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                      .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         }
 
         async function editNode(nodeId) {
