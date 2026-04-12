@@ -32,7 +32,7 @@ SQLite table `memory_nodes` in the same database as the diary system. Schema is 
 | Entry Point | Query | Purpose |
 |-------------|-------|---------|
 | Recent nodes | Last N accessed (excl. root) | Fast path for ongoing conversations |
-| Top nodes | Most accessed in last Y days (excl. root) | Core knowledge domains |
+| Top nodes | Highest decayed access score (excl. root) | Core knowledge domains |
 | Root node | Single root | Full graph traversal for novel queries |
 
 ## Core Operations
@@ -56,6 +56,10 @@ Any node except root can be deleted. Children are orphaned (parent_id set to NUL
 ### Touch
 
 Increments `access_count` and updates `last_accessed`. Called automatically when a node is viewed in the UI or retrieved during query traversal.
+
+### Access Decay
+
+All ordering by access frequency uses a **time-decayed score** computed at query time: `access_count / (1 + age_days / half_life)`. This is hyperbolic decay — a node's effective score halves every `DECAY_HALF_LIFE_DAYS` (default 14) since its last access. The raw `access_count` is never modified, so changing the half-life retroactively reweights all nodes. This applies to `get_top_nodes`, `get_children`, `get_all_nodes`, and `search_nodes` tie-breaking.
 
 ### Search
 
@@ -148,7 +152,8 @@ Default is `"diary"` — graph enrichment can be enabled once tested. Both syste
 | `MERGE_THRESHOLD` | 200 | Tokens below which children collapse |
 | `RECENT_NODES_COUNT` | 10 | Recent nodes to surface |
 | `TOP_NODES_COUNT` | 15 | Top nodes to surface |
-| `TOP_NODES_WINDOW_DAYS` | 30 | Time window for top-nodes |
+| `TOP_NODES_WINDOW_DAYS` | 30 | Legacy — kept for API compat, no longer used for filtering |
+| `DECAY_HALF_LIFE_DAYS` | 14 | Days until a node's access score halves |
 | `MAX_TRAVERSAL_DEPTH` | 8 | Safety limit on graph traversal |
 | `SUMMARY_MAX_LENGTH` | 300 | Max chars for node description |
 | `memory_enrichment_source` | `"diary"` | Which system enriches replies: `"all"`, `"diary"`, or `"graph"` |

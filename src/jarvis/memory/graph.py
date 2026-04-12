@@ -29,9 +29,28 @@ SPLIT_THRESHOLD = 1500       # tokens — when to split a node into children
 MERGE_THRESHOLD = 200        # tokens — when to collapse sparse children back
 RECENT_NODES_COUNT = 10      # number of recently-accessed nodes to track
 TOP_NODES_COUNT = 15         # most-accessed nodes to surface
-TOP_NODES_WINDOW_DAYS = 30   # time window for top-nodes ranking
+TOP_NODES_WINDOW_DAYS = 30   # time window for top-nodes ranking (legacy, kept for compat)
 MAX_TRAVERSAL_DEPTH = 8      # safety limit on graph traversal
 SUMMARY_MAX_LENGTH = 300     # max characters for a node description
+DECAY_HALF_LIFE_DAYS = 14    # days until a node's access score halves
+
+
+# ── SQL helpers ────────────────────────────────────────────────────────────
+
+def _decay_score_sql(half_life_days: int = DECAY_HALF_LIFE_DAYS) -> str:
+    """Return a SQL expression that computes a time-decayed access score.
+
+    Uses hyperbolic decay: access_count / (1 + age_days / half_life).
+    A node accessed 100 times 14 days ago scores the same as one
+    accessed 50 times today (with default half-life of 14 days).
+
+    The raw access_count is never modified — decay is computed at query time
+    so no data is lost and the half-life can be changed freely.
+    """
+    return (
+        f"(access_count * 1.0 / "
+        f"(1.0 + MAX(0, julianday('now') - julianday(last_accessed)) / {half_life_days}.0))"
+    )
 
 
 # ── Data model ──────────────────────────────────────────────────────────────
@@ -165,10 +184,11 @@ class GraphMemoryStore:
             return self._row_to_node(row)
 
     def get_children(self, node_id: str) -> list[MemoryNode]:
-        """Get all direct children of a node, ordered by access_count desc."""
+        """Get all direct children of a node, ordered by decayed access score."""
+        score = _decay_score_sql()
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM memory_nodes WHERE parent_id = ? ORDER BY access_count DESC",
+                f"SELECT * FROM memory_nodes WHERE parent_id = ? ORDER BY {score} DESC",
                 (node_id,),
             ).fetchall()
             return [self._row_to_node(r) for r in rows]
@@ -323,16 +343,21 @@ class GraphMemoryStore:
         limit: int = TOP_NODES_COUNT,
         window_days: int = TOP_NODES_WINDOW_DAYS,
     ) -> list[MemoryNode]:
-        """Get the most frequently accessed nodes within a time window."""
-        from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        """Get nodes with the highest time-decayed access score.
+
+        Uses hyperbolic decay so frequently accessed nodes that haven't
+        been touched in a while naturally fall off without needing a hard
+        window cutoff. The ``window_days`` parameter is kept for backward
+        compatibility but is no longer used for filtering.
+        """
+        score = _decay_score_sql()
         with self._lock:
             rows = self.conn.execute(
-                """SELECT * FROM memory_nodes
-                   WHERE id != 'root' AND last_accessed >= ?
-                   ORDER BY access_count DESC
+                f"""SELECT * FROM memory_nodes
+                   WHERE id != 'root'
+                   ORDER BY {score} DESC
                    LIMIT ?""",
-                (cutoff, limit),
+                (limit,),
             ).fetchall()
             return [self._row_to_node(r) for r in rows]
 
@@ -380,9 +405,10 @@ class GraphMemoryStore:
 
     def get_all_nodes(self) -> list[MemoryNode]:
         """Return all nodes — use with care on large graphs."""
+        score = _decay_score_sql()
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM memory_nodes ORDER BY access_count DESC"
+                f"SELECT * FROM memory_nodes ORDER BY {score} DESC"
             ).fetchall()
             return [self._row_to_node(r) for r in rows]
 
@@ -398,7 +424,7 @@ class GraphMemoryStore:
         """Search nodes by keyword match across name, description, and data.
 
         Uses case-insensitive LIKE matching on each keyword (split by whitespace).
-        Nodes matching more keywords rank higher; ties broken by access_count.
+        Nodes matching more keywords rank higher; ties broken by decayed access score.
         Excludes the root node from results and touches matched nodes.
         """
         keywords = [k.strip() for k in query.split() if k.strip()]
@@ -425,7 +451,7 @@ class GraphMemoryStore:
                 FROM memory_nodes
                 WHERE id != 'root'
             ) WHERE relevance > 0
-            ORDER BY relevance DESC, access_count DESC
+            ORDER BY relevance DESC, {_decay_score_sql()} DESC
             LIMIT ?
         """
         params.append(str(limit))
