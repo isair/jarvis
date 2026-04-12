@@ -1033,7 +1033,6 @@ def index() -> str:
         .tabs {
             display: flex;
             gap: 0.5rem;
-            margin-bottom: 1.5rem;
         }
 
         .tab {
