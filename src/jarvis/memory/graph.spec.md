@@ -74,15 +74,16 @@ All ordering by access frequency uses a **time-decayed score** computed at query
 
 ## Auto-Split (Natural Reduction)
 
-Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) after a write. Auto-split is the system's primary consolidation mechanism — it's where temporal events get distilled into patterns and the tree structure deepens organically.
+Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) after a write. Auto-split is the system's primary consolidation and pruning mechanism — it's where temporal events get distilled into patterns, common knowledge gets dropped, and the tree structure deepens organically.
 
 1. LLM analyses the node's data and proposes 2-5 child categories
 2. Each fact is assigned to exactly one child
-3. **Consolidation during split**: duplicate facts are merged, and repeated similar activities across different dates are consolidated into patterns (e.g. "ate sushi on Mon, ate sushi on Thu" → "regularly eats sushi"). Single occurrences are kept as-is. Date context is preserved only for significant life events.
-4. Child nodes are created under the split node
-5. Parent data is cleared; parent description updated to a summary
+3. **Consolidation**: duplicate facts are merged, and repeated similar activities across different dates are consolidated into patterns (e.g. "ate sushi on Mon, ate sushi on Thu" → "regularly eats sushi"). Date context is preserved only for significant events.
+4. **Pruning**: facts that the LLM already knows from its training data are dropped. This keeps the graph as a delta from the model's baseline knowledge. When migrating to a newer model with broader training data, subsequent splits will naturally prune more — reducing the graph's memory footprint over time.
+5. Child nodes are created under the split node
+6. Parent data is cleared; parent description updated to a summary
 
-This means the tree depth itself encodes a temporal→enduring spectrum: surface-level nodes hold recent raw facts, deeper nodes hold patterns that survived multiple split cycles.
+This means the tree depth itself encodes a raw→refined spectrum: surface-level nodes hold recently ingested knowledge, deeper nodes hold distilled novel knowledge that survived multiple split cycles. Model upgrades naturally shrink the graph as previously-novel facts become common knowledge.
 
 Split quality safeguards:
 - Minimum 2 categories required (abort if LLM proposes fewer)

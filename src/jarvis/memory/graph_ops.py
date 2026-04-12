@@ -264,21 +264,27 @@ def auto_split_node(
     debug_log(f"auto-split: node '{node.name}' ({node_id[:8]}) has {node.data_token_count} tokens", "memory")
 
     system_prompt = (
-        "You are a memory organiser. A collection of facts has grown too large "
-        "for a single node. Organise them into 2-5 categories.\n\n"
+        "You are a knowledge organiser. A collection of facts has grown too "
+        "large for a single node. Organise them into 2-5 categories.\n\n"
         "Rules:\n"
         "- Each fact must be assigned to exactly one category\n"
         "- Category names should be concise (2-4 words)\n"
-        "- Descriptions should be 1-2 sentences explaining what the category covers\n"
-        "- Every fact must appear in exactly one category (no duplicates, no omissions)\n\n"
-        "Consolidation rules — apply these while distributing facts:\n"
-        "- If multiple facts describe the same event or preference, merge into one\n"
+        "- Descriptions should be 1-2 sentences explaining what the category covers\n\n"
+        "Consolidation — apply while distributing:\n"
+        "- Merge duplicate or near-duplicate facts into one\n"
         "- If repeated similar activities appear across different dates "
         "(e.g. ate X on Monday, ate X on Thursday), consolidate into a pattern "
         '(e.g. "Regularly eats X") — drop individual occurrences\n'
-        "- If a single event appears just once, keep it as-is\n"
-        "- Preserve any date context only when it matters "
-        "(e.g. life events: started new job on 2025-03-01)\n\n"
+        "- Preserve date context only for significant events "
+        "(e.g. started new job on 2025-03-01)\n\n"
+        "Pruning — DROP facts that are common knowledge:\n"
+        "- Remove anything you already know from your training data "
+        "(e.g. general nutrition facts, well-known places, public figures' "
+        "basic info, how-to steps for common tasks)\n"
+        "- Only keep knowledge that is NOVEL to you: user-specific details, "
+        "local/niche information, personal circumstances, recent events "
+        "after your training cutoff, or corrections to what you'd assume\n"
+        "- When in doubt, keep it — but actively look for things to prune\n\n"
         "Respond with ONLY valid JSON in this format:\n"
         '{"categories": [{"name": "Category Name", "description": "What this covers", '
         '"facts": ["fact 1", "fact 2"]}], "summary": "1-2 sentence summary of everything"}'
