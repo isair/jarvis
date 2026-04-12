@@ -47,33 +47,43 @@ def extract_graph_memories(
     """
     system_prompt = (
         "You extract NOVEL KNOWLEDGE learned during a conversation. "
-        "This is anything that came up that the assistant wouldn't "
-        "already know from its training data. Each fact should be a "
-        "self-contained statement that would be useful to recall later.\n\n"
-        "EXTRACT — novel knowledge of any kind:\n"
-        "- Facts about the user (preferences, habits, plans, life details)\n"
-        "- Real-world discoveries (opening hours, local businesses, prices)\n"
-        "- Practical knowledge (recipes, techniques, solutions that worked)\n"
-        "- People and relationships the user mentioned\n"
-        "- Current events or recent developments discussed\n"
-        "- Location-specific information (what's nearby, local conditions)\n"
-        "- Corrections or updates to previously known information\n\n"
-        "DO NOT EXTRACT:\n"
-        "- Generic common knowledge the assistant already has\n"
-        "- Greetings, thank-yous, meta-conversation\n"
-        "- Vague statements with no concrete information\n"
-        "- Requests that were made but led to no new information\n\n"
-        "Write facts as standalone statements, not as interaction descriptions. "
+        "This builds the assistant's persistent knowledge base — things "
+        "it wouldn't already know. Each fact must be a self-contained "
+        "statement that would be useful to recall in future conversations.\n\n"
+        "EXTRACT — novel knowledge:\n"
+        "- Facts about the user (preferences, habits, plans, life details, "
+        "location, relationships)\n"
+        "- Real-world discoveries (local businesses, opening hours, prices, "
+        "specific venues)\n"
+        "- Practical knowledge that was discovered (recipes that worked, "
+        "techniques, solutions to specific problems)\n"
+        "- Recent events or developments after your training cutoff\n"
+        "- Corrections to what you'd normally assume\n\n"
+        "DO NOT EXTRACT — these create noise or mislead:\n"
+        "- What the ASSISTANT said, recommended, or suggested — only "
+        "extract knowledge the USER brought or that was discovered, not "
+        "the assistant's own advice back to itself\n"
+        "- Weather or time-of-day snapshots — these go stale immediately "
+        "and will confuse future lookups (e.g. do NOT store "
+        '"today\'s weather is 20°C" or "the current date is Sunday")\n'
+        "- Common knowledge you already have (how GitHub search works, "
+        "basic nutrition guidelines, how Chinese names work, etc.)\n"
+        "- Vague or content-free statements (\"user explored options\", "
+        '"user engaged in an exchange")\n'
+        "- Pure meta-interaction (greetings, thank-yous, user asked for "
+        "a recap, user asked for the time)\n\n"
+        "Write facts as KNOWLEDGE, not as interaction descriptions:\n"
+        "Wrong: \"The assistant recommended adding vegetables\" — "
+        "this is the assistant's own advice\n"
         "Wrong: \"User asked about boxing gyms\" — "
-        "Right: \"There is a boxing gym near Roman Road, E3\"\n"
-        "Wrong: \"User inquired about CEX hours\" — "
-        "Right: \"CEX in Kensington closes at 6pm on Sundays\"\n\n"
+        "reframe as: \"Trenches Boxing Club in Hackney has evening classes\"\n"
+        "Wrong: \"The current location is Tbilisi\" — "
+        "reframe as: \"The user was in Tbilisi, Georgia in April 2026\"\n\n"
         "Respond with ONLY a JSON array of strings.\n"
         "If nothing novel was learned, respond with an empty array: []\n"
         'Example: ["The user follows an 1800 kcal daily meal plan", '
-        '"CEX Kensington closes at 6pm on Sundays", '
-        '"A soy-oyster-teriyaki glaze works well for air-fried chicken breast", '
-        '"The user is currently located in Tbilisi, Georgia"]'
+        '"Trenches Boxing Club in Hackney offers evening classes", '
+        '"A soy-oyster-teriyaki glaze works well for air-fried chicken breast"]'
     )
 
     # Include date so each fact carries temporal context
