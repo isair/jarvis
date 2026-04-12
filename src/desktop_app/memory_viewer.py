@@ -498,8 +498,10 @@ def graph_import_diary() -> Response:
             for row in summaries:
                 summary_text = row["summary"]
                 date_utc = row["date_utc"]
+                error_msg = None
 
                 try:
+                    debug_log(f"graph import: processing {date_utc} ({len(summary_text)} chars)", "memory")
                     facts_stored = update_graph_from_dialogue(
                         store=store,
                         summary=summary_text,
@@ -512,15 +514,19 @@ def graph_import_diary() -> Response:
                 except Exception as e:
                     debug_log(f"graph import: failed for {date_utc} — {e}", "memory")
                     facts_stored = 0
+                    error_msg = str(e)
 
                 processed += 1
-                yield json.dumps({
+                progress_msg = {
                     "type": "progress",
                     "processed": processed,
                     "total": total,
                     "date": date_utc,
                     "facts": facts_stored,
-                }) + "\n"
+                }
+                if error_msg:
+                    progress_msg["error"] = error_msg
+                yield json.dumps(progress_msg) + "\n"
 
             yield json.dumps({
                 "type": "complete",
@@ -2763,7 +2769,9 @@ def index() -> str:
                                     document.getElementById('import-count').textContent = `${msg.processed}/${msg.total}`;
                                     document.getElementById('import-status').textContent = `Processing ${msg.date}…`;
                                     const log = document.getElementById('import-log');
-                                    log.innerHTML += `<div>📅 ${msg.date} — ${msg.facts} fact${msg.facts !== 1 ? 's' : ''}</div>`;
+                                    const icon = msg.error ? '❌' : '📅';
+                                    const detail = msg.error ? `error: ${msg.error}` : `${msg.facts} fact${msg.facts !== 1 ? 's' : ''}`;
+                                    log.innerHTML += `<div>${icon} ${msg.date} — ${detail}</div>`;
                                     log.scrollTop = log.scrollHeight;
                                 } else if (msg.type === 'complete') {
                                     document.getElementById('import-status').textContent = msg.message;

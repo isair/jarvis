@@ -56,6 +56,8 @@ def extract_graph_memories(
         'Example: ["Prefers dark roast coffee", "Works at Acme Corp as a senior engineer"]'
     )
 
+    debug_log(f"graph memory extraction: sending {len(summary)} chars to {ollama_chat_model}", "memory")
+
     response = call_llm_direct(
         base_url=ollama_base_url,
         chat_model=ollama_chat_model,
@@ -69,15 +71,18 @@ def extract_graph_memories(
         debug_log("graph memory extraction: LLM returned no response", "memory")
         return []
 
+    debug_log(f"graph memory extraction: got response ({len(response)} chars)", "memory")
+
     # Parse JSON array from the response
     json_match = re.search(r'\[.*\]', response, re.DOTALL)
     if not json_match:
-        debug_log("graph memory extraction: no JSON array found in response", "memory")
+        debug_log(f"graph memory extraction: no JSON array found in response: {response[:200]}", "memory")
         return []
 
     try:
         facts = json.loads(json_match.group())
         if not isinstance(facts, list):
+            debug_log(f"graph memory extraction: parsed JSON is not a list: {type(facts)}", "memory")
             return []
         # Filter to non-empty strings
         facts = [str(f).strip() for f in facts if isinstance(f, str) and str(f).strip()]
