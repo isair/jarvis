@@ -15,8 +15,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/img/memory-viewer-memories.png" alt="Memory Viewer - Conversations" width="400">
-  <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Nutrition" width="400">
+  <img src="docs/img/memory-viewer-diary.png" alt="Memory Viewer - Diary" width="280">
+  <img src="docs/img/memory-viewer-knowledge.png" alt="Memory Viewer - Knowledge Graph" width="280">
+  <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Meals" width="280">
 </p>
 
 ## Why Jarvis?
