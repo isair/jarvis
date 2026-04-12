@@ -1706,7 +1706,7 @@ def index() -> str:
                     <span>💭</span> Diary
                 </button>
                 <button class="tab" data-tab="graph">
-                    <span>🧠</span> Memories (v2)
+                    <span>🧠</span> Knowledge
                 </button>
                 <button class="tab" data-tab="meals">
                     <span>🍽️</span> Meals
