@@ -19,15 +19,17 @@ def extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_ch
 Extract:
 1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words). Include general, high-level category tags that would be suitable for blog-style tagging when applicable (e.g., "cooking", "fitness", "travel", "finance").
 2. TIME RANGE: If mentioned, convert to exact timestamps
+3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Omit if the query needs no personal context.
 
 Current date/time: {current_time}
 
 Respond ONLY with JSON in this format:
-{{"keywords": ["keyword1", "keyword2"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+{{"keywords": ["keyword1", "keyword2"], "questions": ["what are the user's food preferences?"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 
 Rules:
 - keywords: content topics only (no time words like "yesterday", "today"). Include both specific terms and general category tags when applicable (e.g., for recipes or meal prep you could include "cooking" and "nutrition").
 - prefer concise noun phrases; lowercase; no punctuation; deduplicate similar terms
+- questions: short personal questions about the user that this query implies. Omit for factual/utility queries (time, maths, definitions) that need no personal context.
 - from/to: only if time mentioned, convert to exact UTC timestamps
 - omit from/to if no time mentioned
 
@@ -35,9 +37,10 @@ Examples:
 "what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}}
 "what did I eat yesterday?" → {{"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 "remember that password I mentioned today?" → {{"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
-"what news might interest me?" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"]}}
-"recommend a restaurant I'd enjoy" → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"]}}
-"suggest a movie for me" → {{"keywords": ["movies", "films", "entertainment", "preferences", "genres"]}}
+"what news might interest me?" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}}
+"recommend a restaurant I'd enjoy" → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}}
+"suggest a movie for me" → {{"keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}}
+"what time is it?" → {{"keywords": []}}
 """
         
         now = datetime.now(timezone.utc)

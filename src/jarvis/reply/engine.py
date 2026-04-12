@@ -23,6 +23,41 @@ from ..utils.location import get_location_context
 
 if TYPE_CHECKING:
     from ..memory.db import Database
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+# Stop words excluded from question→node matching (common words that inflate false matches)
+_STOP_WORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "do", "does", "did", "has", "have", "had",
+    "what", "where", "when", "who", "how", "which", "that", "this", "with", "for", "from",
+    "about", "user", "their", "they", "them", "and", "or", "but", "not", "any", "some",
+})
+
+
+def _match_question(node_data: str, questions: list[str]) -> str:
+    """Find which extracted question best matches a node's data via keyword overlap.
+
+    Returns the best matching question string, or "" if no meaningful match.
+    """
+    if not questions:
+        return ""
+
+    data_lower = node_data.lower()
+    best_q = ""
+    best_score = 0
+
+    for q in questions:
+        words = {w.strip("?.,!") for w in q.lower().split()} - _STOP_WORDS
+        if not words:
+            continue
+        hits = sum(1 for w in words if w in data_lower)
+        score = hits / len(words)
+        if score > best_score and hits >= 1:
+            best_score = score
+            best_q = q
+
+    return best_q
     from ..memory.conversation import DialogueMemory
 
 
@@ -68,7 +103,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     conversation_context = ""
     keywords = []
 
-    # Extract keywords (needed by both diary and graph enrichment)
+    questions: list[str] = []
+
+    # Extract keywords and implicit questions (needed by both diary and graph enrichment)
     try:
         search_params = extract_search_params_for_memory(
             redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug,
@@ -76,9 +113,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
         keywords = search_params.get('keywords', [])
+        questions = search_params.get('questions', [])
         if keywords:
             print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
             debug_log(f"extracted keywords: {keywords}", "memory")
+        if questions:
+            debug_log(f"implicit questions: {questions}", "memory")
     except Exception as e:
         debug_log(f"keyword extraction failed: {e}", "memory")
 
@@ -120,7 +160,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             graph_store = GraphMemoryStore(cfg.db_path)
 
             graph_parts: list[str] = []
-            surfaced_names: list[str] = []
+            # Track node name + matched question for user-facing logs
+            node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
             # Primary: keyword search (uses same keywords extracted above)
             graph_nodes = []
@@ -132,7 +173,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     data_preview = node.data[:300] if node.data else ""
                     if data_preview:
                         graph_parts.append(f"[{path}] {data_preview}")
-                        surfaced_names.append(node.name or path.split(" > ")[-1])
+                        matched_q = _match_question(data_preview, questions)
+                        node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
                         debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
             # Secondary: include a few recently accessed nodes for conversational continuity
@@ -142,17 +184,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if rn.id not in recent_ids and rn.data:
                     data_preview = rn.data[:200]
                     graph_parts.append(f"[{rn.name}] {data_preview}")
-                    surfaced_names.append(rn.name or rn.id[:8])
+                    node_annotations.append((rn.name or rn.id[:8], "recently accessed"))
                     debug_log(f"graph recent: [{rn.name}] ({rn.data_token_count} tokens)", "memory")
 
             if graph_parts:
                 graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
-                names_str = ", ".join(n for n in surfaced_names[:4] if n)
+                names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
                 print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
-                for part in graph_parts[:3]:
-                    # Show [path] and a short data preview
-                    preview = part.strip().replace("\n", " ")[:80]
-                    print(f"     {preview}", flush=True)
+                for name, reason in node_annotations[:4]:
+                    if reason:
+                        print(f"     {name} → {reason}", flush=True)
+                    else:
+                        print(f"     {name}", flush=True)
         except Exception as e:
             debug_log(f"graph enrichment failed: {e}", "memory")
 
