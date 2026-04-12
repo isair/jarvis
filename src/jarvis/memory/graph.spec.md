@@ -1,10 +1,10 @@
-# Graph Memory System (v2) Specification
+# Knowledge Graph Specification
 
 ## Overview
 
-A self-organising node graph that dynamically structures memories by topic relevance. Replaces the flat daily-summary model with a hierarchical tree where nodes auto-split when they grow too large and summaries cascade upward.
+A self-organising node graph that stores the assistant's accumulated world knowledge — anything learned during conversations that it wouldn't already know from training data. This includes user-specific facts, real-world discoveries (opening hours, local businesses), practical knowledge (recipes, solutions), and current events. The diary records *what happened*; the knowledge graph records *what was learned*.
 
-Three fast-access entry points — **recent nodes**, **top nodes**, and **root node** — ensure the most relevant memories are always reachable without exhaustive search.
+The graph dynamically structures knowledge by topic relevance using a hierarchical tree where nodes auto-split when they grow too large. Three fast-access entry points — **recent nodes**, **top nodes**, and **root node** — ensure the most relevant knowledge is always reachable without exhaustive search.
 
 ## Data Model
 
@@ -115,7 +115,7 @@ The graph memory system is fully automatic — no tool calls required. It integr
 Piggybacks on the existing diary update flow in `conversation.py`:
 
 1. After a successful diary update, the conversation summary is passed to `update_graph_from_dialogue()`
-2. **Extract**: LLM extracts facts that reveal something about the user as a person (third-person statements). Activities, meals, preferences, and situations are kept. Assistant interactions that reveal nothing about the user are filtered (e.g. "asked for the time", "requested news"). Requests that imply an interest are reframed (e.g. "asked about boxing venues" → "interested in boxing"). The diary entry date is included for temporal context. Patterns and consolidation emerge through auto-split.
+2. **Extract**: LLM extracts novel knowledge from the summary — anything learned that the assistant wouldn't already know. This includes user-specific facts, real-world discoveries (opening hours, local businesses), practical knowledge (recipes, techniques), and current events. Requests are reframed as knowledge ("user asked about CEX hours" → "CEX Kensington closes at 6pm on Sundays"). The diary entry date is included for temporal context. Patterns and consolidation emerge through auto-split.
 3. **Traverse**: Each fact is placed in the best-fitting node using the three entry points:
    - **Recent nodes** — checked first; follows conversational momentum
    - **Top nodes** — checked second; matches frequently accessed knowledge domains
@@ -160,7 +160,7 @@ Default is `"diary"` — graph enrichment can be enabled once tested. Both syste
 
 ## UI: Memory Viewer Integration
 
-The graph explorer appears as the **Memories (v2)** tab in the memory viewer, positioned between the Diary and Meals tabs.
+The graph explorer appears as the **Knowledge** tab in the memory viewer, positioned between the Diary and Meals tabs.
 
 ### Three-Panel Layout
 

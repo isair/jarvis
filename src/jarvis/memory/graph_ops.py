@@ -1,8 +1,8 @@
 """
-🧠 Graph Memory Operations — LLM-dependent graph logic.
+🧠 Knowledge Graph Operations — LLM-dependent graph logic.
 
 Keeps graph.py as a pure data store (SQLite only). This module handles:
-- Memory extraction from conversation summaries
+- Knowledge extraction from conversation summaries
 - Best-node traversal (greedy descent via recent → top → root entry points)
 - Auto-split when a node exceeds the token threshold
 
@@ -31,56 +31,55 @@ def extract_graph_memories(
     thinking: bool = False,
     date_utc: Optional[str] = None,
 ) -> list[str]:
-    """Extract discrete facts about the user from a conversation summary.
+    """Extract novel knowledge from a conversation summary.
 
-    Focuses on what the summary reveals about the user as a person —
-    their life, preferences, activities, and circumstances. Filters out
-    assistant interactions that don't tell us anything about the user.
+    The knowledge graph stores anything the assistant learned during
+    conversations that it wouldn't already know — real-world facts,
+    user-specific information, discovered details. This is the
+    assistant's persistent world knowledge, not just facts about the user.
 
-    Returns a list of short third-person statements about the user,
-    or an empty list if nothing worth storing was found.
+    Returns a list of self-contained factual statements,
+    or an empty list if nothing novel was found.
 
     Args:
         date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
             Included as a date prefix on each fact for temporal context.
     """
     system_prompt = (
-        "You extract facts about the USER from a conversation summary. "
-        "Focus on what the summary reveals about the user as a person. "
-        "Each fact should be a self-contained third-person statement.\n\n"
-        "EXTRACT — things that tell us about the user:\n"
-        "- What they ate, drank, or did (activities, meals, exercise)\n"
-        "- Preferences, habits, routines, interests\n"
-        "- Plans, goals, decisions\n"
-        "- Relationships and people in their life\n"
-        "- Professional details (job, projects, skills)\n"
-        "- Health, location, living situation\n"
-        "- Opinions, values, emotions tied to events\n"
-        "- Ongoing situations (complaints, applications, projects)\n\n"
-        "DO NOT EXTRACT — interactions with the assistant:\n"
-        "- Questions or requests that reveal nothing about the user "
-        "(asked for the time, requested news, asked about the weather, "
-        "asked for a recap, requested a math problem)\n"
+        "You extract NOVEL KNOWLEDGE learned during a conversation. "
+        "This is anything that came up that the assistant wouldn't "
+        "already know from its training data. Each fact should be a "
+        "self-contained statement that would be useful to recall later.\n\n"
+        "EXTRACT — novel knowledge of any kind:\n"
+        "- Facts about the user (preferences, habits, plans, life details)\n"
+        "- Real-world discoveries (opening hours, local businesses, prices)\n"
+        "- Practical knowledge (recipes, techniques, solutions that worked)\n"
+        "- People and relationships the user mentioned\n"
+        "- Current events or recent developments discussed\n"
+        "- Location-specific information (what's nearby, local conditions)\n"
+        "- Corrections or updates to previously known information\n\n"
+        "DO NOT EXTRACT:\n"
+        "- Generic common knowledge the assistant already has\n"
         "- Greetings, thank-yous, meta-conversation\n"
-        "- The assistant's responses or suggestions\n"
-        "- Vague statements with no concrete information\n\n"
-        "REFRAME — if a request reveals an interest, extract the interest:\n"
-        '- "User asked about boxing venues near E3" → "Interested in boxing near E3"\n'
-        '- "User inquired about yoga classes" → "Interested in yoga"\n'
-        '- "User asked about weather in Kazbegi" → skip (generic query) '
-        'UNLESS the summary shows they were planning a trip there\n\n'
+        "- Vague statements with no concrete information\n"
+        "- Requests that were made but led to no new information\n\n"
+        "Write facts as standalone statements, not as interaction descriptions. "
+        "Wrong: \"User asked about boxing gyms\" — "
+        "Right: \"There is a boxing gym near Roman Road, E3\"\n"
+        "Wrong: \"User inquired about CEX hours\" — "
+        "Right: \"CEX in Kensington closes at 6pm on Sundays\"\n\n"
         "Respond with ONLY a JSON array of strings.\n"
-        "If nothing is worth storing, respond with an empty array: []\n"
-        'Example: ["Had gyudon and chicken gyoza for lunch", '
-        '"Interested in boxing near E3 2WS", '
-        '"Currently located in Tbilisi, Georgia", '
-        '"Pursuing a complaint with a food-delivery company over a chargeback"]'
+        "If nothing novel was learned, respond with an empty array: []\n"
+        'Example: ["The user follows an 1800 kcal daily meal plan", '
+        '"CEX Kensington closes at 6pm on Sundays", '
+        '"A soy-oyster-teriyaki glaze works well for air-fried chicken breast", '
+        '"The user is currently located in Tbilisi, Georgia"]'
     )
 
     # Include date so each fact carries temporal context
     date_prefix = f"(Date: {date_utc}) " if date_utc else ""
     user_content = (
-        f"Extract facts about the user from this conversation summary:\n"
+        f"Extract novel knowledge from this conversation summary:\n"
         f"{date_prefix}{summary}"
     )
 

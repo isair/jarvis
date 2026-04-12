@@ -1,14 +1,12 @@
 """
-🧠 Node Graph Memory System (v2)
+🧠 Knowledge Graph
 
-A self-organising node graph that dynamically structures memories by topic
-relevance. Three fast-access entry points (recent nodes, top nodes, root node)
-ensure the most relevant memories are always reachable without exhaustive search.
+A self-organising node graph that stores the assistant's accumulated world
+knowledge — anything learned during conversations that it wouldn't already know.
+Three fast-access entry points (recent nodes, top nodes, root node) ensure the
+most relevant knowledge is always reachable without exhaustive search.
 
-Current: CRUD operations, access tracking, tree/graph queries, UI explorer.
-Future: LLM-powered auto-split when data exceeds SPLIT_THRESHOLD, summary
-cascade upward on writes, auto-merge for sparse subtrees, and periodic
-housekeeping. See graph.spec.md for the full roadmap.
+See graph.spec.md for the full specification.
 """
 
 from __future__ import annotations
