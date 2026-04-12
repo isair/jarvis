@@ -407,6 +407,29 @@ class TestSafetyGuards:
         updated = store.update_node(node.id, description=long_desc)
         assert len(updated.description) == SUMMARY_MAX_LENGTH
 
+    def test_search_ranks_name_matches_above_data_only(self, store):
+        """Nodes matching keywords in name/description should rank above
+        nodes that only match deep inside their data blob."""
+        # Specific node: keyword in name
+        store.create_node(
+            name="Work Schedule",
+            description="Office days and remote work pattern",
+            data="Monday and Thursday are in-office days.",
+            parent_id="root",
+        )
+        # Broad category node: keyword buried in large data
+        store.create_node(
+            name="Creative & Personal",
+            description="Miscellaneous personal facts",
+            data="The user enjoys painting on weekends. " * 50
+                 + "They mentioned their office once. " + "More unrelated content. " * 50,
+            parent_id="root",
+        )
+
+        results = store.search_nodes("office schedule")
+        assert len(results) >= 1
+        assert results[0].name == "Work Schedule"
+
 
 @pytest.mark.unit
 class TestAccessDecay:

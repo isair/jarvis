@@ -428,14 +428,16 @@ class GraphMemoryStore:
         """Search nodes by keyword match across name, description, and data.
 
         Uses case-insensitive LIKE matching on each keyword (split by whitespace).
-        Nodes matching more keywords rank higher; ties broken by decayed access score.
+        Scoring weights: name/description matches are worth 3× data matches, so
+        specific nodes about a topic rank above broad category nodes that merely
+        contain the keyword somewhere in their data blob.
         Excludes the root node from results and touches matched nodes.
         """
         keywords = [k.strip() for k in query.split() if k.strip()]
         if not keywords:
             return []
 
-        # Build a score expression: +1 per keyword per field matched
+        # Build a score expression: name/description matches worth 3, data worth 1
         score_parts: list[str] = []
         params: list[str] = []
         for kw in keywords:
@@ -443,8 +445,8 @@ class GraphMemoryStore:
             escaped = kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"
             score_parts.append(
-                "(CASE WHEN name LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END"
-                " + CASE WHEN description LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END"
+                "(CASE WHEN name LIKE ? ESCAPE '\\' THEN 3 ELSE 0 END"
+                " + CASE WHEN description LIKE ? ESCAPE '\\' THEN 3 ELSE 0 END"
                 " + CASE WHEN data LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)"
             )
             params.extend([pattern, pattern, pattern])
