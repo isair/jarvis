@@ -2161,6 +2161,7 @@ def index() -> str:
 
             const nodeEl = document.createElement('div');
             nodeEl.className = 'tree-node' + (selectedNodeId === node.id ? ' selected' : '');
+            nodeEl.dataset.nodeId = node.id;
             nodeEl.style.paddingLeft = (0.75 + depth * 0.75) + 'rem';
 
             const toggle = document.createElement('span');
@@ -2479,8 +2480,10 @@ def index() -> str:
         async function selectNode(nodeId) {
             selectedNodeId = nodeId;
 
-            // Update tree selection
-            document.querySelectorAll('.tree-node').forEach(el => el.classList.remove('selected'));
+            // Update tree selection highlight in-place (no re-render)
+            document.querySelectorAll('.tree-node').forEach(el => {
+                el.classList.toggle('selected', el.dataset.nodeId === nodeId);
+            });
 
             // Redraw graph
             drawGraph();
@@ -2493,9 +2496,6 @@ def index() -> str:
                 const resp = await fetch('/api/graph/node/' + nodeId);
                 const data = await resp.json();
                 renderNodeDetail(data);
-
-                // Update tree selection highlight
-                loadTreeData();
             } catch (e) {
                 sidebar.innerHTML = '<div class="detail-empty"><p>Failed to load node</p></div>';
             }
