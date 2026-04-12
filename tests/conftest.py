@@ -55,6 +55,7 @@ class MockConfig:
     agentic_max_turns: int = 8
     tool_selection_strategy: str = "embedding"
     memory_enrichment_max_results: int = 5
+    memory_enrichment_source: str = "all"
     location_enabled: bool = True
     location_ip_address: Optional[str] = None
     location_auto_detect: bool = False

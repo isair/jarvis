@@ -62,8 +62,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
-    # Step 4: Conversation memory enrichment
+    # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
+    # "all" = diary + graph, "diary" = diary only, "graph" = graph only
+    enrichment_source = getattr(cfg, "memory_enrichment_source", "all")
     conversation_context = ""
+    keywords = []
+
+    # Extract keywords (needed by both diary and graph enrichment)
     try:
         search_params = extract_search_params_for_memory(
             redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug,
@@ -71,7 +76,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
         keywords = search_params.get('keywords', [])
-        if keywords:
+    except Exception as e:
+        debug_log(f"  ❌ [memory] keyword extraction failed: {e}", "memory")
+
+    # Step 4a: Diary enrichment (episodic conversation history)
+    if enrichment_source in ("all", "diary") and keywords:
+        try:
             from_time = search_params.get('from')
             to_time = search_params.get('to')
             try:
@@ -93,41 +103,43 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
             if context_results:
                 conversation_context = "\n".join(context_results)
-                debug_log(f"  ✅ found {len(context_results)} results for memory enrichment", "memory")
-    except Exception as e:
-        debug_log(f"  ❌ [memory] enrichment failed: {e}", "memory")
+                debug_log(f"  ✅ found {len(context_results)} results for diary enrichment", "memory")
+        except Exception as e:
+            debug_log(f"  ❌ [diary] enrichment failed: {e}", "memory")
 
-    # Step 4b: Graph memory enrichment — search stored knowledge with same keywords
+    # Step 4b: Graph memory enrichment (structured knowledge about the user)
     graph_context = ""
-    try:
-        from ..memory.graph import GraphMemoryStore
-        graph_store = GraphMemoryStore(cfg.db_path)
+    if enrichment_source in ("all", "graph"):
+        try:
+            from ..memory.graph import GraphMemoryStore
+            graph_store = GraphMemoryStore(cfg.db_path)
 
-        graph_parts: list[str] = []
+            graph_parts: list[str] = []
 
-        # Primary: keyword search (uses same keywords extracted for diary search)
-        if keywords:
-            graph_nodes = graph_store.search_nodes(" ".join(keywords), limit=5)
-            for node in graph_nodes:
-                ancestors = graph_store.get_ancestors(node.id)
-                path = " > ".join(a.name for a in ancestors)
-                data_preview = node.data[:300] if node.data else ""
-                if data_preview:
-                    graph_parts.append(f"[{path}] {data_preview}")
+            # Primary: keyword search (uses same keywords extracted above)
+            graph_nodes = []
+            if keywords:
+                graph_nodes = graph_store.search_nodes(" ".join(keywords), limit=5)
+                for node in graph_nodes:
+                    ancestors = graph_store.get_ancestors(node.id)
+                    path = " > ".join(a.name for a in ancestors)
+                    data_preview = node.data[:300] if node.data else ""
+                    if data_preview:
+                        graph_parts.append(f"[{path}] {data_preview}")
 
-        # Secondary: include a few recently accessed nodes for conversational continuity
-        recent_ids = {n.id for n in graph_nodes} if 'graph_nodes' in dir() and graph_nodes else set()
-        recent_nodes = graph_store.get_recent_nodes(limit=3)
-        for rn in recent_nodes:
-            if rn.id not in recent_ids and rn.data:
-                data_preview = rn.data[:200]
-                graph_parts.append(f"[{rn.name}] {data_preview}")
+            # Secondary: include a few recently accessed nodes for conversational continuity
+            recent_ids = {n.id for n in graph_nodes}
+            recent_nodes = graph_store.get_recent_nodes(limit=3)
+            for rn in recent_nodes:
+                if rn.id not in recent_ids and rn.data:
+                    data_preview = rn.data[:200]
+                    graph_parts.append(f"[{rn.name}] {data_preview}")
 
-        if graph_parts:
-            graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
-            debug_log(f"  🧠 graph enrichment: {len(graph_parts)} nodes surfaced", "memory")
-    except Exception as e:
-        debug_log(f"  ❌ [graph memory] enrichment failed: {e}", "memory")
+            if graph_parts:
+                graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
+                debug_log(f"  🧠 graph enrichment: {len(graph_parts)} nodes surfaced", "memory")
+        except Exception as e:
+            debug_log(f"  ❌ [graph memory] enrichment failed: {e}", "memory")
 
     # Step 5: Build initial system message context only (no monolithic prompt)
     context = []

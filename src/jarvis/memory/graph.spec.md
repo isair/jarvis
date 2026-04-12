@@ -131,6 +131,13 @@ At the start of each reply cycle, the reply engine enriches the system prompt wi
 
 No tool calls needed. The LLM sees relevant graph memories as part of its system context.
 
+Controlled by `memory_enrichment_source` config:
+- `"all"` (default) — both diary and graph enrich replies
+- `"diary"` — only diary (conversation summaries) used for enrichment
+- `"graph"` — only graph (structured knowledge) used for enrichment
+
+Both systems always receive writes regardless of this setting.
+
 ## Configuration
 
 | Setting | Default | Description |
@@ -142,6 +149,7 @@ No tool calls needed. The LLM sees relevant graph memories as part of its system
 | `TOP_NODES_WINDOW_DAYS` | 30 | Time window for top-nodes |
 | `MAX_TRAVERSAL_DEPTH` | 8 | Safety limit on graph traversal |
 | `SUMMARY_MAX_LENGTH` | 300 | Max chars for node description |
+| `memory_enrichment_source` | `"all"` | Which system enriches replies: `"all"`, `"diary"`, or `"graph"` |
 
 ## UI: Memory Viewer Integration
 
