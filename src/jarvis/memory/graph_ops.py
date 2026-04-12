@@ -31,11 +31,11 @@ def extract_graph_memories(
     thinking: bool = False,
     date_utc: Optional[str] = None,
 ) -> list[str]:
-    """Extract discrete, storable facts from a conversation summary.
+    """Extract discrete facts about the user from a conversation summary.
 
-    Extracts generously — everything the user said or did that could
-    be relevant later. The graph's auto-split mechanism handles
-    consolidation and pattern recognition over time.
+    Focuses on what the summary reveals about the user as a person —
+    their life, preferences, activities, and circumstances. Filters out
+    assistant interactions that don't tell us anything about the user.
 
     Returns a list of short third-person statements about the user,
     or an empty list if nothing worth storing was found.
@@ -45,32 +45,42 @@ def extract_graph_memories(
             Included as a date prefix on each fact for temporal context.
     """
     system_prompt = (
-        "You extract discrete facts about the user from a conversation summary. "
-        "Each fact should be a single, self-contained statement written in "
-        "third person.\n\n"
-        "Extract anything that tells us something about the user:\n"
-        "- Personal preferences, habits, routines\n"
-        "- Decisions, plans, goals\n"
-        "- Relationships and people mentioned\n"
+        "You extract facts about the USER from a conversation summary. "
+        "Focus on what the summary reveals about the user as a person. "
+        "Each fact should be a self-contained third-person statement.\n\n"
+        "EXTRACT — things that tell us about the user:\n"
+        "- What they ate, drank, or did (activities, meals, exercise)\n"
+        "- Preferences, habits, routines, interests\n"
+        "- Plans, goals, decisions\n"
+        "- Relationships and people in their life\n"
         "- Professional details (job, projects, skills)\n"
-        "- Health, dietary, lifestyle information\n"
-        "- Opinions and values\n"
-        "- Activities and experiences\n"
-        "- Emotional states tied to events\n\n"
-        "Do NOT extract:\n"
-        "- Pure small talk or greetings with no substance\n"
-        "- Information the assistant provided (only what the USER shared)\n"
-        "- Duplicate restatements of the same fact\n\n"
+        "- Health, location, living situation\n"
+        "- Opinions, values, emotions tied to events\n"
+        "- Ongoing situations (complaints, applications, projects)\n\n"
+        "DO NOT EXTRACT — interactions with the assistant:\n"
+        "- Questions or requests that reveal nothing about the user "
+        "(asked for the time, requested news, asked about the weather, "
+        "asked for a recap, requested a math problem)\n"
+        "- Greetings, thank-yous, meta-conversation\n"
+        "- The assistant's responses or suggestions\n"
+        "- Vague statements with no concrete information\n\n"
+        "REFRAME — if a request reveals an interest, extract the interest:\n"
+        '- "User asked about boxing venues near E3" → "Interested in boxing near E3"\n'
+        '- "User inquired about yoga classes" → "Interested in yoga"\n'
+        '- "User asked about weather in Kazbegi" → skip (generic query) '
+        'UNLESS the summary shows they were planning a trip there\n\n'
         "Respond with ONLY a JSON array of strings.\n"
         "If nothing is worth storing, respond with an empty array: []\n"
-        'Example: ["Prefers dark roast coffee", "Works at Acme Corp as a senior engineer", '
-        '"Had sushi for lunch", "Feeling stressed about upcoming deadline"]'
+        'Example: ["Had gyudon and chicken gyoza for lunch", '
+        '"Interested in boxing near E3 2WS", '
+        '"Currently located in Tbilisi, Georgia", '
+        '"Pursuing a complaint with a food-delivery company over a chargeback"]'
     )
 
     # Include date so each fact carries temporal context
     date_prefix = f"(Date: {date_utc}) " if date_utc else ""
     user_content = (
-        f"Extract facts from this conversation summary:\n"
+        f"Extract facts about the user from this conversation summary:\n"
         f"{date_prefix}{summary}"
     )
 

@@ -115,7 +115,7 @@ The graph memory system is fully automatic — no tool calls required. It integr
 Piggybacks on the existing diary update flow in `conversation.py`:
 
 1. After a successful diary update, the conversation summary is passed to `update_graph_from_dialogue()`
-2. **Extract**: LLM extracts all facts from the summary generously (third-person statements about the user). The diary entry date is included so facts carry temporal context. Everything gets stored — daily events, preferences, activities — because patterns and consolidation emerge naturally through auto-split.
+2. **Extract**: LLM extracts facts that reveal something about the user as a person (third-person statements). Activities, meals, preferences, and situations are kept. Assistant interactions that reveal nothing about the user are filtered (e.g. "asked for the time", "requested news"). Requests that imply an interest are reframed (e.g. "asked about boxing venues" → "interested in boxing"). The diary entry date is included for temporal context. Patterns and consolidation emerge through auto-split.
 3. **Traverse**: Each fact is placed in the best-fitting node using the three entry points:
    - **Recent nodes** — checked first; follows conversational momentum
    - **Top nodes** — checked second; matches frequently accessed knowledge domains
