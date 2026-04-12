@@ -186,9 +186,10 @@ class TestEngineLifecycle:
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_skips_on_macos_26(self, mock_kb, mock_sys, mock_platform):
-        """pynput crashes on macOS 26+ (TSM thread assertion). Engine must skip."""
+    def test_start_uses_subprocess_on_macos_26(self, mock_kb, mock_sys, mock_platform):
+        """macOS 26+ should use subprocess helper instead of in-process pynput."""
         mock_sys.platform = "darwin"
+        mock_sys.executable = "python3"
         mock_platform.mac_ver.return_value = ("26.2", ("", "", ""), "")
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
@@ -196,9 +197,36 @@ class TestEngineLifecycle:
         mock_kb.Key.shift = MagicMock()
 
         engine = _make_engine()
-        engine.start()
-        assert engine._started is False
-        mock_kb.Listener.assert_not_called()
+
+        # Mock the subprocess helper to succeed
+        with patch.object(engine, "_start_subprocess_helper", return_value=True):
+            engine.start()
+            assert engine._started is True
+            # In-process pynput listener must NOT be created
+            mock_kb.Listener.assert_not_called()
+            engine.stop()
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("src.jarvis.dictation.dictation_engine.sys")
+    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    def test_start_fails_gracefully_on_macos_26_if_helper_fails(
+        self, mock_kb, mock_sys, mock_platform,
+    ):
+        """If the subprocess helper cannot start, dictation should be disabled."""
+        mock_sys.platform = "darwin"
+        mock_sys.executable = "python3"
+        mock_platform.mac_ver.return_value = ("26.0", ("", "", ""), "")
+        mock_kb.Key = MagicMock()
+        mock_kb.KeyCode = MagicMock()
+        mock_kb.Key.ctrl_l = MagicMock()
+        mock_kb.Key.shift = MagicMock()
+
+        engine = _make_engine()
+
+        with patch.object(engine, "_start_subprocess_helper", return_value=False):
+            engine.start()
+            assert engine._started is False
+            mock_kb.Listener.assert_not_called()
 
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
@@ -672,3 +700,167 @@ class TestListenerPauseFlag:
         """VoiceListener should expose a transcribe_lock."""
         assert hasattr(listener, "transcribe_lock")
         assert isinstance(listener.transcribe_lock, type(threading.Lock()))
+
+
+# ---------------------------------------------------------------------------
+# Subprocess helper event handling
+# ---------------------------------------------------------------------------
+
+class TestSubprocessHelperEvents:
+    """Tests for _on_helper_event mapping to recording logic."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_deps(self):
+        try:
+            import pynput  # noqa: F401
+            import sounddevice  # noqa: F401
+            import numpy  # noqa: F401
+        except ImportError:
+            pytest.skip("required dependencies not installed")
+
+    def test_hotkey_press_starts_recording(self):
+        engine = _make_engine()
+        with patch.object(engine, "_start_recording") as mock_start:
+            engine._on_helper_event("hotkey_press")
+            mock_start.assert_called_once()
+
+    def test_hotkey_release_stops_recording(self):
+        engine = _make_engine()
+        engine._recording = True
+        engine._record_start_time = time.time() - 1.0  # held for 1s
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            engine._on_helper_event("hotkey_release")
+            mock_stop.assert_called_once()
+
+    def test_hotkey_release_ignored_when_not_recording(self):
+        engine = _make_engine()
+        engine._recording = False
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            engine._on_helper_event("hotkey_release")
+            mock_stop.assert_not_called()
+
+    def test_hotkey_release_ignored_in_hands_free(self):
+        """In hands-free mode, key release should NOT stop recording."""
+        engine = _make_engine()
+        engine._recording = True
+        engine._hands_free = True
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            engine._on_helper_event("hotkey_release")
+            mock_stop.assert_not_called()
+
+    def test_escape_stops_hands_free(self):
+        engine = _make_engine()
+        engine._recording = True
+        engine._hands_free = True
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            engine._on_helper_event("escape")
+            mock_stop.assert_called_once()
+
+    def test_escape_ignored_when_not_hands_free(self):
+        engine = _make_engine()
+        engine._recording = True
+        engine._hands_free = False
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            engine._on_helper_event("escape")
+            mock_stop.assert_not_called()
+
+    def test_hotkey_press_stops_hands_free_recording(self):
+        """Re-pressing hotkey in hands-free mode should stop recording."""
+        engine = _make_engine()
+        engine._recording = True
+        engine._hands_free = True
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            engine._on_helper_event("hotkey_press")
+            mock_stop.assert_called_once()
+
+    def test_double_tap_activates_hands_free(self):
+        """Two quick taps should activate hands-free mode."""
+        engine = _make_engine()
+
+        # Simulate first quick tap release
+        engine._recording = True
+        engine._record_start_time = time.time() - 0.1  # held 0.1s < 0.4s
+        engine._last_hotkey_release_time = 0.0
+        with patch.object(engine, "_stop_recording"):
+            engine._on_helper_event("hotkey_release")
+        assert engine._last_hotkey_release_time > 0
+
+        # Simulate second quick tap
+        engine._recording = True
+        engine._hands_free = False
+        engine._record_start_time = time.time() - 0.1  # held 0.1s
+        engine._on_helper_event("hotkey_release")
+        assert engine._hands_free is True
+
+
+# ---------------------------------------------------------------------------
+# Subprocess helper module
+# ---------------------------------------------------------------------------
+
+class TestHotkeySharedModule:
+    """Tests for the shared hotkey-matching utilities."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_pynput(self):
+        try:
+            import pynput  # noqa: F401
+        except ImportError:
+            pytest.skip("pynput not installed")
+
+    def test_parse_hotkey_ctrl_alt(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import parse_hotkey
+        mods, trigger = parse_hotkey(kb, "ctrl+alt")
+        assert len(mods) == 2
+        assert trigger is None
+
+    def test_parse_hotkey_with_trigger(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import parse_hotkey
+        mods, trigger = parse_hotkey(kb, "ctrl+shift+d")
+        assert len(mods) == 2
+        assert trigger is not None
+
+    def test_parse_hotkey_empty_raises(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import parse_hotkey
+        with pytest.raises(ValueError):
+            parse_hotkey(kb, "")
+
+    def test_key_matches_same_key(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import key_matches
+        key = kb.Key.ctrl_l
+        assert key_matches(kb, key, key, kb.Key.ctrl_l) is True
+
+    def test_key_matches_none_target(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import key_matches
+        assert key_matches(kb, kb.Key.ctrl_l, kb.Key.ctrl_l, None) is False
+
+    def test_all_modifiers_held(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import all_modifiers_held
+        modifiers = frozenset({kb.Key.ctrl_l, kb.Key.alt_l})
+        pressed = {kb.Key.ctrl_l, kb.Key.alt_l}
+        assert all_modifiers_held(pressed, modifiers) is True
+
+    def test_all_modifiers_not_held(self):
+        from pynput import keyboard as kb
+        from src.jarvis.dictation._hotkey_shared import all_modifiers_held
+        modifiers = frozenset({kb.Key.ctrl_l, kb.Key.alt_l})
+        pressed = {kb.Key.ctrl_l}
+        assert all_modifiers_held(pressed, modifiers) is False
+
+    def test_needs_subprocess_helper_detects_version(self):
+        """_needs_subprocess_helper should return True for macOS 26+."""
+        from src.jarvis.dictation.dictation_engine import DictationEngine
+        with patch("src.jarvis.dictation.dictation_engine.platform") as mock_platform:
+            mock_platform.mac_ver.return_value = ("26.0", ("", "", ""), "")
+            assert DictationEngine._needs_subprocess_helper() is True
+
+    def test_needs_subprocess_helper_false_for_older(self):
+        from src.jarvis.dictation.dictation_engine import DictationEngine
+        with patch("src.jarvis.dictation.dictation_engine.platform") as mock_platform:
+            mock_platform.mac_ver.return_value = ("15.4", ("", "", ""), "")
+            assert DictationEngine._needs_subprocess_helper() is False
