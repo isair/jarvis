@@ -33,47 +33,45 @@ def extract_graph_memories(
 ) -> list[str]:
     """Extract discrete, storable facts from a conversation summary.
 
+    Extracts generously — everything the user said or did that could
+    be relevant later. The graph's auto-split mechanism handles
+    consolidation and pattern recognition over time.
+
     Returns a list of short third-person statements about the user,
     or an empty list if nothing worth storing was found.
 
     Args:
         date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
-            Helps the LLM distinguish one-off daily events from enduring facts.
+            Included as a date prefix on each fact for temporal context.
     """
     system_prompt = (
-        "You extract ENDURING facts worth remembering long-term about the user "
-        "from a conversation summary. Each fact should be a single, self-contained "
-        "statement written in third person.\n\n"
-        "Only extract facts that are TIMELESS — things that would still be true "
-        "or relevant weeks or months later:\n"
+        "You extract discrete facts about the user from a conversation summary. "
+        "Each fact should be a single, self-contained statement written in "
+        "third person.\n\n"
+        "Extract anything that tells us something about the user:\n"
         "- Personal preferences, habits, routines\n"
-        "- Important life decisions or long-term plans\n"
-        "- Relationships and people in the user's life\n"
+        "- Decisions, plans, goals\n"
+        "- Relationships and people mentioned\n"
         "- Professional details (job, projects, skills)\n"
-        "- Ongoing health conditions, dietary preferences, lifestyle choices\n"
-        "- Opinions, values, and beliefs\n"
-        "- Significant life events (moved house, started a job, got a pet)\n\n"
+        "- Health, dietary, lifestyle information\n"
+        "- Opinions and values\n"
+        "- Activities and experiences\n"
+        "- Emotional states tied to events\n\n"
         "Do NOT extract:\n"
-        "- One-off daily activities (ate X, drank Y, went for a walk today)\n"
-        "- Small talk or greetings\n"
-        "- Questions the user asked (unless they reveal a lasting preference)\n"
-        "- Transient information (today's weather, current mood, what they're doing right now)\n"
+        "- Pure small talk or greetings with no substance\n"
         "- Information the assistant provided (only what the USER shared)\n"
-        "- Things that only make sense with a specific date attached\n\n"
-        "If a daily activity reveals a PATTERN or PREFERENCE, extract the pattern "
-        "instead of the event. For example:\n"
-        '- "User drank coconut water" → skip (one-off event)\n'
-        '- "User always drinks coconut water after workouts" → keep (habit)\n'
-        '- "User is trying to eat more protein" → keep (ongoing goal)\n\n'
+        "- Duplicate restatements of the same fact\n\n"
         "Respond with ONLY a JSON array of strings.\n"
-        "If nothing is worth storing long-term, respond with an empty array: []\n"
-        'Example: ["Prefers dark roast coffee", "Works at Acme Corp as a senior engineer"]'
+        "If nothing is worth storing, respond with an empty array: []\n"
+        'Example: ["Prefers dark roast coffee", "Works at Acme Corp as a senior engineer", '
+        '"Had sushi for lunch", "Feeling stressed about upcoming deadline"]'
     )
 
-    date_context = f"\n(This summary is from: {date_utc})\n" if date_utc else ""
+    # Include date so each fact carries temporal context
+    date_prefix = f"(Date: {date_utc}) " if date_utc else ""
     user_content = (
-        f"Extract enduring facts from this conversation summary:"
-        f"{date_context}\n{summary}"
+        f"Extract facts from this conversation summary:\n"
+        f"{date_prefix}{summary}"
     )
 
     debug_log(f"graph memory extraction: sending {len(summary)} chars to {ollama_chat_model}", "memory")
@@ -263,8 +261,15 @@ def auto_split_node(
         "- Each fact must be assigned to exactly one category\n"
         "- Category names should be concise (2-4 words)\n"
         "- Descriptions should be 1-2 sentences explaining what the category covers\n"
-        "- Every fact must appear in exactly one category (no duplicates, no omissions)\n"
-        "- If two facts are near-duplicates, keep only the more informative one\n\n"
+        "- Every fact must appear in exactly one category (no duplicates, no omissions)\n\n"
+        "Consolidation rules — apply these while distributing facts:\n"
+        "- If multiple facts describe the same event or preference, merge into one\n"
+        "- If repeated similar activities appear across different dates "
+        "(e.g. ate X on Monday, ate X on Thursday), consolidate into a pattern "
+        '(e.g. "Regularly eats X") — drop individual occurrences\n'
+        "- If a single event appears just once, keep it as-is\n"
+        "- Preserve any date context only when it matters "
+        "(e.g. life events: started new job on 2025-03-01)\n\n"
         "Respond with ONLY valid JSON in this format:\n"
         '{"categories": [{"name": "Category Name", "description": "What this covers", '
         '"facts": ["fact 1", "fact 2"]}], "summary": "1-2 sentence summary of everything"}'

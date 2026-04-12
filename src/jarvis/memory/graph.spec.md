@@ -68,19 +68,21 @@ Increments `access_count` and updates `last_accessed`. Called automatically when
 - **get_ancestors(node_id)** — Path from root to node (breadcrumb)
 - **get_graph_data(root_id, max_depth)** — Flat {nodes, edges} for canvas rendering. Each node includes depth and has_children flags.
 
-## Auto-Split
+## Auto-Split (Natural Reduction)
 
-Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) after a write:
+Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) after a write. Auto-split is the system's primary consolidation mechanism — it's where temporal events get distilled into patterns and the tree structure deepens organically.
 
 1. LLM analyses the node's data and proposes 2-5 child categories
-2. Each fact is assigned to exactly one child (no duplicates, no omissions)
-3. Child nodes are created under the split node
-4. Parent data is cleared; parent description updated to a summary
+2. Each fact is assigned to exactly one child
+3. **Consolidation during split**: duplicate facts are merged, and repeated similar activities across different dates are consolidated into patterns (e.g. "ate sushi on Mon, ate sushi on Thu" → "regularly eats sushi"). Single occurrences are kept as-is. Date context is preserved only for significant life events.
+4. Child nodes are created under the split node
+5. Parent data is cleared; parent description updated to a summary
+
+This means the tree depth itself encodes a temporal→enduring spectrum: surface-level nodes hold recent raw facts, deeper nodes hold patterns that survived multiple split cycles.
 
 Split quality safeguards:
 - Minimum 2 categories required (abort if LLM proposes fewer)
 - Each category must have at least one fact
-- Near-duplicate facts are deduplicated during split
 - If the split fails (LLM error, bad JSON), the node retains its data and the next write retries
 
 ## Auto-Merge (Future — requires LLM integration)
@@ -109,7 +111,7 @@ The graph memory system is fully automatic — no tool calls required. It integr
 Piggybacks on the existing diary update flow in `conversation.py`:
 
 1. After a successful diary update, the conversation summary is passed to `update_graph_from_dialogue()`
-2. **Extract**: LLM extracts **enduring** facts from the summary (third-person statements about the user). The diary entry date is provided so the LLM can distinguish one-off daily events (e.g. "drank coconut water") from lasting facts (e.g. "prefers coconut water"). Daily activities are only extracted if they reveal a pattern or preference.
+2. **Extract**: LLM extracts all facts from the summary generously (third-person statements about the user). The diary entry date is included so facts carry temporal context. Everything gets stored — daily events, preferences, activities — because patterns and consolidation emerge naturally through auto-split.
 3. **Traverse**: Each fact is placed in the best-fitting node using the three entry points:
    - **Recent nodes** — checked first; follows conversational momentum
    - **Top nodes** — checked second; matches frequently accessed knowledge domains
