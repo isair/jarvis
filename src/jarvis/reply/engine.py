@@ -104,6 +104,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if context_results:
                 conversation_context = "\n".join(context_results)
                 print(f"  📖 Diary: recalled {len(context_results)} entries", flush=True)
+                for entry in context_results[:3]:
+                    # Show a short preview of each diary entry (first 80 chars)
+                    preview = entry.strip().replace("\n", " ")[:80]
+                    print(f"     {preview}", flush=True)
                 debug_log(f"diary enrichment: {len(context_results)} results", "memory")
         except Exception as e:
             debug_log(f"diary enrichment failed: {e}", "memory")
@@ -116,6 +120,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             graph_store = GraphMemoryStore(cfg.db_path)
 
             graph_parts: list[str] = []
+            surfaced_names: list[str] = []
 
             # Primary: keyword search (uses same keywords extracted above)
             graph_nodes = []
@@ -127,6 +132,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     data_preview = node.data[:300] if node.data else ""
                     if data_preview:
                         graph_parts.append(f"[{path}] {data_preview}")
+                        surfaced_names.append(node.name or path.split(" > ")[-1])
                         debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
             # Secondary: include a few recently accessed nodes for conversational continuity
@@ -136,12 +142,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if rn.id not in recent_ids and rn.data:
                     data_preview = rn.data[:200]
                     graph_parts.append(f"[{rn.name}] {data_preview}")
+                    surfaced_names.append(rn.name or rn.id[:8])
                     debug_log(f"graph recent: [{rn.name}] ({rn.data_token_count} tokens)", "memory")
 
             if graph_parts:
                 graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
-                node_names = [n.name for n in graph_nodes[:3]]
-                print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {', '.join(node_names)}", flush=True)
+                names_str = ", ".join(n for n in surfaced_names[:4] if n)
+                print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
+                for part in graph_parts[:3]:
+                    # Show [path] and a short data preview
+                    preview = part.strip().replace("\n", " ")[:80]
+                    print(f"     {preview}", flush=True)
         except Exception as e:
             debug_log(f"graph enrichment failed: {e}", "memory")
 
