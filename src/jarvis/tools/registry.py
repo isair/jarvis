@@ -14,6 +14,8 @@ from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
 from .builtin.fetch_web_page import FetchWebPageTool
 from .builtin.recall_conversation import RecallConversationTool
+from .builtin.memorise import MemoriseTool
+from .builtin.recall_memory import RecallMemoryTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
 from .builtin.nutrition.delete_meal import DeleteMealTool
@@ -34,6 +36,8 @@ BUILTIN_TOOLS = {
     "localFiles": LocalFilesTool(),
     "fetchWebPage": FetchWebPageTool(),
     "recallConversation": RecallConversationTool(),
+    "memorise": MemoriseTool(),
+    "recallMemory": RecallMemoryTool(),
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
     "deleteMeal": DeleteMealTool(),

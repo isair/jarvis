@@ -10,6 +10,8 @@ from .web_search import WebSearchTool
 from .local_files import LocalFilesTool
 from .fetch_web_page import FetchWebPageTool
 from .recall_conversation import RecallConversationTool
+from .memorise import MemoriseTool
+from .recall_memory import RecallMemoryTool
 from .nutrition.log_meal import LogMealTool
 from .nutrition.fetch_meals import FetchMealsTool
 from .nutrition.delete_meal import DeleteMealTool
@@ -25,6 +27,8 @@ __all__ = [
     'LocalFilesTool',
     'FetchWebPageTool',
     'RecallConversationTool',
+    'MemoriseTool',
+    'RecallMemoryTool',
     'LogMealTool',
     'FetchMealsTool',
     'DeleteMealTool',

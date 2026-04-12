@@ -97,10 +97,26 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except Exception as e:
         debug_log(f"  ❌ [memory] enrichment failed: {e}", "memory")
 
+    # Step 4b: Graph memory enrichment — surface top knowledge domains
+    graph_context = ""
+    try:
+        from ..memory.graph import GraphMemoryStore
+        graph_store = GraphMemoryStore(cfg.db_path)
+        top_nodes = graph_store.get_top_nodes(limit=10)
+        if top_nodes:
+            topics = [f"- {n.name}: {n.description}" for n in top_nodes if n.description]
+            if topics:
+                graph_context = "Known topics in memory:\n" + "\n".join(topics)
+                debug_log(f"  🧠 graph enrichment: {len(topics)} top topics surfaced", "memory")
+    except Exception as e:
+        debug_log(f"  ❌ [graph memory] enrichment failed: {e}", "memory")
+
     # Step 5: Build initial system message context only (no monolithic prompt)
     context = []
     if conversation_context:
         context.append(f"Relevant conversation history:\n{conversation_context}")
+    if graph_context:
+        context.append(graph_context)
 
     # Step 6: Tool selection and description
     # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)

@@ -57,6 +57,11 @@ Any node except root can be deleted. Children are orphaned (parent_id set to NUL
 
 Increments `access_count` and updates `last_accessed`. Called automatically when a node is viewed in the UI or retrieved during query traversal.
 
+### Search
+
+- **search_nodes(query, limit)** — Keyword search across name, description, and data fields. Case-insensitive LIKE matching; nodes matching more keywords rank higher. Excludes root. Touches matched nodes for access tracking.
+- **find_node_by_name(name, parent_id)** — Exact name match (case-insensitive), optionally scoped to a parent node. Excludes root when no parent specified.
+
 ## Tree & Graph Queries
 
 - **get_subtree(node_id, max_depth)** — Nested dict for tree sidebar
@@ -93,6 +98,23 @@ Periodic process that:
 - Compresses cold branches (no access in > Y days)
 - Merges sparse subtrees
 - Validates parent summaries
+
+## LLM Integration
+
+### Tools
+
+Two built-in tools connect the graph memory to the LLM conversation loop:
+
+| Tool | Purpose | Key behaviour |
+|------|---------|---------------|
+| `memorise` | Store memories | Finds or creates a topic node under root, appends content. LLM decides when something is worth remembering. |
+| `recallMemory` | Search memories | Keyword search across all nodes; returns data with breadcrumb path. LLM calls this before asking the user about preferences. |
+
+Tools return raw data — the system prompt handles response formatting and personality.
+
+### Enrichment
+
+At the start of each reply cycle, the reply engine surfaces the top N graph nodes (by access frequency) as context in the system message. This gives the LLM passive awareness of stored knowledge domains without requiring an explicit tool call.
 
 ## Configuration
 

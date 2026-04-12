@@ -376,6 +376,72 @@ class GraphMemoryStore:
             row = self.conn.execute("SELECT COUNT(*) as cnt FROM memory_nodes").fetchone()
             return row["cnt"]
 
+    # ── Search ─────────────────────────────────────────────────────────
+
+    def search_nodes(self, query: str, limit: int = 10) -> list[MemoryNode]:
+        """Search nodes by keyword match across name, description, and data.
+
+        Uses case-insensitive LIKE matching on each keyword (split by whitespace).
+        Nodes matching more keywords rank higher; ties broken by access_count.
+        Excludes the root node from results and touches matched nodes.
+        """
+        keywords = [k.strip() for k in query.split() if k.strip()]
+        if not keywords:
+            return []
+
+        # Build a score expression: +1 per keyword per field matched
+        score_parts: list[str] = []
+        params: list[str] = []
+        for kw in keywords:
+            pattern = f"%{kw}%"
+            score_parts.append(
+                "(CASE WHEN name LIKE ? THEN 1 ELSE 0 END"
+                " + CASE WHEN description LIKE ? THEN 1 ELSE 0 END"
+                " + CASE WHEN data LIKE ? THEN 1 ELSE 0 END)"
+            )
+            params.extend([pattern, pattern, pattern])
+
+        score_expr = " + ".join(score_parts)
+        # Use a subquery to avoid duplicating the score expression (and its bindings)
+        sql = f"""
+            SELECT * FROM (
+                SELECT *, ({score_expr}) AS relevance
+                FROM memory_nodes
+                WHERE id != 'root'
+            ) WHERE relevance > 0
+            ORDER BY relevance DESC, access_count DESC
+            LIMIT ?
+        """
+        params.append(str(limit))
+
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+            nodes = [self._row_to_node(r) for r in rows]
+
+        # Touch matched nodes (updates access tracking)
+        for node in nodes:
+            self.touch_node(node.id)
+
+        debug_log(f"Graph search for '{query}' found {len(nodes)} nodes", "memory")
+        return nodes
+
+    def find_node_by_name(self, name: str, parent_id: Optional[str] = None) -> Optional[MemoryNode]:
+        """Find a node by exact name match (case-insensitive), optionally under a specific parent."""
+        with self._lock:
+            if parent_id is not None:
+                row = self.conn.execute(
+                    "SELECT * FROM memory_nodes WHERE LOWER(name) = LOWER(?) AND parent_id = ? LIMIT 1",
+                    (name, parent_id),
+                ).fetchone()
+            else:
+                row = self.conn.execute(
+                    "SELECT * FROM memory_nodes WHERE LOWER(name) = LOWER(?) AND id != 'root' LIMIT 1",
+                    (name,),
+                ).fetchone()
+            if row is None:
+                return None
+            return self._row_to_node(row)
+
     # ── Graph edges for visualisation ───────────────────────────────────
 
     def get_graph_data(self, root_id: str = "root", max_depth: int = 4) -> dict:
