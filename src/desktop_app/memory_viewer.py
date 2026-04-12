@@ -2042,17 +2042,28 @@ def index() -> str:
         }
 
         async function loadStats() {
+            let totalMemories = 0;
+            let totalNodes = 0;
+
             try {
                 const stats = await fetchStats();
-                document.getElementById('stats-memories').textContent = stats.total_memories || 0;
+                totalMemories = stats.total_memories || 0;
+                document.getElementById('stats-memories').textContent = totalMemories;
                 document.getElementById('stats-meals').textContent = stats.total_meals || 0;
             } catch (e) {}
 
             // Load graph stats separately
             try {
                 const graphStats = await (await fetch('/api/graph/stats')).json();
-                document.getElementById('stats-nodes').textContent = graphStats.total_nodes || 0;
+                totalNodes = graphStats.total_nodes || 0;
+                document.getElementById('stats-nodes').textContent = totalNodes;
             } catch (e) {}
+
+            // First-time migration: offer to import diary entries if the graph
+            // is empty (only root node) but the user has diary data
+            if (totalNodes <= 1 && totalMemories > 0) {
+                showImportDiaryModal(true);
+            }
         }
 
         // Event handlers
@@ -2719,19 +2730,29 @@ def index() -> str:
             document.getElementById('new-node-name').focus();
         }
 
-        function showImportDiaryModal() {
+        function showImportDiaryModal(firstTime = false) {
             const existing = document.querySelector('.modal-overlay');
             if (existing) existing.remove();
+
+            const title = firstTime
+                ? '🧠 Build Your Knowledge Graph'
+                : '📥 Import from Diary';
+            const description = firstTime
+                ? 'You have diary entries that can be imported into the new knowledge graph. '
+                  + 'This will extract facts from your conversation history and organise them '
+                  + 'into a searchable knowledge base. This may take a while for large diaries.'
+                : 'Import all existing diary entries into graph memory. Each diary summary '
+                  + 'will be processed through the LLM to extract facts and organise them '
+                  + 'into the graph. This may take a while for large diaries.';
+            const cancelLabel = firstTime ? 'Not Now' : 'Cancel';
 
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
             overlay.innerHTML = `
                 <div class="modal">
-                    <h3>📥 Import from Diary</h3>
+                    <h3>${title}</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
-                        Import all existing diary entries into graph memory. Each diary summary
-                        will be processed through the LLM to extract facts and organise them
-                        into the graph. This may take a while for large diaries.
+                        ${description}
                     </p>
                     <div id="import-progress" style="display: none;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
@@ -2744,7 +2765,7 @@ def index() -> str:
                         <div id="import-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
                     </div>
                     <div class="modal-actions" id="import-actions">
-                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">${cancelLabel}</button>
                         <button class="modal-btn primary" id="btn-start-import">Start Import</button>
                     </div>
                 </div>
@@ -2800,6 +2821,7 @@ def index() -> str:
                                     delete overlay.dataset.importing;
                                     loadGraphData();
                                     loadTreeData();
+                                    loadStats();
                                     showToast('Diary import complete', 'success');
                                 } else if (msg.type === 'error') {
                                     document.getElementById('import-status').textContent = 'Error: ' + msg.message;
