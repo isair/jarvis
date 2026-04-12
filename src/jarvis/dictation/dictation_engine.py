@@ -461,13 +461,13 @@ def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e
 # Hotkey string parsing
 # ---------------------------------------------------------------------------
 
-_MODIFIER_MAP = {
-    "ctrl": "ctrl_l",
-    "shift": "shift_l",
-    "alt": "alt_l",
-    "cmd": "cmd",
-    "super": "cmd",
-}
+from ._hotkey_shared import (
+    MODIFIER_MAP as _MODIFIER_MAP,  # noqa: E402 — kept for any external refs
+    all_modifiers_held as _all_modifiers_held_fn,
+    key_matches as _key_matches_fn,
+    normalise_key as _normalise_key_fn,
+    parse_hotkey as _shared_parse_hotkey,
+)
 
 
 def parse_hotkey(combo: str):
@@ -479,35 +479,7 @@ def parse_hotkey(combo: str):
     """
     if pynput_keyboard is None:
         raise RuntimeError("pynput is not installed")
-
-    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
-    if not parts:
-        raise ValueError("empty hotkey string")
-
-    modifiers: set = set()
-    trigger = None
-
-    for part in parts:
-        mapped = _MODIFIER_MAP.get(part)
-        if mapped:
-            key_obj = getattr(pynput_keyboard.Key, mapped, None)
-            if key_obj is not None:
-                modifiers.add(key_obj)
-        else:
-            # It's a regular key
-            if len(part) == 1:
-                trigger = pynput_keyboard.KeyCode.from_char(part)
-            else:
-                key_obj = getattr(pynput_keyboard.Key, part, None)
-                if key_obj is not None:
-                    trigger = key_obj
-                else:
-                    raise ValueError(f"unknown key: {part}")
-
-    if not modifiers and trigger is None:
-        raise ValueError("hotkey must contain at least one key")
-
-    return frozenset(modifiers), trigger
+    return _shared_parse_hotkey(pynput_keyboard, combo)
 
 
 # ---------------------------------------------------------------------------
@@ -812,33 +784,15 @@ class DictationEngine:
 
     def _normalise_key(self, key) -> Any:
         """Normalise a key event to compare against our parsed trigger/modifiers."""
-        # pynput sometimes gives KeyCode with vk but char=None for modified combos
-        if hasattr(key, "char") and key.char is not None:
-            return pynput_keyboard.KeyCode.from_char(key.char.lower())
-        return key
+        return _normalise_key_fn(pynput_keyboard, key)
 
     def _key_matches(self, key, nkey, target) -> bool:
         """Check whether *key* (raw) / *nkey* (normalised) matches *target*."""
-        if target is None:
-            return False
-        if nkey == target or key == target:
-            return True
-        if getattr(key, "name", None) == getattr(target, "name", None):
-            return True
-        if hasattr(key, "char") and key.char:
-            if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
-                return True
-        return False
+        return _key_matches_fn(pynput_keyboard, key, nkey, target)
 
     def _all_modifiers_held(self) -> bool:
         """Return True when every required modifier is currently pressed."""
-        return all(
-            m in self._pressed_modifiers or any(
-                getattr(p, "name", None) == getattr(m, "name", None)
-                for p in self._pressed_modifiers
-            )
-            for m in self._modifiers
-        )
+        return _all_modifiers_held_fn(self._pressed_modifiers, self._modifiers)
 
     def _on_key_press(self, key) -> None:
         nkey = self._normalise_key(key)

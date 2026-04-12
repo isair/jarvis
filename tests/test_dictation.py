@@ -797,8 +797,8 @@ class TestSubprocessHelperEvents:
 # Subprocess helper module
 # ---------------------------------------------------------------------------
 
-class TestHotkeyHelperModule:
-    """Tests for the _hotkey_helper subprocess module."""
+class TestHotkeySharedModule:
+    """Tests for the shared hotkey-matching utilities."""
 
     @pytest.fixture(autouse=True)
     def _skip_if_no_pynput(self):
@@ -809,48 +809,48 @@ class TestHotkeyHelperModule:
 
     def test_parse_hotkey_ctrl_alt(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _parse_hotkey
-        mods, trigger = _parse_hotkey(kb, "ctrl+alt")
+        from src.jarvis.dictation._hotkey_shared import parse_hotkey
+        mods, trigger = parse_hotkey(kb, "ctrl+alt")
         assert len(mods) == 2
         assert trigger is None
 
     def test_parse_hotkey_with_trigger(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _parse_hotkey
-        mods, trigger = _parse_hotkey(kb, "ctrl+shift+d")
+        from src.jarvis.dictation._hotkey_shared import parse_hotkey
+        mods, trigger = parse_hotkey(kb, "ctrl+shift+d")
         assert len(mods) == 2
         assert trigger is not None
 
     def test_parse_hotkey_empty_raises(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _parse_hotkey
+        from src.jarvis.dictation._hotkey_shared import parse_hotkey
         with pytest.raises(ValueError):
-            _parse_hotkey(kb, "")
+            parse_hotkey(kb, "")
 
     def test_key_matches_same_key(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _key_matches
+        from src.jarvis.dictation._hotkey_shared import key_matches
         key = kb.Key.ctrl_l
-        assert _key_matches(kb, key, key, kb.Key.ctrl_l) is True
+        assert key_matches(kb, key, key, kb.Key.ctrl_l) is True
 
     def test_key_matches_none_target(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _key_matches
-        assert _key_matches(kb, kb.Key.ctrl_l, kb.Key.ctrl_l, None) is False
+        from src.jarvis.dictation._hotkey_shared import key_matches
+        assert key_matches(kb, kb.Key.ctrl_l, kb.Key.ctrl_l, None) is False
 
     def test_all_modifiers_held(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _all_modifiers_held
+        from src.jarvis.dictation._hotkey_shared import all_modifiers_held
         modifiers = frozenset({kb.Key.ctrl_l, kb.Key.alt_l})
         pressed = {kb.Key.ctrl_l, kb.Key.alt_l}
-        assert _all_modifiers_held(pressed, modifiers) is True
+        assert all_modifiers_held(pressed, modifiers) is True
 
     def test_all_modifiers_not_held(self):
         from pynput import keyboard as kb
-        from src.jarvis.dictation._hotkey_helper import _all_modifiers_held
+        from src.jarvis.dictation._hotkey_shared import all_modifiers_held
         modifiers = frozenset({kb.Key.ctrl_l, kb.Key.alt_l})
         pressed = {kb.Key.ctrl_l}
-        assert _all_modifiers_held(pressed, modifiers) is False
+        assert all_modifiers_held(pressed, modifiers) is False
 
     def test_needs_subprocess_helper_detects_version(self):
         """_needs_subprocess_helper should return True for macOS 26+."""
