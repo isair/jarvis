@@ -30,16 +30,19 @@ def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_con
         resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)
         resp.raise_for_status()
         data = resp.json()
-        
+
         if isinstance(data, dict):
             content = extract_text_from_response(data)
             if isinstance(content, str) and content.strip():
                 return content
+            debug_log(f"call_llm_direct: empty content from response keys={list(data.keys())}", "llm")
     except requests.exceptions.Timeout:
+        debug_log(f"call_llm_direct: timeout after {timeout_sec}s", "llm")
         return None
-    except Exception:
+    except Exception as e:
+        debug_log(f"call_llm_direct: request failed — {e}", "llm")
         return None
-    
+
     return None
 
 
