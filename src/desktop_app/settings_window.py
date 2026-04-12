@@ -246,7 +246,7 @@ def _build_field_metadata() -> List[FieldMeta]:
       "memory", "int", min_val=1, max_val=50)
     f("memory_enrichment_source", "Enrichment Source",
       "Which memory system enriches replies: all (diary + graph), diary only, or graph only",
-      "memory", "choice", choices=["all", "diary", "graph"])
+      "memory", "choice", choices=[("diary", "Diary only"), ("graph", "Graph only"), ("all", "All (diary + graph)")])
     f("agentic_max_turns", "Agentic Max Turns",
       "Maximum turns in agentic tool-use loops",
       "memory", "int", min_val=1, max_val=30)
