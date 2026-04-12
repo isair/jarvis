@@ -752,9 +752,24 @@ def index() -> str:
             max-width: 1400px;
             margin: 0 auto;
             padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .tab-content {
+            flex: 1;
+            min-height: 0;
+        }
+
+        .tab-pane.with-sidebar {
             display: grid;
             grid-template-columns: 280px 1fr;
             gap: 2rem;
+        }
+
+        .tab-pane.with-sidebar[style*="display: none"] {
+            display: none !important;
         }
 
         /* Sidebar */
@@ -997,6 +1012,23 @@ def index() -> str:
             to { transform: rotate(360deg); }
         }
 
+        /* Inline filters (for meals date range) */
+        .inline-filters {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .inline-filter-label {
+            font-size: 0.85rem;
+        }
+
+        .inline-filter-sep {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
         /* Tabs */
         .tabs {
             display: flex;
@@ -1102,7 +1134,7 @@ def index() -> str:
 
         /* Responsive */
         @media (max-width: 900px) {
-            .main-container {
+            .tab-pane.with-sidebar {
                 grid-template-columns: 1fr;
             }
 
@@ -1689,41 +1721,42 @@ def index() -> str:
     </header>
 
     <main class="main-container">
-        <aside class="sidebar">
-            <div class="sidebar-section" id="date-filter-section">
-                <div class="sidebar-title">📅 Date Range</div>
-                <div class="date-filters">
-                    <input type="date" class="date-input" id="from-date" placeholder="From" />
-                    <input type="date" class="date-input" id="to-date" placeholder="To" />
-                </div>
-            </div>
+        <div class="tabs">
+            <button class="tab active" data-tab="memories">
+                <span>💭</span> Diary
+            </button>
+            <button class="tab" data-tab="graph">
+                <span>🧠</span> Knowledge
+            </button>
+            <button class="tab" data-tab="meals">
+                <span>🍽️</span> Meals
+            </button>
+        </div>
 
-            <div class="sidebar-section" id="topics-filter-section">
-                <div class="sidebar-title">🏷️ Topics</div>
-                <div class="topics-cloud" id="topics-cloud">
+        <div class="tab-content">
+            <div id="memories-content" class="tab-pane with-sidebar">
+                <aside class="sidebar" id="diary-sidebar">
+                    <div class="sidebar-section" id="date-filter-section">
+                        <div class="sidebar-title">📅 Date Range</div>
+                        <div class="date-filters">
+                            <input type="date" class="date-input" id="from-date" placeholder="From" />
+                            <input type="date" class="date-input" id="to-date" placeholder="To" />
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section" id="topics-filter-section">
+                        <div class="sidebar-title">🏷️ Topics</div>
+                        <div class="topics-cloud" id="topics-cloud">
+                            <div class="loading"><div class="spinner"></div></div>
+                        </div>
+                    </div>
+                </aside>
+                <div class="memory-list">
                     <div class="loading"><div class="spinner"></div></div>
                 </div>
             </div>
-        </aside>
 
-        <section class="content">
-            <div class="tabs">
-                <button class="tab active" data-tab="memories">
-                    <span>💭</span> Diary
-                </button>
-                <button class="tab" data-tab="graph">
-                    <span>🧠</span> Knowledge
-                </button>
-                <button class="tab" data-tab="meals">
-                    <span>🍽️</span> Meals
-                </button>
-            </div>
-
-            <div id="memories-content" class="memory-list">
-                <div class="loading"><div class="spinner"></div></div>
-            </div>
-
-            <div id="graph-content" style="display: none;">
+            <div id="graph-content" class="tab-pane" style="display: none;">
                 <div class="graph-explorer">
                     <!-- Left sidebar: tree navigator -->
                     <div class="graph-tree-sidebar">
@@ -1757,10 +1790,18 @@ def index() -> str:
                 </div>
             </div>
 
-            <div id="meals-content" class="memory-list" style="display: none;">
-                <div class="loading"><div class="spinner"></div></div>
+            <div id="meals-content" class="tab-pane" style="display: none;">
+                <div class="inline-filters">
+                    <span class="inline-filter-label">📅</span>
+                    <input type="date" class="date-input" id="meals-from-date" placeholder="From" />
+                    <span class="inline-filter-sep">→</span>
+                    <input type="date" class="date-input" id="meals-to-date" placeholder="To" />
+                </div>
+                <div class="memory-list">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
             </div>
-        </section>
+        </div>
     </main>
 
     <script>
@@ -1776,10 +1817,14 @@ def index() -> str:
         const searchInput = document.getElementById('search-input');
         const fromDateInput = document.getElementById('from-date');
         const toDateInput = document.getElementById('to-date');
+        const mealsFromDateInput = document.getElementById('meals-from-date');
+        const mealsToDateInput = document.getElementById('meals-to-date');
         const topicsCloud = document.getElementById('topics-cloud');
-        const memoriesContent = document.getElementById('memories-content');
-        const mealsContent = document.getElementById('meals-content');
+        const memoriesPane = document.getElementById('memories-content');
+        const mealsPane = document.getElementById('meals-content');
         const graphContent = document.getElementById('graph-content');
+        const memoriesContent = memoriesPane.querySelector('.memory-list');
+        const mealsContent = mealsPane.querySelector('.memory-list');
         const tabs = document.querySelectorAll('.tab');
 
         // Shared utilities
@@ -2077,47 +2122,52 @@ def index() -> str:
 
         fromDateInput.addEventListener('change', (e) => {
             fromDate = e.target.value;
-            if (currentTab === 'memories') loadMemories();
-            else loadMeals();
+            mealsFromDateInput.value = fromDate;
+            loadMemories();
         });
 
         toDateInput.addEventListener('change', (e) => {
             toDate = e.target.value;
-            if (currentTab === 'memories') loadMemories();
-            else loadMeals();
+            mealsToDateInput.value = toDate;
+            loadMemories();
         });
 
+        mealsFromDateInput.addEventListener('change', (e) => {
+            fromDate = e.target.value;
+            fromDateInput.value = fromDate;
+            loadMeals();
+        });
+
+        mealsToDateInput.addEventListener('change', (e) => {
+            toDate = e.target.value;
+            toDateInput.value = toDate;
+            loadMeals();
+        });
+
+        function switchTab(tabName) {
+            tabs.forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+            currentTab = tabName;
+
+            // Hide all panes
+            memoriesPane.style.display = 'none';
+            graphContent.style.display = 'none';
+            mealsPane.style.display = 'none';
+
+            if (currentTab === 'memories') {
+                memoriesPane.style.display = '';
+                loadMemories();
+            } else if (currentTab === 'graph') {
+                graphContent.style.display = '';
+                initGraph();
+            } else {
+                mealsPane.style.display = '';
+                loadMeals();
+            }
+        }
+
         tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                tabs.forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                currentTab = tab.dataset.tab;
-
-                memoriesContent.style.display = 'none';
-                graphContent.style.display = 'none';
-                mealsContent.style.display = 'none';
-
-                // Show/hide sidebar filters based on active tab
-                const dateSection = document.getElementById('date-filter-section');
-                const topicsSection = document.getElementById('topics-filter-section');
-
-                if (currentTab === 'memories') {
-                    memoriesContent.style.display = 'flex';
-                    dateSection.style.display = '';
-                    topicsSection.style.display = '';
-                    loadMemories();
-                } else if (currentTab === 'graph') {
-                    graphContent.style.display = 'block';
-                    dateSection.style.display = 'none';
-                    topicsSection.style.display = 'none';
-                    initGraph();
-                } else {
-                    mealsContent.style.display = 'flex';
-                    dateSection.style.display = '';
-                    topicsSection.style.display = 'none';
-                    loadMeals();
-                }
-            });
+            tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
 
         // ─── Graph Explorer ────────────────────────────────────────────
@@ -2390,7 +2440,7 @@ def index() -> str:
                 ctx.font = `500 ${fontSize}px Outfit, sans-serif`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillStyle = isSelected ? '#0a0b0f' : '#f4f4f5';
+                ctx.fillStyle = isSelected ? '#fef3c7' : '#f4f4f5';
 
                 // Truncate name to fit
                 let label = node.name;
