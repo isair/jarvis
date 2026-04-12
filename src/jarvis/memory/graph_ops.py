@@ -232,6 +232,7 @@ def find_best_node(
 
     # Entry point 3: Greedy descent from root
     current_id = "root"
+    depth = 0
     for depth in range(MAX_TRAVERSAL_DEPTH):
         children = store.get_children(current_id)
         if not children:
@@ -245,7 +246,7 @@ def find_best_node(
             break  # None of the children fit — write to current node
         current_id = best
 
-    debug_log(f"graph traversal: writing to node {current_id[:8]} (depth {depth if 'depth' in dir() else 0})", "memory")
+    debug_log(f"graph traversal: writing to node {current_id[:8]} (depth {depth})", "memory")
     return current_id
 
 

@@ -564,7 +564,7 @@ def load_settings() -> Settings:
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     memory_enrichment_source = str(merged.get("memory_enrichment_source", "diary")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
-        memory_enrichment_source = "all"
+        memory_enrichment_source = "diary"
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "embedding")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
