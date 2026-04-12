@@ -207,46 +207,63 @@ def find_best_node(
 
     Returns the id of the best node.
     """
+    debug_log(f"graph traversal: placing '{fragment[:60]}...'", "memory")
+
     # Entry point 1: Check recent nodes
     recent = store.get_recent_nodes(limit=5)
     if recent:
+        debug_log(f"graph traversal: trying {len(recent)} recent nodes: {[n.name for n in recent]}", "memory")
         best = _llm_pick_best_child(
             fragment, recent, ollama_base_url, ollama_chat_model,
             timeout_sec=timeout_sec, thinking=thinking,
         )
         if best is not None:
-            debug_log(f"graph traversal: matched recent node {best[:8]}", "memory")
+            matched = store.get_node(best)
+            name = matched.name if matched else best[:8]
+            debug_log(f"graph traversal: matched recent node '{name}'", "memory")
             return best
 
     # Entry point 2: Check top nodes (excluding any already checked as recent)
     recent_ids = {n.id for n in recent} if recent else set()
     top = [n for n in store.get_top_nodes(limit=10) if n.id not in recent_ids]
     if top:
+        debug_log(f"graph traversal: trying {len(top)} top nodes: {[n.name for n in top]}", "memory")
         best = _llm_pick_best_child(
             fragment, top, ollama_base_url, ollama_chat_model,
             timeout_sec=timeout_sec, thinking=thinking,
         )
         if best is not None:
-            debug_log(f"graph traversal: matched top node {best[:8]}", "memory")
+            matched = store.get_node(best)
+            name = matched.name if matched else best[:8]
+            debug_log(f"graph traversal: matched top node '{name}'", "memory")
             return best
 
     # Entry point 3: Greedy descent from root
+    debug_log("graph traversal: descending from root", "memory")
     current_id = "root"
     depth = 0
     for depth in range(MAX_TRAVERSAL_DEPTH):
         children = store.get_children(current_id)
         if not children:
+            debug_log(f"graph traversal: leaf node at depth {depth}", "memory")
             break  # Leaf node — write here
 
+        debug_log(f"graph traversal: depth {depth}, choosing from {[c.name for c in children]}", "memory")
         best = _llm_pick_best_child(
             fragment, children, ollama_base_url, ollama_chat_model,
             timeout_sec=timeout_sec, thinking=thinking,
         )
         if best is None:
+            debug_log(f"graph traversal: no children fit at depth {depth}, stopping", "memory")
             break  # None of the children fit — write to current node
+        matched = store.get_node(best)
+        name = matched.name if matched else best[:8]
+        debug_log(f"graph traversal: descended into '{name}'", "memory")
         current_id = best
 
-    debug_log(f"graph traversal: writing to node {current_id[:8]} (depth {depth})", "memory")
+    final = store.get_node(current_id)
+    final_name = final.name if final else current_id[:8]
+    debug_log(f"graph traversal: writing to '{final_name}' (depth {depth})", "memory")
     return current_id
 
 
@@ -399,6 +416,8 @@ def update_graph_from_dialogue(
         debug_log("graph update: no facts extracted from summary", "memory")
         return 0
 
+    debug_log(f"graph update: placing {len(facts)} facts into knowledge graph", "memory")
+
     stored = 0
     for fact in facts:
         try:
@@ -417,8 +436,13 @@ def update_graph_from_dialogue(
             store.touch_node(node_id)
             stored += 1
 
+            node = store.get_node(node_id)
+            node_name = node.name if node else node_id[:8]
+            debug_log(f"graph update: stored '{fact[:50]}...' → '{node_name}'", "memory")
+
             # Step 4: Auto-split if the node has grown too large
             if threshold_exceeded:
+                debug_log(f"graph update: node '{node_name}' exceeded threshold, splitting", "memory")
                 auto_split_node(
                     store=store,
                     node_id=node_id,

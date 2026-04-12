@@ -781,6 +781,8 @@ def update_diary_from_dialogue_memory(
                         thinking=thinking,
                         date_utc=today,
                     )
+                    if stored > 0:
+                        print(f"  🧠 Knowledge graph: learned {stored} new facts", flush=True)
                     debug_log(f"graph memory: stored {stored} facts from dialogue", "memory")
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")

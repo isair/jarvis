@@ -76,19 +76,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
         keywords = search_params.get('keywords', [])
+        if keywords:
+            print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
+            debug_log(f"extracted keywords: {keywords}", "memory")
     except Exception as e:
-        debug_log(f"  ❌ [memory] keyword extraction failed: {e}", "memory")
+        debug_log(f"keyword extraction failed: {e}", "memory")
 
     # Step 4a: Diary enrichment (episodic conversation history)
     if enrichment_source in ("all", "diary") and keywords:
         try:
             from_time = search_params.get('from')
             to_time = search_params.get('to')
-            try:
-                time_info = f", time: {from_time or 'none'} to {to_time or 'none'}" if from_time or to_time else ""
-                debug_log(f"🧠 searching with keywords={keywords}{time_info}", "memory")
-            except Exception:
-                pass
+            debug_log(f"diary search: keywords={keywords}, from={from_time}, to={to_time}", "memory")
+
             from ..memory.conversation import search_conversation_memory_by_keywords
             context_results = search_conversation_memory_by_keywords(
                 db=db,
@@ -103,9 +103,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
             if context_results:
                 conversation_context = "\n".join(context_results)
-                debug_log(f"  ✅ found {len(context_results)} results for diary enrichment", "memory")
+                print(f"  📖 Diary: recalled {len(context_results)} entries", flush=True)
+                debug_log(f"diary enrichment: {len(context_results)} results", "memory")
         except Exception as e:
-            debug_log(f"  ❌ [diary] enrichment failed: {e}", "memory")
+            debug_log(f"diary enrichment failed: {e}", "memory")
 
     # Step 4b: Graph memory enrichment (structured knowledge about the user)
     graph_context = ""
@@ -126,6 +127,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     data_preview = node.data[:300] if node.data else ""
                     if data_preview:
                         graph_parts.append(f"[{path}] {data_preview}")
+                        debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
             # Secondary: include a few recently accessed nodes for conversational continuity
             recent_ids = {n.id for n in graph_nodes}
@@ -134,12 +136,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if rn.id not in recent_ids and rn.data:
                     data_preview = rn.data[:200]
                     graph_parts.append(f"[{rn.name}] {data_preview}")
+                    debug_log(f"graph recent: [{rn.name}] ({rn.data_token_count} tokens)", "memory")
 
             if graph_parts:
                 graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
-                debug_log(f"  🧠 graph enrichment: {len(graph_parts)} nodes surfaced", "memory")
+                node_names = [n.name for n in graph_nodes[:3]]
+                print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {', '.join(node_names)}", flush=True)
         except Exception as e:
-            debug_log(f"  ❌ [graph memory] enrichment failed: {e}", "memory")
+            debug_log(f"graph enrichment failed: {e}", "memory")
 
     # Step 5: Build initial system message context only (no monolithic prompt)
     context = []
