@@ -779,6 +779,7 @@ def update_diary_from_dialogue_memory(
                         ollama_chat_model=ollama_chat_model,
                         timeout_sec=timeout_sec,
                         thinking=thinking,
+                        date_utc=today,
                     )
                     debug_log(f"graph memory: stored {stored} facts from dialogue", "memory")
             except Exception as e:

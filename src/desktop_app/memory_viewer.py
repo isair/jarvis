@@ -509,6 +509,7 @@ def graph_import_diary() -> Response:
                         ollama_chat_model=settings.ollama_chat_model,
                         timeout_sec=settings.llm_chat_timeout_sec,
                         thinking=getattr(settings, 'llm_thinking_enabled', False),
+                        date_utc=date_utc,
                     )
                     total_facts += facts_stored
                 except Exception as e:

@@ -29,31 +29,51 @@ def extract_graph_memories(
     ollama_chat_model: str,
     timeout_sec: float = 30.0,
     thinking: bool = False,
+    date_utc: Optional[str] = None,
 ) -> list[str]:
     """Extract discrete, storable facts from a conversation summary.
 
     Returns a list of short third-person statements about the user,
     or an empty list if nothing worth storing was found.
+
+    Args:
+        date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
+            Helps the LLM distinguish one-off daily events from enduring facts.
     """
     system_prompt = (
-        "You extract discrete facts worth remembering long-term about the user "
+        "You extract ENDURING facts worth remembering long-term about the user "
         "from a conversation summary. Each fact should be a single, self-contained "
         "statement written in third person.\n\n"
-        "Only extract facts that are:\n"
+        "Only extract facts that are TIMELESS — things that would still be true "
+        "or relevant weeks or months later:\n"
         "- Personal preferences, habits, routines\n"
-        "- Important decisions or plans\n"
-        "- Relationships and people mentioned\n"
+        "- Important life decisions or long-term plans\n"
+        "- Relationships and people in the user's life\n"
         "- Professional details (job, projects, skills)\n"
-        "- Health, dietary, lifestyle information\n"
-        "- Opinions and values\n\n"
+        "- Ongoing health conditions, dietary preferences, lifestyle choices\n"
+        "- Opinions, values, and beliefs\n"
+        "- Significant life events (moved house, started a job, got a pet)\n\n"
         "Do NOT extract:\n"
+        "- One-off daily activities (ate X, drank Y, went for a walk today)\n"
         "- Small talk or greetings\n"
-        "- Questions the user asked (unless they reveal preferences)\n"
-        "- Temporary or transient information (e.g. today's weather)\n"
-        "- Information the assistant provided (only what the USER shared)\n\n"
+        "- Questions the user asked (unless they reveal a lasting preference)\n"
+        "- Transient information (today's weather, current mood, what they're doing right now)\n"
+        "- Information the assistant provided (only what the USER shared)\n"
+        "- Things that only make sense with a specific date attached\n\n"
+        "If a daily activity reveals a PATTERN or PREFERENCE, extract the pattern "
+        "instead of the event. For example:\n"
+        '- "User drank coconut water" → skip (one-off event)\n'
+        '- "User always drinks coconut water after workouts" → keep (habit)\n'
+        '- "User is trying to eat more protein" → keep (ongoing goal)\n\n'
         "Respond with ONLY a JSON array of strings.\n"
-        "If nothing is worth storing, respond with an empty array: []\n"
+        "If nothing is worth storing long-term, respond with an empty array: []\n"
         'Example: ["Prefers dark roast coffee", "Works at Acme Corp as a senior engineer"]'
+    )
+
+    date_context = f"\n(This summary is from: {date_utc})\n" if date_utc else ""
+    user_content = (
+        f"Extract enduring facts from this conversation summary:"
+        f"{date_context}\n{summary}"
     )
 
     debug_log(f"graph memory extraction: sending {len(summary)} chars to {ollama_chat_model}", "memory")
@@ -62,7 +82,7 @@ def extract_graph_memories(
         base_url=ollama_base_url,
         chat_model=ollama_chat_model,
         system_prompt=system_prompt,
-        user_content=f"Extract facts from this conversation summary:\n{summary}",
+        user_content=user_content,
         timeout_sec=timeout_sec,
         thinking=thinking,
     )
@@ -323,9 +343,14 @@ def update_graph_from_dialogue(
     ollama_chat_model: str,
     timeout_sec: float = 30.0,
     thinking: bool = False,
+    date_utc: Optional[str] = None,
 ) -> int:
     """End-to-end: extract memories from a summary, place each in the best
     node, and trigger auto-split if needed.
+
+    Args:
+        date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
+            Passed to extraction to help distinguish daily events from enduring facts.
 
     Returns the number of facts stored.
     """
@@ -336,6 +361,7 @@ def update_graph_from_dialogue(
         ollama_chat_model=ollama_chat_model,
         timeout_sec=timeout_sec,
         thinking=thinking,
+        date_utc=date_utc,
     )
 
     if not facts:
