@@ -464,6 +464,85 @@ def graph_stats() -> Response:
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/graph/import-diary", methods=["POST"])
+def graph_import_diary() -> Response:
+    """Import all diary conversation summaries into the graph memory system.
+
+    Processes each summary through the extract → traverse → append → split
+    pipeline. Returns a streaming response with progress updates so the UI
+    can show real-time feedback.
+    """
+    from jarvis.config import load_settings
+    from jarvis.memory.db import Database
+    from jarvis.memory.graph_ops import update_graph_from_dialogue
+
+    def generate():
+        try:
+            settings = load_settings()
+            db_path = _get_db_path()
+            db = Database(db_path, sqlite_vss_path=None)
+
+            summaries = db.get_all_conversation_summaries()
+            total = len(summaries)
+
+            if total == 0:
+                yield json.dumps({"type": "complete", "message": "No diary entries found to import.", "processed": 0, "total": 0}) + "\n"
+                return
+
+            yield json.dumps({"type": "start", "total": total}) + "\n"
+
+            store = get_graph_store()
+            processed = 0
+            total_facts = 0
+
+            for row in summaries:
+                summary_text = row["summary"]
+                date_utc = row["date_utc"]
+
+                try:
+                    facts_stored = update_graph_from_dialogue(
+                        store=store,
+                        summary=summary_text,
+                        ollama_base_url=settings.ollama_base_url,
+                        ollama_chat_model=settings.ollama_chat_model,
+                        timeout_sec=settings.llm_chat_timeout_sec,
+                        thinking=settings.llm_thinking_enabled,
+                    )
+                    total_facts += facts_stored
+                except Exception as e:
+                    debug_log(f"graph import: failed for {date_utc} — {e}", "memory")
+                    facts_stored = 0
+
+                processed += 1
+                yield json.dumps({
+                    "type": "progress",
+                    "processed": processed,
+                    "total": total,
+                    "date": date_utc,
+                    "facts": facts_stored,
+                }) + "\n"
+
+            yield json.dumps({
+                "type": "complete",
+                "message": f"Imported {total_facts} facts from {total} diary entries.",
+                "processed": processed,
+                "total": total,
+                "total_facts": total_facts,
+            }) + "\n"
+
+            db.close()
+
+        except Exception as e:
+            debug_log(f"graph import failed: {e}", "memory")
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return Response(
+        generate(),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Frontend
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1650,6 +1729,7 @@ def index() -> str:
                             <button class="graph-btn" id="btn-zoom-out" title="Zoom out">➖</button>
                             <button class="graph-btn" id="btn-fit" title="Fit to view">📐</button>
                             <button class="graph-btn" id="btn-add-node" title="Add node">✨</button>
+                            <button class="graph-btn" id="btn-import-diary" title="Import from Diary">📥</button>
                         </div>
                         <canvas id="graph-canvas"></canvas>
                     </div>
@@ -2376,6 +2456,10 @@ def index() -> str:
                 showCreateNodeModal(selectedNodeId || 'root');
             });
 
+            document.getElementById('btn-import-diary').addEventListener('click', () => {
+                showImportDiaryModal();
+            });
+
             // Resize observer
             new ResizeObserver(() => {
                 if (currentTab === 'graph') {
@@ -2609,6 +2693,108 @@ def index() -> str:
             });
 
             document.getElementById('new-node-name').focus();
+        }
+
+        function showImportDiaryModal() {
+            const existing = document.querySelector('.modal-overlay');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.innerHTML = `
+                <div class="modal">
+                    <h3>📥 Import from Diary</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+                        Import all existing diary entries into graph memory. Each diary summary
+                        will be processed through the LLM to extract facts and organise them
+                        into the graph. This may take a while for large diaries.
+                    </p>
+                    <div id="import-progress" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span id="import-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
+                            <span id="import-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0/0</span>
+                        </div>
+                        <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
+                            <div id="import-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
+                        </div>
+                        <div id="import-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                    </div>
+                    <div class="modal-actions" id="import-actions">
+                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                        <button class="modal-btn primary" id="btn-start-import">Start Import</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay && !overlay.dataset.importing) overlay.remove();
+            });
+
+            document.getElementById('btn-start-import').addEventListener('click', async () => {
+                overlay.dataset.importing = 'true';
+                document.getElementById('import-progress').style.display = 'block';
+                document.getElementById('btn-start-import').disabled = true;
+                document.getElementById('btn-start-import').textContent = 'Importing…';
+
+                try {
+                    const resp = await fetch('/api/graph/import-diary', { method: 'POST' });
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            try {
+                                const msg = JSON.parse(line);
+                                if (msg.type === 'start') {
+                                    document.getElementById('import-count').textContent = `0/${msg.total}`;
+                                } else if (msg.type === 'progress') {
+                                    const pct = Math.round((msg.processed / msg.total) * 100);
+                                    document.getElementById('import-bar').style.width = pct + '%';
+                                    document.getElementById('import-count').textContent = `${msg.processed}/${msg.total}`;
+                                    document.getElementById('import-status').textContent = `Processing ${msg.date}…`;
+                                    const log = document.getElementById('import-log');
+                                    log.innerHTML += `<div>📅 ${msg.date} — ${msg.facts} fact${msg.facts !== 1 ? 's' : ''}</div>`;
+                                    log.scrollTop = log.scrollHeight;
+                                } else if (msg.type === 'complete') {
+                                    document.getElementById('import-status').textContent = msg.message;
+                                    document.getElementById('import-bar').style.width = '100%';
+                                    document.getElementById('import-actions').innerHTML = `
+                                        <button class="modal-btn primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
+                                    `;
+                                    delete overlay.dataset.importing;
+                                    loadGraphData();
+                                    loadTreeData();
+                                    showToast('Diary import complete', 'success');
+                                } else if (msg.type === 'error') {
+                                    document.getElementById('import-status').textContent = 'Error: ' + msg.message;
+                                    document.getElementById('import-actions').innerHTML = `
+                                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                                    `;
+                                    delete overlay.dataset.importing;
+                                    showToast('Import failed', 'error');
+                                }
+                            } catch (e) { /* skip malformed lines */ }
+                        }
+                    }
+                } catch (e) {
+                    document.getElementById('import-status').textContent = 'Connection error: ' + e.message;
+                    document.getElementById('import-actions').innerHTML = `
+                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                    `;
+                    delete overlay.dataset.importing;
+                    showToast('Import failed', 'error');
+                }
+            });
         }
 
         // Initial load

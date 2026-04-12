@@ -159,7 +159,7 @@ The graph explorer appears as the **Memories (v2)** tab in the memory viewer, po
 
 1. **Left sidebar — Tree navigator**: Collapsible tree showing the full hierarchy. Clicking a node selects it in both the tree and the graph canvas. Shows child count badges.
 
-2. **Centre — Graph canvas**: Interactive HTML5 Canvas with radial tree layout. Supports pan (drag), zoom (scroll wheel), and click-to-select. Toolbar provides zoom in/out, fit-to-view, and add-node actions. Node size reflects access count. Selected node is highlighted with accent glow.
+2. **Centre — Graph canvas**: Interactive HTML5 Canvas with radial tree layout. Supports pan (drag), zoom (scroll wheel), and click-to-select. Toolbar provides zoom in/out, fit-to-view, add-node, and import-from-diary actions. Node size reflects access count. Selected node is highlighted with accent glow.
 
 3. **Right sidebar — Node detail**: Shows breadcrumb path, name, description, metadata (accesses, tokens, last seen, children count), stored data, children list, and action buttons (edit, add child, delete).
 
@@ -176,12 +176,19 @@ The graph explorer appears as the **Memories (v2)** tab in the memory viewer, po
 | GET | `/api/graph/recent` | Recently accessed nodes |
 | GET | `/api/graph/top` | Most frequently accessed nodes |
 | GET | `/api/graph/stats` | Node count |
+| POST | `/api/graph/import-diary` | Import all diary summaries into graph (streaming NDJSON) |
+
+### Import from Diary
+
+The graph toolbar includes an "Import from Diary" button (📥) that bootstraps the graph with existing diary data. This is a one-time migration path so users don't lose their accumulated memories when switching from diary-only to graph enrichment.
+
+The endpoint streams NDJSON progress events (`start`, `progress`, `complete`, `error`) so the UI shows real-time feedback. Each diary summary is processed through the standard `update_graph_from_dialogue()` pipeline (extract → traverse → append → split). Failures on individual summaries are non-fatal — the import continues with the remaining entries.
 
 ## Relationship to Existing Systems
 
 The graph memory system lives alongside the existing diary system (conversation_summaries + FTS + vector search). It shares the same SQLite database but uses its own table. The diary system remains the primary memory system for now; the graph is a v2 system being built in parallel.
 
-Future migration: existing conversation summaries can be clustered by topic and imported as leaf nodes under appropriate category parents.
+Users can import existing diary data into the graph via the "Import from Diary" button in the Memory Viewer. This processes all historical summaries through the extract-and-place pipeline, building the graph structure organically.
 
 ## Privacy
 
