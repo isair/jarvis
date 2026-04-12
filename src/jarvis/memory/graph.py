@@ -276,6 +276,22 @@ class GraphMemoryStore:
             self.conn.commit()
             return cur.rowcount > 0
 
+    def append_to_node(self, node_id: str, text: str) -> bool:
+        """Append text to a node's data field.
+
+        Returns True if the node's data_token_count now exceeds SPLIT_THRESHOLD.
+        """
+        node = self.get_node(node_id)
+        if node is None:
+            return False
+
+        separator = "\n" if node.data else ""
+        new_data = node.data + separator + text
+        self.update_node(node_id, data=new_data)
+
+        updated = self.get_node(node_id)
+        return updated is not None and updated.data_token_count > SPLIT_THRESHOLD
+
     def touch_node(self, node_id: str) -> None:
         """Increment access_count and update last_accessed."""
         now = datetime.now(timezone.utc).isoformat()

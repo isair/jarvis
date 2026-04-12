@@ -68,19 +68,20 @@ Increments `access_count` and updates `last_accessed`. Called automatically when
 - **get_ancestors(node_id)** — Path from root to node (breadcrumb)
 - **get_graph_data(root_id, max_depth)** — Flat {nodes, edges} for canvas rendering. Each node includes depth and has_children flags.
 
-## Auto-Split (Future — requires LLM integration)
+## Auto-Split
 
-When `data_token_count > SPLIT_THRESHOLD` (1500 tokens):
+Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) after a write:
 
-1. LLM analyses the data and proposes 2-5 child categories
-2. Each memory fragment is assigned to exactly one child
-3. Parent data is replaced with a summary
-4. Summaries cascade upward to root
+1. LLM analyses the node's data and proposes 2-5 child categories
+2. Each fact is assigned to exactly one child (no duplicates, no omissions)
+3. Child nodes are created under the split node
+4. Parent data is cleared; parent description updated to a summary
 
 Split quality safeguards:
-- Minimum child data size (no near-empty children)
-- Non-overlapping children (LLM validates)
-- If quality < threshold, increase the node's threshold instead
+- Minimum 2 categories required (abort if LLM proposes fewer)
+- Each category must have at least one fact
+- Near-duplicate facts are deduplicated during split
+- If the split fails (LLM error, bad JSON), the node retains its data and the next write retries
 
 ## Auto-Merge (Future — requires LLM integration)
 
@@ -101,20 +102,34 @@ Periodic process that:
 
 ## LLM Integration
 
-### Tools
+The graph memory system is fully automatic — no tool calls required. It integrates at two points in the existing pipeline.
 
-Two built-in tools connect the graph memory to the LLM conversation loop:
+### Automatic Writes (via `graph_ops.py`)
 
-| Tool | Purpose | Key behaviour |
-|------|---------|---------------|
-| `memorise` | Store memories | Finds or creates a topic node under root, appends content. LLM decides when something is worth remembering. |
-| `recallMemory` | Search memories | Keyword search across all nodes; returns data with breadcrumb path. LLM calls this before asking the user about preferences. |
+Piggybacks on the existing diary update flow in `conversation.py`:
 
-Tools return raw data — the system prompt handles response formatting and personality.
+1. After a successful diary update, the conversation summary is passed to `update_graph_from_dialogue()`
+2. **Extract**: LLM extracts discrete facts from the summary (third-person statements about the user)
+3. **Traverse**: Each fact is placed in the best-fitting node using the three entry points:
+   - **Recent nodes** — checked first; follows conversational momentum
+   - **Top nodes** — checked second; matches frequently accessed knowledge domains
+   - **Root traversal** — greedy top-down descent; LLM picks the best child at each level, or stops at the current node if none fit
+4. **Append**: The fact is appended to the chosen node's data
+5. **Split**: If the node now exceeds `SPLIT_THRESHOLD`, auto-split is triggered
 
-### Enrichment
+Cold start: everything goes to root until enough data accumulates for the first auto-split. The tree structure emerges organically.
 
-At the start of each reply cycle, the reply engine surfaces the top N graph nodes (by access frequency) as context in the system message. This gives the LLM passive awareness of stored knowledge domains without requiring an explicit tool call.
+LLM failure at any step is non-fatal — the diary update still succeeds, and the graph simply misses that cycle.
+
+### Automatic Reads (via enrichment in `engine.py`)
+
+At the start of each reply cycle, the reply engine enriches the system prompt with graph context:
+
+1. **Keyword search**: Uses the same keywords already extracted for diary search to find matching graph nodes (up to 5 results with data previews)
+2. **Recent nodes**: Includes 2-3 recently accessed nodes for conversational continuity
+3. Results are injected as "Stored knowledge about the user" — separate from diary history to preserve provenance
+
+No tool calls needed. The LLM sees relevant graph memories as part of its system context.
 
 ## Configuration
 

@@ -759,6 +759,31 @@ def update_diary_from_dialogue_memory(
             dialogue_memory.mark_saved_up_to(snapshot_timestamp)
             debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
 
+            # Graph memory (v2): extract facts and store in the node graph.
+            # Non-blocking — if this fails, the diary update still succeeded.
+            try:
+                from .graph import GraphMemoryStore
+                from .graph_ops import update_graph_from_dialogue
+
+                graph_store = GraphMemoryStore(db.db_path)
+                # Retrieve the summary we just stored to use for extraction
+                today = datetime.now(timezone.utc).date().isoformat()
+                existing = db.get_conversation_summary(today, source_app)
+                summary_text = existing['summary'] if existing else None
+
+                if summary_text:
+                    stored = update_graph_from_dialogue(
+                        store=graph_store,
+                        summary=summary_text,
+                        ollama_base_url=ollama_base_url,
+                        ollama_chat_model=ollama_chat_model,
+                        timeout_sec=timeout_sec,
+                        thinking=thinking,
+                    )
+                    debug_log(f"graph memory: stored {stored} facts from dialogue", "memory")
+            except Exception as e:
+                debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
+
         return summary_id
 
     except Exception as e:

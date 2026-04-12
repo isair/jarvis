@@ -97,17 +97,35 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except Exception as e:
         debug_log(f"  ❌ [memory] enrichment failed: {e}", "memory")
 
-    # Step 4b: Graph memory enrichment — surface top knowledge domains
+    # Step 4b: Graph memory enrichment — search stored knowledge with same keywords
     graph_context = ""
     try:
         from ..memory.graph import GraphMemoryStore
         graph_store = GraphMemoryStore(cfg.db_path)
-        top_nodes = graph_store.get_top_nodes(limit=10)
-        if top_nodes:
-            topics = [f"- {n.name}: {n.description}" for n in top_nodes if n.description]
-            if topics:
-                graph_context = "Known topics in memory:\n" + "\n".join(topics)
-                debug_log(f"  🧠 graph enrichment: {len(topics)} top topics surfaced", "memory")
+
+        graph_parts: list[str] = []
+
+        # Primary: keyword search (uses same keywords extracted for diary search)
+        if keywords:
+            graph_nodes = graph_store.search_nodes(" ".join(keywords), limit=5)
+            for node in graph_nodes:
+                ancestors = graph_store.get_ancestors(node.id)
+                path = " > ".join(a.name for a in ancestors)
+                data_preview = node.data[:300] if node.data else ""
+                if data_preview:
+                    graph_parts.append(f"[{path}] {data_preview}")
+
+        # Secondary: include a few recently accessed nodes for conversational continuity
+        recent_ids = {n.id for n in graph_nodes} if 'graph_nodes' in dir() and graph_nodes else set()
+        recent_nodes = graph_store.get_recent_nodes(limit=3)
+        for rn in recent_nodes:
+            if rn.id not in recent_ids and rn.data:
+                data_preview = rn.data[:200]
+                graph_parts.append(f"[{rn.name}] {data_preview}")
+
+        if graph_parts:
+            graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
+            debug_log(f"  🧠 graph enrichment: {len(graph_parts)} nodes surfaced", "memory")
     except Exception as e:
         debug_log(f"  ❌ [graph memory] enrichment failed: {e}", "memory")
 
