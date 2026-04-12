@@ -1690,7 +1690,7 @@ def index() -> str:
 
     <main class="main-container">
         <aside class="sidebar">
-            <div class="sidebar-section">
+            <div class="sidebar-section" id="date-filter-section">
                 <div class="sidebar-title">📅 Date Range</div>
                 <div class="date-filters">
                     <input type="date" class="date-input" id="from-date" placeholder="From" />
@@ -1698,7 +1698,7 @@ def index() -> str:
                 </div>
             </div>
 
-            <div class="sidebar-section">
+            <div class="sidebar-section" id="topics-filter-section">
                 <div class="sidebar-title">🏷️ Topics</div>
                 <div class="topics-cloud" id="topics-cloud">
                     <div class="loading"><div class="spinner"></div></div>
@@ -2086,14 +2086,24 @@ def index() -> str:
                 graphContent.style.display = 'none';
                 mealsContent.style.display = 'none';
 
+                // Show/hide sidebar filters based on active tab
+                const dateSection = document.getElementById('date-filter-section');
+                const topicsSection = document.getElementById('topics-filter-section');
+
                 if (currentTab === 'memories') {
                     memoriesContent.style.display = 'flex';
+                    dateSection.style.display = '';
+                    topicsSection.style.display = '';
                     loadMemories();
                 } else if (currentTab === 'graph') {
                     graphContent.style.display = 'block';
+                    dateSection.style.display = 'none';
+                    topicsSection.style.display = 'none';
                     initGraph();
                 } else {
                     mealsContent.style.display = 'flex';
+                    dateSection.style.display = '';
+                    topicsSection.style.display = 'none';
                     loadMeals();
                 }
             });
