@@ -65,13 +65,77 @@ from desktop_app.face_widget import FaceWindow
 _LOG_SEPARATOR = "─" * 50
 
 
+def _trim_extension_modules(logs: str) -> str:
+    """Shorten the faulthandler 'Extension modules:' line to a brief summary.
+
+    This line typically consumes 1500-2500 chars of module names that rarely
+    help with crash diagnosis.  Replacing it frees space for the critical
+    'Fatal Python error' header and current-thread stack trace.
+    """
+    import re
+    # Match "Extension modules: mod1, mod2, ... (total: N)\n"
+    m = re.search(
+        r'^(Extension modules:) .+?\(total: (\d+)\)\s*$',
+        logs, re.MULTILINE,
+    )
+    if m:
+        return logs[:m.start()] + f"{m.group(1)} ({m.group(2)} total — trimmed for brevity)\n" + logs[m.end():]
+
+    # Fallback: line without "(total: N)" — just truncate after first few modules
+    m = re.search(
+        r'^(Extension modules:) (.{80}).+$',
+        logs, re.MULTILINE,
+    )
+    if m:
+        return logs[:m.start()] + f"{m.group(1)} {m.group(2)}... (trimmed)\n" + logs[m.end():]
+
+    return logs
+
+
+def _extract_fatal_section(logs: str) -> str:
+    """Extract the 'Fatal Python error' header + current thread stack.
+
+    In faulthandler dumps these lines carry the actual crash cause and
+    appear just before the per-thread stacks.  Returns "" if not found.
+    """
+    import re
+    # Find "Fatal Python error: ..." line
+    m = re.search(r'^Fatal Python error: .+$', logs, re.MULTILINE)
+    if not m:
+        return ""
+
+    start = m.start()
+
+    # Grab everything up to (but not including) the SECOND "Thread 0x" header
+    # (the first one is "Current thread ..."; the second is the next thread).
+    rest = logs[start:]
+    thread_headers = list(re.finditer(r'^Thread 0x', rest, re.MULTILINE))
+    if thread_headers:
+        end = start + thread_headers[0].start()
+    else:
+        # No second thread header — take up to 500 chars
+        end = start + min(500, len(rest))
+
+    return logs[start:end].rstrip() + "\n"
+
+
 def _truncate_logs_for_report(logs: str, max_len: int) -> str:
     """Truncate logs keeping init section + recent tail.
 
     Recent logs are more valuable for debugging, so we preserve the tail.
     The init section (everything up to the last separator line) is kept
     for context (version, platform, configuration info).
+
+    For faulthandler crash dumps, the bulky 'Extension modules:' line is
+    trimmed first and the 'Fatal Python error' header + current thread
+    stack are preserved as a priority section so the root cause survives
+    truncation.
     """
+    # Trim the Extension modules line before size check — it wastes ~1700
+    # chars of budget on module names that almost never help diagnose a crash.
+    if "Extension modules:" in logs:
+        logs = _trim_extension_modules(logs)
+
     if len(logs) <= max_len:
         return logs
 
@@ -90,22 +154,40 @@ def _truncate_logs_for_report(logs: str, max_len: int) -> str:
         # No separator found (e.g. crash logs); skip init preservation
         init_section = ""
 
-    if len(init_section) + len(marker) >= max_len:
-        # Init section alone exceeds budget; just keep the tail
+    # For faulthandler dumps, extract the fatal error + current thread stack
+    # as a second must-keep section (the most diagnostic part of the dump).
+    fatal_section = _extract_fatal_section(logs)
+
+    if len(init_section) + len(fatal_section) + len(marker) * 2 >= max_len:
+        # Budget too tight — keep fatal section + tail only
+        if fatal_section:
+            tail_budget = max_len - len(fatal_section) - len(marker)
+            tail_part = logs[-tail_budget:]
+            newline_idx = tail_part.find('\n')
+            if newline_idx != -1 and newline_idx < 200:
+                tail_part = tail_part[newline_idx + 1:]
+            return fatal_section + marker + tail_part
+
+        # No fatal section — just keep the tail
         tail_part = logs[-(max_len - len(marker)):]
         newline_idx = tail_part.find('\n')
         if newline_idx != -1 and newline_idx < 200:
             tail_part = tail_part[newline_idx + 1:]
         return marker.lstrip() + tail_part
 
-    tail_budget = max_len - len(init_section) - len(marker)
+    # Build: init_section + marker + fatal_section + marker + tail
+    fixed_parts = init_section + marker + fatal_section
+    if fatal_section:
+        fixed_parts += marker
+
+    tail_budget = max_len - len(fixed_parts)
     tail_part = logs[-tail_budget:]
     # Snap to line boundary to avoid a partial first line
     newline_idx = tail_part.find('\n')
     if newline_idx != -1 and newline_idx < 200:
         tail_part = tail_part[newline_idx + 1:]
 
-    return init_section + marker + tail_part
+    return fixed_parts + tail_part
 
 
 def setup_crash_logging():

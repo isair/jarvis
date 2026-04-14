@@ -1297,35 +1297,60 @@ class VoiceListener(threading.Thread):
             return
 
         # Windows 11: Test microphone permission by attempting a brief recording
-        # This catches privacy settings that silently block audio access
+        # This catches privacy settings that silently block audio access.
+        # A 5-second timeout prevents indefinite hangs when Windows blocks
+        # the audio device at the system level without raising an error.
         if sys.platform == 'win32':
             try:
                 print("  🔐 Checking microphone permission...", flush=True)
-                # Try to record 0.1 seconds - will fail immediately if permission denied
-                test_recording = sd.rec(int(0.1 * self._samplerate), samplerate=self._samplerate, channels=1, blocking=True)
-                if test_recording is not None and len(test_recording) > 0:
+                mic_result: list = [None]
+                mic_error: list = [None]
+
+                def _mic_check():
+                    try:
+                        mic_result[0] = sd.rec(
+                            int(0.1 * self._samplerate),
+                            samplerate=self._samplerate, channels=1, blocking=True,
+                        )
+                    except Exception as exc:
+                        mic_error[0] = exc
+
+                check_thread = threading.Thread(target=_mic_check, daemon=True)
+                check_thread.start()
+                check_thread.join(timeout=5.0)
+
+                if check_thread.is_alive():
+                    debug_log("microphone permission check timed out after 5s", "voice")
+                    print("  ⚠️  Microphone permission check timed out", flush=True)
+                    print("     This may indicate Windows is blocking microphone access.", flush=True)
+                    print("     Continuing anyway — voice input may not work.", flush=True)
+                elif mic_error[0] is not None:
+                    e = mic_error[0]
+                    error_str = str(e).lower()
+                    print(f"  ❌ Microphone permission check failed: {e}", flush=True)
+                    if "unapproved" in error_str or "denied" in error_str or "access" in error_str or "-9999" in str(e):
+                        print("", flush=True)
+                        print("  ┌─────────────────────────────────────────────────────────┐", flush=True)
+                        print("  │  🔒 MICROPHONE ACCESS BLOCKED BY WINDOWS               │", flush=True)
+                        print("  │                                                         │", flush=True)
+                        print("  │  To fix this:                                          │", flush=True)
+                        print("  │  1. Open Windows Settings                              │", flush=True)
+                        print("  │  2. Go to Privacy & security → Microphone              │", flush=True)
+                        print("  │  3. Turn ON 'Microphone access'                        │", flush=True)
+                        print("  │  4. Turn ON 'Let apps access your microphone'          │", flush=True)
+                        print("  │  5. Turn ON 'Let desktop apps access your microphone'  │", flush=True)
+                        print("  │                                                         │", flush=True)
+                        print("  │  Then restart Jarvis.                                  │", flush=True)
+                        print("  └─────────────────────────────────────────────────────────┘", flush=True)
+                        print("", flush=True)
+                    return
+                elif mic_result[0] is not None and len(mic_result[0]) > 0:
                     print("  ✅ Microphone permission OK", flush=True)
                 else:
                     print("  ⚠️  Microphone returned empty audio", flush=True)
             except Exception as e:
-                error_str = str(e).lower()
-                print(f"  ❌ Microphone permission check failed: {e}", flush=True)
-                if "unapproved" in error_str or "denied" in error_str or "access" in error_str or "-9999" in str(e):
-                    print("", flush=True)
-                    print("  ┌─────────────────────────────────────────────────────────┐", flush=True)
-                    print("  │  🔒 MICROPHONE ACCESS BLOCKED BY WINDOWS               │", flush=True)
-                    print("  │                                                         │", flush=True)
-                    print("  │  To fix this:                                          │", flush=True)
-                    print("  │  1. Open Windows Settings                              │", flush=True)
-                    print("  │  2. Go to Privacy & security → Microphone              │", flush=True)
-                    print("  │  3. Turn ON 'Microphone access'                        │", flush=True)
-                    print("  │  4. Turn ON 'Let apps access your microphone'          │", flush=True)
-                    print("  │  5. Turn ON 'Let desktop apps access your microphone'  │", flush=True)
-                    print("  │                                                         │", flush=True)
-                    print("  │  Then restart Jarvis.                                  │", flush=True)
-                    print("  └─────────────────────────────────────────────────────────┘", flush=True)
-                    print("", flush=True)
-                return
+                debug_log(f"microphone permission check error: {e}", "voice")
+                print(f"  ⚠️  Microphone check error: {e}", flush=True)
 
         # Determine and initialise Whisper backend
         self._whisper_backend = self._determine_whisper_backend()
