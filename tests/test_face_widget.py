@@ -225,15 +225,27 @@ class TestJarvisStateManager:
         if os.path.exists(state_file):
             os.remove(state_file)
 
-        # Patch QObject.__init__ and state_changed signal so that
-        # JarvisStateManager can be instantiated without a QApplication.
-        mock_signal = MagicMock()
-        with patch("desktop_app.face_widget.QObject.__init__", lambda self: None), \
-             patch.object(
-                 face_widget.JarvisStateManager, "state_changed",
-                 mock_signal,
-             ):
-            yield
+        # Monkey-patch JarvisStateManager so it can be instantiated
+        # without a QApplication on headless CI.  We skip QObject.__init__
+        # and replace the pyqtSignal with a plain mock.
+        _orig_init = face_widget.JarvisStateManager.__init__
+        _orig_signal = face_widget.JarvisStateManager.__dict__.get("state_changed")
+
+        def _headless_init(self):
+            # Skip QObject.__init__(); run only the Python-level setup
+            self._state = face_widget.JarvisState.ASLEEP
+            self._state_lock = __import__("threading").Lock()
+            self._state_file = face_widget._get_jarvis_state_file()
+            self._write_state(face_widget.JarvisState.ASLEEP)
+
+        face_widget.JarvisStateManager.__init__ = _headless_init
+        face_widget.JarvisStateManager.state_changed = MagicMock()
+
+        yield
+
+        face_widget.JarvisStateManager.__init__ = _orig_init
+        if _orig_signal is not None:
+            face_widget.JarvisStateManager.state_changed = _orig_signal
 
         # Reset singleton after test
         face_widget._jarvis_state_instance = None
