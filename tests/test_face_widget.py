@@ -2,8 +2,20 @@
 Tests for the FaceWindow positioning logic.
 """
 
+import os
 from unittest.mock import patch, MagicMock
 import pytest
+
+# Ensure headless Qt works on Linux CI
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="module")
+def _qapp():
+    """Provide a QApplication for tests that create QObject subclasses."""
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    yield app
 
 
 class TestFaceWindowPositioning:
@@ -203,6 +215,10 @@ class TestFaceWidgetImports:
 
 class TestJarvisStateManager:
     """Tests for JarvisStateManager cross-process state sharing."""
+
+    @pytest.fixture(autouse=True)
+    def _ensure_qapp(self, _qapp):
+        """JarvisStateManager extends QObject, which needs a QApplication."""
 
     @pytest.fixture(autouse=True)
     def cleanup_state_file(self):
