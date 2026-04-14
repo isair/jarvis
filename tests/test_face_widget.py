@@ -6,17 +6,6 @@ import os
 from unittest.mock import patch, MagicMock
 import pytest
 
-# Ensure headless Qt works on Linux CI
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-
-@pytest.fixture(scope="module")
-def _qapp():
-    """Provide a QApplication for tests that create QObject subclasses."""
-    from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
-
 
 class TestFaceWindowPositioning:
     """Tests for FaceWindow positioning on the right side of screen."""
@@ -217,12 +206,12 @@ class TestJarvisStateManager:
     """Tests for JarvisStateManager cross-process state sharing."""
 
     @pytest.fixture(autouse=True)
-    def _ensure_qapp(self, _qapp):
-        """JarvisStateManager extends QObject, which needs a QApplication."""
-
-    @pytest.fixture(autouse=True)
     def cleanup_state_file(self):
-        """Clean up state file and singleton before/after each test."""
+        """Clean up state file and singleton before/after each test.
+
+        Also patches QObject so these tests work on headless CI without
+        a running QApplication or display server.
+        """
         import tempfile
         import os
         from desktop_app import face_widget
@@ -236,7 +225,15 @@ class TestJarvisStateManager:
         if os.path.exists(state_file):
             os.remove(state_file)
 
-        yield
+        # Patch QObject.__init__ and state_changed signal so that
+        # JarvisStateManager can be instantiated without a QApplication.
+        mock_signal = MagicMock()
+        with patch("desktop_app.face_widget.QObject.__init__", lambda self: None), \
+             patch.object(
+                 face_widget.JarvisStateManager, "state_changed",
+                 mock_signal,
+             ):
+            yield
 
         # Reset singleton after test
         face_widget._jarvis_state_instance = None
