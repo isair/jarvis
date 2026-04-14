@@ -1300,18 +1300,28 @@ class VoiceListener(threading.Thread):
         # This catches privacy settings that silently block audio access.
         # A 5-second timeout prevents indefinite hangs when Windows blocks
         # the audio device at the system level without raising an error.
+        # Uses InputStream (not sd.rec) so the stream can be explicitly closed
+        # on timeout, avoiding resource leaks that could block later audio init.
         if sys.platform == 'win32':
             try:
                 print("  🔐 Checking microphone permission...", flush=True)
-                mic_result: list = [None]
+                mic_ok = threading.Event()
                 mic_error: list = [None]
+                mic_stream: list = [None]
 
                 def _mic_check():
                     try:
-                        mic_result[0] = sd.rec(
-                            int(0.1 * self._samplerate),
-                            samplerate=self._samplerate, channels=1, blocking=True,
+                        stream = sd.InputStream(
+                            samplerate=self._samplerate, channels=1,
+                            dtype="float32", blocksize=int(self._samplerate * 0.1),
                         )
+                        mic_stream[0] = stream
+                        stream.start()
+                        time.sleep(0.15)
+                        stream.stop()
+                        stream.close()
+                        mic_stream[0] = None
+                        mic_ok.set()
                     except Exception as exc:
                         mic_error[0] = exc
 
@@ -1320,7 +1330,15 @@ class VoiceListener(threading.Thread):
                 check_thread.join(timeout=5.0)
 
                 if check_thread.is_alive():
+                    # Clean up the stream if the thread is still blocked
                     debug_log("microphone permission check timed out after 5s", "voice")
+                    stream_ref = mic_stream[0]
+                    if stream_ref is not None:
+                        try:
+                            stream_ref.abort()
+                            stream_ref.close()
+                        except Exception:
+                            pass
                     print("  ⚠️  Microphone permission check timed out", flush=True)
                     print("     This may indicate Windows is blocking microphone access.", flush=True)
                     print("     Continuing anyway — voice input may not work.", flush=True)
@@ -1344,7 +1362,7 @@ class VoiceListener(threading.Thread):
                         print("  └─────────────────────────────────────────────────────────┘", flush=True)
                         print("", flush=True)
                     return
-                elif mic_result[0] is not None and len(mic_result[0]) > 0:
+                elif mic_ok.is_set():
                     print("  ✅ Microphone permission OK", flush=True)
                 else:
                     print("  ⚠️  Microphone returned empty audio", flush=True)

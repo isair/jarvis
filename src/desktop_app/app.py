@@ -75,7 +75,7 @@ def _trim_extension_modules(logs: str) -> str:
     import re
     # Match "Extension modules: mod1, mod2, ... (total: N)\n"
     m = re.search(
-        r'^(Extension modules:) .+?\(total: (\d+)\)\s*$',
+        r'^(Extension modules:) [^\n]+\(total: (\d+)\)\s*$',
         logs, re.MULTILINE,
     )
     if m:
@@ -96,7 +96,9 @@ def _extract_fatal_section(logs: str) -> str:
     """Extract the 'Fatal Python error' header + current thread stack.
 
     In faulthandler dumps these lines carry the actual crash cause and
-    appear just before the per-thread stacks.  Returns "" if not found.
+    appear between the fatal error line and the first other thread
+    (i.e. the first ``Thread 0x`` header after ``Current thread 0x``).
+    Returns "" if not found.
     """
     import re
     # Find "Fatal Python error: ..." line
@@ -106,17 +108,25 @@ def _extract_fatal_section(logs: str) -> str:
 
     start = m.start()
 
-    # Grab everything up to (but not including) the SECOND "Thread 0x" header
-    # (the first one is "Current thread ..."; the second is the next thread).
+    # Grab everything up to (but not including) the first "Thread 0x" header.
+    # "Current thread 0x..." uses a different prefix so won't match here.
     rest = logs[start:]
-    thread_headers = list(re.finditer(r'^Thread 0x', rest, re.MULTILINE))
-    if thread_headers:
-        end = start + thread_headers[0].start()
+    first_other_thread = next(re.finditer(r'^Thread 0x', rest, re.MULTILINE), None)
+    if first_other_thread:
+        end = start + first_other_thread.start()
     else:
-        # No second thread header — take up to 500 chars
+        # No other thread header — take up to 500 chars
         end = start + min(500, len(rest))
 
     return logs[start:end].rstrip() + "\n"
+
+
+def _snap_to_line_boundary(text: str) -> str:
+    """Advance past a partial first line so truncated output starts cleanly."""
+    newline_idx = text.find('\n')
+    if newline_idx != -1 and newline_idx < 200:
+        return text[newline_idx + 1:]
+    return text
 
 
 def _truncate_logs_for_report(logs: str, max_len: int) -> str:
@@ -158,21 +168,23 @@ def _truncate_logs_for_report(logs: str, max_len: int) -> str:
     # as a second must-keep section (the most diagnostic part of the dump).
     fatal_section = _extract_fatal_section(logs)
 
+    # Cap fatal_section so it never alone exceeds the budget
+    fatal_cap = max(0, max_len - len(marker) - 200)  # leave room for tail
+    if len(fatal_section) > fatal_cap:
+        fatal_section = fatal_section[:fatal_cap].rstrip() + "\n"
+
     if len(init_section) + len(fatal_section) + len(marker) * 2 >= max_len:
         # Budget too tight — keep fatal section + tail only
         if fatal_section:
-            tail_budget = max_len - len(fatal_section) - len(marker)
-            tail_part = logs[-tail_budget:]
-            newline_idx = tail_part.find('\n')
-            if newline_idx != -1 and newline_idx < 200:
-                tail_part = tail_part[newline_idx + 1:]
+            tail_budget = max(0, max_len - len(fatal_section) - len(marker))
+            if tail_budget == 0:
+                return fatal_section[:max_len]
+            tail_part = _snap_to_line_boundary(logs[-tail_budget:])
             return fatal_section + marker + tail_part
 
         # No fatal section — just keep the tail
-        tail_part = logs[-(max_len - len(marker)):]
-        newline_idx = tail_part.find('\n')
-        if newline_idx != -1 and newline_idx < 200:
-            tail_part = tail_part[newline_idx + 1:]
+        tail_budget = max(0, max_len - len(marker))
+        tail_part = _snap_to_line_boundary(logs[-tail_budget:])
         return marker.lstrip() + tail_part
 
     # Build: init_section + marker + fatal_section + marker + tail
@@ -180,12 +192,8 @@ def _truncate_logs_for_report(logs: str, max_len: int) -> str:
     if fatal_section:
         fixed_parts += marker
 
-    tail_budget = max_len - len(fixed_parts)
-    tail_part = logs[-tail_budget:]
-    # Snap to line boundary to avoid a partial first line
-    newline_idx = tail_part.find('\n')
-    if newline_idx != -1 and newline_idx < 200:
-        tail_part = tail_part[newline_idx + 1:]
+    tail_budget = max(0, max_len - len(fixed_parts))
+    tail_part = _snap_to_line_boundary(logs[-tail_budget:])
 
     return fixed_parts + tail_part
 
@@ -423,6 +431,8 @@ def show_crash_report_dialog(crash_content: str) -> None:
                 # Truncate crash info for URL (GitHub has limits)
                 # Keep init lines + recent tail (recent logs are most useful for debugging)
                 truncated = _truncate_logs_for_report(self.crash_info, 4000)
+                # Escape backtick fences so log content can't break out of the code block
+                truncated = truncated.replace('```', '`` `')
 
                 title = "Crash Report"
                 body = f"""## Crash Report
@@ -877,6 +887,8 @@ class LogViewerWindow(QMainWindow):
         # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
         # Keep init lines + recent tail (recent logs are most useful for debugging)
         redacted_logs = _truncate_logs_for_report(redacted_logs, 5000)
+        # Escape backtick fences so log content can't break out of the code block
+        redacted_logs = redacted_logs.replace('```', '`` `')
 
         title = "Bug Report"
         body = f"""## Bug Report

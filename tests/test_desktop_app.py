@@ -492,6 +492,55 @@ class TestLogViewerReportIssue:
         # But summary count should remain
         assert "100" in result
 
+    def test_faulthandler_budget_too_tight_caps_fatal_section(self):
+        """When fatal section exceeds the budget, output must still respect max_len."""
+        from desktop_app.app import _truncate_logs_for_report, _LOG_SEPARATOR
+
+        # Simulate a deep recursion crash: huge fatal section (~5000 chars)
+        init_block = f"Header\n{_LOG_SEPARATOR}\n"
+        fatal_line = "Fatal Python error: maximum recursion depth exceeded\n"
+        deep_stack = "\n".join(
+            [f"  File \"module.py\", line {i} in func_{i}" for i in range(300)]
+        )
+        current_thread = f"\nCurrent thread 0x1234 (most recent call first):\n{deep_stack}\n"
+        other_thread = "\nThread 0x5678 (most recent call first):\n  File \"t.py\", line 1\n"
+        crash_log = init_block + fatal_line + current_thread + other_thread
+
+        result = _truncate_logs_for_report(crash_log, 2000)
+
+        # Must never exceed the budget
+        assert len(result) <= 2000
+        # The fatal error line itself should still be present
+        assert "Fatal Python error: maximum recursion depth exceeded" in result
+
+    def test_faulthandler_fatal_without_thread_headers(self):
+        """Fatal error without any 'Thread 0x' headers should extract up to 500 chars."""
+        from desktop_app.app import _extract_fatal_section
+
+        fatal = "Fatal Python error: Aborted\n\nCurrent thread 0x1234 (most recent call first):\n  File \"x.py\", line 1 in main\n"
+        result = _extract_fatal_section(fatal)
+
+        assert "Fatal Python error: Aborted" in result
+        assert "main" in result
+
+    def test_faulthandler_extension_modules_without_total(self):
+        """Extension modules line without '(total: N)' should use the fallback trim."""
+        from desktop_app.app import _trim_extension_modules
+
+        # No "(total: N)" suffix — should trigger the fallback regex
+        ext_line = "Extension modules: " + ", ".join([f"mod_{i}" for i in range(100)]) + "\n"
+        log = "Some log content\n" + ext_line
+
+        result = _trim_extension_modules(log)
+
+        # Should be trimmed (much shorter than original)
+        assert len(result) < len(log)
+        assert "... (trimmed)" in result
+        # Should keep the first ~80 chars of modules
+        assert "mod_0" in result
+        # Should not contain later modules
+        assert "mod_99" not in result
+
     def test_redaction_handles_multiple_sensitive_patterns(self):
         """Redaction should handle multiple types of sensitive data."""
         from jarvis.utils.redact import redact
