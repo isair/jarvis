@@ -150,13 +150,15 @@ try:
     if _is_apple_silicon():
         import mlx_whisper
         MLX_WHISPER_AVAILABLE = True
-except ImportError:
+except Exception:
     mlx_whisper = None
 
 try:
     from faster_whisper import WhisperModel
     FASTER_WHISPER_AVAILABLE = True
-except ImportError:
+except Exception:
+    # Catch broad: the faster-whisper import chain can raise ValueError
+    # (e.g. "psutil.__spec__ is not set") in some environments.
     WhisperModel = None
 
 
