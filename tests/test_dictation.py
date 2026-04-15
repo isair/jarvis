@@ -296,6 +296,80 @@ class TestRecordingStateMachine:
         assert engine._audio_frames == []
         assert engine._recording is False
 
+    def test_stop_recording_returns_fast_on_slow_stream_close(self):
+        """The non-discard path must not block the caller on stream.close().
+
+        Rationale: ``_stop_recording`` is invoked from the pynput low-level
+        keyboard hook callback.  Windows silently removes low-level keyboard
+        hooks that take more than ~5 s to return, which leaves pynput in an
+        inconsistent state that can crash the process when the paste thread
+        subsequently calls Controller.press/tap/release (issue #184).
+
+        The listener callback must return in a handful of milliseconds even
+        if closing the audio device is slow.
+        """
+        import numpy as np
+        slow_stream = MagicMock()
+
+        def slow_close(*_args, **_kwargs):
+            time.sleep(1.0)
+
+        slow_stream.stop.side_effect = slow_close
+        slow_stream.close.side_effect = slow_close
+
+        engine = _make_engine()
+        engine._recording = True
+        engine._stream = slow_stream
+        # Short (< 0.3 s) audio so transcribe_and_paste exits quickly.
+        engine._audio_frames = [np.zeros(1600, dtype=np.float32)]
+
+        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+            t0 = time.time()
+            engine._stop_recording()
+            elapsed = time.time() - t0
+
+        # The caller (simulating the pynput hook) must return quickly.
+        assert elapsed < 0.2, (
+            f"_stop_recording blocked for {elapsed:.2f}s in the listener "
+            "thread — stream.close() must be off the hot path"
+        )
+
+        # The stream must still be closed eventually, off-thread.
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not slow_stream.close.called:
+            time.sleep(0.05)
+        assert slow_stream.close.called, "stream.close() never ran"
+
+    def test_stop_recording_idempotent_under_concurrent_calls(self):
+        """Rapid double-release of the hotkey must not double-close the stream.
+
+        On Windows ``ctrl+cmd`` the user releases two keys in quick succession;
+        both releases can fire the listener callback before either has finished.
+        Only one teardown should reach the stream.
+        """
+        import numpy as np
+        engine = _make_engine()
+        engine._recording = True
+        stream_mock = MagicMock()
+        engine._stream = stream_mock
+        engine._audio_frames = [np.zeros(1600, dtype=np.float32)]
+
+        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+            # Two near-simultaneous calls from the listener.
+            t1 = threading.Thread(target=engine._stop_recording)
+            t2 = threading.Thread(target=engine._stop_recording)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+
+        # Wait for the spawned teardown thread to run close().
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not stream_mock.close.called:
+            time.sleep(0.05)
+        # Only one of the two calls should have reached the stream.
+        assert stream_mock.close.call_count == 1
+
     def test_on_dictation_callbacks_called(self):
         """Start/end callbacks should be invoked."""
         start_called = threading.Event()

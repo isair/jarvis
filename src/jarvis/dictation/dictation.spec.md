@@ -96,6 +96,14 @@ After transcription, text passes through these stages in order:
 
 - `threading.Lock` around shared Whisper model transcription calls.
 - Dedicated audio stream; never touches the listener's stream.
+- The `pynput` key handlers (`_on_key_press` / `_on_key_release`) must return
+  quickly — Windows silently removes low-level keyboard hooks that take more
+  than ~5 s to return, leaving pynput in an inconsistent state that can
+  segfault on the next `Controller` call from the paste thread. `_stop_recording`
+  therefore only flips state under the lock and dispatches audio-stream
+  teardown, beep playback, transcription, and paste to a background thread.
+  The `discard=True` path keeps the synchronous teardown so shutdown can
+  reliably wait for everything to finish.
 
 ## Beeps
 

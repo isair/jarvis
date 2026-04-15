@@ -553,6 +553,24 @@ def parse_hotkey(combo: str):
 
 
 # ---------------------------------------------------------------------------
+# Stream cleanup
+# ---------------------------------------------------------------------------
+
+def _close_stream(stream: Any) -> None:
+    """Stop and close a sounddevice InputStream, swallowing errors."""
+    if stream is None:
+        return
+    try:
+        stream.stop()
+    except Exception as exc:
+        debug_log(f"stream.stop() failed: {exc}", "dictation")
+    try:
+        stream.close()
+    except Exception as exc:
+        debug_log(f"stream.close() failed: {exc}", "dictation")
+
+
+# ---------------------------------------------------------------------------
 # Main engine
 # ---------------------------------------------------------------------------
 
@@ -911,41 +929,60 @@ class DictationEngine:
         self._audio_frames.append(indata[:, 0].copy())
 
     def _stop_recording(self, discard: bool = False) -> None:
+        # Flip state and snapshot the work queue atomically, under minimal
+        # lock scope.  All heavy work (stream teardown, beep, transcribe,
+        # paste) then runs off-thread so the pynput hotkey callback can
+        # return immediately.  This matters on Windows: low-level keyboard
+        # hooks are silently removed by the OS when a callback takes more
+        # than ~5 s, which leaves pynput in an inconsistent state and can
+        # segfault on the next Controller.press/release issued by the paste
+        # thread (issue #184).
         with self._lock:
             if not self._recording:
                 return
             self._recording = False
             self._hands_free = False
-
-        # Stop audio stream
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
+            stream = self._stream
             self._stream = None
+            audio_frames = self._audio_frames
+            self._audio_frames = []
+            start_time = self._record_start_time
 
         if discard:
-            self._audio_frames = []
+            # Shutdown path — tear down synchronously so the caller knows
+            # everything is finished before the engine is gone.
+            _close_stream(stream)
             if self._on_dictation_end:
-                self._on_dictation_end()
+                try:
+                    self._on_dictation_end()
+                except Exception:
+                    pass
             return
 
-        # Play stop beep
-        _play_beep(_get_stop_beep())
-
-        duration = time.time() - self._record_start_time
-        debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
-
-        # Transcribe in a thread to avoid blocking the key listener
-        audio_frames = self._audio_frames
-        self._audio_frames = []
         threading.Thread(
-            target=self._transcribe_and_paste,
-            args=(audio_frames,),
+            target=self._finalise_and_transcribe,
+            args=(stream, audio_frames, start_time),
             daemon=True,
         ).start()
+
+    def _finalise_and_transcribe(
+        self,
+        stream: Any,
+        audio_frames: list,
+        start_time: float,
+    ) -> None:
+        """Worker: close stream, play beep, transcribe, paste.
+
+        Runs on a background thread so the pynput hotkey callback returns
+        immediately.  See ``_stop_recording`` for the rationale.
+        """
+        _close_stream(stream)
+        _play_beep(_get_stop_beep())
+
+        duration = time.time() - start_time
+        debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
+
+        self._transcribe_and_paste(audio_frames)
 
     # ------------------------------------------------------------------
     # Transcription & paste
