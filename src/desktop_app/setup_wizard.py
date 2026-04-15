@@ -1833,23 +1833,27 @@ class WhisperSetupPage(QWizardPage):
         options = self._get_current_model_options()
         n = len(options)
 
-        # Clear existing labels — detach from parent before deleteLater to
-        # prevent Qt from accessing half-deleted widgets.
+        # Clear existing labels.  The labels are already properly parented
+        # to their container widget, and takeAt() removes the layout's
+        # reference — scheduling deleteLater() is enough.  Do NOT call
+        # setParent(None) here: on macOS that promotes each QLabel to a
+        # top-level widget mid-transition, which triggers a native
+        # window creation and can SIGABRT inside QWizard.exec().
+        # Note: dictation_history.py deliberately keeps the setParent(None)
+        # pattern — it runs from a standalone window (not a QWizard
+        # transition) and needed it to fix a Windows-specific segfault.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-                item.widget().setParent(None)
-                item.widget().deleteLater()
-            elif item.spacerItem():
-                pass  # Spacers are automatically cleaned up
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            # Spacers are automatically cleaned up when the item goes out of scope.
 
         while self._size_layout.count():
             item = self._size_layout.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
         # Add labels aligned with slider tick positions
         # Slider ticks are at 0, 1/(n-1), 2/(n-1), ..., 1 of the groove width

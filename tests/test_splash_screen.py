@@ -32,15 +32,6 @@ class TestSplashScreenImport:
 class TestSplashScreenFunctionality:
     """Tests for splash screen functionality."""
 
-    @pytest.fixture
-    def qapp(self):
-        """Create a QApplication for testing."""
-        from PyQt6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app is None:
-            app = QApplication([])
-        yield app
-
     def test_splash_screen_instantiation(self, qapp):
         """SplashScreen should instantiate without error."""
         from desktop_app.splash_screen import SplashScreen
