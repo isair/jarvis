@@ -1808,6 +1808,7 @@ def index() -> str:
         let currentTab = 'memories';
         let selectedTopics = new Set();
         let searchQuery = '';
+        let diaryImportDone = false;
         let fromDate = '';
         let toDate = '';
         let searchDebounce = null;
@@ -2105,7 +2106,7 @@ def index() -> str:
 
             // First-time migration: offer to import diary entries if the graph
             // is empty (only root node) but the user has diary data
-            if (totalNodes <= 1 && totalMemories > 0) {
+            if (totalNodes <= 1 && totalMemories > 0 && !diaryImportDone) {
                 showImportDiaryModal(true);
             }
         }
@@ -2868,6 +2869,7 @@ def index() -> str:
                                         <button class="modal-btn primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
                                     `;
                                     delete overlay.dataset.importing;
+                                    diaryImportDone = true;
                                     loadGraphData();
                                     loadTreeData();
                                     loadStats();

@@ -232,3 +232,27 @@ class TestImportDiaryEndpoint:
 
         complete_msg = next(m for m in messages if m["type"] == "complete")
         assert complete_msg["processed"] == 2
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(not _HAS_FLASK, reason="Flask not available")
+class TestImportDialogueDismissal:
+    """Regression: after diary import succeeds, loadStats must not re-show the modal."""
+
+    def test_html_contains_diary_import_done_guard(self):
+        """The loadStats check should be gated by diaryImportDone flag."""
+        from src.desktop_app.memory_viewer import app
+
+        app.config["TESTING"] = True
+        client = app.test_client()
+        resp = client.get("/")
+        html = resp.data.decode("utf-8")
+
+        # The flag must be declared
+        assert "let diaryImportDone = false;" in html
+
+        # The flag must be set on import completion
+        assert "diaryImportDone = true;" in html
+
+        # The loadStats check must include the guard
+        assert "&& !diaryImportDone" in html
