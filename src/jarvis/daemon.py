@@ -440,7 +440,8 @@ def main() -> None:
             dictation.start()
             _global_dictation_engine = dictation
             if dictation._started:
-                hotkey_display = cfg.dictation_hotkey
+                from jarvis.dictation.dictation_engine import format_hotkey_display
+                hotkey_display = format_hotkey_display(cfg.dictation_hotkey)
                 print(f"🎙️ Dictation enabled (hold {hotkey_display} to dictate)", flush=True)
         except Exception as e:
             debug_log(f"dictation engine init failed: {e}", "dictation")

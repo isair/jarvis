@@ -215,21 +215,37 @@ def _clipboard_windows(text: str) -> None:
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
 
+    # Set proper return/argument types so handles aren't truncated on 64-bit.
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HANDLE
+    kernel32.GlobalLock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalFree.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalFree.restype = wintypes.HANDLE
+
     CF_UNICODETEXT = 13
     GMEM_MOVEABLE = 0x0002
 
-    if not user32.OpenClipboard(0):
-        return
+    if not user32.OpenClipboard(None):
+        raise OSError("OpenClipboard failed")
     try:
         user32.EmptyClipboard()
         encoded = text.encode("utf-16-le") + b"\x00\x00"
         h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
         if not h:
-            return
+            raise OSError("GlobalAlloc failed")
         ptr = kernel32.GlobalLock(h)
         if not ptr:
             kernel32.GlobalFree(h)
-            return
+            raise OSError("GlobalLock failed")
         ctypes.memmove(ptr, encoded, len(encoded))
         kernel32.GlobalUnlock(h)
         user32.SetClipboardData(CF_UNICODETEXT, h)
@@ -465,7 +481,33 @@ _MODIFIER_MAP = {
     "alt": "alt_l",
     "cmd": "cmd",
     "super": "cmd",
+    "win": "cmd",
 }
+
+
+def format_hotkey_display(combo: str) -> str:
+    """Format a hotkey string for human-readable display.
+
+    On Windows, ``cmd`` is shown as ``Win``.  On macOS, ``cmd`` stays as
+    ``Cmd`` and ``alt`` becomes ``Option``.  Key parts are title-cased and
+    joined with `` + ``.
+    """
+    system = platform.system().lower()
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+
+    display_parts: list[str] = []
+    for part in parts:
+        if part in ("cmd", "super", "win"):
+            if system == "windows":
+                display_parts.append("Win")
+            else:
+                display_parts.append("Cmd")
+        elif part == "alt" and system == "darwin":
+            display_parts.append("Option")
+        else:
+            display_parts.append(part.capitalize())
+
+    return " + ".join(display_parts)
 
 
 def parse_hotkey(combo: str):
