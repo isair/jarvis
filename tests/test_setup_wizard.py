@@ -609,14 +609,6 @@ class TestWhisperSetupPageSliderRebuild:
     safe pattern for clearing items out of a layout.
     """
 
-    @pytest.fixture
-    def qapp(self):
-        from PyQt6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app is None:
-            app = QApplication([])
-        yield app
-
     def test_slider_labels_keep_container_parent_after_rebuild(self, qapp):
         """Newly-built slider labels must remain children of their containers.
 

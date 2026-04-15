@@ -1839,6 +1839,9 @@ class WhisperSetupPage(QWizardPage):
         # setParent(None) here: on macOS that promotes each QLabel to a
         # top-level widget mid-transition, which triggers a native
         # window creation and can SIGABRT inside QWizard.exec().
+        # Note: dictation_history.py deliberately keeps the setParent(None)
+        # pattern — it runs from a standalone window (not a QWizard
+        # transition) and needed it to fix a Windows-specific segfault.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
             widget = item.widget()
