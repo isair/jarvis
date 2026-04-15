@@ -20,8 +20,8 @@ Defaults are aligned with WisprFlow. Modifier-only combos are supported
 key required).
 
 The hotkey is configurable as a dropdown in both the setup wizard and settings
-window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift`,
-`alt+shift`.
+window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift+d`,
+`ctrl+shift`.
 
 ## Core Flow
 

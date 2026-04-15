@@ -2447,8 +2447,6 @@ class LocationPage(QWizardPage):
 class DictationPage(QWizardPage):
     """Page for configuring dictation (hold-to-dictate) settings."""
 
-    _HOTKEY_OPTIONS = None  # Built lazily via _hotkey_options()
-
     @staticmethod
     def _hotkey_options():
         from jarvis.dictation.dictation_engine import format_hotkey_display
