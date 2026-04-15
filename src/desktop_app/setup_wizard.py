@@ -2447,12 +2447,22 @@ class LocationPage(QWizardPage):
 class DictationPage(QWizardPage):
     """Page for configuring dictation (hold-to-dictate) settings."""
 
-    _HOTKEY_OPTIONS = [
-        ("ctrl+alt", "Ctrl + Alt (macOS / Linux default)"),
-        ("ctrl+cmd", "Ctrl + Win/Cmd (Windows default)"),
-        ("ctrl+shift+d", "Ctrl + Shift + D"),
-        ("ctrl+shift", "Ctrl + Shift"),
-    ]
+    @staticmethod
+    def _hotkey_options():
+        from jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.config import _default_dictation_hotkey
+        default = _default_dictation_hotkey()
+        options = [
+            ("ctrl+alt", format_hotkey_display("ctrl+alt")),
+            ("ctrl+cmd", format_hotkey_display("ctrl+cmd")),
+            ("ctrl+shift+d", format_hotkey_display("ctrl+shift+d")),
+            ("ctrl+shift", format_hotkey_display("ctrl+shift")),
+        ]
+        # Tag the platform default
+        return [
+            (val, f"{label} (default)" if val == default else label)
+            for val, label in options
+        ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2521,7 +2531,7 @@ class DictationPage(QWizardPage):
         hotkey_layout.addWidget(hotkey_desc)
 
         self._hotkey_combo = QComboBox()
-        for value, label in self._HOTKEY_OPTIONS:
+        for value, label in self._hotkey_options():
             self._hotkey_combo.addItem(label, value)
         self._hotkey_combo.setStyleSheet(
             "QComboBox { padding: 8px; font-size: 14px; background: #27272a; "

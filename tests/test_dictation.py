@@ -95,6 +95,15 @@ class TestHotkeyParsing:
         assert len(mods) == 2
         assert trigger is None
 
+    def test_parse_ctrl_win(self):
+        """'win' modifier alias should map to the same key as 'cmd'."""
+        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        mods_win, trigger_win = parse_hotkey("ctrl+win")
+        mods_cmd, trigger_cmd = parse_hotkey("ctrl+cmd")
+        assert mods_win == mods_cmd
+        assert trigger_win is None
+        assert trigger_cmd is None
+
     def test_parse_empty_string_raises(self):
         from src.jarvis.dictation.dictation_engine import parse_hotkey
         with pytest.raises(ValueError):
@@ -672,3 +681,100 @@ class TestListenerPauseFlag:
         """VoiceListener should expose a transcribe_lock."""
         assert hasattr(listener, "transcribe_lock")
         assert isinstance(listener.transcribe_lock, type(threading.Lock()))
+
+
+# ---------------------------------------------------------------------------
+# format_hotkey_display
+# ---------------------------------------------------------------------------
+
+class TestFormatHotkeyDisplay:
+    """Tests for platform-aware hotkey display formatting."""
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_windows_cmd_shows_win(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Windows"
+        assert format_hotkey_display("ctrl+cmd") == "Ctrl + Win"
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_windows_super_shows_win(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Windows"
+        assert format_hotkey_display("ctrl+super") == "Ctrl + Win"
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_windows_win_shows_win(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Windows"
+        assert format_hotkey_display("ctrl+win") == "Ctrl + Win"
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_macos_cmd_shows_cmd(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Darwin"
+        assert format_hotkey_display("ctrl+cmd") == "Ctrl + Cmd"
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_macos_alt_shows_option(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Darwin"
+        assert format_hotkey_display("ctrl+alt") == "Ctrl + Option"
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_ctrl_shift_d(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Windows"
+        assert format_hotkey_display("ctrl+shift+d") == "Ctrl + Shift + D"
+
+    @patch("src.jarvis.dictation.dictation_engine.platform")
+    def test_linux_alt_stays_alt(self, mock_platform):
+        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        mock_platform.system.return_value = "Linux"
+        assert format_hotkey_display("ctrl+alt") == "Ctrl + Alt"
+
+
+# ---------------------------------------------------------------------------
+# _clipboard_windows ctypes correctness
+# ---------------------------------------------------------------------------
+
+class TestClipboardWindowsCtypes:
+    """Verify _clipboard_windows sets proper ctypes return types."""
+
+    @pytest.mark.skipif(
+        __import__("sys").platform != "win32",
+        reason="Windows-only clipboard API",
+    )
+    def test_clipboard_windows_roundtrip(self):
+        """Write to clipboard and read back to verify ctypes bindings."""
+        import ctypes
+        from ctypes import wintypes
+        from src.jarvis.dictation.dictation_engine import _clipboard_windows
+
+        test_text = "dictation test 🎙️"
+        _clipboard_windows(test_text)
+
+        # Read back from clipboard
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.GetClipboardData.argtypes = [wintypes.UINT]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        user32.CloseClipboard.restype = wintypes.BOOL
+        kernel32.GlobalLock.argtypes = [wintypes.HANDLE]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+        CF_UNICODETEXT = 13
+        assert user32.OpenClipboard(None)
+        try:
+            h = user32.GetClipboardData(CF_UNICODETEXT)
+            assert h, "GetClipboardData returned NULL"
+            ptr = kernel32.GlobalLock(h)
+            assert ptr, "GlobalLock returned NULL"
+            result = ctypes.wstring_at(ptr)
+            kernel32.GlobalUnlock(h)
+            assert result == test_text
+        finally:
+            user32.CloseClipboard()
