@@ -248,7 +248,9 @@ def _clipboard_windows(text: str) -> None:
             raise OSError("GlobalLock failed")
         ctypes.memmove(ptr, encoded, len(encoded))
         kernel32.GlobalUnlock(h)
-        user32.SetClipboardData(CF_UNICODETEXT, h)
+        if not user32.SetClipboardData(CF_UNICODETEXT, h):
+            kernel32.GlobalFree(h)
+            raise OSError("SetClipboardData failed")
     finally:
         user32.CloseClipboard()
 

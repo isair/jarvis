@@ -95,6 +95,15 @@ class TestHotkeyParsing:
         assert len(mods) == 2
         assert trigger is None
 
+    def test_parse_ctrl_win(self):
+        """'win' modifier alias should map to the same key as 'cmd'."""
+        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        mods_win, trigger_win = parse_hotkey("ctrl+win")
+        mods_cmd, trigger_cmd = parse_hotkey("ctrl+cmd")
+        assert mods_win == mods_cmd
+        assert trigger_win is None
+        assert trigger_cmd is None
+
     def test_parse_empty_string_raises(self):
         from src.jarvis.dictation.dictation_engine import parse_hotkey
         with pytest.raises(ValueError):
