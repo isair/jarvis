@@ -89,3 +89,18 @@ def dialogue_memory():
     from jarvis.memory.conversation import DialogueMemory
     return DialogueMemory(inactivity_timeout=300, max_interactions=20)
 
+
+@pytest.fixture
+def qapp():
+    """Provide a shared QApplication for Qt-based UI tests.
+
+    Qt requires exactly one QApplication per process.  Re-uses an existing
+    instance when present so repeated test runs inside a single session
+    don't error.
+    """
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    yield app
+
