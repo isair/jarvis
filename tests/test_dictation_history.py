@@ -214,6 +214,34 @@ class TestDictationHistoryWindow:
         # We can't call set_history fully without Qt, but verify the method exists
         assert callable(win.set_history)
 
+    def test_reload_detaches_widgets_before_delete(self):
+        """_reload must call setParent(None) on removed widgets to prevent
+        Qt from accessing half-deleted objects (fixes segfault in Qt6Core.dll).
+        """
+        import inspect
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        source = inspect.getsource(DictationHistoryWindow._reload)
+        # The safe pattern: takeAt → hide → setParent(None) → deleteLater
+        assert "setParent(None)" in source, (
+            "_reload must detach widgets with setParent(None) before deleteLater"
+        )
+
+    def test_on_new_entry_removes_from_layout_before_delete(self):
+        """_on_new_entry must takeAt (remove from layout) before deleteLater
+        to avoid dangling layout references to deleted widgets.
+        """
+        import inspect
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        source = inspect.getsource(DictationHistoryWindow._on_new_entry)
+        assert "takeAt" in source, (
+            "_on_new_entry must remove widgets from layout (takeAt) before "
+            "calling deleteLater"
+        )
+        assert "setParent(None)" in source, (
+            "_on_new_entry must detach widgets with setParent(None) before "
+            "deleteLater"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Menu integration tests

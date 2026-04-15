@@ -1833,10 +1833,13 @@ class WhisperSetupPage(QWizardPage):
         options = self._get_current_model_options()
         n = len(options)
 
-        # Clear existing labels
+        # Clear existing labels — detach from parent before deleteLater to
+        # prevent Qt from accessing half-deleted widgets.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
+                item.widget().setParent(None)
                 item.widget().deleteLater()
             elif item.spacerItem():
                 pass  # Spacers are automatically cleaned up
@@ -1844,6 +1847,8 @@ class WhisperSetupPage(QWizardPage):
         while self._size_layout.count():
             item = self._size_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
+                item.widget().setParent(None)
                 item.widget().deleteLater()
 
         # Add labels aligned with slider tick positions
