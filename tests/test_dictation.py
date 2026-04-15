@@ -329,6 +329,9 @@ class TestRecordingStateMachine:
             elapsed = time.time() - t0
 
         # The caller (simulating the pynput hook) must return quickly.
+        # 200 ms is generous headroom vs. the ~5 s Windows LowLevelHooksTimeout
+        # — the method should actually return in microseconds, since it just
+        # flips a bool and spawns a daemon thread.
         assert elapsed < 0.2, (
             f"_stop_recording blocked for {elapsed:.2f}s in the listener "
             "thread — stream.close() must be off the hot path"
@@ -369,6 +372,64 @@ class TestRecordingStateMachine:
             time.sleep(0.05)
         # Only one of the two calls should have reached the stream.
         assert stream_mock.close.call_count == 1
+
+    def test_max_duration_callback_still_stops_recording(self):
+        """Hitting the 60s cap must still close the stream and fire the end
+        callback, even though the new teardown path runs off-thread.
+
+        ``_audio_callback`` spawns a daemon thread that calls
+        ``_stop_recording()``; that then dispatches ``_finalise_and_transcribe``
+        which closes the stream and eventually invokes ``_on_dictation_end``
+        (via ``_transcribe_and_paste``'s finally).
+        """
+        import numpy as np
+        end_called = threading.Event()
+        engine = _make_engine(
+            on_dictation_end=lambda: end_called.set(),
+            whisper_model_ref=lambda: None,  # short-circuits transcribe
+            whisper_backend_ref=lambda: "faster-whisper",
+        )
+        stream_mock = MagicMock()
+        engine._recording = True
+        engine._stream = stream_mock
+        # Pre-fill up to the limit so one more frame triggers the cap.
+        engine._max_frames = 100
+        engine._audio_frames = [np.zeros(100, dtype=np.float32)]
+
+        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+            indata = np.random.randn(1600, 1).astype(np.float32)
+            engine._audio_callback(indata, 1600, None, None)
+            # _stop_recording runs in a daemon thread; wait for close().
+            assert end_called.wait(timeout=5.0), "on_dictation_end never fired"
+
+        assert stream_mock.close.called, "stream.close() never ran"
+        assert engine._recording is False
+
+    def test_finalise_fires_on_dictation_end_when_beep_raises(self):
+        """A failure in ``_play_beep`` must not strand the listener paused.
+
+        ``_on_dictation_end`` is normally fired from
+        ``_transcribe_and_paste``'s finally, but that step is never reached
+        if ``_close_stream`` or ``_play_beep`` raises.  ``_finalise_and_transcribe``
+        must therefore guarantee the callback fires on any error.
+        """
+        import numpy as np
+        end_called = threading.Event()
+        engine = _make_engine(on_dictation_end=lambda: end_called.set())
+
+        with patch(
+            "src.jarvis.dictation.dictation_engine._play_beep",
+            side_effect=RuntimeError("beep broken"),
+        ):
+            engine._finalise_and_transcribe(
+                stream=None,
+                audio_frames=[np.zeros(1600, dtype=np.float32)],
+                start_time=time.time(),
+            )
+
+        assert end_called.is_set(), (
+            "_on_dictation_end must fire even when _play_beep raises"
+        )
 
     def test_on_dictation_callbacks_called(self):
         """Start/end callbacks should be invoked."""

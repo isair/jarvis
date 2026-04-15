@@ -917,6 +917,11 @@ class DictationEngine:
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
         """sounddevice callback — accumulate audio frames."""
+        # ``self._recording`` is read without the engine lock.  This is safe
+        # because writes happen under the lock in _start_recording and
+        # _stop_recording, and a single-word bool read/write is atomic under
+        # the GIL.  Worst case is one extra frame captured just after stop
+        # or one missed frame just after start — both benign.
         if not self._recording:
             return
         # Enforce max duration
@@ -975,14 +980,32 @@ class DictationEngine:
 
         Runs on a background thread so the pynput hotkey callback returns
         immediately.  See ``_stop_recording`` for the rationale.
+
+        ``_on_dictation_end`` is normally fired from ``_transcribe_and_paste``'s
+        finally block.  We wrap the whole body in try/except so a failure in
+        ``_close_stream`` or ``_play_beep`` (before we reach the transcribe
+        step) still unpauses the voice listener and resets the face state —
+        otherwise a single beep error would strand the UI in ``DICTATING``.
         """
-        _close_stream(stream)
-        _play_beep(_get_stop_beep())
+        end_fired = False
+        try:
+            _close_stream(stream)
+            _play_beep(_get_stop_beep())
 
-        duration = time.time() - start_time
-        debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
+            duration = time.time() - start_time
+            debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
 
-        self._transcribe_and_paste(audio_frames)
+            # _transcribe_and_paste has its own finally that fires
+            # _on_dictation_end, so we defer to it on the happy path.
+            end_fired = True
+            self._transcribe_and_paste(audio_frames)
+        except Exception as exc:
+            debug_log(f"dictation finalise error: {exc}", "dictation")
+            if not end_fired and self._on_dictation_end:
+                try:
+                    self._on_dictation_end()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Transcription & paste
