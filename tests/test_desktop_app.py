@@ -428,6 +428,119 @@ class TestLogViewerReportIssue:
         # Early lines should be truncated
         assert "line 0:" not in result
 
+    def test_faulthandler_dump_preserves_fatal_error_line(self):
+        """Faulthandler crash dumps should preserve 'Fatal Python error' and current thread."""
+        from desktop_app.app import _truncate_logs_for_report, _LOG_SEPARATOR
+
+        # Simulate realistic crash log: init section + separator + faulthandler dump
+        init_block = (
+            "=== Jarvis Desktop App Crash Log ===\n"
+            "Timestamp: 2026-04-13\n"
+            "Platform: win32\n"
+            "==================================================\n"
+            "\nStarting Jarvis Desktop App...\n"
+            "Creating QApplication...\n"
+            "🚀 Jarvis daemon started\n"
+            f"{_LOG_SEPARATOR}\n"
+        )
+        # Faulthandler dump: Fatal error + current thread + many other threads + extension modules
+        fatal_line = "Fatal Python error: Segmentation fault\n"
+        current_thread = (
+            "\nCurrent thread 0x00007c54 (most recent call first):\n"
+            "  File \"some_module.py\", line 42 in critical_function\n"
+            "  File \"app.py\", line 100 in main\n"
+        )
+        other_threads = "\n".join([
+            f"\nThread 0x0000{i:04x} (most recent call first):\n"
+            f"  File \"threading.py\", line 331 in wait\n"
+            f"  File \"module_{i}.py\", line {i * 10} in some_func\n"
+            f"  File \"threading.py\", line 1045 in _bootstrap_inner\n"
+            f"  File \"threading.py\", line 1002 in _bootstrap\n"
+            for i in range(20)
+        ])
+        # Large extension modules list (~1700 chars)
+        ext_modules = "Extension modules: " + ", ".join([f"mod_{i}.sub_{i}" for i in range(120)]) + " (total: 120)\n"
+
+        crash_log = init_block + fatal_line + current_thread + other_threads + ext_modules
+
+        result = _truncate_logs_for_report(crash_log, 4000)
+
+        assert len(result) <= 4000
+        # Critical: the Fatal error line and current thread MUST be preserved
+        assert "Fatal Python error: Segmentation fault" in result
+        assert "critical_function" in result
+        # Init section should be preserved
+        assert "Jarvis Desktop App Crash Log" in result
+        # Extension modules should be summarised, not fully listed
+        assert "mod_119.sub_119" not in result
+
+    def test_faulthandler_extension_modules_trimmed(self):
+        """Extension modules line in faulthandler dumps should be shortened."""
+        from desktop_app.app import _truncate_logs_for_report
+
+        # Short log with a huge Extension modules line — should be trimmed even if total is within budget
+        fatal = "Fatal Python error: Aborted\n\nCurrent thread 0x1234:\n  File \"x.py\", line 1\n\n"
+        ext_modules = "Extension modules: " + ", ".join([f"mod_{i}" for i in range(100)]) + " (total: 100)\n"
+        log = fatal + ext_modules
+
+        result = _truncate_logs_for_report(log, 4000)
+
+        # Fatal error should be preserved
+        assert "Fatal Python error: Aborted" in result
+        # The full module list should be trimmed
+        assert "mod_99" not in result
+        # But summary count should remain
+        assert "100" in result
+
+    def test_faulthandler_budget_too_tight_caps_fatal_section(self):
+        """When fatal section exceeds the budget, output must still respect max_len."""
+        from desktop_app.app import _truncate_logs_for_report, _LOG_SEPARATOR
+
+        # Simulate a deep recursion crash: huge fatal section (~5000 chars)
+        init_block = f"Header\n{_LOG_SEPARATOR}\n"
+        fatal_line = "Fatal Python error: maximum recursion depth exceeded\n"
+        deep_stack = "\n".join(
+            [f"  File \"module.py\", line {i} in func_{i}" for i in range(300)]
+        )
+        current_thread = f"\nCurrent thread 0x1234 (most recent call first):\n{deep_stack}\n"
+        other_thread = "\nThread 0x5678 (most recent call first):\n  File \"t.py\", line 1\n"
+        crash_log = init_block + fatal_line + current_thread + other_thread
+
+        result = _truncate_logs_for_report(crash_log, 2000)
+
+        # Must never exceed the budget
+        assert len(result) <= 2000
+        # The fatal error line itself should still be present
+        assert "Fatal Python error: maximum recursion depth exceeded" in result
+
+    def test_faulthandler_fatal_without_thread_headers(self):
+        """Fatal error without any 'Thread 0x' headers should extract up to 500 chars."""
+        from desktop_app.app import _extract_fatal_section
+
+        fatal = "Fatal Python error: Aborted\n\nCurrent thread 0x1234 (most recent call first):\n  File \"x.py\", line 1 in main\n"
+        result = _extract_fatal_section(fatal)
+
+        assert "Fatal Python error: Aborted" in result
+        assert "main" in result
+
+    def test_faulthandler_extension_modules_without_total(self):
+        """Extension modules line without '(total: N)' should use the fallback trim."""
+        from desktop_app.app import _trim_extension_modules
+
+        # No "(total: N)" suffix — should trigger the fallback regex
+        ext_line = "Extension modules: " + ", ".join([f"mod_{i}" for i in range(100)]) + "\n"
+        log = "Some log content\n" + ext_line
+
+        result = _trim_extension_modules(log)
+
+        # Should be trimmed (much shorter than original)
+        assert len(result) < len(log)
+        assert "... (trimmed)" in result
+        # Should keep the first ~80 chars of modules
+        assert "mod_0" in result
+        # Should not contain later modules
+        assert "mod_99" not in result
+
     def test_redaction_handles_multiple_sensitive_patterns(self):
         """Redaction should handle multiple types of sensitive data."""
         from jarvis.utils.redact import redact
