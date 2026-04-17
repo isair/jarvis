@@ -936,7 +936,7 @@ class MemoryViewerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("🧠 Jarvis Memory")
-        self.setGeometry(150, 150, 1200, 960)
+        self.setGeometry(150, 150, 1200, 900)
 
         # Apply theme
         self.setStyleSheet(JARVIS_THEME_STYLESHEET)
