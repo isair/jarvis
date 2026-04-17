@@ -375,7 +375,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
                 )
             current_time = format_time_context(tz_name)
-            return f"{current_time}, {location_context}"
+            return f"Current local time: {current_time}. {location_context}"
         except Exception:
             return ""
 
