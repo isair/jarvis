@@ -1195,11 +1195,57 @@ def index() -> str:
         }
 
         /* ─── Graph Explorer ─── */
+        .alpha-disclaimer {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.85rem 1rem;
+            margin-bottom: 1rem;
+            background: var(--accent-glow);
+            border: 1px solid var(--border-glow);
+            border-radius: var(--radius-md);
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        .alpha-disclaimer .alpha-body {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .alpha-disclaimer .alpha-body p {
+            margin: 0;
+        }
+
+        .alpha-disclaimer code {
+            padding: 0.05rem 0.35rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--accent-secondary);
+        }
+
+        .alpha-disclaimer .alpha-badge {
+            flex-shrink: 0;
+            padding: 0.15rem 0.5rem;
+            background: var(--warning);
+            color: var(--bg-primary);
+            border-radius: var(--radius-sm);
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
         .graph-explorer {
             display: grid;
             grid-template-columns: 240px 1fr 320px;
             gap: 0;
-            height: calc(100vh - 200px);
+            height: calc(100vh - 340px);
             min-height: 500px;
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
@@ -1653,7 +1699,7 @@ def index() -> str:
             .graph-explorer {
                 grid-template-columns: 1fr;
                 grid-template-rows: 200px 1fr;
-                height: calc(100vh - 180px);
+                height: calc(100vh - 340px);
             }
             .graph-tree-sidebar {
                 border-right: none;
@@ -1756,6 +1802,21 @@ def index() -> str:
             </div>
 
             <div id="graph-content" class="tab-pane" style="display: none;">
+                <div class="alpha-disclaimer">
+                    <span class="alpha-badge">Alpha</span>
+                    <div class="alpha-body">
+                        <p>
+                            🧪 The knowledge graph runs in the background but isn't <strong>used by default</strong> yet.
+                            Performance implications and real-world benefits are still being evaluated, and the design will
+                            likely go through significant refinement before it becomes a core part of Jarvis.
+                        </p>
+                        <p>
+                            👉 Want to try it now? Open <strong>Settings → Memory → Enrichment Source</strong> and switch it to
+                            <code>graph</code> (graph only) or <code>all</code> (diary + graph). Expect rough edges and please
+                            share feedback so we can refine it.
+                        </p>
+                    </div>
+                </div>
                 <div class="graph-explorer">
                     <!-- Left sidebar: tree navigator -->
                     <div class="graph-tree-sidebar">
