@@ -47,6 +47,16 @@ try:
 except ImportError:
     print("Warning: piper not installed, TTS may not work in bundle")
 
+# Bundle tzdata on Windows so zoneinfo can resolve IANA zones (Windows has no
+# system zoneinfo database). macOS/Linux read /usr/share/zoneinfo at runtime
+# and do not need the pip package.
+if sys.platform == 'win32':
+    try:
+        datas += collect_data_files('tzdata')
+        print("Bundling tzdata for zoneinfo support on Windows")
+    except Exception as e:
+        print(f"Warning: could not collect tzdata: {e}")
+
 # Add qt.conf for macOS
 if sys.platform == 'darwin':
     datas.append((str(project_root / 'qt.conf'), '.'))
@@ -198,6 +208,9 @@ hiddenimports = [
     'geoip2',
     'geoip2.database',
     'miniupnpc',
+    # zoneinfo support on Windows (macOS/Linux use /usr/share/zoneinfo)
+    'tzdata',
+    'zoneinfo',
     # Flask for memory viewer
     'flask',
     'flask.json',
