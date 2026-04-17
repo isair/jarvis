@@ -729,6 +729,67 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_not_contains="answered that",
     ),
 
+    # Whisper variant: "answers that" (present-tense third-person)
+    MultiSegmentTestCase(
+        name="cross_segment_answers_that_whisper_variant",
+        segments=[
+            ("What's the population of Tokyo", False),
+            ("Jarvis answers that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="tokyo",
+        expected_query_not_contains="answers that",
+    ),
+
+    # Whisper variant: "answering that" (present-participle)
+    MultiSegmentTestCase(
+        name="cross_segment_answering_that_whisper_variant",
+        segments=[
+            ("How many moons does Jupiter have", False),
+            ("Jarvis answering that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="jupiter",
+        expected_query_not_contains="answering that",
+    ),
+
+    # Imperative variant: "go ahead and answer"
+    MultiSegmentTestCase(
+        name="cross_segment_go_ahead_and_answer",
+        segments=[
+            ("What's the capital of Portugal", False),
+            ("Jarvis go ahead and answer", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="portugal",
+        expected_query_not_contains="go ahead and answer",
+    ),
+
+    # Mixed case: imperative + new explicit question in same segment — the new
+    # question should win, not the resolved prior question.
+    MultiSegmentTestCase(
+        name="cross_segment_imperative_superseded_by_new_question",
+        segments=[
+            ("How's the weather today?", False),
+            ("Jarvis, answer that — actually, what time is it?", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="time",
+        expected_query_not_contains="weather",  # Prior question must NOT be re-issued
+    ),
+
     # Cross-segment in hot window (no wake word needed)
     MultiSegmentTestCase(
         name="cross_segment_hot_window_followup",

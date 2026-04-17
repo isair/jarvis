@@ -92,7 +92,8 @@ MODE 1: WAKE WORD (look for segment containing wake word like "{name}")
   → query is "what do you think about dinosaurs being cool" (resolve "that" from previous segment)
 - Example: "Jarvis, how much does that iPhone cost?" after discussing iPhones
   → query is "how much does the iPhone cost" (resolve "that" to the actual topic)
-- CRITICAL - Imperatives referring to a prior question: if the current segment is a command like "answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer" — and a prior segment contains an unanswered question — the query IS the prior question, NOT the imperative. Do not return "answer that" as the query; return the resolved prior question itself. This also applies to Whisper misrecognitions of the same imperative (e.g. "answered that", "answers that", "answering that", "response that") — treat these as the imperative form regardless of tense.
+- CRITICAL - Imperatives referring to a prior question: if the current segment is a command like "answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer" — and a prior segment contains an unanswered question — the query IS the prior question, NOT the imperative. Do not return "answer that" as the query; return the resolved prior question itself. This also applies to Whisper misrecognitions of the same imperative (e.g. "answered that", "answers that", "answering that") — treat these as the imperative form regardless of tense.
+- If the current segment contains BOTH an imperative AND a new explicit question (e.g. "Jarvis, answer that — actually, what time is it?"), the new explicit question takes priority; ignore the imperative and extract the new question as the query.
 - Example (imperative resolution):
   Previous segment: "How's the weather today?"
   Current segment: "Jarvis, answer that"
@@ -101,6 +102,10 @@ MODE 1: WAKE WORD (look for segment containing wake word like "{name}")
   Previous segments: "How tall is Mount Everest" ... "Charlie sands to that"
   Current segment: "Jarvis answer that"
   → query is "how tall is Mount Everest" (ignore unrelated middle segment, resolve "that" to the question)
+- Example (imperative superseded by new question):
+  Previous segment: "How's the weather today?"
+  Current segment: "Jarvis, answer that — actually, what time is it?"
+  → query is "what time is it" (new explicit question overrides the imperative)
 - The query should be answerable WITHOUT needing to see the transcript
 
 MODE 2: HOT WINDOW (no wake word needed)
