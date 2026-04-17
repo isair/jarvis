@@ -133,7 +133,6 @@ I have opened YouTube for you.
 | Platform | Requirement |
 |----------|-------------|
 | **All** | [Ollama](https://ollama.com/download) |
-| **Windows** | [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (most PCs already have this) |
 
 ### 2. Download Jarvis
 

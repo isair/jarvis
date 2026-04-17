@@ -329,7 +329,6 @@ jobs:
 
             ### ⚡ Prerequisites
             - [Ollama](https://ollama.com/download) (all platforms)
-            - [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (Windows only, most PCs already have this)
 
             ### 📦 Downloads
             | Platform | File | Notes |
@@ -469,7 +468,6 @@ jobs:
 
             ### ⚡ Prerequisites
             - [Ollama](https://ollama.com/download) (all platforms)
-            - [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (Windows only, most PCs already have this)
 
             ### 📦 Downloads
             | Platform | File | Notes |
