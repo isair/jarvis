@@ -19,7 +19,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from ..utils.location import get_location_context, get_location_info
+from ..utils.location import get_location_context_with_timezone
 from ..utils.time_context import format_time_context
 
 if TYPE_CHECKING:
@@ -361,14 +361,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if not getattr(cfg, 'location_enabled', True):
                 location_context = "Location: Disabled"
             else:
-                info = get_location_info(
-                    config_ip=getattr(cfg, 'location_ip_address', None),
-                    auto_detect=getattr(cfg, 'location_auto_detect', True),
-                    resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
-                    location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
-                )
-                tz_name = info.get("timezone") if isinstance(info, dict) else None
-                location_context = get_location_context(
+                location_context, tz_name = get_location_context_with_timezone(
                     config_ip=getattr(cfg, 'location_ip_address', None),
                     auto_detect=getattr(cfg, 'location_auto_detect', True),
                     resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),

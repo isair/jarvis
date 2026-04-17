@@ -542,27 +542,13 @@ def get_location_info(
         return result
 
 
-def get_location_context(
-    *,
-    config_ip: Optional[str] = None,
-    auto_detect: bool = True,
-    resolve_cgnat_public_ip: bool = True,
-    location_cache_minutes: int = 60,
-) -> str:
-    """Generate a concise location context string using explicit parameters."""
-    location_info = get_location_info(
-        config_ip=config_ip,
-        auto_detect=auto_detect,
-        resolve_cgnat_public_ip=resolve_cgnat_public_ip,
-        location_cache_minutes=location_cache_minutes,
-    )
-
+def _format_location_context(location_info: Dict[str, Any]) -> str:
+    """Format a location_info dict into a one-line human-readable context string."""
     if "error" in location_info:
         return "Location: Unknown"
 
     parts = []
 
-    # Add city and region if available
     if location_info.get("city"):
         if location_info.get("region"):
             parts.append(f"{location_info['city']}, {location_info['region']}")
@@ -571,18 +557,49 @@ def get_location_context(
     elif location_info.get("region"):
         parts.append(location_info["region"])
 
-    # Add country
     if location_info.get("country"):
         parts.append(location_info["country"])
 
-    # Add timezone if different from what we might expect
     if location_info.get("timezone"):
         parts.append(f"({location_info['timezone']})")
 
     if parts:
         return f"Location: {', '.join(parts)}"
-    else:
-        return "Location: Unknown"
+    return "Location: Unknown"
+
+
+def get_location_context(
+    *,
+    config_ip: Optional[str] = None,
+    auto_detect: bool = True,
+    resolve_cgnat_public_ip: bool = True,
+    location_cache_minutes: int = 60,
+) -> str:
+    """Generate a concise location context string using explicit parameters."""
+    return _format_location_context(get_location_info(
+        config_ip=config_ip,
+        auto_detect=auto_detect,
+        resolve_cgnat_public_ip=resolve_cgnat_public_ip,
+        location_cache_minutes=location_cache_minutes,
+    ))
+
+
+def get_location_context_with_timezone(
+    *,
+    config_ip: Optional[str] = None,
+    auto_detect: bool = True,
+    resolve_cgnat_public_ip: bool = True,
+    location_cache_minutes: int = 60,
+) -> tuple[str, Optional[str]]:
+    """Return the location context string and the IANA timezone (if known) in one lookup."""
+    info = get_location_info(
+        config_ip=config_ip,
+        auto_detect=auto_detect,
+        resolve_cgnat_public_ip=resolve_cgnat_public_ip,
+        location_cache_minutes=location_cache_minutes,
+    )
+    tz_name = info.get("timezone") if isinstance(info, dict) else None
+    return _format_location_context(info), tz_name
 
 
 def is_location_available() -> bool:
