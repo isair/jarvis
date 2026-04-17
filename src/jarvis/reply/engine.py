@@ -19,7 +19,8 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from ..utils.location import get_location_context
+from ..utils.location import get_location_context, get_location_info
+from ..utils.time_context import format_time_context
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -355,18 +356,25 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     def _get_context_string() -> str:
         """Get current time and location context as a string."""
         try:
-            now = datetime.now(timezone.utc)
-            current_time = now.strftime("%A, %B %d, %Y at %H:%M UTC")
+            tz_name: Optional[str] = None
             # Respect global location_enabled flag early to avoid unnecessary work
             if not getattr(cfg, 'location_enabled', True):
                 location_context = "Location: Disabled"
             else:
+                info = get_location_info(
+                    config_ip=getattr(cfg, 'location_ip_address', None),
+                    auto_detect=getattr(cfg, 'location_auto_detect', True),
+                    resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
+                    location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
+                )
+                tz_name = info.get("timezone") if isinstance(info, dict) else None
                 location_context = get_location_context(
                     config_ip=getattr(cfg, 'location_ip_address', None),
                     auto_detect=getattr(cfg, 'location_auto_detect', True),
                     resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
                     location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
                 )
+            current_time = format_time_context(tz_name)
             return f"{current_time}, {location_context}"
         except Exception:
             return ""

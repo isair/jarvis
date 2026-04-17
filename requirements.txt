@@ -15,6 +15,7 @@ webrtcvad==2.0.10
 rapidfuzz==3.6.1
 pynput>=1.7.6
 geoip2==4.8.0
+tzdata>=2024.1; sys_platform == "win32"
 miniupnpc==2.2.8
 pytest==8.3.2
 pytest-repeat==0.9.3
