@@ -231,14 +231,9 @@ class DictationHistoryWindow(QMainWindow):
         self._scroll.setWidget(self._list_widget)
         root_layout.addWidget(self._scroll)
 
-        # The empty-state label is created lazily by _reload() — never
-        # pre-inserted here.  Any widget that lives in _list_widget before
-        # the window is first shown becomes a never-painted orphan once
-        # _reload() removes it (takeAt + deleteLater), and Qt 6.11 on
-        # Windows fast-fails (0xc0000409) mid-show when the paint/layout
-        # pass touches that transient state.  Starting with only the
-        # stretch means the first showEvent's _reload has nothing to
-        # remove and only inserts fresh widgets.
+        # Empty-state label is created lazily by _reload(); pre-inserting
+        # it here would orphan the widget on first rebuild and crash mid-
+        # show on Qt 6.11 Windows (see spec).
 
         # File-watch timer: poll the history file for changes so the window
         # updates even when the daemon runs in a separate process.
@@ -292,27 +287,27 @@ class DictationHistoryWindow(QMainWindow):
         except Exception:
             return True
 
+    @staticmethod
+    def _retire_layout_widget(widget) -> None:
+        """Safely retire a widget removed from a layout.
+
+        The widget stays parented to its container after ``takeAt()``,
+        so we hide it first to suppress any pending paint/layout events
+        before the deferred delete runs. ``setParent(None)`` is avoided
+        — it promotes the widget to a top-level window and crashes
+        natively on Windows/macOS (see spec).
+        """
+        widget.hide()
+        widget.deleteLater()
+
     def _reload(self) -> None:
         """Rebuild the card list from history."""
-        # Remove all existing cards (but keep the stretch at the end).
-        # takeAt() removes the layout's reference, and the widget is still
-        # parented to the container — scheduling deleteLater() is enough.
-        # Do NOT call setParent(None) here: on Windows it promotes each
-        # child to a native top-level HWND mid-rebuild and fast-fails
-        # (0xc0000409) inside Qt6Core.dll; on macOS it SIGABRTs for the
-        # equivalent NSWindow reason (see setup_wizard.py for the macOS
-        # QWizard variant of the same mistake).
+        # Keep the trailing stretch; retire everything else.
         while self._list_layout.count() > 1:
             item = self._list_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                # Hide before deleteLater so Qt's pending paint/layout
-                # pass doesn't touch the orphaned-but-still-parented
-                # widget before the deferred delete runs.  Removing
-                # from the layout alone leaves the widget as a child
-                # of _list_widget with its last-known geometry.
-                widget.hide()
-                widget.deleteLater()
+                self._retire_layout_widget(widget)
 
         if self._history is None:
             placeholder = self._make_empty_label()
@@ -377,36 +372,21 @@ class DictationHistoryWindow(QMainWindow):
         """Slot: called (via signal) when a new dictation completes."""
         if self._history is None:
             return
-        # Skip UI work while the window is hidden.  In bundled mode the daemon
-        # runs in-process, so the engine's on_dictation_result callback fires
-        # on a worker thread whenever a dictation lands, even if the user
-        # never opened this window.  Touching the widget tree while the
-        # window has never been shown fast-fails inside Qt6Core.dll on
-        # Windows (0xc0000409 — fatal app exit from an internal Qt assertion,
-        # matching the signature of setParent-related crashes seen elsewhere
-        # in this file).  The entry is already persisted to history by the
-        # engine, and showEvent() rebuilds from disk on next open.
+        # Hidden windows are inert (see spec); showEvent rebuilds from
+        # disk on next open, so the entry is not lost.
         if not self.isVisible():
             return
-        # Remove any placeholder labels (empty state / disabled state).
-        # The isinstance(QLabel) filter is safe because _DictationCard is a
-        # QFrame, not a QLabel — cards are never caught here.  Collect
-        # indices first, then remove in reverse order so that indices stay
-        # valid.  takeAt() is the essential step — it removes the layout's
-        # reference to the widget so the deferred deletion is safe.  See
-        # _reload() for why setParent(None) is deliberately avoided.
-        indices_to_remove = []
-        for i in range(self._list_layout.count()):
-            item = self._list_layout.itemAt(i)
-            widget = item.widget() if item else None
-            if isinstance(widget, QLabel):
-                indices_to_remove.append(i)
+        # Retire any placeholder labels (empty/disabled state) — cards
+        # are QFrame, so the isinstance filter never catches them.
+        # Reverse order keeps indices valid after each takeAt().
+        indices_to_remove = [
+            i for i in range(self._list_layout.count())
+            if isinstance(self._list_layout.itemAt(i).widget(), QLabel)
+        ]
         for i in reversed(indices_to_remove):
-            item = self._list_layout.takeAt(i)
-            widget = item.widget()
+            widget = self._list_layout.takeAt(i).widget()
             if widget is not None:
-                widget.hide()
-                widget.deleteLater()
+                self._retire_layout_widget(widget)
 
         card = _DictationCard(entry)
         card.deleted.connect(self._on_delete)

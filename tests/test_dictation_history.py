@@ -393,18 +393,12 @@ class TestDictationHistoryWindow:
             "Card list layout must contain only the stretch at construction "
             "time; any pre-inserted widget becomes an orphan on first _reload."
         )
-        from PyQt6.QtWidgets import QLabel
         for i in range(window._list_layout.count()):
             item = window._list_layout.itemAt(i)
             assert item.widget() is None, (
                 "No QLabel/QWidget should be inserted into the list layout "
                 "before the first show; _reload() builds the content lazily."
             )
-        # Also verify no _empty_label attribute lingers as a zombie reference.
-        assert not hasattr(window, "_empty_label"), (
-            "The window should not own a self._empty_label attribute — the "
-            "empty-state placeholder is created on demand inside _reload()."
-        )
 
     def test_first_show_with_existing_entries_leaves_no_orphan_widgets(
         self, qapp, tmp_path

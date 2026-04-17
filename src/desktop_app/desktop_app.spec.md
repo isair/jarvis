@@ -92,13 +92,13 @@ The central controller that manages:
 
 ### DictationHistoryWindow Behaviour
 
-- **Backing store**: A file-backed `DictationHistory` (see `src/jarvis/dictation/history.py`) persisting to `~/.local/share/jarvis/dictation_history.json` (platform-equivalent path). Entries are newest-first with `id`, `text`, `timestamp`, `duration`.
-- **Visibility-gated rendering**: The `new_entry` signal slot (`_on_new_entry`) is a no-op while the window is hidden. In bundled mode the daemon runs in-process, so the engine's `on_dictation_result` callback fires on a worker thread after every successful dictation — even before the user ever opens this window. Manipulating the widget tree for a never-shown window fast-fails inside `Qt6Core.dll` on Windows (`0xc0000409`). The entry is already persisted to disk by the engine, so no data is lost.
-- **Disk-reload on show**: `showEvent` calls `history.reload_from_disk()` and rebuilds the list. This covers both (a) bundled mode where the slot was skipped while hidden and (b) subprocess mode where the daemon owns a separate in-memory `DictationHistory` instance and the only shared state is the JSON file.
-- **File-watch polling**: While visible, a 1.5 s `QTimer` polls the history file's mtime and reloads when it changes (covers subprocess-mode dictations that land while the window is open).
-- **No `setParent(None)` on rebuild**: `_reload()` removes cards via `takeAt()` + `hide()` + `deleteLater()` only. Promoting children to top-level by nulling their parent fast-fails on Windows (`0xc0000409`) and SIGABRTs on macOS for the equivalent NSWindow reason.
-- **Hide before `deleteLater`**: After `takeAt()` the widget is still parented to the list container with its last-known geometry, so Qt's next paint/layout pass can touch it before the deferred delete runs. `hide()` suppresses those events — omitting it fast-fails inside `Qt6Core.dll` on Qt 6.11 when the window is first shown with pre-existing entries.
-- **Empty-state label is lazy**: `__init__` only adds the stretch to the card list; the placeholder QLabel is created on demand inside `_reload()`. Pre-inserting it triggered the same fast-fail, because the first show's `_reload` would remove it mid-show-event and leave a never-painted orphan in the widget tree during Qt's initial paint pass.
+- **Backing store**: File-backed via `DictationHistory` (`src/jarvis/dictation/history.py`); entries are newest-first with `id`, `text`, `timestamp`, `duration`. Disk is the source of truth — the window must not assume its in-memory instance is authoritative.
+- **Hidden windows are inert**: Signals from the dictation engine must not mutate the widget tree while the window is hidden; pending entries are surfaced on next open instead. The engine persists entries regardless, so no data is lost.
+- **On show, reload from disk and rebuild**: The window reads disk state on every show, because the daemon may be in a separate process (subprocess mode) or may have recorded entries while the window was hidden (bundled mode). In-memory state alone is not trusted.
+- **While visible, poll for external writes**: A short interval timer watches the history file's mtime and reloads on change so subprocess-mode dictations appear without requiring a re-open.
+- **Rebuilds preserve parent-ing**: Cards and placeholders must remain children of the list container for their entire lifetime. Promoting them to top-level widgets during a rebuild (e.g. `setParent(None)`) crashes natively on Windows and macOS.
+- **Removed widgets are hidden before deferred deletion**: After removal from the layout, widgets stay in the container tree until their deferred delete runs. They must not receive further paint/layout events in that window. This pattern applies project-wide — see also `src/desktop_app/setup_wizard.py`.
+- **No widgets in the list before first show**: The card list starts with only its trailing stretch; any empty-state placeholder is created on demand during rebuild. Pre-populated list contents become orphans on the first rebuild.
 
 ### LogViewerWindow Features
 
