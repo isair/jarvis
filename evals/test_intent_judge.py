@@ -44,6 +44,27 @@ INTENT_JUDGE_TEST_CASES = [
         expected_query_contains="time",
         expected_query_not_contains="jarvis",
     ),
+    # Wake word + command/imperative addressed to the assistant (not a question)
+    IntentJudgeTestCase(
+        name="wake_word_command_timer",
+        transcript="Jarvis set a timer for 5 minutes",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.5,
+        expected_directed=True,
+        expected_query_contains="timer",
+        expected_query_not_contains="jarvis",
+    ),
+    # Wake word + statement/command to remember something
+    IntentJudgeTestCase(
+        name="wake_word_statement_remember",
+        transcript="Jarvis remind me to call mum at 5pm",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.5,
+        expected_directed=True,
+        expected_query_contains="mum",
+    ),
     # Same-segment context synthesis (distinct from simple wake+Q)
     IntentJudgeTestCase(
         name="context_synthesis_weather_opinion",

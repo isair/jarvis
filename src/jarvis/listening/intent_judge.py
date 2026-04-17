@@ -69,7 +69,7 @@ class IntentJudge:
 Two modes:
 
 WAKE WORD MODE:
-- Extract complete query from segment containing "{name}"
+- Extract complete query from segment containing "{name}" — may be a question, statement, or command/imperative addressed to the assistant (e.g. "set a timer", "remind me to...", "play music"). All are valid queries.
 - If current segment contains a vague ref ("that", "it", "this") OR a topic-less open question ("what do you think", "how much does it cost", "is it worth it") — NAME the topic from earlier segments inside the query string. Do NOT output the vague/open form literally.
 - Example: "I made carbonara" + "Jarvis find recipe for that" -> "find recipe for carbonara"
 - Example: "the weather will be nice tomorrow" + "Jarvis what do you think" -> "what do you think about the weather tomorrow"
