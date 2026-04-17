@@ -399,9 +399,11 @@ def install_update_windows(download_path: Path) -> bool:
 
     temp_dir = Path(tempfile.mkdtemp())
     current_pid = os.getpid()
+    installed_exe_path = get_app_path()
 
     try:
         escaped_temp = _escape_batch_path(temp_dir)
+        escaped_installed_exe = _escape_batch_path(installed_exe_path)
 
         with zipfile.ZipFile(download_path, "r") as zf:
             zf.extractall(temp_dir)
@@ -418,6 +420,8 @@ def install_update_windows(download_path: Path) -> bool:
         # This is more reliable than a fixed timeout since the app may take time
         # to shut down (e.g., saving diary entries).
         # tasklist returns errorlevel 0 if process found, 1 if not found.
+        # After the silent installer finishes the installer's own [Run] launch
+        # step is skipped (skipifsilent), so we relaunch the upgraded exe here.
         batch_content = f'''@echo off
 echo Updating Jarvis...
 echo Waiting for process {current_pid} to exit...
@@ -429,6 +433,8 @@ if not errorlevel 1 (
 )
 echo Process exited, running installer...
 "{escaped_new_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+echo Launching updated Jarvis...
+start "" "{escaped_installed_exe}"
 rmdir /s /q "{escaped_temp}"
 '''
         batch_script.write_text(batch_content)

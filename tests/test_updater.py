@@ -471,6 +471,57 @@ class TestInstallUpdateWindows:
             assert "/SUPPRESSMSGBOXES" in batch_content
             assert "move /y" not in batch_content
 
+    @pytest.mark.unit
+    def test_batch_script_launches_updated_exe(self, tmp_path):
+        """After silent install, the batch script must relaunch the upgraded exe.
+
+        Inno Setup's postinstall launch is skipped under /VERYSILENT, so the
+        updater itself has to start the new version — otherwise the user is
+        left with a stopped app after a successful update.
+        """
+        import subprocess
+        import zipfile
+        from unittest.mock import patch, MagicMock
+
+        zip_path = tmp_path / "update.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("Jarvis.exe", b"mock executable content")
+
+        mock_app_path = tmp_path / "Program Files" / "Jarvis" / "Jarvis.exe"
+        mock_app_path.parent.mkdir(parents=True)
+        mock_app_path.write_bytes(b"old executable")
+
+        from desktop_app.updater import install_update_windows
+
+        batch_content_captured = []
+
+        def capture_popen(args, **kwargs):
+            if args[0] == "cmd" and args[1] == "/c":
+                batch_path = Path(args[2])
+                if batch_path.exists():
+                    batch_content_captured.append(batch_path.read_text())
+            return MagicMock()
+
+        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+            if not hasattr(subprocess, 'CREATE_NO_WINDOW'):
+                with patch.object(subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True):
+                    with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                        install_update_windows(zip_path)
+            else:
+                with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                    install_update_windows(zip_path)
+
+        assert len(batch_content_captured) == 1
+        batch_content = batch_content_captured[0]
+
+        # The launch must come after the installer line so the new binary is
+        # in place when it runs.
+        installer_idx = batch_content.find("/VERYSILENT")
+        launch_idx = batch_content.find(f'start "" "{mock_app_path}"')
+        assert installer_idx != -1, "installer line missing"
+        assert launch_idx != -1, "start line for upgraded exe missing"
+        assert launch_idx > installer_idx, "launch must follow install"
+
 
 class TestInstallUpdateLinux:
     """Tests for Linux update installation."""
