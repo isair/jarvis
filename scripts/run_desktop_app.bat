@@ -25,12 +25,18 @@ echo.
 REM Navigate to project root (use for-loop to resolve .. reliably across shells)
 for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
 cd /d "%PROJECT_ROOT%"
-set "MAMBA_ENV=%PROJECT_ROOT%\.mamba_env"
 set "PYTHONPATH=%PROJECT_ROOT%\src;%PYTHONPATH%"
+
+REM Resolve mamba env: prefer this checkout's own, fall back to the main
+REM repo's when running from a git worktree (worktrees share one env).
+set "MAMBA_ENV=%PROJECT_ROOT%\.mamba_env"
+if not exist "%MAMBA_ENV%\python.exe" call :resolve_mamba_from_worktree
 
 REM Check if mamba environment exists
 if not exist "%MAMBA_ENV%\python.exe" (
-    echo ERROR: Mamba environment not found at %MAMBA_ENV%
+    echo ERROR: Mamba environment not found.
+    echo    Looked in: %PROJECT_ROOT%\.mamba_env
+    echo    And the main repo's .mamba_env ^(if this is a git worktree^).
     echo Please run the setup script first.
     pause
     exit /b 1
@@ -67,4 +73,12 @@ if "%VOICE_DEBUG%"=="1" (
 )
 
 "%MAMBA_ENV%\python.exe" -m desktop_app
+goto :eof
+
+:resolve_mamba_from_worktree
+for /f "usebackq delims=" %%G in (`git -C "%PROJECT_ROOT%" rev-parse --git-common-dir 2^>nul`) do set "GIT_COMMON_DIR=%%G"
+if not defined GIT_COMMON_DIR goto :eof
+for %%I in ("%GIT_COMMON_DIR%\..") do set "MAIN_REPO=%%~fI"
+if exist "%MAIN_REPO%\.mamba_env\python.exe" set "MAMBA_ENV=%MAIN_REPO%\.mamba_env"
+goto :eof
 
