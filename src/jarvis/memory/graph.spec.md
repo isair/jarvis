@@ -183,7 +183,7 @@ The graph explorer appears as the **Knowledge** tab in the memory viewer, positi
 | DELETE | `/api/graph/node/<id>` | Delete node (not root) |
 | GET | `/api/graph/recent` | Recently accessed nodes |
 | GET | `/api/graph/top` | Most frequently accessed nodes |
-| GET | `/api/graph/stats` | Node count |
+| GET | `/api/graph/stats` | Node count and total data tokens (`total_tokens = 0` means the graph holds no knowledge) |
 | POST | `/api/graph/import-diary` | Import all diary summaries into graph (streaming NDJSON) |
 
 ### Import from Diary
