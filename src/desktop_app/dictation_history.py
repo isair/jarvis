@@ -263,6 +263,15 @@ class DictationHistoryWindow(QMainWindow):
     def showEvent(self, event) -> None:
         """Refresh the list each time the window is shown."""
         super().showEvent(event)
+        # In dev mode the daemon runs in a subprocess and owns its own
+        # DictationHistory instance; this window's instance only holds what
+        # was on disk at desktop-app startup.  Pull fresh entries before
+        # rebuilding so dictations recorded during the session appear on
+        # first open — the file-watch timer alone won't help, because its
+        # mtime baseline is set after this reload and it only fires on
+        # *subsequent* changes.
+        if self._history is not None:
+            self._history.reload_from_disk()
         self._reload()
         self._last_file_mtime = self._get_history_file_mtime()
         self._file_watch_timer.start()
