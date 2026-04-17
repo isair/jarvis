@@ -737,6 +737,54 @@ class TestFaceWidgetDictatingState:
         state = JarvisState("dictating")
         assert state == JarvisState.DICTATING
 
+    def test_jarvis_state_has_dictation_processing(self):
+        from src.desktop_app.face_widget import JarvisState
+        assert hasattr(JarvisState, "DICTATION_PROCESSING")
+        assert JarvisState.DICTATION_PROCESSING.value == "dictation_processing"
+
+    def test_dictation_processing_state_round_trips(self):
+        from src.desktop_app.face_widget import JarvisState
+        state = JarvisState("dictation_processing")
+        assert state == JarvisState.DICTATION_PROCESSING
+
+
+class TestDictationProcessingCallback:
+    """Verifies the processing callback fires between recording stop and
+    transcription, so the face can switch to a distinct 'processing' state
+    once the user's voice input has been accepted."""
+
+    def test_processing_callback_fires_before_end(self):
+        from src.jarvis.dictation import dictation_engine as de
+
+        events = []
+
+        engine = _make_engine(
+            on_dictation_processing_start=lambda: events.append("processing"),
+            on_dictation_end=lambda: events.append("end"),
+        )
+
+        # Stub out heavy side effects
+        with patch.object(de, "_close_stream"), \
+             patch.object(de, "_play_beep"), \
+             patch.object(engine, "_transcribe_and_paste", side_effect=lambda frames: events.append("end")):
+            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time())
+
+        assert events == ["processing", "end"], (
+            "processing callback must fire after stop beep but before transcription finishes"
+        )
+
+    def test_processing_callback_optional(self):
+        """Engine must work when no processing callback is supplied."""
+        from src.jarvis.dictation import dictation_engine as de
+
+        engine = _make_engine(on_dictation_processing_start=None)
+
+        with patch.object(de, "_close_stream"), \
+             patch.object(de, "_play_beep"), \
+             patch.object(engine, "_transcribe_and_paste"):
+            # Should not raise
+            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time())
+
 
 # ---------------------------------------------------------------------------
 # Thread safety
