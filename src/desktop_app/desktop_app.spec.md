@@ -88,6 +88,15 @@ The central controller that manages:
 | **FaceWindow** | Animated face that reacts to speaking state |
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
+| **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
+
+### DictationHistoryWindow Behaviour
+
+- **Backing store**: A file-backed `DictationHistory` (see `src/jarvis/dictation/history.py`) persisting to `~/.local/share/jarvis/dictation_history.json` (platform-equivalent path). Entries are newest-first with `id`, `text`, `timestamp`, `duration`.
+- **Visibility-gated rendering**: The `new_entry` signal slot (`_on_new_entry`) is a no-op while the window is hidden. In bundled mode the daemon runs in-process, so the engine's `on_dictation_result` callback fires on a worker thread after every successful dictation — even before the user ever opens this window. Manipulating the widget tree for a never-shown window fast-fails inside `Qt6Core.dll` on Windows (`0xc0000409`). The entry is already persisted to disk by the engine, so no data is lost.
+- **Disk-reload on show**: `showEvent` calls `history.reload_from_disk()` and rebuilds the list. This covers both (a) bundled mode where the slot was skipped while hidden and (b) subprocess mode where the daemon owns a separate in-memory `DictationHistory` instance and the only shared state is the JSON file.
+- **File-watch polling**: While visible, a 1.5 s `QTimer` polls the history file's mtime and reloads when it changes (covers subprocess-mode dictations that land while the window is open).
+- **No `setParent(None)` on rebuild**: `_reload()` removes cards via `takeAt()` + `deleteLater()` only. Promoting children to top-level by nulling their parent fast-fails on Windows (`0xc0000409`) and SIGABRTs on macOS for the equivalent NSWindow reason.
 
 ### LogViewerWindow Features
 
