@@ -32,6 +32,16 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit 
 
 When pushing commits to a PR, always update the PR title and body to cover the entire changeset.
 
+Squash-merged commits on `develop` should only carry the PR number in the title (e.g. `(#171)`), never the originating issue number. Issue references belong in the commit body as `Closes #NNN` so that they auto-close when the commit reaches `main` on release.
+
+## Issue Triage
+
+Never close an issue because its fix landed on `develop`. GitHub auto-closes issues when the `Closes #NNN` commit reaches `main` during a release, so a manual close on a develop-only fix is premature and drops the auto-close signal. The only legitimate manual closures are: duplicates (reference the canonical issue), insufficient info, user-environment issues, or not-a-bug.
+
+## Releases
+
+"Release" means fast-forwarding `main` to the current tip of `develop` and pushing it. No merge commit, no force push — just `git checkout main && git merge --ff-only develop && git push origin main`. This is what triggers the release workflow and the auto-close of issues referenced by `Closes #NNN` in the develop commits.
+
 ## Development Environment
 
 The project uses a micromamba environment at `.mamba_env/`. Always activate it before running builds, tests, or the app:
