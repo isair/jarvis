@@ -250,16 +250,38 @@ class TestDictationHistoryWindow:
         """A card inserted via the new-entry signal must be parented to the
         container, not promoted to a top-level widget.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.desktop_app.dictation_history import (
+            DictationHistoryWindow,
+            _DictationCard,
+        )
         from src.jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         window = DictationHistoryWindow(history=history)
         container = window._list_widget
 
+        # _on_new_entry is a no-op while the window is hidden (see
+        # test_on_new_entry_is_safe_when_window_hidden).  To exercise the
+        # visible-path insertion without calling .show() — which hangs under
+        # QT_QPA_PLATFORM=offscreen in some configurations — monkey-patch
+        # isVisible() to report True.
+        window.isVisible = lambda: True  # type: ignore[assignment]
+
         # Start from the empty-state placeholder and add an entry.
         entry = history.add("hello world", duration=1.0)
         window._on_new_entry(entry)
+
+        # A card must actually have been inserted — otherwise this test passes
+        # vacuously and gives no coverage of the parent-ing behaviour.
+        cards = [
+            window._list_layout.itemAt(i).widget()
+            for i in range(window._list_layout.count())
+            if isinstance(window._list_layout.itemAt(i).widget(), _DictationCard)
+        ]
+        assert len(cards) == 1, (
+            "Expected exactly one _DictationCard to be inserted into the "
+            "visible window's layout."
+        )
 
         for i in range(window._list_layout.count()):
             item = window._list_layout.itemAt(i)
