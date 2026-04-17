@@ -753,7 +753,9 @@ class TestDictationProcessingCallback:
     transcription, so the face can switch to a distinct 'processing' state
     once the user's voice input has been accepted."""
 
-    def test_processing_callback_fires_before_end(self):
+    def test_processing_callback_fires_before_end_callback(self):
+        """End-to-end ordering: the processing callback must fire before the
+        end callback during the full finalise → transcribe → paste chain."""
         from src.jarvis.dictation import dictation_engine as de
 
         events = []
@@ -763,15 +765,16 @@ class TestDictationProcessingCallback:
             on_dictation_end=lambda: events.append("end"),
         )
 
-        # Stub out heavy side effects
-        with patch.object(de, "_close_stream"), \
-             patch.object(de, "_play_beep"), \
-             patch.object(engine, "_transcribe_and_paste", side_effect=lambda frames: events.append("end")):
-            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time())
+        # Stub stream teardown and beep audio only. The real
+        # _transcribe_and_paste runs; with empty frames it short-circuits
+        # and still fires _on_dictation_end via its finally block, which is
+        # the wiring we want to verify.
+        with patch.object(de, "_close_stream"), patch.object(de, "_play_beep"):
+            engine._finalise_and_transcribe(
+                stream=MagicMock(), audio_frames=[], start_time=time.time()
+            )
 
-        assert events == ["processing", "end"], (
-            "processing callback must fire after stop beep but before transcription finishes"
-        )
+        assert events == ["processing", "end"]
 
     def test_processing_callback_optional(self):
         """Engine must work when no processing callback is supplied."""
