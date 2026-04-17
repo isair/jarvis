@@ -619,6 +619,177 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_contains="carbonara",  # Must resolve "that" → carbonara
     ),
 
+    # User asked a full question without the wake word, then explicitly asks the
+    # assistant to answer it. The judge must treat "that" as referring to the prior
+    # question and re-issue it as the query, not extract "answer that" literally.
+    MultiSegmentTestCase(
+        name="cross_segment_answer_that_weather",
+        segments=[
+            ("Sorry, how's the weather today?", False),  # Full question, no wake word
+            ("Jarvis, answer that", False),  # Wake word + imperative referring to prior Q
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="weather",  # Should re-issue the prior question
+        expected_query_not_contains="answer that",  # NOT the literal imperative
+    ),
+
+    # Same pattern with "respond to that" phrasing
+    MultiSegmentTestCase(
+        name="cross_segment_respond_to_that",
+        segments=[
+            ("What time does the library close tonight", False),  # Full question, no wake word
+            ("Jarvis respond to that", False),  # Wake word + imperative
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="library",
+        expected_query_not_contains="respond to that",
+    ),
+
+    # Full question then imperative separated by unrelated misheard chatter.
+    # Isolates the "noise between question and imperative" dimension.
+    MultiSegmentTestCase(
+        name="cross_segment_answer_that_with_noise",
+        segments=[
+            ("How tall is Mount Everest", False),  # Full question
+            ("Charlie sands to that", False),  # Unrelated/misheard noise
+            ("Jarvis answer that", False),  # Wake word + imperative
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1004.5,
+        expected_directed=True,
+        expected_query_contains="everest",
+        expected_query_not_contains="answer that",
+    ),
+
+    # Imperative variant: "reply to that"
+    MultiSegmentTestCase(
+        name="cross_segment_reply_to_that",
+        segments=[
+            ("When does the pharmacy open on Sundays", False),
+            ("Jarvis reply to that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="pharmacy",
+        expected_query_not_contains="reply to that",
+    ),
+
+    # Imperative variant: "address that"
+    MultiSegmentTestCase(
+        name="cross_segment_address_that",
+        segments=[
+            ("Who won the World Cup in 2022", False),
+            ("Jarvis address that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="world cup",
+        expected_query_not_contains="address that",
+    ),
+
+    # Imperative variant: "answer my question"
+    MultiSegmentTestCase(
+        name="cross_segment_answer_my_question",
+        segments=[
+            ("How long does it take to boil an egg", False),
+            ("Jarvis answer my question", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="egg",
+        expected_query_not_contains="answer my question",
+    ),
+
+    # Whisper sometimes transcribes "answer" as "answered" — the past-tense form
+    # should still be treated as the same imperative pattern.
+    MultiSegmentTestCase(
+        name="cross_segment_answered_that_whisper_variant",
+        segments=[
+            ("Sorry, how's the weather today?", False),
+            ("Jarvis answered that", False),  # Whisper misrecognition of "answer that"
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="weather",
+        expected_query_not_contains="answered that",
+    ),
+
+    # Whisper variant: "answers that" (present-tense third-person)
+    MultiSegmentTestCase(
+        name="cross_segment_answers_that_whisper_variant",
+        segments=[
+            ("What's the population of Tokyo", False),
+            ("Jarvis answers that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="tokyo",
+        expected_query_not_contains="answers that",
+    ),
+
+    # Whisper variant: "answering that" (present-participle)
+    MultiSegmentTestCase(
+        name="cross_segment_answering_that_whisper_variant",
+        segments=[
+            ("How many moons does Jupiter have", False),
+            ("Jarvis answering that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="jupiter",
+        expected_query_not_contains="answering that",
+    ),
+
+    # Imperative variant: "go ahead and answer"
+    MultiSegmentTestCase(
+        name="cross_segment_go_ahead_and_answer",
+        segments=[
+            ("What's the capital of Portugal", False),
+            ("Jarvis go ahead and answer", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="portugal",
+        expected_query_not_contains="go ahead and answer",
+    ),
+
+    # Mixed case: imperative + new explicit question in same segment — the new
+    # question should win, not the resolved prior question.
+    MultiSegmentTestCase(
+        name="cross_segment_imperative_superseded_by_new_question",
+        segments=[
+            ("How's the weather today?", False),
+            ("Jarvis, answer that — actually, what time is it?", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="time",
+        expected_query_not_contains="weather",  # Prior question must NOT be re-issued
+    ),
+
     # Cross-segment in hot window (no wake word needed)
     MultiSegmentTestCase(
         name="cross_segment_hot_window_followup",
