@@ -1232,3 +1232,62 @@ class TestSpeechIgnoredOutsideHotWindow:
 
         assert _accepted_query(listener) == ""
         listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Stale wake timestamp must not leak across utterances
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestStaleWakeTimestampAcrossUtterances:
+    """After the intent judge rejects a wake-worded utterance, the next
+    utterance without a wake word must not be accepted just because the
+    previous utterance had one.
+
+    Real-world bug: user said "Jarvis, remember..." (rejected by judge),
+    then said "Hey Google, TV off." The judge saw the previous "Jarvis"
+    in its buffer and returned directed=true with query="tv off". The
+    verification guard `_wake_timestamp is not None` short-circuited true
+    because it was never cleared, so the unrelated "Hey Google" command
+    was accepted.
+    """
+
+    @patch("builtins.print")
+    def test_rejected_wake_utterance_does_not_vouch_for_next_utterance(self, _print):
+        """A prior rejected wake-worded utterance must not authorise a later
+        utterance that lacks a wake word."""
+        listener, _ = _create_listener(echo_tolerance=0.3, hot_window_seconds=3.0)
+
+        # First utterance: has "jarvis", judge rejects as not directed
+        _install_intent_judge(listener, _make_judgment(
+            directed=False, query="", confidence="high",
+            reasoning="statement to self, not directed"))
+
+        now = time.time()
+        listener._process_transcript(
+            "jarvis i want you to remember that my other office days are thursdays",
+            utterance_energy=0.01,
+            utterance_start_time=now,
+            utterance_end_time=now + 2.0,
+        )
+        assert _accepted_query(listener) == ""
+
+        # Second utterance: no wake word, judge hallucinates directed=true
+        # (e.g. because the earlier "jarvis" is still in its context buffer)
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="tv off", confidence="high",
+            reasoning="synthesised from buffer"))
+
+        listener._process_transcript(
+            "hey google, tv off.",
+            utterance_energy=0.01,
+            utterance_start_time=now + 5.0,
+            utterance_end_time=now + 6.0,
+        )
+
+        # Must be rejected — no wake word in this utterance, no hot window
+        assert _accepted_query(listener) == "", (
+            "Second utterance without wake word must not be accepted just "
+            "because a prior utterance set _wake_timestamp")
+        listener.state_manager.stop()

@@ -415,6 +415,13 @@ class VoiceListener(threading.Thread):
 
         text_lower = text.strip().lower()
 
+        # Reset wake timestamp — it must reflect only the current utterance.
+        # If this utterance contains a wake word, the early-beep check below
+        # will set it. Without this reset, a prior rejected wake-worded
+        # utterance would vouch for subsequent unrelated utterances via the
+        # `_wake_timestamp is not None` guard in the intent-judge accept path.
+        self._wake_timestamp = None
+
         start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-3] if utterance_start_time > 0 else "N/A"
         end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
