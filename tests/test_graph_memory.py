@@ -84,6 +84,24 @@ class TestGraphMemoryStoreBootstrap:
     def test_node_count_starts_at_one(self, store):
         assert store.get_node_count() == 1  # root only
 
+    def test_total_tokens_zero_for_empty_graph(self, store):
+        assert store.get_total_tokens() == 0
+
+    def test_total_tokens_reflects_stored_data(self, store):
+        store.create_node(
+            name="Facts",
+            description="Things I know",
+            data="The sky is blue. Water boils at 100C.",
+            parent_id="root",
+        )
+        assert store.get_total_tokens() > 0
+
+    def test_total_tokens_stays_zero_when_root_only_and_empty(self, store):
+        # Even after touching/updating the root without data, tokens remain zero.
+        root = store.get_root()
+        store.update_node(root.id, description="updated description")
+        assert store.get_total_tokens() == 0
+
 
 @pytest.mark.unit
 class TestNodeCRUD:

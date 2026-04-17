@@ -256,3 +256,9 @@ class TestImportDialogueDismissal:
 
         # The loadStats check must include the guard
         assert "&& !diaryImportDone" in html
+
+        # The gate must be based on stored knowledge (total_tokens), not node count.
+        # Guards against a regression to the old `totalNodes <= 1` condition that kept
+        # re-prompting after a successful import filled the root node.
+        assert "totalTokens === 0" in html
+        assert "totalNodes <= 1" not in html
