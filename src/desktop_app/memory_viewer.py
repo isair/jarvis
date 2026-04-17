@@ -465,6 +465,7 @@ def graph_stats() -> Response:
     try:
         return jsonify({
             "total_nodes": store.get_node_count(),
+            "total_tokens": store.get_total_tokens(),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2149,7 +2150,7 @@ def index() -> str:
 
         async function loadStats() {
             let totalMemories = 0;
-            let totalNodes = 0;
+            let totalTokens = 0;
 
             try {
                 const stats = await fetchStats();
@@ -2161,13 +2162,13 @@ def index() -> str:
             // Load graph stats separately
             try {
                 const graphStats = await (await fetch('/api/graph/stats')).json();
-                totalNodes = graphStats.total_nodes || 0;
-                document.getElementById('stats-nodes').textContent = totalNodes;
+                totalTokens = graphStats.total_tokens || 0;
+                document.getElementById('stats-nodes').textContent = graphStats.total_nodes || 0;
             } catch (e) {}
 
             // First-time migration: offer to import diary entries if the graph
-            // is empty (only root node) but the user has diary data
-            if (totalNodes <= 1 && totalMemories > 0 && !diaryImportDone) {
+            // holds no knowledge yet but the user has diary data.
+            if (totalTokens === 0 && totalMemories > 0 && !diaryImportDone) {
                 showImportDiaryModal(true);
             }
         }
@@ -2876,15 +2877,17 @@ def index() -> str:
                         <div id="import-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
                     </div>
                     <div class="modal-actions" id="import-actions">
-                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">${cancelLabel}</button>
+                        <button class="modal-btn secondary" id="btn-cancel-import">${cancelLabel}</button>
                         <button class="modal-btn primary" id="btn-start-import">Start Import</button>
                     </div>
                 </div>
             `;
             document.body.appendChild(overlay);
 
+            const dismiss = () => overlay.remove();
+            document.getElementById('btn-cancel-import').addEventListener('click', dismiss);
             overlay.addEventListener('click', (e) => {
-                if (e.target === overlay && !overlay.dataset.importing) overlay.remove();
+                if (e.target === overlay && !overlay.dataset.importing) dismiss();
             });
 
             document.getElementById('btn-start-import').addEventListener('click', async () => {

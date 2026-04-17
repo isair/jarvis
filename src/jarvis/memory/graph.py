@@ -422,6 +422,14 @@ class GraphMemoryStore:
             row = self.conn.execute("SELECT COUNT(*) as cnt FROM memory_nodes").fetchone()
             return row["cnt"]
 
+    def get_total_tokens(self) -> int:
+        """Return total data tokens across all nodes. Zero means no knowledge stored."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(data_token_count), 0) as total FROM memory_nodes"
+            ).fetchone()
+            return int(row["total"])
+
     # ── Search ─────────────────────────────────────────────────────────
 
     def search_nodes(self, query: str, limit: int = 10) -> list[MemoryNode]:
