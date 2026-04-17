@@ -285,15 +285,18 @@ class DictationHistoryWindow(QMainWindow):
     def _reload(self) -> None:
         """Rebuild the card list from history."""
         # Remove all existing cards (but keep the stretch at the end).
-        # We must hide + setParent(None) before deleteLater to avoid
-        # Qt accessing a half-deleted widget still referenced by the layout.
+        # takeAt() removes the layout's reference, and the widget is still
+        # parented to the container — scheduling deleteLater() is enough.
+        # Do NOT call setParent(None) here: on Windows it promotes each
+        # child to a native top-level HWND mid-rebuild and fast-fails
+        # (0xc0000409) inside Qt6Core.dll; on macOS it SIGABRTs for the
+        # equivalent NSWindow reason (see setup_wizard.py for the macOS
+        # QWizard variant of the same mistake).
         while self._list_layout.count() > 1:
             item = self._list_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.hide()
-                w.setParent(None)
-                w.deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
         if self._history is None:
             self._empty_label = self._make_empty_label()
@@ -360,7 +363,10 @@ class DictationHistoryWindow(QMainWindow):
             return
         # Remove any placeholder labels (empty state / disabled state).
         # Collect indices first, then remove in reverse order so that
-        # indices stay valid.  Also detach from parent before deleteLater.
+        # indices stay valid.  takeAt() is the essential step — it
+        # removes the layout's reference to the widget so the deferred
+        # deletion is safe.  See _reload() for why setParent(None) is
+        # deliberately avoided.
         indices_to_remove = []
         for i in range(self._list_layout.count()):
             item = self._list_layout.itemAt(i)
@@ -369,11 +375,9 @@ class DictationHistoryWindow(QMainWindow):
                 indices_to_remove.append(i)
         for i in reversed(indices_to_remove):
             item = self._list_layout.takeAt(i)
-            w = item.widget()
-            if w:
-                w.hide()
-                w.setParent(None)
-                w.deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
         card = _DictationCard(entry)
         card.deleted.connect(self._on_delete)
