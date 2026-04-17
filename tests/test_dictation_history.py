@@ -250,16 +250,38 @@ class TestDictationHistoryWindow:
         """A card inserted via the new-entry signal must be parented to the
         container, not promoted to a top-level widget.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.desktop_app.dictation_history import (
+            DictationHistoryWindow,
+            _DictationCard,
+        )
         from src.jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         window = DictationHistoryWindow(history=history)
         container = window._list_widget
 
+        # _on_new_entry is a no-op while the window is hidden (see
+        # test_on_new_entry_is_safe_when_window_hidden).  To exercise the
+        # visible-path insertion without calling .show() — which hangs under
+        # QT_QPA_PLATFORM=offscreen in some configurations — monkey-patch
+        # isVisible() to report True.
+        window.isVisible = lambda: True  # type: ignore[assignment]
+
         # Start from the empty-state placeholder and add an entry.
         entry = history.add("hello world", duration=1.0)
         window._on_new_entry(entry)
+
+        # A card must actually have been inserted — otherwise this test passes
+        # vacuously and gives no coverage of the parent-ing behaviour.
+        cards = [
+            window._list_layout.itemAt(i).widget()
+            for i in range(window._list_layout.count())
+            if isinstance(window._list_layout.itemAt(i).widget(), _DictationCard)
+        ]
+        assert len(cards) == 1, (
+            "Expected exactly one _DictationCard to be inserted into the "
+            "visible window's layout."
+        )
 
         for i in range(window._list_layout.count()):
             item = window._list_layout.itemAt(i)
@@ -269,6 +291,58 @@ class TestDictationHistoryWindow:
                     "Widgets must stay parented to the container after a new "
                     "entry is inserted."
                 )
+
+    def test_on_new_entry_is_safe_when_window_hidden(self, qapp, tmp_path):
+        """A dictation can complete before the user ever opens the history
+        window.  In bundled mode the daemon runs in-process, so the engine's
+        on_dictation_result callback fires while the window is still hidden.
+        That path must not manipulate the widget tree — on Windows Qt 6 the
+        combination of creating cards and triggering queued event delivery
+        while the window has never been shown fast-fails inside Qt6Core.dll
+        (0xc0000409) (installer-mode-only crash reported after a successful
+        paste).  When the user later opens the window, showEvent pulls the
+        fresh entries from history and rebuilds from scratch.
+        """
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        window = DictationHistoryWindow(history=history)
+        assert not window.isVisible()
+
+        # Snapshot the layout contents before the signal.
+        before = [
+            window._list_layout.itemAt(i).widget()
+            for i in range(window._list_layout.count())
+        ]
+
+        entry = history.add("late-arriving dictation", duration=1.0)
+        window._on_new_entry(entry)
+
+        # No new cards should be added while the window is hidden.
+        after = [
+            window._list_layout.itemAt(i).widget()
+            for i in range(window._list_layout.count())
+        ]
+        assert before == after, (
+            "_on_new_entry must be a no-op while the window is hidden; "
+            "widget manipulation during hidden state caused a Qt6Core.dll "
+            "fast-fail on Windows."
+        )
+
+        # Later, when the user opens the window, the new entry must appear.
+        # Exercise the same code path showEvent runs (reload + rebuild) without
+        # actually showing a window — avoids platform-specific headless issues.
+        history.reload_from_disk()
+        window._reload()
+        rendered_texts = []
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            widget = item.widget() if item else None
+            e = getattr(widget, "_entry", None)
+            if e is not None:
+                rendered_texts.append(e["text"])
+        assert "late-arriving dictation" in rendered_texts
 
     def test_show_event_is_safely_re_callable(self, qapp, tmp_path):
         """showEvent must be callable repeatedly without orphaning widgets.

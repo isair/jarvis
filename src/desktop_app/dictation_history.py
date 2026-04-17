@@ -370,6 +370,17 @@ class DictationHistoryWindow(QMainWindow):
         """Slot: called (via signal) when a new dictation completes."""
         if self._history is None:
             return
+        # Skip UI work while the window is hidden.  In bundled mode the daemon
+        # runs in-process, so the engine's on_dictation_result callback fires
+        # on a worker thread whenever a dictation lands, even if the user
+        # never opened this window.  Touching the widget tree while the
+        # window has never been shown fast-fails inside Qt6Core.dll on
+        # Windows (0xc0000409 — fatal app exit from an internal Qt assertion,
+        # matching the signature of setParent-related crashes seen elsewhere
+        # in this file).  The entry is already persisted to history by the
+        # engine, and showEvent() rebuilds from disk on next open.
+        if not self.isVisible():
+            return
         # Remove any placeholder labels (empty state / disabled state).
         # The isinstance(QLabel) filter is safe because _DictationCard is a
         # QFrame, not a QLabel — cards are never caught here.  Collect
