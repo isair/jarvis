@@ -231,13 +231,14 @@ class DictationHistoryWindow(QMainWindow):
         self._scroll.setWidget(self._list_widget)
         root_layout.addWidget(self._scroll)
 
-        # Empty state label (shown when no entries)
-        self._empty_label = QLabel("Hold your dictation hotkey to start.\nTranscriptions will appear here.")
-        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
-        )
-        self._list_layout.insertWidget(0, self._empty_label)
+        # The empty-state label is created lazily by _reload() — never
+        # pre-inserted here.  Any widget that lives in _list_widget before
+        # the window is first shown becomes a never-painted orphan once
+        # _reload() removes it (takeAt + deleteLater), and Qt 6.11 on
+        # Windows fast-fails (0xc0000409) mid-show when the paint/layout
+        # pass touches that transient state.  Starting with only the
+        # stretch means the first showEvent's _reload has nothing to
+        # remove and only inserts fresh widgets.
 
         # File-watch timer: poll the history file for changes so the window
         # updates even when the daemon runs in a separate process.
@@ -305,11 +306,17 @@ class DictationHistoryWindow(QMainWindow):
             item = self._list_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # Hide before deleteLater so Qt's pending paint/layout
+                # pass doesn't touch the orphaned-but-still-parented
+                # widget before the deferred delete runs.  Removing
+                # from the layout alone leaves the widget as a child
+                # of _list_widget with its last-known geometry.
+                widget.hide()
                 widget.deleteLater()
 
         if self._history is None:
-            self._empty_label = self._make_empty_label()
-            self._list_layout.insertWidget(0, self._empty_label)
+            placeholder = self._make_empty_label()
+            self._list_layout.insertWidget(0, placeholder)
             self._subtitle.setText("No dictations yet")
             return
 
@@ -398,6 +405,7 @@ class DictationHistoryWindow(QMainWindow):
             item = self._list_layout.takeAt(i)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
 
         card = _DictationCard(entry)

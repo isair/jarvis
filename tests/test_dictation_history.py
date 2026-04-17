@@ -371,6 +371,88 @@ class TestDictationHistoryWindow:
             if widget is not None:
                 assert widget.parent() is container
 
+    def test_init_does_not_pre_insert_empty_label_orphan(self, qapp, tmp_path):
+        """__init__ must not insert an empty-state QLabel into the layout.
+
+        Pre-inserting it means the first _reload() on show removes it and
+        schedules a deleteLater, leaving the widget as an orphaned child of
+        the container with its initial geometry during Qt's first paint/layout
+        pass.  On Qt 6.11 (Windows) that triggers a fast-fail inside
+        Qt6Core.dll (0xc0000409) when the user opens the window via the tray
+        menu after recording a dictation.  The placeholder must be created
+        lazily by _reload() instead.
+        """
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        window = DictationHistoryWindow(history=history)
+
+        # Only the stretch should be in the list layout at construction time.
+        assert window._list_layout.count() == 1, (
+            "Card list layout must contain only the stretch at construction "
+            "time; any pre-inserted widget becomes an orphan on first _reload."
+        )
+        from PyQt6.QtWidgets import QLabel
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            assert item.widget() is None, (
+                "No QLabel/QWidget should be inserted into the list layout "
+                "before the first show; _reload() builds the content lazily."
+            )
+        # Also verify no _empty_label attribute lingers as a zombie reference.
+        assert not hasattr(window, "_empty_label"), (
+            "The window should not own a self._empty_label attribute — the "
+            "empty-state placeholder is created on demand inside _reload()."
+        )
+
+    def test_first_show_with_existing_entries_leaves_no_orphan_widgets(
+        self, qapp, tmp_path
+    ):
+        """After the first show with pre-existing on-disk entries, every
+        child of the card container must still be in the layout.
+
+        Reproduces the open-after-dictate crash scenario: the user records a
+        dictation (entries land on disk), then opens the window via the tray.
+        If _reload() removes a pre-existing placeholder and schedules its
+        deletion without hiding it, the orphaned widget remains in the
+        container's children list and Qt's paint pass may touch it before
+        the deferred delete runs — fast-failing inside Qt6Core.dll.
+        """
+        from src.desktop_app.dictation_history import (
+            DictationHistoryWindow,
+            _DictationCard,
+        )
+        from src.jarvis.dictation.history import DictationHistory
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QWidget
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        history.add("pre-existing entry")
+
+        window = DictationHistoryWindow(history=history)
+        window.show()
+
+        # Collect widgets referenced by the layout.
+        layout_widgets = set()
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            w = item.widget() if item else None
+            if w is not None:
+                layout_widgets.add(id(w))
+
+        # Any direct child QWidget of the container should either be in the
+        # layout or be hidden (so Qt won't paint it before deleteLater runs).
+        container = window._list_widget
+        for child in container.findChildren(QWidget, "", Qt.FindChildOption.FindDirectChildrenOnly):
+            if id(child) in layout_widgets:
+                continue
+            assert not child.isVisible(), (
+                f"Orphaned widget {type(child).__name__!r} left visible under "
+                "the card container after _reload — must be hidden before "
+                "deleteLater to avoid Qt6Core.dll fast-fail during paint."
+            )
+
     def test_show_event_reloads_entries_written_by_another_process(
         self, qapp, tmp_path
     ):
