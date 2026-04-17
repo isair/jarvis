@@ -92,11 +92,13 @@ The central controller that manages:
 
 ### DictationHistoryWindow Behaviour
 
-- **Backing store**: A file-backed `DictationHistory` (see `src/jarvis/dictation/history.py`) persisting to `~/.local/share/jarvis/dictation_history.json` (platform-equivalent path). Entries are newest-first with `id`, `text`, `timestamp`, `duration`.
-- **Visibility-gated rendering**: The `new_entry` signal slot (`_on_new_entry`) is a no-op while the window is hidden. In bundled mode the daemon runs in-process, so the engine's `on_dictation_result` callback fires on a worker thread after every successful dictation — even before the user ever opens this window. Manipulating the widget tree for a never-shown window fast-fails inside `Qt6Core.dll` on Windows (`0xc0000409`). The entry is already persisted to disk by the engine, so no data is lost.
-- **Disk-reload on show**: `showEvent` calls `history.reload_from_disk()` and rebuilds the list. This covers both (a) bundled mode where the slot was skipped while hidden and (b) subprocess mode where the daemon owns a separate in-memory `DictationHistory` instance and the only shared state is the JSON file.
-- **File-watch polling**: While visible, a 1.5 s `QTimer` polls the history file's mtime and reloads when it changes (covers subprocess-mode dictations that land while the window is open).
-- **No `setParent(None)` on rebuild**: `_reload()` removes cards via `takeAt()` + `deleteLater()` only. Promoting children to top-level by nulling their parent fast-fails on Windows (`0xc0000409`) and SIGABRTs on macOS for the equivalent NSWindow reason.
+- **Backing store**: File-backed via `DictationHistory` (`src/jarvis/dictation/history.py`); entries are newest-first with `id`, `text`, `timestamp`, `duration`. Disk is the source of truth — the window must not assume its in-memory instance is authoritative.
+- **Hidden windows are inert**: Signals from the dictation engine must not mutate the widget tree while the window is hidden; pending entries are surfaced on next open instead. The engine persists entries regardless, so no data is lost.
+- **On show, reload from disk and rebuild**: The window reads disk state on every show, because the daemon may be in a separate process (subprocess mode) or may have recorded entries while the window was hidden (bundled mode). In-memory state alone is not trusted.
+- **While visible, poll for external writes**: A short interval timer watches the history file's mtime and reloads on change so subprocess-mode dictations appear without requiring a re-open.
+- **Rebuilds replace the container**: `_reload()` builds a fresh list container and installs it into the scroll area via `takeWidget()` + `setWidget()`; the previous container is hidden and `deleteLater()`'d. This atomic swap sidesteps every class of orphan-during-paint issue that surgical layout edits invite.
+- **Reload deferred off showEvent**: `showEvent` schedules the rebuild via `QTimer.singleShot(0, ...)` rather than mutating the widget tree inline, so the first paint pass sees a stable tree.
+- **No emoji codepoints in `strftime` format strings**: On Windows with the bundled Python 3.11, `datetime.strftime` routes through the C locale encoder and raises `UnicodeEncodeError` on non-BMP codepoints (e.g. 📅). When that exception escapes a Qt slot invocation, Qt6Core triggers a fast-fail (0xc0000409) and the whole app dies. Build timestamp labels by interpolating emoji outside `strftime`.
 
 ### LogViewerWindow Features
 

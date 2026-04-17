@@ -214,12 +214,11 @@ class TestDictationHistoryWindow:
         # We can't call set_history fully without Qt, but verify the method exists
         assert callable(win.set_history)
 
-    def test_reload_keeps_list_items_parented_to_container(self, qapp, tmp_path):
-        """Cards/placeholders must stay parented to the list container after
-        a rebuild.  A None parent promotes the widget to a top-level window,
-        which on Windows allocates a native HWND and fast-fails (0xc0000409)
-        inside Qt6Core.dll when done in a loop — the crash that opening the
-        dictation history tray menu item triggered.
+    def test_reload_keeps_list_items_parented_to_current_container(self, qapp, tmp_path):
+        """Cards/placeholders must be children of the currently-installed
+        list container after a rebuild. The container is swapped atomically
+        on each _reload() — what matters is that the cards live inside
+        whatever container is now in the scroll area, not the old one.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
         from src.jarvis.dictation.history import DictationHistory
@@ -230,20 +229,17 @@ class TestDictationHistoryWindow:
         history.add("third")
 
         window = DictationHistoryWindow(history=history)
-        container = window._list_widget
 
-        # Rebuild a few times to mirror show/hide/show from the tray menu.
         for _ in range(3):
             window._reload()
 
+        container = window._list_widget
         for i in range(window._list_layout.count()):
             item = window._list_layout.itemAt(i)
             widget = item.widget()
             if widget is not None:
                 assert widget.parent() is container, (
-                    "List items must stay parented to the container — a None "
-                    "parent promotes them to top-level widgets, which crashes "
-                    "on Windows (0xc0000409 inside Qt6Core.dll)."
+                    "List items must be children of the current container."
                 )
 
     def test_on_new_entry_keeps_new_card_parented_to_container(self, qapp, tmp_path):
@@ -258,39 +254,28 @@ class TestDictationHistoryWindow:
 
         history = DictationHistory(path=tmp_path / "h.json")
         window = DictationHistoryWindow(history=history)
-        container = window._list_widget
 
-        # _on_new_entry is a no-op while the window is hidden (see
-        # test_on_new_entry_is_safe_when_window_hidden).  To exercise the
-        # visible-path insertion without calling .show() — which hangs under
-        # QT_QPA_PLATFORM=offscreen in some configurations — monkey-patch
-        # isVisible() to report True.
         window.isVisible = lambda: True  # type: ignore[assignment]
 
-        # Start from the empty-state placeholder and add an entry.
         entry = history.add("hello world", duration=1.0)
         window._on_new_entry(entry)
 
-        # A card must actually have been inserted — otherwise this test passes
-        # vacuously and gives no coverage of the parent-ing behaviour.
+        # The reload rebuilds the container from scratch; assert the new
+        # card lives inside the *current* container.
+        container = window._list_widget
         cards = [
             window._list_layout.itemAt(i).widget()
             for i in range(window._list_layout.count())
             if isinstance(window._list_layout.itemAt(i).widget(), _DictationCard)
         ]
         assert len(cards) == 1, (
-            "Expected exactly one _DictationCard to be inserted into the "
-            "visible window's layout."
+            "Expected exactly one _DictationCard in the visible window's layout."
         )
-
         for i in range(window._list_layout.count()):
             item = window._list_layout.itemAt(i)
             widget = item.widget()
             if widget is not None:
-                assert widget.parent() is container, (
-                    "Widgets must stay parented to the container after a new "
-                    "entry is inserted."
-                )
+                assert widget.parent() is container
 
     def test_on_new_entry_is_safe_when_window_hidden(self, qapp, tmp_path):
         """A dictation can complete before the user ever opens the history
@@ -358,18 +343,136 @@ class TestDictationHistoryWindow:
             history.add(f"entry {i}")
 
         window = DictationHistoryWindow(history=history)
-        container = window._list_widget
 
-        # Mimic several tray-menu open/close cycles.
         for _ in range(3):
             window.show()
+            qapp.processEvents()  # let the deferred reload run
             window.hide()
 
+        container = window._list_widget
         for i in range(window._list_layout.count()):
             item = window._list_layout.itemAt(i)
             widget = item.widget()
             if widget is not None:
                 assert widget.parent() is container
+
+    def test_show_event_defers_reload_off_paint_path(self, qapp, tmp_path):
+        """showEvent must defer _reload() so it runs after the first paint.
+
+        Mutating the widget tree inside showEvent is re-entrant with Qt's
+        first paint pass and has triggered a Qt6Core fast-fail
+        (0xc0000409) on Qt 6.11 Windows. The window schedules the reload
+        via QTimer.singleShot(0, ...) so it lands on the next event-loop
+        tick, after the initial show paint has completed.
+        """
+        from src.desktop_app.dictation_history import (
+            DictationHistoryWindow,
+            _DictationCard,
+        )
+        from src.jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        history.add("pre-existing")
+
+        window = DictationHistoryWindow(history=history)
+
+        # Track the container before show. If show triggered a synchronous
+        # rebuild, _list_widget would already be swapped.
+        before_container = window._list_widget
+
+        window.show()
+        # Before the event loop runs, the container should still be the
+        # original empty one — the reload is deferred.
+        assert window._list_widget is before_container
+
+        # After the event loop processes the deferred reload, the container
+        # is swapped and cards are present.
+        qapp.processEvents()
+        assert window._list_widget is not before_container
+        cards = [
+            window._list_layout.itemAt(i).widget()
+            for i in range(window._list_layout.count())
+            if isinstance(window._list_layout.itemAt(i).widget(), _DictationCard)
+        ]
+        assert len(cards) == 1
+
+    def test_first_show_with_existing_entries_leaves_no_orphan_widgets(
+        self, qapp, tmp_path
+    ):
+        """After the first show with pre-existing on-disk entries, the
+        current container has no orphaned (non-layout) direct children.
+
+        Reproduces the open-after-dictate crash scenario: the user records
+        a dictation (entries land on disk), then opens the window. The
+        atomic-swap rebuild replaces the container wholesale, so the new
+        container's direct children are exactly the layout contents.
+        """
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.jarvis.dictation.history import DictationHistory
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QWidget
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        history.add("pre-existing entry")
+
+        window = DictationHistoryWindow(history=history)
+        window.show()
+        qapp.processEvents()  # let the deferred reload run
+
+        layout_widgets = set()
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            w = item.widget() if item else None
+            if w is not None:
+                layout_widgets.add(id(w))
+
+        container = window._list_widget
+        for child in container.findChildren(QWidget, "", Qt.FindChildOption.FindDirectChildrenOnly):
+            if id(child) in layout_widgets:
+                continue
+            assert not child.isVisible(), (
+                f"Orphaned widget {type(child).__name__!r} left visible in "
+                "the current container."
+            )
+
+    def test_card_timestamp_does_not_feed_emoji_to_strftime(self, qapp):
+        """The card timestamp label must not pass emojis through strftime.
+
+        On Windows with the bundled Python 3.11, datetime.strftime routes
+        through the C locale encoder which cannot encode non-BMP emoji
+        codepoints and raises UnicodeEncodeError. When that exception
+        escapes a Qt slot invocation (e.g. the deferred reload fired from
+        showEvent), Qt6Core triggers a fast-fail (0xc0000409) rather than
+        surfacing a catchable error, crashing the whole app.
+
+        This test reproduces the failure mode by forcing a locale whose
+        encoder can't handle U+1F4C5 — mirrors the bundled-Windows
+        behaviour that broke open-after-dictate for real users.
+        """
+        import locale
+        import inspect
+        from src.desktop_app.dictation_history import _DictationCard
+
+        # Source check: the card source must not pass emoji literals into
+        # strftime. Catches future regressions even on locales where the
+        # runtime encoder happens to accept the codepoint.
+        source = inspect.getsource(_DictationCard.__init__)
+        for line in source.splitlines():
+            stripped = line.strip()
+            if "strftime(" not in stripped:
+                continue
+            # Allow only ASCII format specifiers inside strftime().
+            start = stripped.index("strftime(")
+            arg = stripped[start + len("strftime("):]
+            # Grab until matching close paren (simple heuristic, format
+            # strings don't contain parens).
+            close = arg.find(")")
+            if close >= 0:
+                arg = arg[:close]
+            assert arg.isascii(), (
+                f"strftime argument must be ASCII-only to survive Windows "
+                f"locale encoders; found non-ASCII in: {stripped!r}"
+            )
 
     def test_show_event_reloads_entries_written_by_another_process(
         self, qapp, tmp_path
@@ -402,6 +505,7 @@ class TestDictationHistoryWindow:
 
         # User opens the window via the tray menu.
         window.show()
+        qapp.processEvents()  # let the deferred reload run
 
         rendered_texts = []
         for i in range(window._list_layout.count()):

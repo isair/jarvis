@@ -102,7 +102,12 @@ class _DictationCard(QFrame):
 
         ts = entry.get("timestamp", 0)
         dt = datetime.fromtimestamp(ts)
-        time_label = QLabel(dt.strftime("📅 %Y-%m-%d  🕐 %H:%M:%S"))
+        # Keep emojis out of strftime: on Windows with the bundled Python
+        # 3.11, strftime routes through the C locale encoder which can't
+        # encode non-BMP codepoints and raises UnicodeEncodeError. When
+        # that exception bubbles through a Qt slot invocation it triggers
+        # a Qt6Core fast-fail (0xc0000409) rather than a catchable error.
+        time_label = QLabel(f"📅 {dt.strftime('%Y-%m-%d')}  🕐 {dt.strftime('%H:%M:%S')}")
         time_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
         top_row.addWidget(time_label)
 
@@ -123,8 +128,7 @@ class _DictationCard(QFrame):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         text_label.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 14px; "
-            f"line-height: 1.5; padding: 4px 0;"
+            f"color: {COLORS['text_primary']}; font-size: 14px; padding: 4px 0;"
         )
         layout.addWidget(text_label)
 
@@ -222,22 +226,12 @@ class DictationHistoryWindow(QMainWindow):
             f"QScrollArea {{ border: none; background: {COLORS['bg_primary']}; }}"
         )
 
-        self._list_widget = QWidget()
-        self._list_layout = QVBoxLayout(self._list_widget)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(8)
-        self._list_layout.addStretch()  # Push cards to top
-
+        # Start with an empty container; _reload() swaps in a freshly built
+        # widget each time (see spec).
+        self._list_widget = self._build_list_widget([])
         self._scroll.setWidget(self._list_widget)
+        self._list_layout = self._list_widget.layout()
         root_layout.addWidget(self._scroll)
-
-        # Empty state label (shown when no entries)
-        self._empty_label = QLabel("Hold your dictation hotkey to start.\nTranscriptions will appear here.")
-        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
-        )
-        self._list_layout.insertWidget(0, self._empty_label)
 
         # File-watch timer: poll the history file for changes so the window
         # updates even when the daemon runs in a separate process.
@@ -263,18 +257,20 @@ class DictationHistoryWindow(QMainWindow):
     def showEvent(self, event) -> None:
         """Refresh the list each time the window is shown."""
         super().showEvent(event)
-        # In dev mode the daemon runs in a subprocess and owns its own
-        # DictationHistory instance; this window's instance only holds what
-        # was on disk at desktop-app startup.  Pull fresh entries before
-        # rebuilding so dictations recorded during the session appear on
-        # first open — the file-watch timer alone won't help, because its
-        # mtime baseline is set after this reload and it only fires on
-        # *subsequent* changes.
+        # Defer the rebuild to the next event-loop tick. Mutating the widget
+        # tree inside showEvent is re-entrant with Qt's first paint pass and
+        # has triggered a Qt6Core fast-fail (0xc0000409) on Qt 6.11 Windows.
+        # Running after showEvent returns lets the window complete its
+        # initial layout/paint before we swap the list contents.
+        QTimer.singleShot(0, self._refresh_from_disk_and_reload)
+        self._last_file_mtime = self._get_history_file_mtime()
+        self._file_watch_timer.start()
+
+    def _refresh_from_disk_and_reload(self) -> None:
+        """Pull fresh entries from disk, then rebuild."""
         if self._history is not None:
             self._history.reload_from_disk()
         self._reload()
-        self._last_file_mtime = self._get_history_file_mtime()
-        self._file_watch_timer.start()
 
     def hideEvent(self, event) -> None:
         """Stop polling when the window is hidden."""
@@ -291,53 +287,67 @@ class DictationHistoryWindow(QMainWindow):
         except Exception:
             return True
 
-    def _reload(self) -> None:
-        """Rebuild the card list from history."""
-        # Remove all existing cards (but keep the stretch at the end).
-        # takeAt() removes the layout's reference, and the widget is still
-        # parented to the container — scheduling deleteLater() is enough.
-        # Do NOT call setParent(None) here: on Windows it promotes each
-        # child to a native top-level HWND mid-rebuild and fast-fails
-        # (0xc0000409) inside Qt6Core.dll; on macOS it SIGABRTs for the
-        # equivalent NSWindow reason (see setup_wizard.py for the macOS
-        # QWizard variant of the same mistake).
-        while self._list_layout.count() > 1:
-            item = self._list_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+    def _build_list_widget(self, entries: List[Dict[str, Any]]) -> QWidget:
+        """Build a fresh container widget populated for the given entries.
 
-        if self._history is None:
-            self._empty_label = self._make_empty_label()
-            self._list_layout.insertWidget(0, self._empty_label)
-            self._subtitle.setText("No dictations yet")
-            return
-
-        entries = self._history.get_all()
+        Returns a newly-constructed QWidget with its layout and children
+        already in place. The caller atomically installs it into the
+        scroll area, replacing the previous contents.
+        """
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
         if not entries:
-            # Show a contextual hint depending on whether dictation is enabled
-            if not self._is_dictation_enabled():
+            if self._history is None or self._is_dictation_enabled():
+                placeholder = self._make_empty_label()
+            else:
                 placeholder = QLabel(
                     "Dictation mode is currently disabled.\n\n"
                     "Enable it in Settings \u2192 Features \u2192 Dictation Mode."
                 )
-            else:
-                placeholder = self._make_empty_label()
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet(
-                f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
-            )
-            self._list_layout.insertWidget(0, placeholder)
-            self._subtitle.setText("No dictations yet")
-            return
+                placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                placeholder.setStyleSheet(
+                    f"color: {COLORS['text_muted']}; font-size: 14px; padding: 40px;"
+                )
+            layout.addWidget(placeholder)
+        else:
+            for entry in entries:
+                card = _DictationCard(entry)
+                card.deleted.connect(self._on_delete)
+                layout.addWidget(card)
+        layout.addStretch()
+        return container
 
-        self._subtitle.setText(f"{len(entries)} dictation(s)")
-        for entry in entries:
-            card = _DictationCard(entry)
-            card.deleted.connect(self._on_delete)
-            # Insert before the stretch
-            self._list_layout.insertWidget(self._list_layout.count() - 1, card)
+    def _reload(self) -> None:
+        """Rebuild the card list by atomically swapping the container.
+
+        Instead of mutating the existing layout (taking items out and
+        scheduling deferred deletes), we build a completely new container
+        and install it into the scroll area. ``QScrollArea.takeWidget()``
+        returns the previous container, which we then hide and
+        ``deleteLater()``. This keeps the old widgets alive only as long
+        as their deferred destruction takes, and they never receive any
+        further paint/layout events because they are no longer in the
+        visible tree.
+        """
+        entries = self._history.get_all() if self._history is not None else []
+
+        new_container = self._build_list_widget(entries)
+        old_container = self._scroll.takeWidget()
+        self._scroll.setWidget(new_container)
+        self._list_widget = new_container
+        self._list_layout = new_container.layout()
+
+        if old_container is not None:
+            old_container.hide()
+            old_container.deleteLater()
+
+        if self._history is None or not entries:
+            self._subtitle.setText("No dictations yet")
+        else:
+            self._subtitle.setText(f"{len(entries)} dictation(s)")
 
     def _get_history_file_mtime(self) -> float:
         """Return the mtime of the history JSON file, or 0 if missing."""
@@ -370,43 +380,13 @@ class DictationHistoryWindow(QMainWindow):
         """Slot: called (via signal) when a new dictation completes."""
         if self._history is None:
             return
-        # Skip UI work while the window is hidden.  In bundled mode the daemon
-        # runs in-process, so the engine's on_dictation_result callback fires
-        # on a worker thread whenever a dictation lands, even if the user
-        # never opened this window.  Touching the widget tree while the
-        # window has never been shown fast-fails inside Qt6Core.dll on
-        # Windows (0xc0000409 — fatal app exit from an internal Qt assertion,
-        # matching the signature of setParent-related crashes seen elsewhere
-        # in this file).  The entry is already persisted to history by the
-        # engine, and showEvent() rebuilds from disk on next open.
+        # Hidden windows are inert (see spec); showEvent rebuilds from
+        # disk on next open, so the entry is not lost.
         if not self.isVisible():
             return
-        # Remove any placeholder labels (empty state / disabled state).
-        # The isinstance(QLabel) filter is safe because _DictationCard is a
-        # QFrame, not a QLabel — cards are never caught here.  Collect
-        # indices first, then remove in reverse order so that indices stay
-        # valid.  takeAt() is the essential step — it removes the layout's
-        # reference to the widget so the deferred deletion is safe.  See
-        # _reload() for why setParent(None) is deliberately avoided.
-        indices_to_remove = []
-        for i in range(self._list_layout.count()):
-            item = self._list_layout.itemAt(i)
-            widget = item.widget() if item else None
-            if isinstance(widget, QLabel):
-                indices_to_remove.append(i)
-        for i in reversed(indices_to_remove):
-            item = self._list_layout.takeAt(i)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        card = _DictationCard(entry)
-        card.deleted.connect(self._on_delete)
-        # Insert at the top (index 0) — newest first
-        self._list_layout.insertWidget(0, card)
-
-        count = self._history.count
-        self._subtitle.setText(f"{count} dictation(s)")
+        # Full rebuild via the same code path as showEvent. Cheaper and
+        # far safer than surgical layout edits.
+        self._reload()
 
     def _on_delete(self, entry_id: str) -> None:
         """Delete a single entry."""
