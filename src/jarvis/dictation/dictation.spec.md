@@ -31,9 +31,16 @@ window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift+d`,
    set face to `DICTATING`, pause main voice listener.
 2. **Hold hotkey** → audio frames accumulate in a dedicated
    `sounddevice.InputStream`.
-3. **Release hotkey** → stop recording, play stop beep, transcribe via shared
-   Whisper model, apply post-processing pipeline, paste result into focused app
-   via clipboard, restore face to `IDLE`, resume main voice listener.
+3. **Release hotkey** → stop recording, play stop beep, set face to
+   `DICTATION_PROCESSING`, transcribe via shared Whisper model, apply
+   post-processing pipeline, paste result into focused app via clipboard,
+   restore face to `IDLE`, resume main voice listener.
+
+The face therefore moves through three distinct states across a dictation
+cycle: `DICTATING` while recording, `DICTATION_PROCESSING` while the captured
+audio is being transcribed / post-processed / pasted, and back to `IDLE` once
+the cycle completes. This gives the user visual confirmation that their voice
+input has been accepted and is being processed.
 
 ### Hands-Free Mode (Double-Tap)
 

@@ -412,6 +412,14 @@ def main() -> None:
                     pass
                 debug_log("dictation started — listener paused", "dictation")
 
+            def _on_dictation_processing_start():
+                try:
+                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    get_jarvis_state().set_state(JarvisState.DICTATION_PROCESSING)
+                except Exception:
+                    pass
+                debug_log("dictation processing started — transcribing captured audio", "dictation")
+
             def _on_dictation_end():
                 voice_thread._dictation_active = False
                 try:
@@ -428,6 +436,7 @@ def main() -> None:
                 hotkey=cfg.dictation_hotkey,
                 sample_rate=int(getattr(cfg, "sample_rate", 16000)),
                 on_dictation_start=_on_dictation_start,
+                on_dictation_processing_start=_on_dictation_processing_start,
                 on_dictation_end=_on_dictation_end,
                 transcribe_lock=voice_thread.transcribe_lock,
                 voice_device=getattr(cfg, "voice_device", None),

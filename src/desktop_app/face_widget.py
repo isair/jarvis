@@ -58,6 +58,7 @@ class JarvisState(Enum):
     THINKING = "thinking"      # Processing query
     SPEAKING = "speaking"      # Speaking response
     DICTATING = "dictating"    # Hold-to-dictate recording active
+    DICTATION_PROCESSING = "dictation_processing"  # Transcribing & pasting captured dictation
 
 
 # Global Jarvis state - allows daemon to signal overall state to face widget
@@ -430,7 +431,7 @@ class LowPolyFaceWidget(QWidget):
         if self._jarvis_state == JarvisState.ASLEEP:
             self._target_activation = 0.0
         else:
-            # IDLE, LISTENING, THINKING, SPEAKING, or DICTATING - all should be awake
+            # IDLE, LISTENING, THINKING, SPEAKING, DICTATING, or DICTATION_PROCESSING - all should be awake
             self._target_activation = 1.0
 
         # Smooth activation transition
@@ -500,12 +501,12 @@ class LowPolyFaceWidget(QWidget):
                     new_rings.append(ring)
             self._listening_rings = new_rings
 
-        # Dictation pulse animation (when dictating)
-        if self._jarvis_state == JarvisState.DICTATING:
+        # Dictation pulse animation (during recording and post-recording processing)
+        if self._jarvis_state in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
             self._dictation_pulse_phase += 0.08  # Steady pulse speed
 
-        # Spinner animation (when thinking)
-        if self._jarvis_state == JarvisState.THINKING:
+        # Spinner animation (while thinking or post-dictation processing)
+        if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
             self._spinner_angle += 8.0  # Rotate 8 degrees per frame (~240 deg/sec)
             if self._spinner_angle >= 360:
                 self._spinner_angle -= 360
@@ -810,7 +811,7 @@ class LowPolyFaceWidget(QWidget):
             pupil_size = size * 0.3 * (1.0 - blink_factor)
 
             # Check if we should draw a spinner (thinking state)
-            if self._jarvis_state == JarvisState.THINKING:
+            if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
                 # Draw spinning loader instead of pupil
                 painter.setPen(QPen(self.PRIMARY_COLOR, 2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -992,8 +993,8 @@ class LowPolyFaceWidget(QWidget):
 
     def _draw_dictation_pulse(self, painter: QPainter, cx: float, cy: float,
                               face_width: float, face_height: float):
-        """Draw a steady pulsing ring around the face during dictation."""
-        if self._jarvis_state != JarvisState.DICTATING:
+        """Draw a pulsing ring around the face during dictation / post-dictation processing."""
+        if self._jarvis_state not in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
             return
 
         # Pulsing opacity and scale driven by a sine wave

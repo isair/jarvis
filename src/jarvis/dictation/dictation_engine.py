@@ -594,8 +594,14 @@ class DictationEngine:
         Audio sample rate (should match Whisper expectations, default 16000).
     on_dictation_start : callable | None
         Called when recording starts (for face state, listener pause, etc.).
+    on_dictation_processing_start : callable | None
+        Called after the user releases the hotkey, once audio has been captured
+        and the stop beep has played, just before transcription begins. Used by
+        the UI to switch the face into a "processing" state while we transcribe
+        and paste.
     on_dictation_end : callable | None
-        Called when recording ends.
+        Called when the full dictation cycle (recording + transcription +
+        paste) has finished.
     transcribe_lock : threading.Lock | None
         Lock shared with the voice listener to serialise Whisper calls.
     on_dictation_result : callable | None
@@ -611,6 +617,7 @@ class DictationEngine:
         hotkey: str = "ctrl+shift+d",
         sample_rate: int = 16000,
         on_dictation_start: Optional[Callable[[], None]] = None,
+        on_dictation_processing_start: Optional[Callable[[], None]] = None,
         on_dictation_end: Optional[Callable[[], None]] = None,
         transcribe_lock: Optional[threading.Lock] = None,
         on_dictation_result: Optional[Callable] = None,
@@ -628,6 +635,7 @@ class DictationEngine:
         self._target_sample_rate = sample_rate  # Whisper expects this rate
         self._stream_sample_rate = sample_rate  # Actual device rate (may differ)
         self._on_dictation_start = on_dictation_start
+        self._on_dictation_processing_start = on_dictation_processing_start
         self._on_dictation_end = on_dictation_end
         self._on_dictation_result = on_dictation_result
         self._transcribe_lock = transcribe_lock or threading.Lock()
@@ -994,6 +1002,12 @@ class DictationEngine:
 
             duration = time.time() - start_time
             debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
+
+            if self._on_dictation_processing_start:
+                try:
+                    self._on_dictation_processing_start()
+                except Exception as exc:
+                    debug_log(f"on_dictation_processing_start callback error: {exc}", "dictation")
 
             # _transcribe_and_paste has its own finally that fires
             # _on_dictation_end, so we defer to it on the happy path.
