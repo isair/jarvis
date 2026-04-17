@@ -297,6 +297,50 @@ class TestDictationHistoryWindow:
             if widget is not None:
                 assert widget.parent() is container
 
+    def test_show_event_reloads_entries_written_by_another_process(
+        self, qapp, tmp_path
+    ):
+        """Opening the window via the tray must surface entries that a sibling
+        process (the daemon subprocess) wrote after the desktop app started.
+
+        The desktop app owns one DictationHistory instance and the daemon owns
+        another; they only share the JSON file on disk.  If showEvent() didn't
+        reload from disk, the window would render the desktop app's stale
+        in-memory cache and the user would see no new dictations from the
+        current session.
+        """
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.jarvis.dictation.history import DictationHistory
+
+        path = tmp_path / "h.json"
+
+        # Desktop-app-side history: loads what exists on disk at startup.
+        desktop_history = DictationHistory(path=path)
+        desktop_history.add("older entry from a previous session")
+
+        window = DictationHistoryWindow(history=desktop_history)
+
+        # Simulate the daemon subprocess adding entries through its own
+        # DictationHistory instance — same file, separate in-memory state.
+        daemon_history = DictationHistory(path=path)
+        daemon_history.add("first new dictation")
+        daemon_history.add("second new dictation")
+
+        # User opens the window via the tray menu.
+        window.show()
+
+        rendered_texts = []
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            widget = item.widget() if item else None
+            # Only cards expose `_entry`; placeholders are plain QLabels.
+            entry = getattr(widget, "_entry", None)
+            if entry is not None:
+                rendered_texts.append(entry["text"])
+
+        assert "first new dictation" in rendered_texts
+        assert "second new dictation" in rendered_texts
+
 
 # ---------------------------------------------------------------------------
 # Menu integration tests
