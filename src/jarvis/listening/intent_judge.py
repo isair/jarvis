@@ -92,7 +92,7 @@ MODE 1: WAKE WORD (look for segment containing wake word like "{name}")
   → query is "what do you think about dinosaurs being cool" (resolve "that" from previous segment)
 - Example: "Jarvis, how much does that iPhone cost?" after discussing iPhones
   → query is "how much does the iPhone cost" (resolve "that" to the actual topic)
-- CRITICAL - Imperatives referring to a prior question: if the current segment is a command like "answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer" — and a prior segment contains an unanswered question — the query IS the prior question, NOT the imperative. Do not return "answer that" as the query; return the resolved prior question itself.
+- CRITICAL - Imperatives referring to a prior question: if the current segment is a command like "answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer" — and a prior segment contains an unanswered question — the query IS the prior question, NOT the imperative. Do not return "answer that" as the query; return the resolved prior question itself. This also applies to Whisper misrecognitions of the same imperative (e.g. "answered that", "answers that", "answering that", "response that") — treat these as the imperative form regardless of tense.
 - Example (imperative resolution):
   Previous segment: "How's the weather today?"
   Current segment: "Jarvis, answer that"
@@ -139,6 +139,7 @@ Examples:
 - Previous: "I made carbonara for dinner" + Current: "Jarvis can you find me a recipe for that" → {{"directed": true, "query": "find a recipe for carbonara", "stop": false, "confidence": "high", "reasoning": "resolved 'that' from previous segment about carbonara"}}
 - Previous: "How's the weather today?" + Current: "Jarvis, answer that" → {{"directed": true, "query": "how is the weather today", "stop": false, "confidence": "high", "reasoning": "imperative 'answer that' → re-issue the prior question as the query"}}
 - Previous: "What time does the library close tonight" + Current: "Jarvis respond to that" → {{"directed": true, "query": "what time does the library close tonight", "stop": false, "confidence": "high", "reasoning": "imperative 'respond to that' → re-issue the prior question"}}
+- Previous: "How's the weather today?" + Current: "Jarvis answered that" (Whisper misrecognition of "answer that") → {{"directed": true, "query": "how is the weather today", "stop": false, "confidence": "high", "reasoning": "past-tense 'answered that' is Whisper variant of imperative → re-issue prior question"}}
 - Hot window + user statement → {{"directed": true, "query": "I think absurdism is better than nihilism", "stop": false, "confidence": "high", "reasoning": "user speaking in hot window = directed"}}
 - Hot window + only "(during TTS)" segments → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo, no user speech"}}
 - "stop" or "quiet" command → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}

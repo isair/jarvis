@@ -651,20 +651,37 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_not_contains="respond to that",
     ),
 
-    # Full question then imperative separated by unrelated misheard chatter
+    # Full question then imperative separated by unrelated misheard chatter.
+    # Uses Whisper's past-tense misrecognition "answered that" for "answer that".
     MultiSegmentTestCase(
         name="cross_segment_answer_that_with_noise",
         segments=[
             ("How tall is Mount Everest", False),  # Full question
             ("Charlie sands to that", False),  # Unrelated/misheard noise
-            ("Jarvis answer that", False),  # Wake word + imperative
+            ("Jarvis answered that", False),  # Wake word + imperative (Whisper variant)
         ],
         last_tts_text="",
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
         expected_query_contains="everest",
-        expected_query_not_contains="answer that",
+        expected_query_not_contains="answered that",
+    ),
+
+    # Whisper sometimes transcribes "answer" as "answered" — the past-tense form
+    # should still be treated as the same imperative pattern.
+    MultiSegmentTestCase(
+        name="cross_segment_answered_that_whisper_variant",
+        segments=[
+            ("Sorry, how's the weather today?", False),
+            ("Jarvis answered that", False),  # Whisper misrecognition of "answer that"
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="weather",
+        expected_query_not_contains="answered that",
     ),
 
     # Cross-segment in hot window (no wake word needed)
