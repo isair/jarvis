@@ -503,9 +503,7 @@ class LowPolyFaceWidget(QWidget):
 
         # Dictation pulse animation (during recording and post-recording processing)
         if self._jarvis_state in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
-            # Processing pulses faster to signal active transcription
-            pulse_speed = 0.16 if self._jarvis_state == JarvisState.DICTATION_PROCESSING else 0.08
-            self._dictation_pulse_phase += pulse_speed
+            self._dictation_pulse_phase += 0.08  # Steady pulse speed
 
         # Spinner animation (while thinking or post-dictation processing)
         if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
@@ -999,13 +997,10 @@ class LowPolyFaceWidget(QWidget):
         if self._jarvis_state not in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
             return
 
-        is_processing = self._jarvis_state == JarvisState.DICTATION_PROCESSING
-
         # Pulsing opacity and scale driven by a sine wave
         pulse = (math.sin(self._dictation_pulse_phase) + 1.0) / 2.0  # 0..1
-        # Tighter, snappier ring while processing to visually distinguish the state
-        scale = (1.08 + pulse * 0.06) if is_processing else (1.12 + pulse * 0.08)
-        opacity = (0.45 + pulse * 0.3 if is_processing else 0.35 + pulse * 0.25) * self._activation_level
+        scale = 1.12 + pulse * 0.08  # 1.12..1.20 gentle breathing
+        opacity = (0.35 + pulse * 0.25) * self._activation_level
 
         base_vertices = self._get_face_vertices(cx, cy, face_width, face_height)
 
@@ -1015,8 +1010,8 @@ class LowPolyFaceWidget(QWidget):
             scaled_vertices.append((cx + dx * scale, cy + dy * scale))
 
         painter.setOpacity(opacity)
-        # Red while recording; amber (theme accent) while processing
-        dictation_colour = QColor(251, 191, 36) if is_processing else QColor(239, 68, 68)
+        # Use a red-ish tint to differentiate from listening rings
+        dictation_colour = QColor(239, 68, 68)  # Warm red (#ef4444)
         ring_pen = QPen(dictation_colour, 2.0)
         ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(ring_pen)
