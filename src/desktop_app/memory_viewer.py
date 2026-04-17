@@ -1201,8 +1201,8 @@ def index() -> str:
             gap: 0.75rem;
             padding: 0.85rem 1rem;
             margin-bottom: 1rem;
-            background: rgba(245, 158, 11, 0.08);
-            border: 1px solid rgba(245, 158, 11, 0.4);
+            background: var(--accent-glow);
+            border: 1px solid var(--border-glow);
             border-radius: var(--radius-md);
             color: var(--text-secondary);
             font-size: 0.85rem;
@@ -1233,7 +1233,7 @@ def index() -> str:
             flex-shrink: 0;
             padding: 0.15rem 0.5rem;
             background: var(--warning);
-            color: #1a1a1a;
+            color: var(--bg-primary);
             border-radius: var(--radius-sm);
             font-size: 0.7rem;
             font-weight: 700;
@@ -1245,7 +1245,7 @@ def index() -> str:
             display: grid;
             grid-template-columns: 240px 1fr 320px;
             gap: 0;
-            height: calc(100vh - 240px);
+            height: calc(100vh - 340px);
             min-height: 500px;
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
@@ -1699,7 +1699,7 @@ def index() -> str:
             .graph-explorer {
                 grid-template-columns: 1fr;
                 grid-template-rows: 200px 1fr;
-                height: calc(100vh - 180px);
+                height: calc(100vh - 340px);
             }
             .graph-tree-sidebar {
                 border-right: none;
@@ -1806,7 +1806,7 @@ def index() -> str:
                     <span class="alpha-badge">Alpha</span>
                     <div class="alpha-body">
                         <p>
-                            🧪 The knowledge graph is updated in the background but is <strong>not used by default</strong> yet.
+                            🧪 The knowledge graph runs in the background but isn't <strong>used by default</strong> yet.
                             Performance implications and real-world benefits are still being evaluated, and the design will
                             likely go through significant refinement before it becomes a core part of Jarvis.
                         </p>
