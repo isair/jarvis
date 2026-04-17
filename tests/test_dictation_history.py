@@ -214,33 +214,88 @@ class TestDictationHistoryWindow:
         # We can't call set_history fully without Qt, but verify the method exists
         assert callable(win.set_history)
 
-    def test_reload_detaches_widgets_before_delete(self):
-        """_reload must call setParent(None) on removed widgets to prevent
-        Qt from accessing half-deleted objects (fixes segfault in Qt6Core.dll).
+    def test_reload_keeps_list_items_parented_to_container(self, qapp, tmp_path):
+        """Cards/placeholders must stay parented to the list container after
+        a rebuild.  A None parent promotes the widget to a top-level window,
+        which on Windows allocates a native HWND and fast-fails (0xc0000409)
+        inside Qt6Core.dll when done in a loop — the crash that opening the
+        dictation history tray menu item triggered.
         """
-        import inspect
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        source = inspect.getsource(DictationHistoryWindow._reload)
-        # The safe pattern: takeAt → hide → setParent(None) → deleteLater
-        assert "setParent(None)" in source, (
-            "_reload must detach widgets with setParent(None) before deleteLater"
-        )
+        from src.jarvis.dictation.history import DictationHistory
 
-    def test_on_new_entry_removes_from_layout_before_delete(self):
-        """_on_new_entry must takeAt (remove from layout) before deleteLater
-        to avoid dangling layout references to deleted widgets.
+        history = DictationHistory(path=tmp_path / "h.json")
+        history.add("first")
+        history.add("second")
+        history.add("third")
+
+        window = DictationHistoryWindow(history=history)
+        container = window._list_widget
+
+        # Rebuild a few times to mirror show/hide/show from the tray menu.
+        for _ in range(3):
+            window._reload()
+
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            widget = item.widget()
+            if widget is not None:
+                assert widget.parent() is container, (
+                    "List items must stay parented to the container — a None "
+                    "parent promotes them to top-level widgets, which crashes "
+                    "on Windows (0xc0000409 inside Qt6Core.dll)."
+                )
+
+    def test_on_new_entry_keeps_new_card_parented_to_container(self, qapp, tmp_path):
+        """A card inserted via the new-entry signal must be parented to the
+        container, not promoted to a top-level widget.
         """
-        import inspect
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        source = inspect.getsource(DictationHistoryWindow._on_new_entry)
-        assert "takeAt" in source, (
-            "_on_new_entry must remove widgets from layout (takeAt) before "
-            "calling deleteLater"
-        )
-        assert "setParent(None)" in source, (
-            "_on_new_entry must detach widgets with setParent(None) before "
-            "deleteLater"
-        )
+        from src.jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        window = DictationHistoryWindow(history=history)
+        container = window._list_widget
+
+        # Start from the empty-state placeholder and add an entry.
+        entry = history.add("hello world", duration=1.0)
+        window._on_new_entry(entry)
+
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            widget = item.widget()
+            if widget is not None:
+                assert widget.parent() is container, (
+                    "Widgets must stay parented to the container after a new "
+                    "entry is inserted."
+                )
+
+    def test_show_event_is_safely_re_callable(self, qapp, tmp_path):
+        """showEvent must be callable repeatedly without orphaning widgets.
+
+        The tray menu opens the window every time, so show/hide cycles over a
+        session need to keep the list layout healthy.
+        """
+        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from src.jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "h.json")
+        for i in range(5):
+            history.add(f"entry {i}")
+
+        window = DictationHistoryWindow(history=history)
+        container = window._list_widget
+
+        # Mimic several tray-menu open/close cycles.
+        for _ in range(3):
+            window.show()
+            window.hide()
+
+        for i in range(window._list_layout.count()):
+            item = window._list_layout.itemAt(i)
+            widget = item.widget()
+            if widget is not None:
+                assert widget.parent() is container
 
 
 # ---------------------------------------------------------------------------

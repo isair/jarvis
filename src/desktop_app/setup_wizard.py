@@ -1838,10 +1838,10 @@ class WhisperSetupPage(QWizardPage):
         # reference — scheduling deleteLater() is enough.  Do NOT call
         # setParent(None) here: on macOS that promotes each QLabel to a
         # top-level widget mid-transition, which triggers a native
-        # window creation and can SIGABRT inside QWizard.exec().
-        # Note: dictation_history.py deliberately keeps the setParent(None)
-        # pattern — it runs from a standalone window (not a QWizard
-        # transition) and needed it to fix a Windows-specific segfault.
+        # NSWindow creation and can SIGABRT inside QWizard.exec().  On
+        # Windows the same reparent creates a native HWND and fast-fails
+        # (0xc0000409) inside Qt6Core.dll — see dictation_history.py
+        # where the same mistake crashed the history window.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
             widget = item.widget()
