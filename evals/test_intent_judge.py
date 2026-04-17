@@ -652,20 +652,65 @@ MULTI_SEGMENT_TEST_CASES = [
     ),
 
     # Full question then imperative separated by unrelated misheard chatter.
-    # Uses Whisper's past-tense misrecognition "answered that" for "answer that".
+    # Isolates the "noise between question and imperative" dimension.
     MultiSegmentTestCase(
         name="cross_segment_answer_that_with_noise",
         segments=[
             ("How tall is Mount Everest", False),  # Full question
             ("Charlie sands to that", False),  # Unrelated/misheard noise
-            ("Jarvis answered that", False),  # Wake word + imperative (Whisper variant)
+            ("Jarvis answer that", False),  # Wake word + imperative
         ],
         last_tts_text="",
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
         expected_query_contains="everest",
-        expected_query_not_contains="answered that",
+        expected_query_not_contains="answer that",
+    ),
+
+    # Imperative variant: "reply to that"
+    MultiSegmentTestCase(
+        name="cross_segment_reply_to_that",
+        segments=[
+            ("When does the pharmacy open on Sundays", False),
+            ("Jarvis reply to that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="pharmacy",
+        expected_query_not_contains="reply to that",
+    ),
+
+    # Imperative variant: "address that"
+    MultiSegmentTestCase(
+        name="cross_segment_address_that",
+        segments=[
+            ("Who won the World Cup in 2022", False),
+            ("Jarvis address that", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="world cup",
+        expected_query_not_contains="address that",
+    ),
+
+    # Imperative variant: "answer my question"
+    MultiSegmentTestCase(
+        name="cross_segment_answer_my_question",
+        segments=[
+            ("How long does it take to boil an egg", False),
+            ("Jarvis answer my question", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="egg",
+        expected_query_not_contains="answer my question",
     ),
 
     # Whisper sometimes transcribes "answer" as "answered" — the past-tense form
