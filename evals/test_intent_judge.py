@@ -619,6 +619,54 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_contains="carbonara",  # Must resolve "that" → carbonara
     ),
 
+    # User asked a full question without the wake word, then explicitly asks the
+    # assistant to answer it. The judge must treat "that" as referring to the prior
+    # question and re-issue it as the query, not extract "answer that" literally.
+    MultiSegmentTestCase(
+        name="cross_segment_answer_that_weather",
+        segments=[
+            ("Sorry, how's the weather today?", False),  # Full question, no wake word
+            ("Jarvis, answer that", False),  # Wake word + imperative referring to prior Q
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="weather",  # Should re-issue the prior question
+        expected_query_not_contains="answer that",  # NOT the literal imperative
+    ),
+
+    # Same pattern with "respond to that" phrasing
+    MultiSegmentTestCase(
+        name="cross_segment_respond_to_that",
+        segments=[
+            ("What time does the library close tonight", False),  # Full question, no wake word
+            ("Jarvis respond to that", False),  # Wake word + imperative
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1002.5,
+        expected_directed=True,
+        expected_query_contains="library",
+        expected_query_not_contains="respond to that",
+    ),
+
+    # Full question then imperative separated by unrelated misheard chatter
+    MultiSegmentTestCase(
+        name="cross_segment_answer_that_with_noise",
+        segments=[
+            ("How tall is Mount Everest", False),  # Full question
+            ("Charlie sands to that", False),  # Unrelated/misheard noise
+            ("Jarvis answer that", False),  # Wake word + imperative
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1004.5,
+        expected_directed=True,
+        expected_query_contains="everest",
+        expected_query_not_contains="answer that",
+    ),
+
     # Cross-segment in hot window (no wake word needed)
     MultiSegmentTestCase(
         name="cross_segment_hot_window_followup",
