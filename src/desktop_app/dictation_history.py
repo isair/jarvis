@@ -362,16 +362,17 @@ class DictationHistoryWindow(QMainWindow):
         if self._history is None:
             return
         # Remove any placeholder labels (empty state / disabled state).
-        # Collect indices first, then remove in reverse order so that
-        # indices stay valid.  takeAt() is the essential step — it
-        # removes the layout's reference to the widget so the deferred
-        # deletion is safe.  See _reload() for why setParent(None) is
-        # deliberately avoided.
+        # The isinstance(QLabel) filter is safe because _DictationCard is a
+        # QFrame, not a QLabel — cards are never caught here.  Collect
+        # indices first, then remove in reverse order so that indices stay
+        # valid.  takeAt() is the essential step — it removes the layout's
+        # reference to the widget so the deferred deletion is safe.  See
+        # _reload() for why setParent(None) is deliberately avoided.
         indices_to_remove = []
         for i in range(self._list_layout.count()):
             item = self._list_layout.itemAt(i)
-            w = item.widget() if item else None
-            if isinstance(w, QLabel):
+            widget = item.widget() if item else None
+            if isinstance(widget, QLabel):
                 indices_to_remove.append(i)
         for i in reversed(indices_to_remove):
             item = self._list_layout.takeAt(i)
