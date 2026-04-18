@@ -160,9 +160,20 @@ Examples:
         self._available = REQUESTS_AVAILABLE
         self._last_error_time: float = 0.0
         self._error_cooldown: float = 30.0
+        self._last_error_reason: Optional[str] = None
 
         if not self._available:
             debug_log("intent judge disabled: requests not available", "voice")
+
+    @property
+    def last_error_reason(self) -> Optional[str]:
+        """Human-readable reason for the most recent failure, or None.
+
+        Cleared when a judgment succeeds. Surfaced to the user so they can
+        distinguish a slow local LLM (timeout) from Ollama being offline
+        (unreachable) from a malformed response (parse failure).
+        """
+        return self._last_error_reason
 
     @property
     def available(self) -> bool:
@@ -344,7 +355,9 @@ Examples:
             )
 
             if response.status_code != 200:
-                debug_log(f"intent judge: Ollama error {response.status_code}", "voice")
+                reason = f"Ollama HTTP {response.status_code}"
+                debug_log(f"intent judge: {reason}", "voice")
+                self._last_error_reason = reason
                 self._last_error_time = time.time()
                 return None
 
@@ -362,20 +375,42 @@ Examples:
                     "voice"
                 )
                 debug_log(f"   Reasoning: {judgment.reasoning}", "voice")
+                self._last_error_reason = None
             else:
-                debug_log(f"🧠 Intent judge: failed to parse: {response_text[:100]}", "voice")
+                reason = "parse failure (LLM returned non-JSON)"
+                debug_log(f"🧠 Intent judge: {reason}: {response_text[:100]}", "voice")
+                self._last_error_reason = reason
 
             return judgment
 
         except requests.Timeout:
-            debug_log(f"intent judge: timeout after {self.config.timeout_sec}s", "voice")
+            reason = f"timeout after {self.config.timeout_sec}s (model too slow — try a smaller model)"
+            debug_log(f"intent judge: {reason}", "voice")
+            self._last_error_reason = reason
+            return None
+        except requests.ConnectionError as e:
+            # Normalise base URL into host:port for the user-facing reason.
+            host_port = self.config.ollama_base_url
+            for prefix in ("https://", "http://"):
+                if host_port.startswith(prefix):
+                    host_port = host_port[len(prefix):]
+                    break
+            host_port = host_port.rstrip("/")
+            reason = f"Ollama unreachable at {host_port}"
+            debug_log(f"intent judge: {reason}: {e}", "voice")
+            self._last_error_reason = reason
+            self._last_error_time = time.time()
             return None
         except requests.RequestException as e:
-            debug_log(f"intent judge: request error: {e}", "voice")
+            reason = f"request error: {e}"
+            debug_log(f"intent judge: {reason}", "voice")
+            self._last_error_reason = reason
             self._last_error_time = time.time()
             return None
         except Exception as e:
-            debug_log(f"intent judge: error: {e}", "voice")
+            reason = f"unexpected error: {e}"
+            debug_log(f"intent judge: {reason}", "voice")
+            self._last_error_reason = reason
             return None
 
 

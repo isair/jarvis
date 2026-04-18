@@ -250,6 +250,107 @@ class TestIntentJudge:
         assert result is None
 
 
+class TestIntentJudgeErrorReason:
+    """Tests that specific failure reasons are surfaced for user diagnostics."""
+
+    def test_last_error_reason_defaults_to_none(self):
+        """last_error_reason starts as None."""
+        judge = IntentJudge()
+        assert judge.last_error_reason is None
+
+    def test_timeout_records_reason(self):
+        """Timeout populates last_error_reason with the configured timeout value."""
+        import requests as real_requests
+        config = IntentJudgeConfig(timeout_sec=7.5)
+        judge = IntentJudge(config)
+        judge._available = True
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+            result = judge.judge(segments)
+
+        assert result is None
+        assert judge.last_error_reason is not None
+        assert "timeout" in judge.last_error_reason.lower()
+        assert "7.5" in judge.last_error_reason
+
+    def test_connection_error_records_reason(self):
+        """Connection refused populates last_error_reason as unreachable."""
+        import requests as real_requests
+        config = IntentJudgeConfig(ollama_base_url="http://127.0.0.1:11434")
+        judge = IntentJudge(config)
+        judge._available = True
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch(
+            'jarvis.listening.intent_judge.requests.post',
+            side_effect=real_requests.ConnectionError("refused"),
+        ):
+            result = judge.judge(segments)
+
+        assert result is None
+        assert judge.last_error_reason is not None
+        assert "unreachable" in judge.last_error_reason.lower()
+        assert "127.0.0.1:11434" in judge.last_error_reason
+
+    def test_http_error_records_reason(self):
+        """Non-200 response populates last_error_reason with the status code."""
+        judge = IntentJudge()
+        judge._available = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            result = judge.judge(segments)
+
+        assert result is None
+        assert judge.last_error_reason is not None
+        assert "503" in judge.last_error_reason
+
+    def test_parse_failure_records_reason(self):
+        """A malformed (non-JSON) LLM response populates last_error_reason."""
+        judge = IntentJudge()
+        judge._available = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"response": "I am not JSON at all"}
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            result = judge.judge(segments)
+
+        assert result is None
+        assert judge.last_error_reason is not None
+        assert "parse" in judge.last_error_reason.lower()
+
+    def test_successful_judgment_clears_reason(self):
+        """A successful judgment clears any prior error reason."""
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_reason = "timeout after 10.0s"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "response": '{"directed": true, "query": "hi", "stop": false, "confidence": "high", "reasoning": "ok"}'
+        }
+
+        segments = [TranscriptSegment("jarvis hi", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            result = judge.judge(segments, wake_timestamp=1000.5)
+
+        assert result is not None
+        assert judge.last_error_reason is None
+
+
 class TestCreateIntentJudge:
     """Tests for create_intent_judge factory function."""
 
