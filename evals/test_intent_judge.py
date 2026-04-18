@@ -381,12 +381,7 @@ MULTI_SEGMENT_TEST_CASES = [
 
 # Cases known to fail with the small model on the current prompt.
 # Track regressions / future prompt improvements here.
-KNOWN_FAILING_CASES: set = {
-    # gemma4:e2b occasionally flips this to not-directed when the wake word
-    # lands mid-utterance after a long narrative buffer. Tracked so a prompt
-    # improvement can flip it back to passing.
-    "wake_word_after_narrative_addresses_assistant",
-}
+KNOWN_FAILING_CASES: set = set()
 
 
 # =============================================================================
