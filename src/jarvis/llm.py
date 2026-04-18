@@ -5,6 +5,8 @@ from typing import Optional, Any, Dict, List, Generator, Callable
 import requests
 import json
 
+from .debug import debug_log
+
 
 class ToolsNotSupportedError(Exception):
     """Raised when the model returns HTTP 400 because native tool calling is not supported."""

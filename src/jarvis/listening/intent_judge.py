@@ -66,89 +66,47 @@ class IntentJudge:
 
     SYSTEM_PROMPT_TEMPLATE = '''You are the intent judge for voice assistant "{name}".
 
-You receive:
-1. Recent transcript with timestamps (may include multi-person conversation)
-2. Wake word detection info (timestamp or "hot window" mode)
-3. Last TTS output (what the assistant just said)
-4. Current state
+Two modes:
 
-Your job:
-1. Determine if speech is directed at the assistant
-2. Extract the USER'S SPEECH as the query (question OR statement - both valid)
-3. Detect stop commands
+WAKE WORD MODE:
+- Extract complete query from segment containing "{name}" — may be a question, statement, or command/imperative addressed to the assistant (e.g. "set a timer", "remind me to...", "play music"). All are valid queries.
+- If current segment contains a vague ref ("that", "it", "this") OR a topic-less open question ("what do you think", "how much does it cost", "is it worth it") — NAME the topic from earlier segments inside the query string. Do NOT output the vague/open form literally.
+- Example: "I made carbonara" + "Jarvis find recipe for that" -> "find recipe for carbonara"
+- Example: "the weather will be nice tomorrow" + "Jarvis what do you think" -> "what do you think about the weather tomorrow"
+- Example: "the new iPhone is cool" + "Jarvis how much does it cost" -> "how much does the iPhone cost"
+- If standalone imperative command ("answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer") NOT a question -> re-issue prior question
+  Variants: "answered that", "answers that", "answering that" = same imperative (Whisper tense errors)
+  Exception: If segment has BOTH imperative + new question -> new question wins
+- Query must be answerable alone (without the transcript)
 
-CRITICAL - Two modes of operation:
+HOT WINDOW MODE (no wake word needed):
+- User IS DIRECTED (directed=true)
+- Extract from segments WITHOUT "(during TTS)" marker
+- Question or statement both valid
 
-MODE 1: WAKE WORD (look for segment containing wake word like "{name}")
-- Find the segment with the wake word
-- Extract a COMPLETE, STANDALONE query that makes sense on its own
-- Include context from the SAME segment AND from previous segments to resolve references
-- If the current segment has vague words like "that", "it", "this", "there" — look at previous segments to find what they refer to
-- Example (same segment): "I think the weather is great. What do you think, Jarvis?"
-  → query is "what do you think about the weather being great" (NOT just "what do you think")
-- Example (cross-segment reference):
-  Previous segment: "I think dinosaurs are cool"
-  Current segment: "What do you think about that Jarvis?"
-  → query is "what do you think about dinosaurs being cool" (resolve "that" from previous segment)
-- Example: "Jarvis, how much does that iPhone cost?" after discussing iPhones
-  → query is "how much does the iPhone cost" (resolve "that" to the actual topic)
-- CRITICAL - Imperatives referring to a prior question: if the current segment is a command like "answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer" — and a prior segment contains an unanswered question — the query IS the prior question, NOT the imperative. Do not return "answer that" as the query; return the resolved prior question itself. This also applies to Whisper misrecognitions of the same imperative (e.g. "answered that", "answers that", "answering that") — treat these as the imperative form regardless of tense.
-- If the current segment contains BOTH an imperative AND a new explicit question (e.g. "Jarvis, answer that — actually, what time is it?"), the new explicit question takes priority; ignore the imperative and extract the new question as the query.
-- Example (imperative resolution):
-  Previous segment: "How's the weather today?"
-  Current segment: "Jarvis, answer that"
-  → query is "how's the weather today" (re-issue the prior question; DO NOT return "answer that")
-- Example (imperative resolution with noise in between):
-  Previous segments: "How tall is Mount Everest" ... "Charlie sands to that"
-  Current segment: "Jarvis answer that"
-  → query is "how tall is Mount Everest" (ignore unrelated middle segment, resolve "that" to the question)
-- Example (imperative superseded by new question):
-  Previous segment: "How's the weather today?"
-  Current segment: "Jarvis, answer that — actually, what time is it?"
-  → query is "what time is it" (new explicit question overrides the imperative)
-- The query should be answerable WITHOUT needing to see the transcript
+ECHO / MARKER RULES:
+- "(during TTS)" = echo of assistant -> skip, never extract
+- "(CURRENT - JUDGE THIS)" = segment to judge now
+- Use earlier segments to resolve references only, not as query source
 
-MODE 2: HOT WINDOW (no wake word needed)
-- User is responding to/continuing conversation with assistant
-- In hot window, user speech IS DIRECTED (directed=true) - they're talking to assistant
-- Focus on segments WITHOUT "(during TTS)" marker - that's the user
-- Segments WITH "(during TTS)" are echo of assistant's speech - SKIP these
-- User's response can be a QUESTION or STATEMENT - both are valid queries
-- Example: Assistant asked "What do you think?" → User says "I think it's great"
-  → directed=true, query is "I think it's great" (user's statement response)
+STOP DETECTION:
+- "stop", "quiet" (standalone or short command) -> directed=true, stop=true, query=""
 
-CRITICAL - Echo detection (applies to both modes):
-- "(during TTS)" marker = assistant's speech being transcribed = ECHO
-- NEVER use text from "(during TTS)" segments as the query
-- The query MUST come from segments WITHOUT "(during TTS)" marker
-- Example transcript:
-  [00:01] (during TTS) "What do you think" ← SKIP (echo)
-  [00:03] "I think it's great" ← USER SPEECH → query is "I think it's great"
-
-CRITICAL - Current segment marker:
-- "(CURRENT - JUDGE THIS)" marker = the specific segment to judge NOW
-- Extract the query from THIS segment, but resolve ALL references using context
-- The CURRENT segment may contain context + question (e.g., "The food was great. What do you think Jarvis?")
-  → Extract a COMPLETE query: "what do you think about the food being great"
-- Segments WITHOUT this marker = background context from earlier speech
-- IMPORTANT: Use background segments to resolve vague references! If the CURRENT segment says "that", "it", "this", or asks a vague question, look at previous segments to understand what it refers to
-- Example: background segment says "I think dinosaurs are cool", then CURRENT says "What do you think about that Jarvis?" → resolve "that" to dinosaurs → query is "what do you think about dinosaurs being cool"
+NOT DIRECTED:
+- No wake word AND not hot window -> directed=false
+- Wake word used only as a narrative mention ("I told my friend about {name}") -> directed=false
 
 Output JSON only:
-{{"directed": true/false, "query": "extracted query", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
+{{"directed": true/false, "query": "...", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief"}}
 
 Examples:
-- "Jarvis what time is it" → {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word with question"}}
-- "The weather is lovely today. What do you think Jarvis?" → {{"directed": true, "query": "what do you think about the weather being lovely today", "stop": false, "confidence": "high", "reasoning": "wake word with contextual question"}}
-- "I was looking at the new iPhone. Jarvis how much does it cost?" → {{"directed": true, "query": "how much does the new iPhone cost", "stop": false, "confidence": "high", "reasoning": "wake word with context from same utterance"}}
-- Previous: "I made carbonara for dinner" + Current: "Jarvis can you find me a recipe for that" → {{"directed": true, "query": "find a recipe for carbonara", "stop": false, "confidence": "high", "reasoning": "resolved 'that' from previous segment about carbonara"}}
-- Previous: "How's the weather today?" + Current: "Jarvis, answer that" → {{"directed": true, "query": "how is the weather today", "stop": false, "confidence": "high", "reasoning": "imperative 'answer that' → re-issue the prior question as the query"}}
-- Previous: "What time does the library close tonight" + Current: "Jarvis respond to that" → {{"directed": true, "query": "what time does the library close tonight", "stop": false, "confidence": "high", "reasoning": "imperative 'respond to that' → re-issue the prior question"}}
-- Previous: "How's the weather today?" + Current: "Jarvis answered that" (Whisper misrecognition of "answer that") → {{"directed": true, "query": "how is the weather today", "stop": false, "confidence": "high", "reasoning": "past-tense 'answered that' is Whisper variant of imperative → re-issue prior question"}}
-- Hot window + user statement → {{"directed": true, "query": "I think absurdism is better than nihilism", "stop": false, "confidence": "high", "reasoning": "user speaking in hot window = directed"}}
-- Hot window + only "(during TTS)" segments → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo, no user speech"}}
-- "stop" or "quiet" command → {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
-- No wake word, not in hot window → {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "no wake word detected"}}'''
+- "Jarvis what time is it" -> {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word + question"}}
+- Previous "dinosaurs are cool" + Current "Jarvis what do you think about that" -> {{"directed": true, "query": "what do you think about dinosaurs being cool", "stop": false, "confidence": "high", "reasoning": "resolved 'that' to dinosaurs"}}
+- Previous "How's the weather?" + Current "Jarvis answer that" -> {{"directed": true, "query": "how is the weather", "stop": false, "confidence": "high", "reasoning": "imperative -> re-issue prior question"}}
+- Hot window, user says "I think absurdism is better" -> {{"directed": true, "query": "I think absurdism is better", "stop": false, "confidence": "high", "reasoning": "user statement in hot window"}}
+- "(during TTS)" segments only -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo"}}
+- "stop" -> {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
+- No wake word, not hot window -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "no wake word"}}'''
 
     def __init__(self, config: Optional[IntentJudgeConfig] = None):
         """Initialize the intent judge.

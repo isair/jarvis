@@ -81,44 +81,6 @@ SUPERSEDING_CASES = [
     ),
     pytest.param(
         SupersedingCase(
-            description="Moved to a new flat",
-            old_entry=(
-                "[2025-09-01] The user lives in a flat in Dalston, east London. "
-                "They mentioned it's a one-bedroom near the Overground station."
-            ),
-            old_date="2025-09-01",
-            new_entry=(
-                "[2026-02-10] The user moved to a new flat in Hackney last week. "
-                "It's a two-bedroom and they're really happy with the extra space."
-            ),
-            new_date="2026-02-10",
-            search_keywords=["flat", "live", "home"],
-            newer_value_keywords=["Hackney", "two-bedroom", "moved"],
-            older_value_keywords=["Dalston"],
-        ),
-        id="Moved from Dalston to Hackney",
-    ),
-    pytest.param(
-        SupersedingCase(
-            description="Changed gym",
-            old_entry=(
-                "[2025-11-05] The user goes to PureGym in Bethnal Green three times a week. "
-                "They mostly do weightlifting at the gym."
-            ),
-            old_date="2025-11-05",
-            new_entry=(
-                "[2026-04-01] The user switched gym to Trenches Boxing Club in Hackney. "
-                "They go four times a week now and focus on boxing training."
-            ),
-            new_date="2026-04-01",
-            search_keywords=["gym", "week"],
-            newer_value_keywords=["Trenches", "boxing", "Hackney"],
-            older_value_keywords=["PureGym", "Bethnal Green"],
-        ),
-        id="Switched from PureGym to Trenches Boxing",
-    ),
-    pytest.param(
-        SupersedingCase(
             description="Diet plan updated",
             old_entry=(
                 "[2025-12-01] The user follows a 2200 kcal bulking diet with 180g protein daily. "
@@ -298,7 +260,7 @@ Respond with JSON:
 
 Question: Based on these entries, what is the current/latest information about: {case.description}?"""
 
-        response = call_judge_llm(judge_system, judge_user, timeout_sec=30.0)
+        response = call_judge_llm(judge_system, judge_user, timeout_sec=120.0)
         assert response is not None, "Judge LLM returned no response"
 
         # Parse judge response

@@ -10,6 +10,7 @@ Run: .venv/bin/python -m pytest evals/test_tool_selection.py -v
 import pytest
 
 from conftest import requires_judge_llm
+from helpers import JUDGE_MODEL
 
 
 # =============================================================================
@@ -65,7 +66,15 @@ class TestToolSelectionFiltering:
         must_include,
         max_tools,
     ):
-        """Embedding strategy should select relevant tools, not all of them."""
+        """Embedding strategy should select relevant tools, not all of them.
+
+        Tool selection uses a fixed embed model (nomic-embed-text) regardless of
+        the judge model, so we only run this once per eval run (during the
+        gemma4 phase) to save time.
+        """
+        if "gemma4" not in JUDGE_MODEL:
+            pytest.skip(f"Tool selection uses fixed embed model; only runs in gemma4 phase (current: {JUDGE_MODEL})")
+
         from jarvis.tools.selection import select_tools, ToolSelectionStrategy
         from jarvis.tools.registry import BUILTIN_TOOLS
 

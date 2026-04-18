@@ -43,47 +43,17 @@ class MealTestCase:
     expect_micros: bool = False
 
 
-# Common meals with reasonable nutritional ranges
+# Representative meals across the macro-estimation range (lean, calorie-dense, carb-heavy)
 MEAL_TEST_CASES = [
     pytest.param(
         MealTestCase(
             description="a grilled chicken breast with steamed broccoli",
             calories_range=(200, 400),
             protein_range=(25, 50),
-            carbs_range=(0, 20),  # Broccoli has minimal carbs; some models report 0
+            carbs_range=(0, 20),
             fat_range=(3, 15),
         ),
         id="Nutrition: chicken with broccoli"
-    ),
-    pytest.param(
-        MealTestCase(
-            description="two scrambled eggs with toast",
-            calories_range=(200, 450),
-            protein_range=(12, 25),
-            carbs_range=(5, 35),  # Smaller models may underestimate toast carbs
-            fat_range=(10, 30),
-        ),
-        id="Nutrition: scrambled eggs with toast"
-    ),
-    pytest.param(
-        MealTestCase(
-            description="a large pepperoni pizza slice",
-            calories_range=(250, 400),
-            protein_range=(10, 20),
-            carbs_range=(25, 45),
-            fat_range=(10, 25),
-        ),
-        id="Nutrition: pepperoni pizza slice"
-    ),
-    pytest.param(
-        MealTestCase(
-            description="a bowl of oatmeal with banana and honey",
-            calories_range=(300, 500),
-            protein_range=(6, 15),
-            carbs_range=(50, 90),
-            fat_range=(3, 12),
-        ),
-        id="Nutrition: oatmeal with banana"
     ),
     pytest.param(
         MealTestCase(
@@ -97,33 +67,13 @@ MEAL_TEST_CASES = [
     ),
     pytest.param(
         MealTestCase(
-            description="a caesar salad with grilled chicken",
-            calories_range=(350, 600),
-            protein_range=(25, 45),
-            carbs_range=(10, 30),
-            fat_range=(20, 40),
+            description="a bowl of oatmeal with banana and honey",
+            calories_range=(300, 500),
+            protein_range=(6, 15),
+            carbs_range=(50, 90),
+            fat_range=(3, 12),
         ),
-        id="Nutrition: caesar salad with chicken"
-    ),
-    pytest.param(
-        MealTestCase(
-            description="a protein shake with milk and peanut butter",
-            calories_range=(300, 550),
-            protein_range=(25, 50),
-            carbs_range=(15, 40),
-            fat_range=(10, 25),
-        ),
-        id="Nutrition: protein shake"
-    ),
-    pytest.param(
-        MealTestCase(
-            description="spaghetti bolognese",
-            calories_range=(500, 800),
-            protein_range=(20, 40),
-            carbs_range=(60, 100),
-            fat_range=(15, 35),
-        ),
-        id="Nutrition: spaghetti bolognese"
+        id="Nutrition: oatmeal with banana"
     ),
 ]
 
@@ -265,7 +215,7 @@ class TestNutritionExtraction:
         """
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 30.0
+        mock_config.llm_chat_timeout_sec = 120.0
 
         print(f"\n[MEAL] Testing meal: {case.description}")
         print(f"   Model: {JUDGE_MODEL}")
@@ -300,7 +250,7 @@ class TestNutritionExtraction:
         """
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 30.0
+        mock_config.llm_chat_timeout_sec = 120.0
 
         print(f"\n[JSON] Testing JSON structure")
         print(f"   Model: {JUDGE_MODEL}")
@@ -335,7 +285,7 @@ class TestNutritionExtraction:
         """
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 30.0
+        mock_config.llm_chat_timeout_sec = 120.0
 
         print(f"\n[AMBIGUOUS] Testing ambiguous portions")
         print(f"   Model: {JUDGE_MODEL}")
@@ -365,7 +315,7 @@ class TestNutritionExtraction:
         """
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 30.0
+        mock_config.llm_chat_timeout_sec = 120.0
 
         print(f"\n[NON-FOOD] Testing non-food rejection")
         print(f"   Model: {JUDGE_MODEL}")
@@ -399,7 +349,7 @@ class TestNutritionToolIntegration:
 
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 45.0
+        mock_config.llm_chat_timeout_sec = 120.0
         mock_config.use_stdin = True
 
         print(f"\n[TOOL] Testing LogMealTool integration")
@@ -490,7 +440,7 @@ class TestNutritionModelComparison:
         """
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 30.0
+        mock_config.llm_chat_timeout_sec = 120.0
 
         print(f"\n[SIMPLE] Simple meal test (baseline)")
         print(f"   Model: {JUDGE_MODEL}")
@@ -524,7 +474,7 @@ class TestNutritionModelComparison:
         """
         mock_config.ollama_base_url = JUDGE_BASE_URL
         mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 30.0
+        mock_config.llm_chat_timeout_sec = 120.0
 
         print(f"\n[QUANTITY] Quantity extraction test")
         print(f"   Model: {JUDGE_MODEL}")

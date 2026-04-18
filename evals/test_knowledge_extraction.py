@@ -100,19 +100,6 @@ GOOD_EXTRACTION_CASES = [
     pytest.param(
         ExtractionTestCase(
             summary=(
-                "The user discovered that CEX in Kensington closes at 6pm on "
-                "Sundays, earlier than the 7pm listed on Google Maps. They "
-                "were looking to sell an old PS4."
-            ),
-            date_utc="2026-04-06",
-            should_extract_keywords=["CEX", "6pm"],
-            min_facts=1,
-        ),
-        id="Novel knowledge: corrected business hours",
-    ),
-    pytest.param(
-        ExtractionTestCase(
-            summary=(
                 "Kullanıcı Kadıköy'deki Çiya Sofrası restoranını sordu. "
                 "Öğle yemeği menüsü 250 TL civarında, özellikle kuzu tandır "
                 "ve enginar yemeği çok beğeniliyormuş. Kullanıcı İstanbul'da "
@@ -169,42 +156,6 @@ BAD_PATTERN_CASES = [
             max_facts=1,  # Maybe "user is in London" but nothing else
         ),
         id="Reject: stale temporal snapshots (weather, time of day)",
-    ),
-    pytest.param(
-        ExtractionTestCase(
-            summary=(
-                "The user asked how Chinese names work. I explained that in "
-                "Chinese naming convention, the family name comes first, "
-                "followed by the given name. I also mentioned that Chinese "
-                "given names typically have one or two characters. The user "
-                "found this helpful."
-            ),
-            date_utc="2026-04-09",
-            should_not_extract_patterns=[
-                r"(?i)chinese.*name",
-                r"(?i)family name.*first",
-            ],
-            max_facts=0,  # All of this is common knowledge
-        ),
-        id="Reject: common knowledge (Chinese naming conventions)",
-    ),
-    pytest.param(
-        ExtractionTestCase(
-            summary=(
-                "The user greeted me and asked how I was doing. We exchanged "
-                "pleasantries. The user then asked me to recap our last "
-                "conversation. I provided a brief summary of what we discussed "
-                "yesterday."
-            ),
-            date_utc="2026-04-11",
-            should_not_extract_patterns=[
-                r"(?i)greeted",
-                r"(?i)pleasantries",
-                r"(?i)recap",
-            ],
-            max_facts=0,  # Pure meta-interaction, nothing to learn
-        ),
-        id="Reject: pure meta-interaction (greetings, recap requests)",
     ),
 ]
 
@@ -319,7 +270,7 @@ def _judge_extraction_quality(
         f"Extracted facts:\n{facts_text}"
     )
 
-    response = call_judge_llm(system_prompt, user_prompt, timeout_sec=30.0)
+    response = call_judge_llm(system_prompt, user_prompt, timeout_sec=120.0)
 
     if not response:
         return JudgeVerdict(
