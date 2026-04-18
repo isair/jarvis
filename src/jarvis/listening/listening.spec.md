@@ -83,6 +83,8 @@ The intent judge receives full context and makes intelligent decisions:
 - Sees pre-wake-word context → can understand "...what do YOU think, Jarvis?"
 - Extracts clean query → removes filler words, false starts
 
+**Gating:** The judge is called only when there is an engagement signal — (a) a wake word was detected in the current utterance, (b) the utterance falls inside (or pending) a hot window, or (c) TTS is currently speaking. Pure ambient speech skips the judge entirely. This keeps the synchronous audio loop from blocking up to `intent_judge_timeout_sec` on every background utterance, which would otherwise freeze the UI when Ollama is slow or contended.
+
 ## The Three Listening Modes
 
 ### 1. Wake Word Mode (Default)

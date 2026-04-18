@@ -20,7 +20,7 @@ class TestIntentJudgeConfig:
         config = IntentJudgeConfig()
         assert config.assistant_name == "Jarvis"
         assert config.model == "gemma4:e2b"
-        assert config.timeout_sec == 10.0
+        assert config.timeout_sec == 15.0
         assert config.aliases == []
 
     def test_custom_config(self):
@@ -248,6 +248,147 @@ class TestIntentJudge:
             result = judge.judge(segments)
 
         assert result is None
+
+    def test_timeout_does_not_trigger_backoff(self):
+        """Timeouts must NOT trigger the 30s cooldown.
+
+        Voice is a high-turn environment: a single slow call must not lock out
+        intent judging for the next half-minute of conversation. The upstream
+        engagement-signal gate (wake word / hot window / TTS) already prevents
+        hammering Ollama on ambient speech, so individual timeouts are safe to
+        retry immediately on the next real engagement.
+        """
+        import requests as real_requests
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_time = 0.0
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+            judge.judge(segments)
+
+        assert judge._last_error_time == 0.0, "timeout must NOT lock out future calls"
+        assert judge.available is True, "judge must remain available after a single timeout"
+
+    def test_http_error_does_not_trigger_backoff(self):
+        """Transient HTTP errors (503 etc.) must NOT trigger the 30s cooldown.
+
+        Same reasoning as timeouts — we want to retry on the next engagement
+        signal, not lock out intent judging.
+        """
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_time = 0.0
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            judge.judge(segments)
+
+        assert judge._last_error_time == 0.0
+        assert judge.available is True
+
+    def test_connection_error_does_trigger_backoff(self):
+        """Connection errors (Ollama actually down) DO trigger the 30s cooldown.
+
+        If the server is unreachable, retrying on every engagement just wastes
+        time. This is the one case where backoff is appropriate — it gives
+        Ollama a chance to come back up.
+        """
+        import requests as real_requests
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_time = 0.0
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch(
+            'jarvis.listening.intent_judge.requests.post',
+            side_effect=real_requests.ConnectionError("refused"),
+        ):
+            judge.judge(segments)
+
+        assert judge._last_error_time > 0.0
+        assert judge.available is False
+
+    def test_last_failure_reason_recorded_on_timeout(self):
+        """Judge should remember why the last call failed so the listener can surface it."""
+        import requests as real_requests
+        judge = IntentJudge()
+        judge._available = True
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+            judge.judge(segments)
+
+        assert "timeout" in judge.last_failure_reason.lower()
+
+    def test_last_failure_reason_recorded_on_http_error(self):
+        """HTTP non-200 responses should be recorded as a failure reason."""
+        judge = IntentJudge()
+        judge._available = True
+        # Clear any stray _last_error_time from earlier test setup
+        judge._last_error_time = 0.0
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            judge.judge(segments)
+
+        assert "503" in judge.last_failure_reason
+
+    def test_last_failure_reason_cleared_on_success(self):
+        """Successful judgments clear the last failure reason."""
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_failure_reason = "timeout"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "response": '{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "ok"}'
+        }
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            result = judge.judge(segments)
+
+        assert result is not None
+        assert judge.last_failure_reason == ""
+
+
+class TestResponseParserRobustness:
+    """Tests for response parser edge cases seen in the wild."""
+
+    def test_parse_response_with_nested_braces(self):
+        """Parser handles JSON where a string value contains braces.
+
+        The old regex `\\{[^{}]*\\}` failed on any nested brace, producing
+        spurious "unavailable" errors when the model quoted code in reasoning.
+        """
+        judge = IntentJudge()
+        response = '{"directed": true, "query": "format as {json}", "stop": false, "confidence": "high", "reasoning": "user asked about {formatting}"}'
+        result = judge._parse_response(response)
+
+        assert result is not None
+        assert result.directed is True
+        assert "json" in result.query
+
+    def test_parse_response_with_markdown_code_fence(self):
+        """Parser handles JSON wrapped in ```json ... ``` fences."""
+        judge = IntentJudge()
+        response = '```json\n{"directed": true, "query": "hi", "stop": false, "confidence": "high", "reasoning": "ok"}\n```'
+        result = judge._parse_response(response)
+
+        assert result is not None
+        assert result.directed is True
+        assert result.query == "hi"
 
 
 class TestCreateIntentJudge:
