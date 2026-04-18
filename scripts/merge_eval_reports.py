@@ -210,6 +210,10 @@ def is_fixed_model_test(result: TestResult) -> bool:
 
     These shouldn't be compared across judge models since they always use the
     same model — they belong in their own section.
+
+    NOTE: This list is kept in sync manually. When you add a new test class or
+    file whose model is pinned (not controlled by EVAL_JUDGE_MODEL), add its
+    class-name substring below or its test-name pattern to the fallback list.
     """
     fixed_model_classes = [
         "IntentJudge",  # TestIntentJudgeAccuracy, TestIntentJudgeMultiSegment, etc.

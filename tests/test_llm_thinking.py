@@ -277,3 +277,42 @@ class TestSettingsWindowThinking:
         field = next(fm for fm in FIELD_METADATA if fm.key == "dictation_thinking_enabled")
         assert field.field_type == "bool"
         assert field.category == "features"
+
+
+# ---------------------------------------------------------------------------
+# Timeout / error paths — regression test for missing debug_log import
+# ---------------------------------------------------------------------------
+
+class TestCallLlmDirectFailurePaths:
+    """Exercises the exception branches in call_llm_direct.
+
+    These branches call debug_log; a missing import would surface here as a
+    NameError instead of the intended graceful None return.
+    """
+
+    def test_timeout_returns_none(self):
+        import requests
+        from jarvis.llm import call_llm_direct
+
+        with patch('jarvis.llm.requests.post', side_effect=requests.exceptions.Timeout):
+            result = call_llm_direct(
+                base_url="http://localhost:99999",
+                chat_model="test-model",
+                system_prompt="sys",
+                user_content="hi",
+                timeout_sec=0.1,
+            )
+        assert result is None
+
+    def test_request_exception_returns_none(self):
+        from jarvis.llm import call_llm_direct
+
+        with patch('jarvis.llm.requests.post', side_effect=ConnectionError("boom")):
+            result = call_llm_direct(
+                base_url="http://localhost:99999",
+                chat_model="test-model",
+                system_prompt="sys",
+                user_content="hi",
+                timeout_sec=0.1,
+            )
+        assert result is None

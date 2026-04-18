@@ -225,8 +225,7 @@ class TestContextUtilization:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=(f"Location: {user_location}", None)), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -274,8 +273,7 @@ class TestToolUsage:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="developer", create=True):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -314,8 +312,7 @@ class TestToolUsage:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -380,8 +377,7 @@ class TestMultiStepReasoning:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["health", "diet"]}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["health", "diet"]}):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -443,8 +439,7 @@ class TestMultiStepReasoning:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["news", "interest", "hobbies"]}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["news", "interest", "hobbies"]}):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -564,8 +559,7 @@ class TestMemoryEnrichment:
 
         with patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["dinner", "food", "preferences"]}), \
-             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_memory_results), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
+             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_memory_results):
 
             run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -625,8 +619,7 @@ class TestMemoryEnrichment:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["interests", "hobbies", "preferences"]}), \
-             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
+             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 

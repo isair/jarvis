@@ -5,7 +5,7 @@ from typing import Optional, Any, Dict, List, Generator, Callable
 import requests
 import json
 
-from jarvis.debug import debug_log
+from .debug import debug_log
 
 
 class ToolsNotSupportedError(Exception):

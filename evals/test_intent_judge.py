@@ -570,7 +570,7 @@ class TestIntentJudgePromptQuality:
 
 
 class TestIntentJudgeFallback:
-    """Tests for intent judge fallback behavior."""
+    """Tests for intent judge fallback behaviour."""
 
     def test_returns_none_when_ollama_unavailable(self):
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
