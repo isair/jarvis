@@ -23,6 +23,41 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 
 
+def _extract_json_object(text: str) -> str:
+    """Return the first balanced `{...}` object in `text`, or "" if none.
+
+    Walks character-by-character tracking brace depth while respecting string
+    literals and escapes. Handles markdown code fences and values containing
+    braces — cases a simple regex cannot.
+    """
+    start = text.find("{")
+    if start == -1:
+        return ""
+
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ""
+
+
 @dataclass
 class IntentJudgment:
     """Result of intent judgment."""
@@ -43,7 +78,7 @@ class IntentJudgeConfig:
     aliases: list = None
     model: str = "gemma4:e2b"
     ollama_base_url: str = "http://127.0.0.1:11434"
-    timeout_sec: float = 10.0
+    timeout_sec: float = 15.0
     thinking: bool = False
 
     def __post_init__(self):
@@ -118,9 +153,15 @@ Examples:
         self._available = REQUESTS_AVAILABLE
         self._last_error_time: float = 0.0
         self._error_cooldown: float = 30.0
+        self._last_failure_reason: str = ""
 
         if not self._available:
             debug_log("intent judge disabled: requests not available", "voice")
+
+    @property
+    def last_failure_reason(self) -> str:
+        """Human-readable reason the most recent judge() call failed, if any."""
+        return self._last_failure_reason
 
     @property
     def available(self) -> bool:
@@ -219,14 +260,16 @@ Examples:
         Returns:
             IntentJudgment or None if parsing failed
         """
-        # Try to extract JSON from response
-        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-        if not json_match:
+        # Locate the outermost JSON object by brace-matching. This handles
+        # markdown code fences and JSON whose string values contain braces
+        # — cases the old `\{[^{}]*\}` regex missed.
+        json_text = _extract_json_object(response_text)
+        if not json_text:
             debug_log(f"intent judge: no JSON found in response: {response_text[:100]}", "voice")
             return None
 
         try:
-            data = json.loads(json_match.group())
+            data = json.loads(json_text)
 
             return IntentJudgment(
                 directed=bool(data.get("directed", False)),
@@ -295,14 +338,16 @@ Examples:
                     "think": self.config.thinking,
                     "options": {
                         "temperature": 0.0,
-                        "num_predict": 800,
+                        "num_predict": 200,
                     },
                 },
                 timeout=self.config.timeout_sec,
             )
 
             if response.status_code != 200:
-                debug_log(f"intent judge: Ollama error {response.status_code}", "voice")
+                reason = f"HTTP {response.status_code} from Ollama"
+                debug_log(f"intent judge: {reason}", "voice")
+                self._last_failure_reason = reason
                 self._last_error_time = time.time()
                 return None
 
@@ -312,6 +357,7 @@ Examples:
             judgment = self._parse_response(response_text)
 
             if judgment:
+                self._last_failure_reason = ""
                 direction = "✅ DIRECTED" if judgment.directed else "❌ NOT DIRECTED"
                 stop_str = " [STOP]" if judgment.stop else ""
                 query_str = f" → \"{judgment.query}\"" if judgment.query else ""
@@ -321,19 +367,26 @@ Examples:
                 )
                 debug_log(f"   Reasoning: {judgment.reasoning}", "voice")
             else:
+                self._last_failure_reason = f"unparseable response: {response_text[:80]}"
                 debug_log(f"🧠 Intent judge: failed to parse: {response_text[:100]}", "voice")
 
             return judgment
 
         except requests.Timeout:
-            debug_log(f"intent judge: timeout after {self.config.timeout_sec}s", "voice")
+            # Timeouts must trigger the backoff cooldown so a slow/overloaded
+            # Ollama doesn't get hammered on every subsequent utterance.
+            self._last_failure_reason = f"timeout after {self.config.timeout_sec}s"
+            debug_log(f"intent judge: {self._last_failure_reason}", "voice")
+            self._last_error_time = time.time()
             return None
         except requests.RequestException as e:
-            debug_log(f"intent judge: request error: {e}", "voice")
+            self._last_failure_reason = f"request error: {e}"
+            debug_log(f"intent judge: {self._last_failure_reason}", "voice")
             self._last_error_time = time.time()
             return None
         except Exception as e:
-            debug_log(f"intent judge: error: {e}", "voice")
+            self._last_failure_reason = f"error: {e}"
+            debug_log(f"intent judge: {self._last_failure_reason}", "voice")
             return None
 
 

@@ -1291,3 +1291,67 @@ class TestStaleWakeTimestampAcrossUtterances:
             "Second utterance without wake word must not be accepted just "
             "because a prior utterance set _wake_timestamp")
         listener.state_manager.stop()
+
+
+@pytest.mark.unit
+class TestIntentJudgeGating:
+    """The intent judge must not be called on pure ambient speech.
+
+    Calling it on every utterance blocks the audio loop for up to
+    `intent_judge_timeout_sec` on each background chatter, which can
+    cascade into UI freezes when many utterances queue up during a slow
+    or loaded Ollama. The judge adds value only when there's an
+    engagement signal: wake word, hot window, or active TTS.
+    """
+
+    @patch("builtins.print")
+    def test_judge_not_called_for_ambient_speech(self, _print):
+        """Ambient speech with no wake word / hot window / TTS must not hit the judge."""
+        listener, _ = _create_listener()
+
+        mock_judge = _install_intent_judge(
+            listener, _make_judgment(directed=False, query=""))
+
+        # No hot window, no TTS, no wake word in the text
+        listener._process_transcript(
+            "random background chatter about the weather",
+            utterance_energy=0.01,
+        )
+
+        assert mock_judge.judge.call_count == 0, (
+            "Intent judge must be gated on an engagement signal; ambient "
+            "speech should skip the judge to avoid blocking the audio loop")
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_judge_called_when_wake_word_detected(self, _print):
+        """Utterances containing the wake word do reach the judge."""
+        listener, _ = _create_listener()
+
+        mock_judge = _install_intent_judge(
+            listener, _make_judgment(
+                directed=True, query="what time is it"))
+
+        listener._process_transcript(
+            "jarvis what time is it", utterance_energy=0.01,
+        )
+
+        assert mock_judge.judge.call_count == 1
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_judge_called_in_hot_window(self, _print):
+        """Utterances during the hot window do reach the judge."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        listener.echo_detector.track_tts_start("Here you go.")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        mock_judge = _install_intent_judge(
+            listener, _make_judgment(directed=True, query="thanks"))
+
+        listener._process_transcript("thanks", utterance_energy=0.01)
+
+        assert mock_judge.judge.call_count == 1
+        listener.state_manager.stop()

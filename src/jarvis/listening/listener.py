@@ -544,27 +544,55 @@ class VoiceListener(threading.Thread):
         is_speaking_now = self.tts and self.tts.is_speaking()
         intent_judgment = None
 
+        # Determine if this could be a hot window follow-up.
+        # Only use formal hot window state — no time-based grace period.
+        # The state manager already handles the timing (echo_tolerance
+        # delay before activation, hot_window_seconds before expiry).
+        # A generous grace period caused false hot window claims after
+        # the user had already seen "Returning to wake word mode".
+        could_be_hot_window = self.state_manager.was_speech_during_hot_window(
+            utterance_start_time, utterance_end_time
+        )
+
         # Use the upgraded intent judge if available (with full transcript context)
         # Allow during TTS for longer utterances (>3 words) that might be user responses
         word_count = len(text_lower.split())
         skip_intent_judge_during_tts = is_speaking_now and word_count <= 3
-        if not skip_intent_judge_during_tts and self._intent_judge is not None and self._intent_judge.available:
+
+        # Gate the intent judge on an engagement signal. Without this check the
+        # judge was called on every ambient utterance, blocking the audio loop
+        # for up to `timeout_sec` on each background chatter — which could
+        # cascade into UI freezes when many utterances queued up during a slow
+        # or loaded Ollama. The judge adds value only when one of:
+        #   1. A wake word was detected in the current utterance
+        #   2. We are in (or pending) a hot window following TTS
+        #   3. TTS is currently speaking (intent judge can catch responses / stops
+        #      that the fast text-based stop command check missed)
+        has_engagement_signal = (
+            self._wake_timestamp is not None
+            or could_be_hot_window
+            or is_speaking_now
+        )
+
+        if not has_engagement_signal:
+            debug_log(
+                f"skipping intent judge — no wake word, no hot window, no TTS "
+                f"(ambient: \"{text_lower[:40]}{'...' if len(text_lower) > 40 else ''}\")",
+                "voice",
+            )
+
+        if (
+            not skip_intent_judge_during_tts
+            and has_engagement_signal
+            and self._intent_judge is not None
+            and self._intent_judge.available
+        ):
             # Get recent transcript segments for context (full buffer)
             context_segments = self._transcript_buffer.get_last_seconds(self._buffer_duration)
 
             # Get TTS context for echo detection
             last_tts_text = self.echo_detector._last_tts_text or ""
             last_tts_finish_time = self.echo_detector._last_tts_finish_time or 0.0
-
-            # Determine if this could be a hot window follow-up.
-            # Only use formal hot window state — no time-based grace period.
-            # The state manager already handles the timing (echo_tolerance
-            # delay before activation, hot_window_seconds before expiry).
-            # A generous grace period caused false hot window claims after
-            # the user had already seen "Returning to wake word mode".
-            could_be_hot_window = self.state_manager.was_speech_during_hot_window(
-                utterance_start_time, utterance_end_time
-            )
 
             intent_judgment = self._intent_judge.judge(
                 segments=context_segments,
@@ -583,8 +611,9 @@ class VoiceListener(threading.Thread):
                 else:
                     print(f"  🧠 Intent ({mode_str}): not directed ({intent_judgment.reasoning})", flush=True)
             else:
-                print(f"  🧠 Intent judge: unavailable (timeout or error)", flush=True)
-                debug_log("intent judge returned None — falling back", "voice")
+                reason = self._intent_judge.last_failure_reason or "no segments or unavailable"
+                print(f"  🧠 Intent judge: unavailable ({reason})", flush=True)
+                debug_log(f"intent judge returned None — falling back ({reason})", "voice")
                 # Hot window fallback: if the early echo check already cleared
                 # this text, accept it even without the judge's verdict.
                 if could_be_hot_window:

@@ -20,7 +20,7 @@ class TestIntentJudgeConfig:
         config = IntentJudgeConfig()
         assert config.assistant_name == "Jarvis"
         assert config.model == "gemma4:e2b"
-        assert config.timeout_sec == 10.0
+        assert config.timeout_sec == 15.0
         assert config.aliases == []
 
     def test_custom_config(self):
@@ -248,6 +248,100 @@ class TestIntentJudge:
             result = judge.judge(segments)
 
         assert result is None
+
+    def test_timeout_sets_error_backoff(self):
+        """Timeouts should trigger the error cooldown so we don't hammer Ollama.
+
+        Previously only RequestException set _last_error_time — timeouts would
+        retry on every utterance with no backoff, producing a flood of "Intent
+        judge: unavailable (timeout or error)" lines in the console.
+        """
+        import requests as real_requests
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_time = 0.0
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+            judge.judge(segments)
+
+        assert judge._last_error_time > 0.0, "timeout must trigger backoff cooldown"
+        assert judge.available is False, "judge must be unavailable during cooldown"
+
+    def test_last_failure_reason_recorded_on_timeout(self):
+        """Judge should remember why the last call failed so the listener can surface it."""
+        import requests as real_requests
+        judge = IntentJudge()
+        judge._available = True
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+            judge.judge(segments)
+
+        assert "timeout" in judge.last_failure_reason.lower()
+
+    def test_last_failure_reason_recorded_on_http_error(self):
+        """HTTP non-200 responses should be recorded as a failure reason."""
+        judge = IntentJudge()
+        judge._available = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            judge.judge(segments)
+
+        assert "503" in judge.last_failure_reason
+
+    def test_last_failure_reason_cleared_on_success(self):
+        """Successful judgments clear the last failure reason."""
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_failure_reason = "timeout"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "response": '{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "ok"}'
+        }
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            result = judge.judge(segments)
+
+        assert result is not None
+        assert judge.last_failure_reason == ""
+
+
+class TestResponseParserRobustness:
+    """Tests for response parser edge cases seen in the wild."""
+
+    def test_parse_response_with_nested_braces(self):
+        """Parser handles JSON where a string value contains braces.
+
+        The old regex `\\{[^{}]*\\}` failed on any nested brace, producing
+        spurious "unavailable" errors when the model quoted code in reasoning.
+        """
+        judge = IntentJudge()
+        response = '{"directed": true, "query": "format as {json}", "stop": false, "confidence": "high", "reasoning": "user asked about {formatting}"}'
+        result = judge._parse_response(response)
+
+        assert result is not None
+        assert result.directed is True
+        assert "json" in result.query
+
+    def test_parse_response_with_markdown_code_fence(self):
+        """Parser handles JSON wrapped in ```json ... ``` fences."""
+        judge = IntentJudge()
+        response = '```json\n{"directed": true, "query": "hi", "stop": false, "confidence": "high", "reasoning": "ok"}\n```'
+        result = judge._parse_response(response)
+
+        assert result is not None
+        assert result.directed is True
+        assert result.query == "hi"
 
 
 class TestCreateIntentJudge:
