@@ -331,20 +331,28 @@ class TestIntentJudgeErrorReason:
         assert "parse" in judge.last_error_reason.lower()
 
     def test_successful_judgment_clears_reason(self):
-        """A successful judgment clears any prior error reason."""
+        """A successful judgment clears any prior error reason.
+
+        Drives the full behaviour: a failing call records a reason, then a
+        subsequent successful call must clear it. Avoids poking private state.
+        """
+        import requests as real_requests
         judge = IntentJudge()
         judge._available = True
-        judge._last_error_reason = "timeout after 10.0s"
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": '{"directed": true, "query": "hi", "stop": false, "confidence": "high", "reasoning": "ok"}'
-        }
 
         segments = [TranscriptSegment("jarvis hi", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+            judge.judge(segments, wake_timestamp=1000.5)
+        assert judge.last_error_reason is not None
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.json.return_value = {
+            "response": '{"directed": true, "query": "hi", "stop": false, "confidence": "high", "reasoning": "ok"}'
+        }
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=success_response):
             result = judge.judge(segments, wake_timestamp=1000.5)
 
         assert result is not None
