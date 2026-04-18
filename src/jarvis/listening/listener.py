@@ -454,11 +454,30 @@ class VoiceListener(threading.Thread):
                         and text_words <= max(tts_words * 1.3, tts_words + 3)
                     )
                     if is_pure_echo:
-                        debug_log(f"🔇 Early echo rejection (score={echo_score}): \"{text_lower}\"", "voice")
-                        print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
-                        return
+                        # Before rejecting, try to salvage user speech appended
+                        # after the echo prefix. Whisper commonly merges the tail
+                        # of TTS echo with the user's follow-up into a single
+                        # transcript; without salvage, the user's real speech
+                        # would be dropped before the intent judge ever sees it.
+                        salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
+                        # Require ≥3 salvaged words to avoid treating Whisper's
+                        # echo-tail hallucinations ("...regions like Steneti")
+                        # as genuine user speech.
+                        if (salvaged and salvaged != text_lower
+                                and len(salvaged.split()) >= 3):
+                            debug_log(
+                                f"salvaged user speech from hot-window echo+speech "
+                                f"chunk: '{salvaged}'",
+                                "voice",
+                            )
+                            self._transcript_buffer.update_last_segment_text(salvaged)
+                            text_lower = salvaged
+                        else:
+                            debug_log(f"🔇 Early echo rejection (score={echo_score}): \"{text_lower}\"", "voice")
+                            print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
+                            return
 
-                # Non-echo in hot window — start beep
+                # Non-echo (or salvaged) in hot window — start beep
                 self._start_thinking_tune()
                 self._set_face_state_listening()
                 debug_log("early beep: hot window active", "voice")
