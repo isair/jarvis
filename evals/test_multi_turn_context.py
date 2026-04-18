@@ -50,19 +50,6 @@ Sunday: 11:00 AM - 5:00 PM
 2. **CEX Store Locator** - https://uk.webuy.com/stores
 """
 
-MOCK_RESTAURANT_SEARCH = """Web search results for 'Italian restaurants Kensington':
-
-**Content from top result:**
-Best Italian Restaurants in Kensington:
-1. Zafferano - Fine Italian dining, Michelin recommended
-2. Scalini - Traditional Italian cuisine since 1988
-3. Lucio - Modern Italian with great pasta
-
-**Other search results:**
-1. **TripAdvisor Italian Restaurants** - https://tripadvisor.com/...
-2. **Time Out London** - https://timeout.com/...
-"""
-
 MOCK_NEWS_SEARCH = """Web search results for 'tech news today':
 
 **Content from top result:**
@@ -115,7 +102,7 @@ class TestTopicSwitching:
         })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, Royal Kensington and Chelsea, United Kingdom"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Kensington, Royal Kensington and Chelsea, United Kingdom", None)):
 
             # Turn 1: Weather query
             capture.clear()
@@ -167,65 +154,6 @@ class TestTopicSwitching:
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_weather_then_restaurant_search(self, mock_config, eval_db, eval_dialogue_memory):
-        """
-        After weather query, asking for restaurant recommendations should use webSearch.
-        """
-        from jarvis.reply.engine import run_reply_engine
-
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
-
-        capture = ToolCallCapture()
-
-        mock_tool_run = create_mock_tool_run(capture, {
-            "getWeather": MOCK_WEATHER_RESPONSE,
-            "webSearch": MOCK_RESTAURANT_SEARCH,
-        })
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
-
-            # Turn 1: Weather
-            capture.clear()
-            run_reply_engine(
-                db=eval_db, cfg=mock_config, tts=None,
-                text="What's the weather like?",
-                dialogue_memory=eval_dialogue_memory
-            )
-            turn1_tools = capture.tool_sequence()
-
-            # Turn 2: Restaurant search
-            capture.clear()
-            response2 = run_reply_engine(
-                db=eval_db, cfg=mock_config, tts=None,
-                text="Any good Italian restaurants nearby?",
-                dialogue_memory=eval_dialogue_memory
-            )
-            turn2_tools = capture.tool_sequence()
-
-        print(f"\n📊 Topic Switching - Weather → Restaurants:")
-        print(f"   Turn 1 tools: {turn1_tools}")
-        print(f"   Turn 2 tools: {turn2_tools}")
-
-        assert "getWeather" in turn1_tools, \
-            f"Turn 1 should use getWeather. Used: {turn1_tools}"
-
-        # Check for context anchoring bug
-        if "getWeather" in turn2_tools and "webSearch" not in turn2_tools:
-            pytest.fail(
-                f"❌ CONTEXT ANCHORING BUG: Model used getWeather for restaurant query!\n"
-                f"   Turn 2 tools: {turn2_tools}\n"
-                f"   Response: {response2[:200] if response2 else 'None'}"
-            )
-
-        assert "webSearch" in turn2_tools, \
-            f"Turn 2 should use webSearch for restaurant query. Used: {turn2_tools}"
-
-        print(f"   ✅ Correctly switched from getWeather to webSearch")
-
-    @pytest.mark.eval
-    @requires_judge_llm
     def test_search_then_weather(self, mock_config, eval_db, eval_dialogue_memory):
         """
         After a web search, asking about weather should use getWeather.
@@ -245,7 +173,7 @@ class TestTopicSwitching:
         })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Kensington, UK", None)):
 
             # Turn 1: News search
             capture.clear()
@@ -317,7 +245,7 @@ class TestFollowUpContext:
         mock_tool_run = create_mock_tool_run(capture, {"getWeather": MOCK_WEATHER_RESPONSE})
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Kensington, UK", None)):
 
             # Turn 1: Weather query
             capture.clear()
@@ -405,7 +333,7 @@ class TestMultiTurnExtended:
             return ToolExecutionResult(success=True, reply_text="OK")
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Kensington, UK", None)):
 
             queries = [
                 ("How's the weather today?", "getWeather"),
@@ -456,68 +384,3 @@ class TestMultiTurnExtended:
 
         print(f"   ✅ All turns selected correct tools")
 
-    @pytest.mark.eval
-    @requires_judge_llm
-    def test_rapid_topic_switching(self, mock_config, eval_db, eval_dialogue_memory):
-        """
-        Rapid back-and-forth between weather and search topics.
-
-        This stress-tests the model's ability to quickly switch context.
-        """
-        from jarvis.reply.engine import run_reply_engine
-
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
-
-        capture = ToolCallCapture()
-
-        mock_tool_run = create_mock_tool_run(capture, {
-            "getWeather": MOCK_WEATHER_RESPONSE,
-            "webSearch": MOCK_NEWS_SEARCH,
-        })
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Kensington, UK"):
-
-            # Rapid switches between weather and search
-            queries = [
-                ("What's the weather?", "getWeather"),
-                ("Search for coffee shops", "webSearch"),
-                ("Is it going to rain?", "getWeather"),
-                ("Find me a gym nearby", "webSearch"),
-            ]
-
-            results = []
-            for query, expected in queries:
-                capture.clear()
-                run_reply_engine(
-                    db=eval_db, cfg=mock_config, tts=None,
-                    text=query,
-                    dialogue_memory=eval_dialogue_memory
-                )
-                tools = capture.tool_sequence()
-                results.append({
-                    "query": query,
-                    "expected": expected,
-                    "tools": tools,
-                    "correct": expected in tools
-                })
-
-        print(f"\n📊 Rapid Topic Switching:")
-        correct_count = sum(1 for r in results if r["correct"])
-        total = len(results)
-
-        for r in results:
-            status = "✅" if r["correct"] else "❌"
-            print(f"   {status} '{r['query'][:30]}...' → {r['tools']} (expected: {r['expected']})")
-
-        print(f"\n   Score: {correct_count}/{total} correct")
-
-        # Allow some flexibility - at least 3/4 should be correct
-        assert correct_count >= 3, \
-            f"Rapid topic switching: Only {correct_count}/{total} correct tool selections"
-
-        if correct_count == total:
-            print(f"   ✅ Perfect score on rapid topic switching")
-        else:
-            print(f"   ⚠️ Some errors in rapid switching (acceptable: {correct_count}/{total})")

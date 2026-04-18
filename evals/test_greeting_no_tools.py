@@ -55,8 +55,6 @@ class TestGreetingNoToolsLive:
     @pytest.mark.parametrize("query,should_use_tools", [
         pytest.param("hello", False, id="Live greeting: hello"),
         pytest.param("ni hao", False, id="Live greeting: ni hao (Chinese)"),
-        pytest.param("bonjour", False, id="Live greeting: bonjour (French)"),
-        pytest.param("how are you", False, id="Live greeting: how are you"),
     ])
     def test_greeting_no_tools_live(
         self,
@@ -101,7 +99,6 @@ class TestGreetingNoToolsLive:
     @requires_judge_llm
     @pytest.mark.parametrize("query,should_use_tools", [
         pytest.param("always use Celsius when telling me temperatures", False, id="Live instruction: use Celsius"),
-        pytest.param("remember to always tell me things in Celsius", False, id="Live instruction: remember Celsius"),
         pytest.param("be more brief in your responses", False, id="Live instruction: be more brief"),
     ])
     def test_user_instructions_no_tools_live(

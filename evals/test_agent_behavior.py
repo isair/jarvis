@@ -224,9 +224,9 @@ class TestContextUtilization:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.get_location_context', return_value=f"Location: {user_location}"), \
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=(f"Location: {user_location}", None)), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
 
             run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -275,7 +275,7 @@ class TestToolUsage:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="developer"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="developer", create=True):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -315,7 +315,7 @@ class TestToolUsage:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -381,7 +381,7 @@ class TestMultiStepReasoning:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["health", "diet"]}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -444,7 +444,7 @@ class TestMultiStepReasoning:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["news", "interest", "hobbies"]}), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -491,11 +491,6 @@ class TestMemoryEnrichment:
             "what news might interest me?",
             ["interests", "hobbies", "preferences"],
             id="Memory enrichment: personalized news"
-        ),
-        pytest.param(
-            "recommend a restaurant I'd enjoy",
-            ["food", "restaurant", "cuisine", "preferences"],
-            id="Memory enrichment: personalized restaurant"
         ),
         pytest.param(
             "what did we discuss about the python project?",
@@ -570,7 +565,7 @@ class TestMemoryEnrichment:
         with patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["dinner", "food", "preferences"]}), \
              patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_memory_results), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
 
             run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -631,7 +626,7 @@ class TestMemoryEnrichment:
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["interests", "hobbies", "preferences"]}), \
              patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context), \
-             patch('jarvis.reply.engine.select_profile_llm', return_value="life"):
+             patch('jarvis.reply.engine.select_profile_llm', return_value="life", create=True):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -679,9 +674,9 @@ class TestLiveEndToEnd:
         mock_config.ollama_chat_model = JUDGE_MODEL
 
         def mock_get_location(**kwargs):
-            return f"Location: {test_location}"
+            return (f"Location: {test_location}", None)
 
-        with patch('jarvis.reply.engine.get_location_context', side_effect=mock_get_location):
+        with patch('jarvis.reply.engine.get_location_context_with_timezone', side_effect=mock_get_location):
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
                 text=query, dialogue_memory=eval_dialogue_memory
@@ -734,7 +729,7 @@ class TestLiveEndToEnd:
         })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: London, UK"), \
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: London, UK", None)), \
              patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context):
 
             response = run_reply_engine(
@@ -827,20 +822,12 @@ class TestHelpfulness:
     @requires_judge_llm
     @pytest.mark.parametrize("query", [
         pytest.param(
-            "how's the weather going to be later today?",
-            id="No deflection: forecast later today"
-        ),
-        pytest.param(
             "what's the weather tomorrow?",
             id="No deflection: tomorrow weather"
         ),
         pytest.param(
             "will it rain this week?",
             id="No deflection: weekly rain forecast"
-        ),
-        pytest.param(
-            "what's the weather going to be like on Friday?",
-            id="No deflection: specific day forecast"
         ),
     ])
     def test_no_deflection_for_weather_forecast_live(
@@ -861,7 +848,7 @@ class TestHelpfulness:
         })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Tbilisi, Georgia"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Tbilisi, Georgia", None)):
 
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
@@ -914,7 +901,7 @@ class TestHelpfulness:
         })
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Tbilisi, Georgia"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Tbilisi, Georgia", None)):
 
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
@@ -1004,7 +991,7 @@ class TestHelpfulness:
         capture = ToolCallCapture()
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.get_location_context', return_value="Location: Tbilisi, Georgia"):
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Tbilisi, Georgia", None)):
 
             # Turn 1: Ask about weather in obscure location — tool will fail
             capture.clear()

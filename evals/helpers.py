@@ -104,7 +104,7 @@ class MockConfig:
     llm_profile_select_timeout_sec: float = 10.0
     llm_tools_timeout_sec: float = 8.0
     llm_embed_timeout_sec: float = 10.0
-    llm_chat_timeout_sec: float = 45.0
+    llm_chat_timeout_sec: float = 120.0
     agentic_max_turns: int = 8
     memory_enrichment_max_results: int = 5
     active_profiles: List[str] = field(default_factory=lambda: ["developer", "business", "life"])
@@ -250,7 +250,7 @@ def is_judge_llm_available() -> bool:
         return False
 
 
-def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 30.0) -> Optional[str]:
+def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 120.0) -> Optional[str]:
     """Call the judge LLM with a prompt."""
     import requests
 

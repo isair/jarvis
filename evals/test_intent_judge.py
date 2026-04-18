@@ -463,6 +463,14 @@ def is_intent_judge_available() -> bool:
         return False
 
 
+def _skip_if_not_intent_judge_phase():
+    """Intent judge tests are fixed to gemma4:e2b and would run twice under the
+    multi-model eval matrix. Skip during the large-model phase to keep runtime
+    down; they still run once during the small-model (gemma4) phase."""
+    if "gemma4" not in JUDGE_MODEL:
+        pytest.skip(f"Intent judge tests only run in the gemma4 phase (current: {JUDGE_MODEL})")
+
+
 # =============================================================================
 # Tests
 # =============================================================================
@@ -472,6 +480,7 @@ class TestIntentJudgeAccuracy:
 
     @pytest.mark.parametrize("case", INTENT_JUDGE_TEST_CASES, ids=lambda c: c.name)
     def test_intent_judge_case(self, case: IntentJudgeTestCase):
+        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
             pytest.skip("Intent judge model (gemma4) not available")
 
@@ -582,6 +591,7 @@ class TestIntentJudgeMultiSegment:
 
     @pytest.mark.parametrize("case", MULTI_SEGMENT_TEST_CASES, ids=lambda c: c.name)
     def test_multi_segment_case(self, case: MultiSegmentTestCase):
+        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
             pytest.skip("Intent judge model (gemma4) not available")
 
@@ -631,6 +641,7 @@ class TestProcessedSegmentFiltering:
     """Tests for processed segment filtering in intent judge."""
 
     def test_processed_segment_not_reextracted(self):
+        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
             pytest.skip("Intent judge model (gemma4) not available")
 
