@@ -201,34 +201,38 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
     return report
 
 
-def is_intent_judge_test(result: TestResult) -> bool:
-    """Check if a test is an intent judge test (uses fixed model, not configurable).
+def is_fixed_model_test(result: TestResult) -> bool:
+    """Check if a test uses a fixed model, independent of the judge model.
 
-    Intent judge tests belong to specific test classes that use a fixed model
-    (gemma4) for the intent classification system. These shouldn't be
-    compared across models since they always use the same model.
+    Some tests are pinned to specific models regardless of EVAL_JUDGE_MODEL:
+    - Intent judge tests use gemma4 (the intent classification model)
+    - Tool selection tests use nomic-embed-text (the embedding model)
+
+    These shouldn't be compared across judge models since they always use the
+    same model — they belong in their own section.
     """
-    # Classes that contain intent judge tests
-    intent_judge_classes = [
-        "IntentJudge",  # Matches TestIntentJudgeAccuracy, TestIntentJudgeMultiSegment, etc.
-        "ProcessedSegmentFiltering",  # Tests intent judge processed segment filtering
+    fixed_model_classes = [
+        "IntentJudge",  # TestIntentJudgeAccuracy, TestIntentJudgeMultiSegment, etc.
+        "ProcessedSegmentFiltering",  # Intent judge processed segment filtering
+        "ToolSelectionFiltering",  # Uses fixed nomic-embed-text
     ]
 
-    # Check class name for intent judge classes
     if result.class_name:
-        for class_pattern in intent_judge_classes:
+        for class_pattern in fixed_model_classes:
             if class_pattern in result.class_name:
                 return True
 
-    # Fallback: check test name patterns for non-parametrized tests
-    # (these have the full test function name as their name)
-    intent_judge_patterns = [
+    fixed_model_name_patterns = [
         "test_hot_window_mode_indicated_in_prompt",
         "test_tts_text_included_for_echo_detection",
         "test_system_prompt_has_echo_guidance",
         "test_returns_none_when_ollama_unavailable",
     ]
-    return any(pattern in result.name for pattern in intent_judge_patterns)
+    return any(pattern in result.name for pattern in fixed_model_name_patterns)
+
+
+# Backwards-compatible alias
+is_intent_judge_test = is_fixed_model_test
 
 
 def _parse_pass_rate_fraction(pass_rate: str) -> Optional[Tuple[int, int]]:
@@ -277,24 +281,112 @@ def _calc_run_level_pass_rate(
     return total_passes, total_runs
 
 
+STATUS_EMOJI = {
+    "passed": "✅",
+    "failed": "❌",
+    "skipped": "⏭️",
+    "xfailed": "🔸",
+    "xpassed": "🎉",
+    "partial": "⚠️",
+    "unknown": "❓",
+}
+
+
+def _classify_fixed_model(result: TestResult) -> Optional[Tuple[str, str]]:
+    """Return (category_key, pinned_model) for fixed-model tests, else None."""
+    cls = result.class_name or ""
+    name = result.name or ""
+    if "IntentJudge" in cls or "ProcessedSegmentFiltering" in cls or any(
+        p in name
+        for p in (
+            "test_hot_window_mode_indicated_in_prompt",
+            "test_tts_text_included_for_echo_detection",
+            "test_system_prompt_has_echo_guidance",
+            "test_returns_none_when_ollama_unavailable",
+        )
+    ):
+        return ("intent_judge", "gemma4:e2b")
+    if "ToolSelectionFiltering" in cls:
+        return ("tool_selection", "nomic-embed-text")
+    return None
+
+
+def _rate_emoji(rate: float) -> str:
+    return "🟢" if rate >= 80 else "🟡" if rate >= 50 else "🔴"
+
+
+def _count_outcomes(results) -> Dict[str, int]:
+    """Count outcome buckets (run-level: uses pass_rate fractions where available)."""
+    passed = failed = skipped = xfailed = partial = 0
+    total_passes = total_runs = 0
+    for r in results:
+        if r.outcome == "passed":
+            passed += 1
+        elif r.outcome == "failed":
+            failed += 1
+        elif r.outcome == "skipped":
+            skipped += 1
+        elif r.outcome == "xfailed":
+            xfailed += 1
+        elif r.outcome == "partial":
+            partial += 1
+        if r.outcome in ("xfailed", "skipped"):
+            continue
+        fraction = _parse_pass_rate_fraction(r.pass_rate) if r.pass_rate else None
+        if fraction:
+            total_passes += fraction[0]
+            total_runs += fraction[1]
+        elif r.outcome == "passed":
+            total_passes += 1
+            total_runs += 1
+        elif r.outcome == "failed":
+            total_runs += 1
+    rate = (total_passes / total_runs * 100) if total_runs > 0 else 0.0
+    return {
+        "passed": passed, "failed": failed, "skipped": skipped,
+        "xfailed": xfailed, "partial": partial,
+        "total": passed + failed + skipped + xfailed + partial,
+        "run_passes": total_passes, "run_total": total_runs, "rate": rate,
+    }
+
+
 def generate_combined_report(reports: List[ModelReport]) -> str:
-    """Generate a combined markdown report comparing multiple models."""
-    lines = []
+    """Generate a combined markdown report grouped by test category."""
+    lines: List[str] = []
     now = datetime.now()
 
-    # Separate intent judge tests from main LLM tests
-    # Intent judge tests use fixed model (gemma4), so only show once
-    intent_judge_results = {}
-    main_llm_tests = set()
+    # Bucket results into three categories:
+    #   judge_compared: run once per judge model, compared side-by-side
+    #   intent_judge:   pinned to gemma4:e2b, shown once
+    #   tool_selection: pinned to nomic-embed-text, shown once
+    judge_compared: set[str] = set()
+    intent_judge_results: Dict[str, TestResult] = {}
+    tool_selection_results: Dict[str, TestResult] = {}
 
     for report in reports:
         for test_name, result in report.results.items():
-            if is_intent_judge_test(result):
-                # Only keep one result for intent judge tests (they're identical across runs)
-                if test_name not in intent_judge_results:
-                    intent_judge_results[test_name] = result
-            else:
-                main_llm_tests.add(test_name)
+            fm = _classify_fixed_model(result)
+            if fm is None:
+                judge_compared.add(test_name)
+                continue
+            bucket = intent_judge_results if fm[0] == "intent_judge" else tool_selection_results
+            existing = bucket.get(test_name)
+            if existing is None or (existing.outcome == "skipped" and result.outcome != "skipped"):
+                bucket[test_name] = result
+
+    # Per-model stats for the judge-compared bucket
+    per_model_stats: Dict[str, Dict[str, int]] = {}
+    for report in reports:
+        results = [r for n, r in report.results.items() if n in judge_compared]
+        per_model_stats[report.model_name] = _count_outcomes(results)
+
+    intent_stats = _count_outcomes(list(intent_judge_results.values()))
+    tool_stats = _count_outcomes(list(tool_selection_results.values()))
+
+    # Overall aggregate (sum of runs across all categories)
+    overall_passes = sum(s["run_passes"] for s in per_model_stats.values()) + intent_stats["run_passes"] + tool_stats["run_passes"]
+    overall_runs = sum(s["run_total"] for s in per_model_stats.values()) + intent_stats["run_total"] + tool_stats["run_total"]
+    overall_rate = (overall_passes / overall_runs * 100) if overall_runs > 0 else 0.0
 
     # Header
     lines.append("# 🧪 Jarvis Evaluation Report")
@@ -302,182 +394,98 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append(f"**Generated:** {now.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
 
-    # Model comparison table
-    lines.append("## 📊 Model Comparison")
+    # TL;DR
+    lines.append("## 📊 TL;DR")
     lines.append("")
-    lines.append("This report compares eval results across officially supported models.")
-    lines.append("Use this to understand the performance tradeoffs when choosing a model.")
+    lines.append(f"**Overall:** {_rate_emoji(overall_rate)} **{overall_passes}/{overall_runs} passed ({overall_rate:.1f}%)** across all categories")
     lines.append("")
+    lines.append("| Category | Model | Passed | Failed | Skipped | Pass Rate |")
+    lines.append("|----------|-------|-------:|-------:|--------:|----------:|")
 
-    # Calculate stats for main LLM tests only (excluding intent judge)
-    def calc_main_llm_stats(report: ModelReport) -> dict:
-        passed = failed = skipped = xfailed = partial = 0
-        duration = 0.0
-        for test_name, result in report.results.items():
-            if not is_intent_judge_test(result):
-                if result.outcome == "passed":
-                    passed += 1
-                elif result.outcome == "failed":
-                    failed += 1
-                elif result.outcome == "skipped":
-                    skipped += 1
-                elif result.outcome == "xfailed":
-                    xfailed += 1
-                elif result.outcome == "partial":
-                    partial += 1
-                duration += result.duration
-        total = passed + failed + skipped + xfailed + partial
-        return {"passed": passed, "failed": failed, "skipped": skipped,
-                "xfailed": xfailed, "partial": partial,
-                "total": total, "duration": duration}
+    def _fmt_row(label: str, model_note: str, stats: Dict[str, int]) -> str:
+        emoji = _rate_emoji(stats["rate"]) if stats["run_total"] else "➖"
+        rate_str = f"{emoji} {stats['rate']:.1f}%" if stats["run_total"] else "➖"
+        return (
+            f"| {label} | {model_note} | {stats['passed']} | {stats['failed']} | "
+            f"{stats['skipped']} | {rate_str} |"
+        )
 
-    # Summary comparison table (main LLM tests only)
-    header = "| Metric |"
-    separator = "|--------|"
     for report in reports:
-        header += f" {report.model_name} |"
-        separator += "--------|"
-
-    lines.append(header)
-    lines.append(separator)
-
-    # Rows using main LLM stats
-    stats_by_model = {r.model_name: calc_main_llm_stats(r) for r in reports}
-
-    metrics = [
-        ("✅ Passed", "passed"),
-        ("⚠️ Partial", "partial"),
-        ("❌ Failed", "failed"),
-        ("🔸 Expected Fail", "xfailed"),
-        ("⏭️ Skipped", "skipped"),
-        ("📊 Total", "total"),
-        ("⏱️ Duration", "duration"),
-    ]
-
-    for label, attr in metrics:
-        row = f"| {label} |"
-        for report in reports:
-            val = stats_by_model[report.model_name][attr]
-            if attr == "duration":
-                row += f" {val:.1f}s |"
-            else:
-                row += f" {val} |"
-        lines.append(row)
-
-    # Pass rate row (calculated from individual test run results for accuracy)
-    row = "| 📈 Pass Rate |"
-    for report in reports:
-        total_passes, total_runs = _calc_run_level_pass_rate(report, main_llm_tests)
-        rate = (total_passes / total_runs * 100) if total_runs > 0 else 0.0
-        emoji = "🟢" if rate >= 80 else "🟡" if rate >= 50 else "🔴"
-        row += f" {emoji} {rate:.1f}% |"
-    lines.append(row)
-
+        lines.append(_fmt_row("🤖 Agent behaviour", f"`{report.model_name}`", per_model_stats[report.model_name]))
+    if intent_judge_results:
+        lines.append(_fmt_row("🎤 Intent judge", "`gemma4:e2b` (fixed)", intent_stats))
+    if tool_selection_results:
+        lines.append(_fmt_row("🔍 Tool selection", "`nomic-embed-text` (fixed)", tool_stats))
     lines.append("")
 
-    # Pass rate bars (main LLM tests only)
-    lines.append("### Pass Rate Visualization")
-    lines.append("")
-    for report in reports:
-        total_passes, total_runs = _calc_run_level_pass_rate(report, main_llm_tests)
-        rate = (total_passes / total_runs * 100) if total_runs > 0 else 0.0
-        bar_filled = int(rate / 5)  # 20 chars max
-        bar_empty = 20 - bar_filled
-        bar = "█" * bar_filled + "░" * bar_empty
-        emoji = "🟢" if rate >= 80 else "🟡" if rate >= 50 else "🔴"
-        lines.append(f"**{report.model_name}:** {emoji} `{bar}` **{rate:.1f}%**")
-    lines.append("")
+    # Model selection guide (only when comparing judges)
+    if len(reports) > 1:
+        lines.append("### 💡 Model Selection Guide")
+        lines.append("")
+        lines.append("| Model | Best For | Trade-offs |")
+        lines.append("|-------|----------|------------|")
+        lines.append("| `gemma4:e2b` | Quick responses, lower RAM usage | May struggle with complex reasoning |")
+        lines.append("| `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |")
+        lines.append("")
 
-    # Model recommendations
-    lines.append("### 💡 Model Selection Guide")
-    lines.append("")
-    lines.append("| Model | Best For | Trade-offs |")
-    lines.append("|-------|----------|------------|")
-    lines.append("| `gemma4` | Quick responses, lower RAM usage | May struggle with complex reasoning |")
-    lines.append("| `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |")
-    lines.append("")
-
-    # Detailed comparison per test (main LLM tests only)
+    # Agent behaviour: per-test comparison across judge models
     lines.append("---")
     lines.append("")
-    lines.append("## 📋 Detailed Test Results")
+    lines.append("## 🤖 Agent behaviour")
     lines.append("")
-
-    # Build comparison table for main LLM tests only
+    lines.append("> Runs the full agent pipeline against each judge model. Tests are compared side-by-side.")
+    lines.append("")
     header = "| Test Case |"
     separator = "|-----------|"
     for report in reports:
         header += f" {report.model_name} |"
-        separator += "----------|"
-
+        separator += "----------:|"
     lines.append(header)
     lines.append(separator)
-
-    status_emoji = {
-        "passed": "✅",
-        "failed": "❌",
-        "skipped": "⏭️",
-        "xfailed": "🔸",
-        "xpassed": "🎉",
-        "partial": "⚠️",
-        "unknown": "❓",
-    }
-
-    for test_name in sorted(main_llm_tests):
+    for test_name in sorted(judge_compared):
         row = f"| {test_name} |"
         for report in reports:
             result = report.results.get(test_name)
             if result:
-                emoji = status_emoji.get(result.outcome, "❓")
-                # Include pass rate if available
-                if result.pass_rate:
-                    row += f" {emoji} {result.pass_rate} |"
-                else:
-                    row += f" {emoji} |"
+                emoji = STATUS_EMOJI.get(result.outcome, "❓")
+                row += f" {emoji} {result.pass_rate} |" if result.pass_rate else f" {emoji} |"
             else:
                 row += " ➖ |"
         lines.append(row)
-
     lines.append("")
 
-    # Intent Judge Tests Section (separate, single model)
-    if intent_judge_results:
+    def _render_fixed_section(title: str, blurb: str, results: Dict[str, TestResult]) -> None:
+        if not results:
+            return
         lines.append("---")
         lines.append("")
-        lines.append("## 🎤 Intent Judge Tests")
+        lines.append(f"## {title}")
         lines.append("")
-        lines.append("> These tests evaluate the voice intent classification system.")
-        lines.append("> They use a fixed model (`gemma4`) and are not part of the model comparison.")
+        lines.append(f"> {blurb}")
         lines.append("")
-
-        # Calculate intent judge stats
-        ij_passed = sum(1 for r in intent_judge_results.values() if r.outcome == "passed")
-        ij_partial = sum(1 for r in intent_judge_results.values() if r.outcome == "partial")
-        ij_failed = sum(1 for r in intent_judge_results.values() if r.outcome == "failed")
-        ij_xfailed = sum(1 for r in intent_judge_results.values() if r.outcome == "xfailed")
-        ij_total = len(intent_judge_results)
-
-        lines.append(f"**Model:** `gemma4` (fixed)")
-        result_parts = [f"{ij_passed} passed"]
-        if ij_partial > 0:
-            result_parts.append(f"{ij_partial} partial")
-        result_parts.append(f"{ij_failed} failed")
-        result_parts.append(f"{ij_xfailed} expected failures")
-        lines.append(f"**Results:** {', '.join(result_parts)}")
-        lines.append("")
-
         lines.append("| Test Case | Pass Rate | Status |")
-        lines.append("|-----------|-----------|--------|")
-
-        for test_name in sorted(intent_judge_results.keys()):
-            result = intent_judge_results[test_name]
-            emoji = status_emoji.get(result.outcome, "❓")
+        lines.append("|-----------|-----------|:------:|")
+        for test_name in sorted(results.keys()):
+            result = results[test_name]
+            emoji = STATUS_EMOJI.get(result.outcome, "❓")
             pass_rate_str = result.pass_rate if result.pass_rate else "N/A"
             lines.append(f"| {test_name} | {pass_rate_str} | {emoji} |")
-
         lines.append("")
 
+    _render_fixed_section(
+        "🎤 Intent judge",
+        "Pinned to `gemma4:e2b` (the voice intent classifier). Not affected by the judge model.",
+        intent_judge_results,
+    )
+    _render_fixed_section(
+        "🔍 Tool selection",
+        "Pinned to `nomic-embed-text` (embedding-based filter). Not affected by the judge model.",
+        tool_selection_results,
+    )
+
     # Legend
+    lines.append("---")
+    lines.append("")
     lines.append("### 📖 Legend")
     lines.append("")
     lines.append("| Symbol | Meaning |")
@@ -489,10 +497,6 @@ def generate_combined_report(reports: List[ModelReport]) -> str:
     lines.append("| 🔸 | Expected failure (known limitation) |")
     lines.append("| 🎉 | Unexpectedly passed (bug fixed!) |")
     lines.append("| ➖ | Not run for this model |")
-    lines.append("")
-
-    # Footer
-    lines.append("---")
     lines.append("")
     lines.append("*Report generated by Jarvis eval suite*")
 

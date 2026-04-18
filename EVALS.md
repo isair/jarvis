@@ -1,44 +1,36 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-04-18 11:38:00
+**Generated:** 2026-04-18 13:19:13
 
-## 📊 Model Comparison
+## 📊 TL;DR
 
-This report compares eval results across officially supported models.
-Use this to understand the performance tradeoffs when choosing a model.
+**Overall:** 🟢 **156/164 passed (95.1%)** across all categories
 
-| Metric | gemma4:e2b | gpt-oss:20b |
-|--------|--------|--------|
-| ✅ Passed | 61 | 65 |
-| ⚠️ Partial | 0 | 0 |
-| ❌ Failed | 7 | 1 |
-| 🔸 Expected Fail | 3 | 0 |
-| ⏭️ Skipped | 0 | 5 |
-| 📊 Total | 71 | 71 |
-| ⏱️ Duration | 1272.2s | 1778.8s |
-| 📈 Pass Rate | 🟢 89.7% | 🟢 98.5% |
-
-### Pass Rate Visualization
-
-**gemma4:e2b:** 🟢 `█████████████████░░░` **89.7%**
-**gpt-oss:20b:** 🟢 `███████████████████░` **98.5%**
+| Category | Model | Passed | Failed | Skipped | Pass Rate |
+|----------|-------|-------:|-------:|--------:|----------:|
+| 🤖 Agent behaviour | `gemma4:e2b` | 56 | 7 | 0 | 🟢 88.9% |
+| 🤖 Agent behaviour | `gpt-oss:20b` | 65 | 1 | 0 | 🟢 98.5% |
+| 🎤 Intent judge | `gemma4:e2b` (fixed) | 30 | 0 | 0 | 🟢 100.0% |
+| 🔍 Tool selection | `nomic-embed-text` (fixed) | 5 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
 
 | Model | Best For | Trade-offs |
 |-------|----------|------------|
-| `gemma4` | Quick responses, lower RAM usage | May struggle with complex reasoning |
+| `gemma4:e2b` | Quick responses, lower RAM usage | May struggle with complex reasoning |
 | `gpt-oss:20b` | Best accuracy, complex tasks | Slower, requires more RAM |
 
 ---
 
-## 📋 Detailed Test Results
+## 🤖 Agent behaviour
+
+> Runs the full agent pipeline against each judge model. Tests are compared side-by-side.
 
 | Test Case | gemma4:e2b | gpt-oss:20b |
-|-----------|----------|----------|
+|-----------|----------:|----------:|
 | 3-turn conversation with topic changes | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | Agent calls webSearch for info queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Agent chains search → fetch for details | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
+| Agent chains search → fetch for details | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | Agent recalls interests before personalized search (mocked) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent uses memory + nutrition data | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: deflection without attempting answer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -74,7 +66,7 @@ Use this to understand the performance tradeoffs when choosing a model.
 | Novel knowledge: user diet plan and preferred recipe | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: cheeseburger with fries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: chicken with broccoli | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Nutrition: oatmeal with banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Nutrition: oatmeal with banana | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | Office days changed from Mon/Wed to Mon/Thu | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: life events framed as facts with temporal context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: requests become knowledge, not interaction descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -88,9 +80,6 @@ Use this to understand the performance tradeoffs when choosing a model.
 | Tool retry: vague just try | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | Topic switch: search → weather uses getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Topic switch: weather → store hours uses webSearch | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ⏭️ SKIPPED |
-| meal logging selects logMeal and few others | ✅ 1/1 (100%) | ⏭️ SKIPPED |
-| meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ⏭️ SKIPPED |
 | test_active_hot_window_follow_up_accepted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_casual_statement_without_wake_word_rejected | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_judge_echo_claim_overridden_in_hot_window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -105,21 +94,15 @@ Use this to understand the performance tradeoffs when choosing a model.
 | test_utterance_started_during_tts_treated_as_hot_window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_wake_word_query_after_echo_segments | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_wake_word_query_uses_judge_extraction | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| weather query selects getWeather and few others | ✅ 1/1 (100%) | ⏭️ SKIPPED |
-| web search query selects webSearch and few others | ✅ 1/1 (100%) | ⏭️ SKIPPED |
 
 ---
 
-## 🎤 Intent Judge Tests
+## 🎤 Intent judge
 
-> These tests evaluate the voice intent classification system.
-> They use a fixed model (`gemma4`) and are not part of the model comparison.
-
-**Model:** `gemma4` (fixed)
-**Results:** 30 passed, 0 failed, 0 expected failures
+> Pinned to `gemma4:e2b` (the voice intent classifier). Not affected by the judge model.
 
 | Test Case | Pass Rate | Status |
-|-----------|-----------|--------|
+|-----------|-----------|:------:|
 | buffer_echo_then_followup_hot_window | 1/1 (100%) | ✅ |
 | context_synthesis_weather_opinion | 1/1 (100%) | ✅ |
 | context_synthesis_with_prior_ambient | 1/1 (100%) | ✅ |
@@ -151,6 +134,22 @@ Use this to understand the performance tradeoffs when choosing a model.
 | wake_word_simple_question | 1/1 (100%) | ✅ |
 | wake_word_statement_remember | 1/1 (100%) | ✅ |
 
+---
+
+## 🔍 Tool selection
+
+> Pinned to `nomic-embed-text` (embedding-based filter). Not affected by the judge model.
+
+| Test Case | Pass Rate | Status |
+|-----------|-----------|:------:|
+| location weather query selects getWeather and few others | 1/1 (100%) | ✅ |
+| meal logging selects logMeal and few others | 1/1 (100%) | ✅ |
+| meal recall selects fetchMeals and few others | 1/1 (100%) | ✅ |
+| weather query selects getWeather and few others | 1/1 (100%) | ✅ |
+| web search query selects webSearch and few others | 1/1 (100%) | ✅ |
+
+---
+
 ### 📖 Legend
 
 | Symbol | Meaning |
@@ -162,7 +161,5 @@ Use this to understand the performance tradeoffs when choosing a model.
 | 🔸 | Expected failure (known limitation) |
 | 🎉 | Unexpectedly passed (bug fixed!) |
 | ➖ | Not run for this model |
-
----
 
 *Report generated by Jarvis eval suite*
