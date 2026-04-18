@@ -356,12 +356,37 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_directed=True,
         expected_query_contains="germany",
     ),
+    # Wake word mid-utterance after narrative buffer, addressing the assistant.
+    # Real-world case: user was discussing Mata Hari in the background, then
+    # turned to the assistant with "Jarvis, do you know what she's talking about,
+    # about Mata Hari?". The small model mis-classified as "not directed" with
+    # reasoning that contradicted the verdict. The wake word is mid-utterance
+    # here but the trailing clause addresses the assistant directly ("do YOU
+    # know"), so this must be DIRECTED.
+    MultiSegmentTestCase(
+        name="wake_word_after_narrative_addresses_assistant",
+        segments=[
+            ("The dude was a lie upon the lie", False),
+            ("Mata Hari was never a traitor, she was an honest woman", False),
+            ("Jarvis, do you know what she's talking about, about Mata Hari?", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1004.5,
+        expected_directed=True,
+        expected_query_contains="mata hari",
+    ),
 ]
 
 
 # Cases known to fail with the small model on the current prompt.
-# Kept empty during baseline runs so we observe true pass/fail.
-KNOWN_FAILING_CASES: set = set()
+# Track regressions / future prompt improvements here.
+KNOWN_FAILING_CASES: set = {
+    # gemma4:e2b occasionally flips this to not-directed when the wake word
+    # lands mid-utterance after a long narrative buffer. Tracked so a prompt
+    # improvement can flip it back to passing.
+    "wake_word_after_narrative_addresses_assistant",
+}
 
 
 # =============================================================================

@@ -1355,3 +1355,50 @@ class TestIntentJudgeGating:
 
         assert mock_judge.judge.call_count == 1
         listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_judge_skipped_for_short_utterance_during_tts(self, _print):
+        """Short utterances (<=3 words) during active TTS bypass the judge.
+
+        The fast text-based stop-command check already handles short
+        interruptions like "stop" / "shut up" while TTS is speaking. Sending
+        these to the judge would block the audio loop for the judge's
+        timeout on every short echo chunk during playback.
+        """
+        listener, mock_tts = _create_listener(tts_speaking=True)
+
+        mock_judge = _install_intent_judge(
+            listener, _make_judgment(directed=False, query=""))
+
+        listener._process_transcript(
+            "uh huh yeah", utterance_energy=0.01,
+        )
+
+        assert mock_judge.judge.call_count == 0, (
+            "Short utterances during TTS must be handled by the stop-command "
+            "path, not the judge, to avoid blocking the audio loop")
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_judge_called_for_longer_utterance_during_tts(self, _print):
+        """Longer utterances (>3 words) during TTS still reach the judge.
+
+        Active TTS is itself an engagement signal — the user may be
+        interrupting with a real follow-up or correction, and the judge
+        needs to see it to catch intents the fast text-based stop-command
+        check misses.
+        """
+        listener, mock_tts = _create_listener(tts_speaking=True)
+
+        mock_judge = _install_intent_judge(
+            listener, _make_judgment(
+                directed=True, query="what about tomorrow's weather"))
+
+        # >3 words, no stop-command keywords, not echo
+        listener._process_transcript(
+            "actually what about tomorrow's weather",
+            utterance_energy=0.01,
+        )
+
+        assert mock_judge.judge.call_count == 1
+        listener.state_manager.stop()
