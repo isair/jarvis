@@ -583,8 +583,9 @@ class VoiceListener(threading.Thread):
                 else:
                     print(f"  🧠 Intent ({mode_str}): not directed ({intent_judgment.reasoning})", flush=True)
             else:
-                print(f"  🧠 Intent judge: unavailable (timeout or error)", flush=True)
-                debug_log("intent judge returned None — falling back", "voice")
+                reason = self._intent_judge.last_error_reason or "unavailable (timeout or error)"
+                print(f"  🧠 Intent judge: {reason}", flush=True)
+                debug_log(f"intent judge returned None — falling back ({reason})", "voice")
                 # Hot window fallback: if the early echo check already cleared
                 # this text, accept it even without the judge's verdict.
                 if could_be_hot_window:

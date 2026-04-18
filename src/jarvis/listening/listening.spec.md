@@ -313,7 +313,7 @@ When components are unavailable, the system degrades gracefully:
 
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
-| Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
+| Intent Judge | Simple text-based wake word + query extraction; hot window override still applies. The specific failure reason (timeout, Ollama unreachable, HTTP status, parse failure) is surfaced to the user so it is actionable rather than a generic "unavailable" message. |
 | 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
