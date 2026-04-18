@@ -327,7 +327,11 @@ Examples:
             transcript_preview = "; ".join(s.text[:30] for s in segments[-3:])
             debug_log(f"🧠 Intent judge [{mode}]: \"{transcript_preview}...\"", "voice")
 
-            # Call Ollama API
+            # Call Ollama API. keep_alive keeps the model resident between
+            # calls so we don't pay the ~5s cold-reload on each engagement
+            # (which was the original timeout culprit). Ollama's default is
+            # 5m; we pin to 30m because voice sessions can have long quiet
+            # stretches and reloading mid-conversation is a bad experience.
             response = requests.post(
                 f"{self.config.ollama_base_url}/api/generate",
                 json={
@@ -336,6 +340,7 @@ Examples:
                     "system": system_prompt,
                     "stream": False,
                     "think": self.config.thinking,
+                    "keep_alive": "30m",
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 200,
@@ -345,10 +350,12 @@ Examples:
             )
 
             if response.status_code != 200:
+                # Don't back off on transient HTTP errors — voice is high-turn
+                # and a 503 from an overloaded Ollama shouldn't kill the next
+                # 30s of intent judging. Retry on the next engagement signal.
                 reason = f"HTTP {response.status_code} from Ollama"
                 debug_log(f"intent judge: {reason}", "voice")
                 self._last_failure_reason = reason
-                self._last_error_time = time.time()
                 return None
 
             result = response.json()
@@ -373,11 +380,12 @@ Examples:
             return judgment
 
         except requests.Timeout:
-            # Timeouts must trigger the backoff cooldown so a slow/overloaded
-            # Ollama doesn't get hammered on every subsequent utterance.
+            # Do NOT back off on timeout. Voice is high-turn: a single slow
+            # call must not lock out intent judging for the next 30s. The
+            # engagement-signal gate upstream already prevents calling the
+            # judge on ambient speech, so timeouts don't hammer Ollama.
             self._last_failure_reason = f"timeout after {self.config.timeout_sec}s"
             debug_log(f"intent judge: {self._last_failure_reason}", "voice")
-            self._last_error_time = time.time()
             return None
         except requests.RequestException as e:
             self._last_failure_reason = f"request error: {e}"

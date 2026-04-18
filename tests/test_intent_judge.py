@@ -249,12 +249,14 @@ class TestIntentJudge:
 
         assert result is None
 
-    def test_timeout_sets_error_backoff(self):
-        """Timeouts should trigger the error cooldown so we don't hammer Ollama.
+    def test_timeout_does_not_trigger_backoff(self):
+        """Timeouts must NOT trigger the 30s cooldown.
 
-        Previously only RequestException set _last_error_time — timeouts would
-        retry on every utterance with no backoff, producing a flood of "Intent
-        judge: unavailable (timeout or error)" lines in the console.
+        Voice is a high-turn environment: a single slow call must not lock out
+        intent judging for the next half-minute of conversation. The upstream
+        engagement-signal gate (wake word / hot window / TTS) already prevents
+        hammering Ollama on ambient speech, so individual timeouts are safe to
+        retry immediately on the next real engagement.
         """
         import requests as real_requests
         judge = IntentJudge()
@@ -266,8 +268,51 @@ class TestIntentJudge:
         with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
             judge.judge(segments)
 
-        assert judge._last_error_time > 0.0, "timeout must trigger backoff cooldown"
-        assert judge.available is False, "judge must be unavailable during cooldown"
+        assert judge._last_error_time == 0.0, "timeout must NOT lock out future calls"
+        assert judge.available is True, "judge must remain available after a single timeout"
+
+    def test_http_error_does_not_trigger_backoff(self):
+        """Transient HTTP errors (503 etc.) must NOT trigger the 30s cooldown.
+
+        Same reasoning as timeouts — we want to retry on the next engagement
+        signal, not lock out intent judging.
+        """
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_time = 0.0
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+            judge.judge(segments)
+
+        assert judge._last_error_time == 0.0
+        assert judge.available is True
+
+    def test_connection_error_does_trigger_backoff(self):
+        """Connection errors (Ollama actually down) DO trigger the 30s cooldown.
+
+        If the server is unreachable, retrying on every engagement just wastes
+        time. This is the one case where backoff is appropriate — it gives
+        Ollama a chance to come back up.
+        """
+        import requests as real_requests
+        judge = IntentJudge()
+        judge._available = True
+        judge._last_error_time = 0.0
+
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch(
+            'jarvis.listening.intent_judge.requests.post',
+            side_effect=real_requests.ConnectionError("refused"),
+        ):
+            judge.judge(segments)
+
+        assert judge._last_error_time > 0.0
+        assert judge.available is False
 
     def test_last_failure_reason_recorded_on_timeout(self):
         """Judge should remember why the last call failed so the listener can surface it."""
@@ -286,6 +331,8 @@ class TestIntentJudge:
         """HTTP non-200 responses should be recorded as a failure reason."""
         judge = IntentJudge()
         judge._available = True
+        # Clear any stray _last_error_time from earlier test setup
+        judge._last_error_time = 0.0
 
         mock_response = MagicMock()
         mock_response.status_code = 503
