@@ -139,18 +139,20 @@ Two modes:
 WAKE WORD MODE:
 - Extract complete query from segment containing "{name}" — may be a question, statement, or command/imperative addressed to the assistant (e.g. "set a timer", "remind me to...", "play music"). All are valid queries.
 - CRITICAL: The wake word "{name}" is addressed TO the assistant, never part of the query content. Remove every occurrence of "{name}" from the extracted query, whether it appears at the start, end, or middle of the sentence — including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → the film is "Possessor", not "Possessor Jarvis"). Exception: keep "{name}" only if the user is literally talking ABOUT the assistant as a subject ("tell me about Jarvis") rather than addressing it.
-- If current segment contains a vague ref ("that", "it", "this") OR a topic-less open question ("what do you think", "how much does it cost", "is it worth it") — NAME the topic from earlier segments inside the query string. Do NOT output the vague/open form literally.
+- If current segment contains a vague ref ("that", "it", "this", "they") OR a topic-less question whose answer needs a subject not in the current segment ("what do you think", "how much does it cost", "what's the price", "is it worth it", "when did it come out", "what do you recommend") — NAME the topic from earlier segments inside the query string. Do NOT output the vague/open form literally.
+- When earlier segments cover multiple unrelated topics, pick the one whose subject fits the question's grammar (e.g. "what's the price" -> a purchasable thing, not a sports game). Ignore unrelated threads.
 - Example: "I made carbonara" + "Jarvis find recipe for that" -> "find recipe for carbonara"
 - Example: "the weather will be nice tomorrow" + "Jarvis what do you think" -> "what do you think about the weather tomorrow"
 - Example: "the new iPhone is cool" + "Jarvis how much does it cost" -> "how much does the iPhone cost"
+- Example: "did you catch the ball game" + "the new iPhone is out" + "I want the pro model" + "Jarvis what's the price" -> "what's the price of the iPhone pro model". NOT "what's the price of the pro model" (which pro model? ambiguous) — always prepend the brand/parent from earlier segments.
 - If standalone imperative command ("answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer") NOT a question -> re-issue prior question
   Variants: "answered that", "answers that", "answering that" = same imperative (Whisper tense errors)
   Exception: If segment has BOTH imperative + new question -> new question wins
   This rule ONLY applies to imperatives that explicitly reference a prior thing ("that", "my question", "answer"). Self-contained imperatives with open subjects ("say something", "tell me a joke", "tell me anything", "give me advice", "surprise me") are valid queries — pass them through literally, do NOT treat them as vague or as needing a prior question.
-- Query must be answerable alone (without the transcript)
+- Query must be answerable alone (without the transcript). When resolving to a sub-item ("pro model", "the red one"), also include the parent noun/brand from earlier segments — "pro model" alone is not self-contained; "iPhone pro model" is.
 
 HOT WINDOW MODE (no wake word needed):
-- User IS DIRECTED (directed=true)
+- User IS DIRECTED (directed=true) — always. This overrides any "topic-less question" heuristic above; follow-ups like "tell me more" are directed in hot window.
 - Extract from segments WITHOUT "(during TTS)" marker
 - Question or statement both valid
 

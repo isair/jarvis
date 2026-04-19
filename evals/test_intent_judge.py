@@ -469,6 +469,48 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_contains="iphone",
         aliases=["jervis", "jaivis", "jervis", "javis"],
     ),
+    # Buried target sentence amid interleaved unrelated chatter (multi-topic
+    # disambiguation). Two separate topics coexist in the buffer — iPhone
+    # pricing thread and an unrelated Yankees game discussion. The wake-word
+    # segment contains a vague reference ("it") that must resolve to the
+    # correct thread (iPhone), not the most recent unrelated topic.
+    MultiSegmentTestCase(
+        name="buried_target_amid_unrelated_chatter",
+        segments=[
+            ("The new iPhone looks pretty cool", False),
+            ("Did you see the Yankees game last night", False),
+            ("I heard the camera is amazing on that phone", False),
+            ("Yeah that was a great play in the ninth inning", False),
+            ("Jarvis how much does it cost", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1008.5,
+        expected_directed=True,
+        expected_query_contains="iphone",
+        expected_query_not_contains="yankees",
+    ),
+    # Same buried-target disambiguation, but the wake-word question has no
+    # explicit pronoun ("what's the price" instead of "how much does it cost").
+    # The judge must still resolve the topic from prior segments — a query of
+    # "what's the price" is not answerable alone.
+    MultiSegmentTestCase(
+        name="buried_target_topicless_question",
+        segments=[
+            ("so anyway the meeting ran really long yesterday", False),
+            ("did you catch the ball game", False),
+            ("the new iPhone is out", False),
+            ("yeah they lost again though", False),
+            ("I want the pro model", False),
+            ("Jarvis what's the price", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1010.5,
+        expected_directed=True,
+        expected_query_contains="iphone",
+        expected_query_not_contains="ball game",
+    ),
     # Wake word mid-utterance after narrative buffer, addressing the assistant.
     # Real-world case: user was discussing Mata Hari in the background, then
     # turned to the assistant with "Jarvis, do you know what she's talking about,
