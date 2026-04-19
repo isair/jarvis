@@ -508,9 +508,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # form the model naturally emits will succeed.
             guidance.append("\n" + tools_desc)
             guidance.append(
-                "\nWhen you decide to call a tool, output ONLY the tool_calls line shown above "
-                "with the chosen tool name and JSON arguments. Output no other text on that "
-                "turn. On the NEXT turn, after tool results arrive, answer the user conversationally."
+                "\nExact tool-call syntax (copy this shape — emit nothing else on a "
+                "tool-calling turn):\n"
+                'tool_calls: [{"id": "call_1", "type": "function", "function": '
+                '{"name": "webSearch", "arguments": "{\\"search_query\\": '
+                '\\"example query\\"}"}}]\n'
+                "Notes:\n"
+                "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
+                "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
+                "a bare name is not a valid call and the tool will not run.\n"
+                "- On the NEXT turn, after tool results arrive, answer the user "
+                "conversationally in plain sentences."
             )
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
@@ -576,6 +584,30 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 name, args, tool_call_id = _extract_text_tool_call(content_field, known_names)
                 if name:
                     return name, args, tool_call_id
+
+                # Diagnostic: if the content LOOKS like a botched tool call (starts
+                # with a known tool name, or contains `tool_calls:`, or is suspiciously
+                # short for a real reply), log the raw content so we can diagnose
+                # small-model format regressions from field logs. Without this, a
+                # user-visible reply of "web" gives no signal about what the model
+                # actually emitted.
+                if content_field:
+                    stripped_preview = content_field.strip()
+                    looks_malformed = (
+                        len(stripped_preview) <= 32
+                        and any(stripped_preview.lower().startswith(n.lower()) for n in known_names)
+                    ) or "tool_calls" in stripped_preview.lower() or (
+                        # bare prefix of a known tool name, e.g. "web" for "webSearch"
+                        known_names and len(stripped_preview) <= 20 and
+                        any(n.lower().startswith(stripped_preview.lower()) and stripped_preview
+                            for n in known_names)
+                    )
+                    if looks_malformed:
+                        debug_log(
+                            f"⚠️ tool-call parse failed on suspicious content "
+                            f"(len={len(stripped_preview)}): {stripped_preview!r}",
+                            "planning",
+                        )
 
         except Exception:
             pass
