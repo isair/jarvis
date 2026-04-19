@@ -458,8 +458,6 @@ def main() -> None:
     else:
         print("🎙️ Dictation disabled", flush=True)
 
-    print("─" * 50, flush=True)
-
     # Periodic diary update checking
     last_diary_check = time.time()
     diary_check_interval = 60.0
