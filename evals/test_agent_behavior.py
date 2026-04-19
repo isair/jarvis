@@ -1271,3 +1271,114 @@ class TestHelpfulness:
         )
         print(f"   ✅ No long-term-memory denial")
 
+    @pytest.mark.eval
+    @requires_judge_llm
+    def test_open_ended_prompt_grounds_in_graph_context_live(
+        self, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """
+        Live eval: open-ended prompts like "say something" should ground the
+        reply in the stored knowledge about the user rather than fall back to
+        a generic "Hello, how can I help you?" greeting.
+
+        Locks in the system-prompt nudge that tells the model to use provided
+        context on open-ended prompts instead of emitting a stock greeting.
+        """
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config.memory_enrichment_source = "all"
+
+        class _Node:
+            def __init__(self, id_, name, data):
+                self.id = id_
+                self.name = name
+                self.data = data
+                self.data_token_count = max(1, len(data) // 4)
+
+        class _Ancestor:
+            def __init__(self, name):
+                self.name = name
+
+        nodes = [
+            _Node(
+                "n-food",
+                "Food Preferences",
+                "The user loves Thai food (especially pad see ew) and "
+                "regularly cooks homemade ramen on Sundays.",
+            ),
+            _Node(
+                "n-fitness",
+                "Fitness & Wellness",
+                "The user boxes three times a week at Trenches Gym in Hackney.",
+            ),
+        ]
+
+        class _FakeStore:
+            def __init__(self, *a, **kw):
+                pass
+
+            def search_nodes(self, query, limit=5):
+                return nodes[:limit]
+
+            def get_ancestors(self, node_id):
+                return [_Ancestor("Root")]
+
+        fake_extract = {
+            "keywords": ["interests", "preferences"],
+            "questions": [
+                "what are the user's hobbies and interests?",
+                "what food does the user like?",
+            ],
+        }
+
+        query = "say something"
+
+        with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=fake_extract), \
+             patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
+             patch("jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[]), \
+             patch("jarvis.reply.engine.get_location_context_with_timezone",
+                   return_value=("Location: Hackney, London, UK", "Europe/London")):
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory,
+            )
+
+        response = response or ""
+        response_lower = response.lower()
+
+        print(f"\n📊 Open-Ended Prompt Grounds in Graph Context (live):")
+        print(f"   Query: {query}")
+        print(f"   Model: {JUDGE_MODEL}")
+        print(f"   Response: {response[:300]}")
+
+        # Stock greeting fallbacks — what we *don't* want.
+        generic_phrases = [
+            "how can i help you",
+            "how may i help you",
+            "what can i do for you",
+            "what would you like",
+            "i'm here and ready to chat",
+            "is there something specific",
+            "what's on your mind",
+        ]
+        generic_hit = next((p for p in generic_phrases if p in response_lower), None)
+        assert generic_hit is None, (
+            f"Open-ended prompt produced a generic greeting instead of using stored "
+            f"knowledge. Matched: {generic_hit!r}\nResponse: {response[:400]}"
+        )
+
+        # At least one concrete fact from the stored nodes should appear.
+        fact_keywords = [
+            "thai", "pad see ew", "ramen",
+            "box", "trenches", "hackney", "gym",
+        ]
+        matched_facts = [kw for kw in fact_keywords if kw in response_lower]
+        assert matched_facts, (
+            f"Open-ended response did not reference any stored knowledge. "
+            f"Expected at least one of: {fact_keywords}\nResponse: {response[:400]}"
+        )
+        print(f"   ✅ Grounded in stored facts: {matched_facts}")
+

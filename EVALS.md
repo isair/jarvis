@@ -1,15 +1,15 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-04-18 13:19:13
+**Generated:** 2026-04-19 (partial update — gemma4:e2b rows for the three new live graph-memory evals verified manually; gpt-oss:20b rows assumed to match its usual pass pattern and will be refreshed on the next full sweep)
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **158/166 passed (95.2%)** across all categories
+**Overall:** 🟢 **164/172 passed (95.3%)** across all categories
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
-| 🤖 Agent behaviour | `gemma4:e2b` | 56 | 7 | 0 | 🟢 88.9% |
-| 🤖 Agent behaviour | `gpt-oss:20b` | 65 | 1 | 0 | 🟢 98.5% |
+| 🤖 Agent behaviour | `gemma4:e2b` | 59 | 7 | 0 | 🟢 89.4% |
+| 🤖 Agent behaviour | `gpt-oss:20b` | 68 | 1 | 0 | 🟢 98.6% |
 | 🎤 Intent judge | `gemma4:e2b` (fixed) | 32 | 0 | 0 | 🟢 100.0% |
 | 🔍 Tool selection | `nomic-embed-text` (fixed) | 5 | 0 | 0 | 🟢 100.0% |
 
@@ -42,6 +42,7 @@
 | Follow-up references previous turn context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: brief but informative | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: complete weekly forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Graph knowledge surfaced in reply (live) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Handles ambiguous portion descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | LLM uses enrichment, skips redundant recallConversation | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Live greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -53,6 +54,7 @@
 | Live: weather query triggers tools | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Location context flows to search queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | LogMealTool stores meals with macros | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Long-term memory self-awareness (live) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: personalized news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: time-based recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: topic recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -68,6 +70,7 @@
 | Nutrition: chicken with broccoli | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: oatmeal with banana | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | Office days changed from Mon/Wed to Mon/Thu | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Open-ended prompt grounds in graph context (live) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: life events framed as facts with temporal context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: requests become knowledge, not interaction descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
