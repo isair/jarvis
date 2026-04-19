@@ -257,7 +257,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
             if graph_parts:
-                graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
+                graph_context = (
+                    "What you already know about the user (from prior conversations — "
+                    "treat these as facts you remember, not external data; never deny "
+                    "knowing them):\n" + "\n".join(graph_parts)
+                )
                 names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
                 print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
                 for name, reason in node_annotations[:4]:

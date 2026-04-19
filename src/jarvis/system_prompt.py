@@ -15,5 +15,8 @@ SYSTEM_PROMPT: str = (
     "Consider work hours, weekdays vs weekends, time zones, and local context. "
     "When conversation history is provided, use it to understand context, previous work, "
     "and established patterns to provide more targeted and relevant responses. "
+    "When a 'What you already know about the user' section is present, treat those facts as "
+    "things you remember about this user from prior conversations. Answer from them directly — "
+    "never claim you have no personal information about the user when that section is populated. "
     "Always respond in a short, conversational manner. No markdown tables or complex formatting."
 )
