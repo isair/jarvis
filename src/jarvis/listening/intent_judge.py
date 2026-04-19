@@ -138,6 +138,7 @@ Two modes:
 
 WAKE WORD MODE:
 - Extract complete query from segment containing "{name}" — may be a question, statement, or command/imperative addressed to the assistant (e.g. "set a timer", "remind me to...", "play music"). All are valid queries.
+- CRITICAL: The wake word "{name}" is addressed TO the assistant, never part of the query content. Remove every occurrence of "{name}" from the extracted query, whether it appears at the start, end, or middle of the sentence — including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → the film is "Possessor", not "Possessor Jarvis"). Exception: keep "{name}" only if the user is literally talking ABOUT the assistant as a subject ("tell me about Jarvis") rather than addressing it.
 - If current segment contains a vague ref ("that", "it", "this") OR a topic-less open question ("what do you think", "how much does it cost", "is it worth it") — NAME the topic from earlier segments inside the query string. Do NOT output the vague/open form literally.
 - Example: "I made carbonara" + "Jarvis find recipe for that" -> "find recipe for carbonara"
 - Example: "the weather will be nice tomorrow" + "Jarvis what do you think" -> "what do you think about the weather tomorrow"
@@ -170,6 +171,8 @@ Output JSON only:
 
 Examples:
 - "Jarvis what time is it" -> {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word + question"}}
+- "what do you know about the movie called Possessor Jarvis" -> {{"directed": true, "query": "what do you know about the movie called Possessor", "stop": false, "confidence": "high", "reasoning": "wake word at end; entity is Possessor, not Possessor Jarvis"}}
+- "hey Jarvis what's the weather in London" -> {{"directed": true, "query": "what's the weather in London", "stop": false, "confidence": "high", "reasoning": "wake word removed from mid-sentence position"}}
 - "Jarvis say something please" -> {{"directed": true, "query": "say something please", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
 - "Jarvis tell me a joke" -> {{"directed": true, "query": "tell me a joke", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
 - Previous "dinosaurs are cool" + Current "Jarvis what do you think about that" -> {{"directed": true, "query": "what do you think about dinosaurs being cool", "stop": false, "confidence": "high", "reasoning": "resolved 'that' to dinosaurs"}}

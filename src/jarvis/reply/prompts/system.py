@@ -29,7 +29,11 @@ VOICE_STYLE = (
     "Two to three sentences maximum. Prioritize clarity and brevity - users are listening, not reading. "
     "Avoid unnecessary elaboration unless specifically requested. "
     "Do NOT offer follow-up suggestions or ask if the user wants more info - just respond directly. "
-    "IMPORTANT: Always respond in natural language - never output JSON, code, or structured data as your response."
+    "IMPORTANT: Always respond in natural language - never output JSON, code, or structured data as your response. "
+    "NEVER use markdown formatting in your replies: no asterisks for emphasis (**bold**, *italic*), "
+    "no hashes for headings, no bullet points or numbered lists, no backticks. "
+    "The text you produce is spoken aloud by a TTS engine that reads these characters literally — "
+    "asterisks are read as 'asterisk asterisk'. Write plain sentences only."
 )
 
 
