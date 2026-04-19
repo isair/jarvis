@@ -201,6 +201,53 @@ class TestStripMarkdownForSpeech:
         assert "**" not in result
         assert "Link to a page under docs.example.com" in result
 
+    def test_preserves_isolated_year_at_line_start(self):
+        # True list detection: a single line beginning with "YYYY. " is prose,
+        # not a one-item numbered list. "2024. The year..." must survive intact.
+        text = "2024. The year the breakthrough happened"
+        assert _strip_markdown_for_speech(text) == text
+
+    def test_preserves_single_numbered_line_as_prose(self):
+        # A lone line like "1. done" with no sibling list items is treated as
+        # prose. Mildly odd if it was intended as a one-item list, but safer
+        # than mangling prose that coincidentally starts with a digit.
+        text = "1. done and dusted"
+        assert _strip_markdown_for_speech(text) == text
+
+    def test_strips_numbered_list_when_grouped(self):
+        # Two adjacent numbered lines form a real list and get stripped.
+        text = "1. first\n2. second"
+        result = _strip_markdown_for_speech(text)
+        assert result == "first\nsecond"
+
+    def test_does_not_strip_large_numbers_as_list_markers(self):
+        # Large integers (years, counts) are never list markers, even if two
+        # adjacent lines happen to start with them.
+        text = "2023. The prior year\n2024. The current year"
+        result = _strip_markdown_for_speech(text)
+        assert "2023." in result
+        assert "2024." in result
+
+    def test_strips_blockquote_markers(self):
+        text = "> a quoted line\n> another quote"
+        result = _strip_markdown_for_speech(text)
+        assert result == "a quoted line\nanother quote"
+
+    def test_strips_setext_heading_underlines(self):
+        # Setext-style headings use === or --- under the title line.
+        text = "Main Title\n==========\nbody text\n\nSubtitle\n--------\nmore body"
+        result = _strip_markdown_for_speech(text)
+        assert "=====" not in result
+        assert "-----" not in result
+        assert "Main Title" in result
+        assert "Subtitle" in result
+        assert "body text" in result
+
+    def test_strips_html_tags(self):
+        text = "this is <b>bold</b> and <em>italic</em> text"
+        result = _strip_markdown_for_speech(text)
+        assert result == "this is bold and italic text"
+
 
 class TestEstimateTtsDuration:
     """Tests for TTS duration estimation (for audio buffer timing)."""
