@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+
+def _indent_text(text: str, prefix: str = "  ") -> str:
+    return f"\n{prefix}".join(text.splitlines())
+
+
 # Stop words excluded from question→node matching (common words that inflate false matches).
 # The list is English-biased — the extractor prompt currently produces English questions. For
 # non-English questions nothing would be filtered here, which is a graceful degradation (noisier
@@ -833,10 +838,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Print error message
         try:
-            indented_reply = "\n  ".join(reply.splitlines())
-            print(f"\n⚠️ Jarvis\n  {indented_reply}\n", flush=True)
-        except Exception:
-            pass
+            print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
+        except Exception as e:
+            debug_log(f"error reply formatting failed: {e}", "planning")
 
         # Still add to dialogue memory so context is preserved
         if dialogue_memory is not None:
@@ -854,13 +858,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if safe_reply:
         # Print reply with appropriate header
         try:
-            indented_safe_reply = "\n  ".join(safe_reply.splitlines())
             if not getattr(cfg, "voice_debug", False):
-                print(f"\n🤖 Jarvis\n  {indented_safe_reply}\n", flush=True)
+                print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)
             else:
-                print(f"\n[jarvis]\n  {indented_safe_reply}\n", flush=True)
-        except Exception:
-            print(f"\n[jarvis]\n  " + "\n  ".join(safe_reply.splitlines()) + "\n", flush=True)
+                print(f"\n[jarvis]\n  {_indent_text(safe_reply)}\n", flush=True)
+        except Exception as e:
+            debug_log(f"reply formatting failed: {e}", "planning")
 
         # TTS output - callbacks handled by calling code
         if tts is not None and tts.enabled:
