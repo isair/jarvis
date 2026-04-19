@@ -68,7 +68,32 @@ TOOL_GUIDANCE_LARGE = (
     "You have access to tools - use them proactively when you need current information or to perform actions. "
     "After receiving tool results, use the data to FULFILL THE USER'S ORIGINAL REQUEST. "
     "Do NOT describe the structure of tool responses - extract the relevant information and present it conversationally. "
-    "Tool results are raw data for you to interpret and use, not content to describe or explain."
+    "Tool results are raw data for you to interpret and use, not content to describe or explain. "
+    "CRITICAL fidelity rule: when you answer a question using a tool result, every specific fact in your "
+    "reply (names, dates, cast, authors, places, numbers, plot details, product specs) must come from the "
+    "tool result itself or from the user's own messages. Do NOT supplement tool results with cast, plot, "
+    "release years, authors, or other specifics from your prior — even if they feel plausible. If the tool "
+    "returned only a short summary, answer using only that summary; do not extend it with invented detail. "
+    "If the tool result doesn't contain what the user asked for, say so and offer to look up more rather "
+    "than filling the gap from memory."
+)
+
+# Large models also confabulate on named entities — e.g. gpt-oss:20b produces a
+# confident but wrong cast list for the film "Possessor" without calling
+# webSearch. The anti-confabulation rule is therefore not a small-model-only
+# concern. We keep a shorter version here (large models follow concise
+# instructions reliably; repetition and worked examples are only needed for
+# small models).
+TOOL_CONSTRAINTS_LARGE = (
+    "UNKNOWN NAMED ENTITIES:\n"
+    "When the user asks about a specific named thing (a film, book, song, game, "
+    "product, person, company, place, event), call webSearch before answering unless "
+    "you can state concrete, verifiable facts about that exact entity with high confidence. "
+    "Do NOT confabulate cast, plot, release year, authors, or other specifics from a "
+    "plausible-sounding prior — if you are not certain, look it up. "
+    "A diary or memory entry mentioning the entity's name only confirms the topic came "
+    "up before; it does NOT give you facts you can restate. "
+    "Do not announce the search or ask permission — just call the tool, then answer."
 )
 
 
@@ -103,7 +128,9 @@ USER INSTRUCTIONS:
 When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests.
 
 UNKNOWN NAMED ENTITIES:
-If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch to look it up. Never offer or ask permission to search — do not say "I can search", "I could look that up", "would you like me to search", "let me know if you want me to", "if you'd like". Once you've decided a tool is needed, call it in the SAME turn, silently. Do NOT reply that you have no information, ask the user for a link, or announce what you are about to do — just perform the lookup and then answer. Only skip the lookup if the entity is one you can state specific facts about (title, year, creator, plot, etc.) without guessing. This rule applies regardless of how the user phrases the request ("what do you know about X", "what can you tell me about X", "tell me about X", "have you heard of X") — all are requests for information, not questions about your capabilities."""
+If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch to look it up. Never offer or ask permission to search — do not say "I can search", "I could look that up", "would you like me to search", "let me know if you want me to", "if you'd like". Once you've decided a tool is needed, call it in the SAME turn, silently. Do NOT reply that you have no information, ask the user for a link, or announce what you are about to do — just perform the lookup and then answer. Only skip the lookup if the entity is one you can state specific facts about (title, year, creator, plot, etc.) without guessing. This rule applies regardless of how the user phrases the request ("what do you know about X", "what can you tell me about X", "tell me about X", "tell me more about X", "have you heard of X") — all are requests for information, not questions about your capabilities.
+
+Do NOT ask the user to clarify which X they mean before calling the tool. If the query contains enough to search ("the movie Possessor", "the book Piranesi"), search first. Clarifying questions BEFORE the tool call is a deflection pattern; clarification AFTER the tool returns nothing useful is acceptable. Do NOT invent plot, cast, release year, themes, or any other facts about a named entity from your own prior — even if the diary/context mentions the name, a diary mention only confirms the topic came up, it does NOT give you facts you can state. If you do not have facts from a tool result in this turn, you must call webSearch."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE
@@ -139,5 +166,5 @@ def get_system_prompts(model_size: ModelSize) -> PromptComponents:
             tool_incentives=TOOL_INCENTIVES_LARGE,
             voice_style=VOICE_STYLE,
             tool_guidance=TOOL_GUIDANCE_LARGE,
-            tool_constraints=None,
+            tool_constraints=TOOL_CONSTRAINTS_LARGE,
         )

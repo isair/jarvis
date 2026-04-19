@@ -33,6 +33,118 @@ def _indent_text(text: str, prefix: str = "  ") -> str:
     return f"\n{prefix}".join(text.splitlines())
 
 
+def _extract_text_tool_call(content_field: str, known_names: set):
+    """Parse a tool call out of a content-mode LLM response.
+
+    Small models emit several shapes when instructed to use text-based tool
+    calling; this helper attempts each in order and returns (name, args, id)
+    on the first match, or (None, None, None) if nothing parses.
+
+    Supported shapes:
+      1. `tool_calls: [{"id": ..., "function": {"name": ..., "arguments": ...}}]`
+      2. ```` ```tool_call\n{"name": ..., "arguments": {...}}\n``` ```` (markdown fence)
+      3. `<toolName>: <key>: <value>` (simplified colon form — only matches when
+          the extracted name is in ``known_names``, to avoid hijacking prose)
+      4. `<toolName>(<json or bare string>)`
+
+    ``known_names`` is the set of tool names the engine is currently willing
+    to dispatch; passing an empty set disables the lenient name-matching
+    fallbacks and leaves only the JSON/fence parsers active.
+    """
+    if not isinstance(content_field, str) or not content_field:
+        return None, None, None
+    content_field = content_field
+
+    # Form: markdown fence
+    fence_match = re.search(
+        r"```tool_call\s*\n({.+?})\s*\n```",
+        content_field,
+        re.DOTALL,
+    )
+    if fence_match:
+        try:
+            data = json.loads(fence_match.group(1).strip())
+            name = str(data.get("name", "")).strip()
+            args = data.get("arguments", data.get("args", {}))
+            if name:
+                return name, (args if isinstance(args, dict) else {}), f"call_{uuid.uuid4().hex[:8]}"
+        except Exception:
+            pass
+
+    # Form: `tool_calls: [...]` JSON array literal
+    tc_literal = re.search(
+        r"tool_calls\s*:\s*(\[.+?\])",
+        content_field,
+        re.DOTALL,
+    )
+    if tc_literal:
+        try:
+            arr = json.loads(tc_literal.group(1))
+            if isinstance(arr, list) and arr:
+                first = arr[0]
+                if isinstance(first, dict) and isinstance(first.get("function"), dict):
+                    func = first["function"]
+                    name = str(func.get("name", "")).strip()
+                    raw_args = func.get("arguments")
+                    if isinstance(raw_args, str):
+                        try:
+                            parsed_args = json.loads(raw_args)
+                            if not isinstance(parsed_args, dict):
+                                parsed_args = {"query": raw_args}
+                        except Exception:
+                            parsed_args = {"query": raw_args}
+                    elif isinstance(raw_args, dict):
+                        parsed_args = raw_args
+                    else:
+                        parsed_args = {}
+                    tool_call_id = first.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                    if name:
+                        return name, parsed_args, tool_call_id
+        except Exception:
+            pass
+
+    if not known_names:
+        return None, None, None
+
+    stripped = content_field.strip()
+
+    # Form: `toolName: key: value` — only accept if the first segment is a known tool.
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped, re.DOTALL)
+    if m and m.group(1) in known_names:
+        name = m.group(1)
+        rest = m.group(2).strip()
+        args: dict = {}
+        for pair in re.split(r"[\n,]", rest):
+            pair = pair.strip()
+            if not pair:
+                continue
+            kv = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$", pair)
+            if kv:
+                args[kv.group(1)] = kv.group(2).strip().strip('"').strip("'")
+        if not args and rest:
+            args = {"query": rest.strip().strip('"').strip("'")}
+        return name, args, f"call_{uuid.uuid4().hex[:8]}"
+
+    # Form: `toolName(...)`
+    m2 = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$", stripped, re.DOTALL)
+    if m2 and m2.group(1) in known_names:
+        name = m2.group(1)
+        inside = m2.group(2).strip()
+        parsed_args = {}
+        if inside:
+            try:
+                candidate = json.loads(inside)
+                if isinstance(candidate, dict):
+                    parsed_args = candidate
+                else:
+                    parsed_args = {"query": str(candidate)}
+            except Exception:
+                parsed_args = {"query": inside.strip().strip('"').strip("'")}
+        return name, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
+
+    return None, None, None
+
+
 # Stop words excluded from question→node matching (common words that inflate false matches).
 # The list is English-biased — the extractor prompt currently produces English questions. For
 # non-English questions nothing would be filtered here, which is a graceful degradation (noisier
@@ -342,9 +454,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     model_size = detect_model_size(cfg.ollama_chat_model)
     # Start with native tool calling. If the model returns HTTP 400 (tools not supported),
     # we automatically switch to text-based tool calling (markdown fences in system prompt).
-    use_text_tools = False
+    #
+    # For SMALL models we force text-based tool calling from the start. Small models like
+    # gemma4:e2b often emit malformed pseudo-native-tool-call syntax (e.g.
+    # `webSearch{search_query:<|"|>...}` or bare `webSearch()`) that the native-tool parser
+    # can't recognise. The markdown-fence format is explicit in the system prompt, so the
+    # model has a concrete template to follow. Using text tools from the start also avoids
+    # the wasted round-trip and prompt confusion of starting native and falling back mid-turn.
+    use_text_tools = (model_size == ModelSize.SMALL)
     prompts = get_system_prompts(model_size)
-    debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model}", "planning")
+    debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model} (use_text_tools={use_text_tools})", "planning")
 
     def _build_initial_system_message() -> str:
         guidance = [SYSTEM_PROMPT.strip()]
@@ -380,13 +499,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append("\n" + graph_context)
 
         if use_text_tools and tools_desc:
-            # Text-based tool calling fallback: model returned HTTP 400 for native tools API,
-            # so we inject tool descriptions as plain text and expect markdown fence responses.
+            # Text-based tool calling: inject tool descriptions as plain text. The tools_desc
+            # already specifies the protocol (`tool_calls: [{...}]` JSON literal); don't
+            # append a competing markdown-fence protocol here — two formats in the same
+            # prompt confuses small models and they emit half-native/half-fenced hybrids
+            # that neither parser recognises. The engine's _extract_structured_tool_call
+            # parses both the `tool_calls: [...]` literal and a markdown fence, so either
+            # form the model naturally emits will succeed.
             guidance.append("\n" + tools_desc)
             guidance.append(
-                '\nWhen calling a tool output ONLY a markdown code fence tagged `tool_call`:\n'
-                '```tool_call\n{"name": "toolName", "arguments": {...}}\n```\n'
-                'Output nothing else on that turn.'
+                "\nWhen you decide to call a tool, output ONLY the tool_calls line shown above "
+                "with the chosen tool name and JSON arguments. Output no other text on that "
+                "turn. On the NEXT turn, after tool results arrive, answer the user conversationally."
             )
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
@@ -434,20 +558,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         if name:
                             return name, (args if isinstance(args, dict) else {}), tool_call_id
 
-                # Second try: markdown fence tool call for the text-based fallback path
-                # (used when the model returned HTTP 400 for the native tools API)
+                # Content-mode tool-call parsing: the model returned prose that may
+                # encode a tool call in one of several shapes (markdown fence,
+                # `tool_calls: [...]` literal, `toolName: key: value`, or
+                # `toolName(...)`). Delegate to the module-level helper so the
+                # logic is unit-testable and shared across future callers.
                 content_field = msg.get("content", "") or ""
-                fence_match = re.search(
-                    r"```tool_call\s*\n({.+?})\s*\n```",
-                    content_field,
-                    re.DOTALL,
-                )
-                if fence_match:
-                    data = json.loads(fence_match.group(1).strip())
-                    name = str(data.get("name", "")).strip()
-                    args = data.get("arguments", data.get("args", {}))
-                    if name:
-                        return name, (args if isinstance(args, dict) else {}), f"call_{uuid.uuid4().hex[:8]}"
+                known_names = set()
+                try:
+                    for schema in (tools_json_schema or []):
+                        fn = schema.get("function", {}) if isinstance(schema, dict) else {}
+                        nm = fn.get("name") if isinstance(fn, dict) else None
+                        if nm:
+                            known_names.add(str(nm))
+                except Exception:
+                    pass
+                name, args, tool_call_id = _extract_text_tool_call(content_field, known_names)
+                if name:
+                    return name, args, tool_call_id
 
         except Exception:
             pass
