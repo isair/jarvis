@@ -321,7 +321,7 @@ class TestGraphContextReachesSystemMessage:
         system_msgs = [m for m in captured_messages if m.get("role") == "system"]
         assert system_msgs, "Expected a system message to be sent to the LLM"
         joined = "\n".join(m.get("content", "") for m in system_msgs)
-        assert "What you already know about the user" in joined, \
+        assert "Information the user has shared with you in prior conversations" in joined, \
             f"Graph context missing from system prompt. Got:\n{joined[:500]}"
         assert "sushi" in joined, \
             f"Graph node data missing from system prompt. Got:\n{joined[:500]}"

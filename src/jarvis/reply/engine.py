@@ -258,9 +258,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             if graph_parts:
                 graph_context = (
-                    "What you already know about the user (from prior conversations — "
-                    "treat these as facts you remember, not external data; never deny "
-                    "knowing them):\n" + "\n".join(graph_parts)
+                    "Information the user has shared with you in prior conversations "
+                    "(you have access to this — it is part of what the user has told "
+                    "you, just not in the current session):\n" + "\n".join(graph_parts)
                 )
                 names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
                 print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
