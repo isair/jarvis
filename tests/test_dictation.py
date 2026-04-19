@@ -546,10 +546,14 @@ class TestClipboard:
         _clipboard_paste("hello")
         mock_clip_win.assert_called_once_with("hello")
 
+    @patch("src.jarvis.dictation.dictation_engine._paste_cgevent", return_value=True)
+    @patch("src.jarvis.dictation.dictation_engine._check_macos_accessibility", return_value=True)
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine._clipboard_macos")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_clipboard_paste_macos(self, mock_kb, mock_clip_mac, mock_platform):
+    def test_clipboard_paste_macos(
+        self, mock_kb, mock_clip_mac, mock_platform, mock_ax, mock_cge
+    ):
         from src.jarvis.dictation.dictation_engine import _clipboard_paste
         mock_platform.system.return_value = "Darwin"
         mock_ctrl = MagicMock()
@@ -558,6 +562,10 @@ class TestClipboard:
 
         _clipboard_paste("hello mac")
         mock_clip_mac.assert_called_once_with("hello mac")
+        # Guard: the real CGEvent paste and Accessibility check must never
+        # fire during tests — they would emit a real Cmd+V into whatever
+        # window has focus and pop open System Settings.
+        mock_cge.assert_called_once()
 
     def test_clipboard_paste_empty_string_is_noop(self):
         from src.jarvis.dictation.dictation_engine import _clipboard_paste
