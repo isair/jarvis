@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+
+def _indent_text(text: str, prefix: str = "  ") -> str:
+    return f"\n{prefix}".join(text.splitlines())
+
+
 # Stop words excluded from question→node matching (common words that inflate false matches).
 # The list is English-biased — the extractor prompt currently produces English questions. For
 # non-English questions nothing would be filtered here, which is a graceful degradation (noisier
@@ -220,7 +225,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 for entry in context_results[:3]:
                     # Show a short preview of each diary entry (first 80 chars)
                     preview = entry.strip().replace("\n", " ")[:80]
-                    print(f"     {preview}", flush=True)
+                    print(f"     · {preview}", flush=True)
                 debug_log(f"diary enrichment: {len(context_results)} results", "memory")
         except Exception as e:
             debug_log(f"diary enrichment failed: {e}", "memory")
@@ -281,9 +286,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
                     for name, reason in node_annotations[:4]:
                         if reason:
-                            print(f"     {name} → {reason}", flush=True)
+                            print(f"     · {name} → {reason}", flush=True)
                         else:
-                            print(f"     {name}", flush=True)
+                            print(f"     · {name}", flush=True)
             except Exception as e:
                 debug_log(f"graph enrichment failed: {e}", "memory")
 
@@ -833,9 +838,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Print error message
         try:
-            print(f"\n⚠️ Jarvis\n{reply}\n", flush=True)
-        except Exception:
-            pass
+            print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
+        except Exception as e:
+            debug_log(f"error reply formatting failed: {e}", "planning")
 
         # Still add to dialogue memory so context is preserved
         if dialogue_memory is not None:
@@ -854,11 +859,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Print reply with appropriate header
         try:
             if not getattr(cfg, "voice_debug", False):
-                print(f"\n🤖 Jarvis\n" + safe_reply + "\n", flush=True)
+                print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)
             else:
-                print(f"\n[jarvis]\n" + safe_reply + "\n", flush=True)
-        except Exception:
-            print(f"\n[jarvis]\n" + safe_reply + "\n", flush=True)
+                print(f"\n[jarvis]\n  {_indent_text(safe_reply)}\n", flush=True)
+        except Exception as e:
+            debug_log(f"reply formatting failed: {e}", "planning")
 
         # TTS output - callbacks handled by calling code
         if tts is not None and tts.enabled:

@@ -263,6 +263,7 @@ class VoiceListener(threading.Thread):
         self.dialogue_memory = dialogue_memory
         self._should_stop = False
         self._dictation_active = False  # Pause flag set by dictation engine
+        self._first_utterance = True  # Suppress turn separator before the very first transcription
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
@@ -1971,7 +1972,7 @@ class VoiceListener(threading.Thread):
 
             # Show ready message only after stream is confirmed active
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
-            print(f"🎙️  Listening! Try: \"How's the weather, {wake_word.title()}?\"", flush=True)
+            print(f"\n{'─' * 50}\n🎙️  Listening! Try: \"How's the weather, {wake_word.title()}?\"", flush=True)
 
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
@@ -2203,8 +2204,11 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        # Log successful transcription
-        print(f"  📝 Heard: \"{text}\"", flush=True)
+        # Log successful transcription — separator omitted on the first utterance since
+        # there is no prior turn to visually separate from.
+        separator = "" if self._first_utterance else f"\n{'─' * 50}"
+        self._first_utterance = False
+        print(f"{separator}\n📝 Heard: \"{text}\"", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
