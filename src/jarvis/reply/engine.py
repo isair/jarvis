@@ -106,12 +106,42 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     questions: list[str] = []
 
+    # Build a compact hint of what's already in live context so the query
+    # generator can skip questions already answerable from it (time, location,
+    # short-term dialogue). No need to pull these from long-term memory.
+    context_hint_parts: list[str] = []
+    try:
+        tz_name: Optional[str] = None
+        if not getattr(cfg, 'location_enabled', True):
+            location_context = "Location: Disabled"
+        else:
+            location_context, tz_name = get_location_context_with_timezone(
+                config_ip=getattr(cfg, 'location_ip_address', None),
+                auto_detect=getattr(cfg, 'location_auto_detect', True),
+                resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
+                location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
+            )
+        context_hint_parts.append(f"Current local time: {format_time_context(tz_name)}. {location_context}")
+    except Exception:
+        pass
+    if recent_messages:
+        recent_lines = []
+        for msg in recent_messages[-6:]:
+            role = msg.get("role", "")
+            content = (msg.get("content") or "").strip().replace("\n", " ")
+            if content:
+                recent_lines.append(f"- {role}: {content[:200]}")
+        if recent_lines:
+            context_hint_parts.append("Recent dialogue (short-term memory):\n" + "\n".join(recent_lines))
+    context_hint = "\n\n".join(context_hint_parts) if context_hint_parts else None
+
     # Extract keywords and implicit questions (needed by both diary and graph enrichment)
     try:
         search_params = extract_search_params_for_memory(
             redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug,
             timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
+            context_hint=context_hint,
         )
         keywords = search_params.get('keywords', [])
         questions = search_params.get('questions', [])

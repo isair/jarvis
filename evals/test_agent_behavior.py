@@ -531,6 +531,43 @@ class TestMemoryEnrichment:
             f"Extracted keywords {extracted_keywords} don't match any expected: {expected_keywords}"
 
     @pytest.mark.eval
+    @requires_judge_llm
+    def test_enrichment_skips_questions_answered_by_context(self, mock_config):
+        """
+        When context already contains information (e.g. location, short-term dialogue),
+        the query generator should not emit implicit questions asking for that same
+        information — we don't want to pull it from long-term memory redundantly.
+        """
+        from jarvis.reply.enrichment import extract_search_params_for_memory
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        context_hint = (
+            "Current local time: Sunday, 2026-04-19 14:30 local. "
+            "Location: Tbilisi, Georgia.\n\n"
+            "Recent dialogue (short-term memory):\n"
+            "- user: I just finished a big bowl of khinkali for lunch.\n"
+            "- assistant: Sounds tasty — anything planned for dinner?"
+        )
+
+        result = extract_search_params_for_memory(
+            query="recommend a restaurant I'd enjoy",
+            ollama_base_url=mock_config.ollama_base_url,
+            ollama_chat_model=mock_config.ollama_chat_model,
+            timeout_sec=15.0,
+            context_hint=context_hint,
+        )
+
+        questions = [q.lower() for q in result.get("questions", [])]
+        print(f"\n📊 Context-aware questions: {questions}")
+
+        # Location is in context — no need to ask "where is the user?"
+        assert not any("locat" in q or "where" in q for q in questions), \
+            f"Should not ask about location when it's in context. Got: {questions}"
+
+    @pytest.mark.eval
     def test_enrichment_provides_context_to_llm(self, mock_config, eval_db, eval_dialogue_memory):
         """
         Verify that enrichment results are included in the system message.

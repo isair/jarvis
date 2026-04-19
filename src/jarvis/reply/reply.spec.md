@@ -32,8 +32,9 @@ Design principles enforced by the engine:
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
 
 4. Conversation Memory Enrichment (optional)
-   - Extract search parameters via `extract_search_params_for_memory(query, base_url, chat_model, ...)`.
-     - Output fields: `keywords: List[str]`, optional `from`, optional `to`.
+   - Extract search parameters via `extract_search_params_for_memory(query, base_url, chat_model, ..., context_hint=...)`.
+     - Output fields: `keywords: List[str]`, optional `from`, optional `to`, optional `questions: List[str]`.
+     - `context_hint` carries a compact summary of what is already live in the assistant's context (current time, location, short-term dialogue). The extractor uses it to skip implicit personal questions whose answers are already visible — those facts do not need to be pulled from long-term memory.
    - If `keywords` present, call `search_conversation_memory_by_keywords(db, keywords, from_time, to_time, ...)` to retrieve relevant snippets (bounded by configured max results).
    - Join snippets into a `conversation_context` string for inclusion in the system message.
 
