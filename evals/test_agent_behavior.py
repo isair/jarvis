@@ -561,7 +561,14 @@ class TestMemoryEnrichment:
         )
 
         questions = [q.lower() for q in result.get("questions", [])]
+        keywords = result.get("keywords", [])
         print(f"\n📊 Context-aware questions: {questions}")
+        print(f"   keywords: {keywords}")
+
+        # Sanity check: guard against a silent extractor failure making the
+        # assertion below pass vacuously.
+        assert keywords, \
+            f"Extractor returned no keywords — test would pass trivially. Result: {result}"
 
         # Location is in context — no need to ask "where is the user?"
         assert not any("locat" in q or "where" in q for q in questions), \

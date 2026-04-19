@@ -59,7 +59,62 @@ def _match_question(node_data: str, questions: list[str]) -> str:
             best_q = q
 
     return best_q
-    from ..memory.conversation import DialogueMemory
+
+
+# ── Live-context helpers ────────────────────────────────────────────────────
+#
+# Both the extractor (needs to know what the assistant already sees so it can
+# skip redundant questions) and the agentic loop (needs fresh time/location
+# each turn) consume the same time+location string. Centralise the lookup to
+# avoid drift and to let `get_location_context_with_timezone`'s cache do its
+# job across the two call sites.
+
+# Max short-term dialogue messages mirrored into the extractor hint, and the
+# per-message truncation length. Kept small — the extractor runs on a tiny
+# model where prompt bloat noticeably slows things down.
+_HINT_RECENT_MESSAGES = 6
+_HINT_MESSAGE_CHAR_LIMIT = 200
+
+
+def _live_time_location_string(cfg) -> str:
+    """Return a one-liner describing current local time and location, or ""."""
+    try:
+        tz_name: Optional[str] = None
+        if not getattr(cfg, 'location_enabled', True):
+            location_context = "Location: Disabled"
+        else:
+            location_context, tz_name = get_location_context_with_timezone(
+                config_ip=getattr(cfg, 'location_ip_address', None),
+                auto_detect=getattr(cfg, 'location_auto_detect', True),
+                resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
+                location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
+            )
+        return f"Current local time: {format_time_context(tz_name)}. {location_context}"
+    except Exception:
+        return ""
+
+
+def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
+    """Compact summary of live context for the query extractor.
+
+    The extractor uses this to skip implicit questions already answerable from
+    what the assistant can see: time, location, and the last few dialogue
+    turns. Pulling those from long-term memory would be redundant.
+    """
+    parts: list[str] = []
+    live = _live_time_location_string(cfg)
+    if live:
+        parts.append(live)
+    if recent_messages:
+        lines: list[str] = []
+        for msg in recent_messages[-_HINT_RECENT_MESSAGES:]:
+            role = msg.get("role", "")
+            content = (msg.get("content") or "").strip().replace("\n", " ")
+            if content:
+                lines.append(f"- {role}: {content[:_HINT_MESSAGE_CHAR_LIMIT]}")
+        if lines:
+            parts.append("Recent dialogue (short-term memory):\n" + "\n".join(lines))
+    return "\n\n".join(parts) if parts else None
 
 
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
@@ -106,39 +161,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     questions: list[str] = []
 
-    # Build a compact hint of what's already in live context so the query
-    # generator can skip questions already answerable from it (time, location,
-    # short-term dialogue). No need to pull these from long-term memory.
-    context_hint_parts: list[str] = []
-    try:
-        tz_name: Optional[str] = None
-        if not getattr(cfg, 'location_enabled', True):
-            location_context = "Location: Disabled"
-        else:
-            location_context, tz_name = get_location_context_with_timezone(
-                config_ip=getattr(cfg, 'location_ip_address', None),
-                auto_detect=getattr(cfg, 'location_auto_detect', True),
-                resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
-                location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
-            )
-        context_hint_parts.append(f"Current local time: {format_time_context(tz_name)}. {location_context}")
-    except Exception:
-        pass
-    if recent_messages:
-        recent_lines = []
-        for msg in recent_messages[-6:]:
-            role = msg.get("role", "")
-            content = (msg.get("content") or "").strip().replace("\n", " ")
-            if content:
-                recent_lines.append(f"- {role}: {content[:200]}")
-        if recent_lines:
-            context_hint_parts.append("Recent dialogue (short-term memory):\n" + "\n".join(recent_lines))
-    context_hint = "\n\n".join(context_hint_parts) if context_hint_parts else None
+    context_hint = _build_enrichment_context_hint(cfg, recent_messages)
 
     # Extract keywords and implicit questions (needed by both diary and graph enrichment)
     try:
         search_params = extract_search_params_for_memory(
-            redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug,
+            redacted, cfg.ollama_base_url, cfg.ollama_chat_model,
             timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
             context_hint=context_hint,
@@ -190,6 +218,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # or already fully answerable from live context — no reason to crawl the
     # knowledge graph.
     graph_context = ""
+    if enrichment_source in ("all", "graph") and not questions:
+        debug_log("skipping graph enrichment: no implicit questions to answer", "memory")
     if enrichment_source in ("all", "graph") and questions:
         try:
             from ..memory.graph import GraphMemoryStore
@@ -205,12 +235,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             seen: set[str] = set()
             for q in questions:
                 for w in q.lower().split():
-                    w = w.strip("?.,!")
+                    w = w.strip("?.,!'\"")
                     if w and w not in _STOP_WORDS and w not in seen:
                         seen.add(w)
                         question_words.append(w)
 
-            if question_words:
+            # Fewer than 2 meaningful words produces noisy LIKE matches against
+            # a single generic term — skip rather than surface irrelevant hits.
+            if len(question_words) < 2:
+                debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
+            else:
                 graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
                 for node in graph_nodes:
                     ancestors = graph_store.get_ancestors(node.id)
@@ -389,22 +423,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     def _get_context_string() -> str:
         """Get current time and location context as a string."""
-        try:
-            tz_name: Optional[str] = None
-            # Respect global location_enabled flag early to avoid unnecessary work
-            if not getattr(cfg, 'location_enabled', True):
-                location_context = "Location: Disabled"
-            else:
-                location_context, tz_name = get_location_context_with_timezone(
-                    config_ip=getattr(cfg, 'location_ip_address', None),
-                    auto_detect=getattr(cfg, 'location_auto_detect', True),
-                    resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
-                    location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
-                )
-            current_time = format_time_context(tz_name)
-            return f"Current local time: {current_time}. {location_context}"
-        except Exception:
-            return ""
+        return _live_time_location_string(cfg)
 
     def _update_system_message_with_context(messages_list):
         """Update the first system message with fresh context.

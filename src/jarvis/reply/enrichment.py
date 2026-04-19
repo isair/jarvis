@@ -7,27 +7,30 @@ from ..debug import debug_log
 
 
 def extract_search_params_for_memory(query: str, ollama_base_url: str, ollama_chat_model: str,
-                                   voice_debug: bool = False, timeout_sec: float = 8.0,
+                                   timeout_sec: float = 8.0,
                                    thinking: bool = False,
                                    context_hint: Optional[str] = None) -> dict:
     """
     Extract search keywords and time parameters for memory recall.
 
     ``context_hint`` is an optional compact summary of what is already in the
-    assistant's live context (system prompt, current time, location, short-term
-    dialogue memory). When provided, the extractor is told not to generate
-    questions whose answers are already available there — no point pulling those
-    from long-term memory.
+    assistant's live context (current time, location, short-term dialogue
+    memory). When provided, the extractor is told not to generate questions
+    whose answers are already available there — no point pulling those from
+    long-term memory. When absent, the extractor gets a UTC timestamp fallback
+    so it can still resolve relative time expressions.
     """
     try:
-        hint_block = ""
         if context_hint and context_hint.strip():
             hint_block = (
-                "\nALREADY IN CONTEXT (the assistant can already see this, so do NOT "
+                "ALREADY IN CONTEXT (the assistant can already see this, so do NOT "
                 "generate questions whose answers are present here — those facts do not "
                 "need to be pulled from long-term memory):\n"
-                f"{context_hint.strip()}\n"
+                f"{context_hint.strip()}"
             )
+        else:
+            now = datetime.now(timezone.utc)
+            hint_block = f"Current date/time: {now.strftime('%A, %Y-%m-%d %H:%M UTC')}"
 
         system_prompt = """Extract search parameters from the user's query for conversation memory search.
 
@@ -36,8 +39,8 @@ Extract:
 2. TIME RANGE: If mentioned, convert to exact timestamps
 3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Omit if the query needs no personal context, OR if the answer is already visible in the ALREADY IN CONTEXT block below.
 
-Current date/time: {current_time}
 {hint_block}
+
 Respond ONLY with JSON in this format:
 {{"keywords": ["keyword1", "keyword2"], "questions": ["what are the user's food preferences?"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 
@@ -59,9 +62,7 @@ Examples:
 "what time is it?" → {{"keywords": []}}
 """
 
-        now = datetime.now(timezone.utc)
-        current_time = now.strftime("%A, %Y-%m-%d %H:%M UTC")
-        formatted_prompt = system_prompt.format(current_time=current_time, hint_block=hint_block)
+        formatted_prompt = system_prompt.format(hint_block=hint_block)
 
         # Try up to 2 attempts
         attempts = 0
@@ -77,20 +78,17 @@ Examples:
             )
 
             if response:
-                # Try to parse JSON response
                 import re
                 import json
                 json_match = re.search(r'\{.*\}', response, re.DOTALL)
                 if json_match:
                     try:
                         params = json.loads(json_match.group())
-                        # Validate structure
                         if 'keywords' in params and isinstance(params['keywords'], list):
                             return params
                     except json.JSONDecodeError:
                         pass
 
-            # If first attempt failed, log and retry
             if attempts == 1:
                 debug_log("search parameter extraction: first attempt returned no usable result, retrying", "memory")
 
