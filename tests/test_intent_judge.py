@@ -423,6 +423,44 @@ class TestCreateIntentJudge:
         assert judge is not None
 
 
+class TestWarmUp:
+    """Tests for IntentJudge.warm_up()."""
+
+    def test_warmup_posts_to_generate_with_keep_alive(self):
+        """Warmup issues a /api/generate request that pins the model in memory."""
+        judge = IntentJudge(IntentJudgeConfig(model="gemma4:e2b"))
+        with patch("jarvis.listening.intent_judge.requests") as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=200)
+            ok = judge.warm_up()
+
+        assert ok is True
+        args, kwargs = mock_requests.post.call_args
+        assert args[0].endswith("/api/generate")
+        assert kwargs["json"]["model"] == "gemma4:e2b"
+        assert kwargs["json"]["keep_alive"] == "30m"
+        assert kwargs["json"]["stream"] is False
+
+    def test_warmup_returns_false_on_http_error(self):
+        """Warmup reports failure when Ollama returns a non-200 status."""
+        judge = IntentJudge()
+        with patch("jarvis.listening.intent_judge.requests") as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=500)
+            assert judge.warm_up() is False
+
+    def test_warmup_swallows_exceptions(self):
+        """Warmup never raises — transport errors return False."""
+        judge = IntentJudge()
+        with patch("jarvis.listening.intent_judge.requests") as mock_requests:
+            mock_requests.post.side_effect = RuntimeError("boom")
+            assert judge.warm_up() is False
+
+    def test_warmup_skipped_when_unavailable(self):
+        """Warmup is a no-op when requests isn't installed."""
+        judge = IntentJudge()
+        judge._available = False
+        assert judge.warm_up() is False
+
+
 class TestEchoFollowUpPattern:
     """Tests for echo + follow-up pattern handling."""
 

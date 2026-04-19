@@ -283,6 +283,38 @@ Examples:
             debug_log(f"intent judge: failed to parse response: {e}", "voice")
             return None
 
+    def warm_up(self) -> bool:
+        """Trigger Ollama to load the model into memory ahead of first use.
+
+        Issues a trivial generation request with ``keep_alive=30m`` so the
+        cold-load cost is paid before the user speaks. Returns True on
+        success. Errors are swallowed — warmup is best-effort.
+        """
+        if not self._available:
+            return False
+        try:
+            response = requests.post(
+                f"{self.config.ollama_base_url}/api/generate",
+                json={
+                    "model": self.config.model,
+                    "prompt": "",
+                    "stream": False,
+                    "keep_alive": "30m",
+                    "options": {"num_predict": 1},
+                },
+                timeout=max(self.config.timeout_sec, 60.0),
+            )
+            ok = response.status_code == 200
+            debug_log(
+                f"intent judge warmup {'ok' if ok else f'failed HTTP {response.status_code}'} "
+                f"(model={self.config.model})",
+                "voice",
+            )
+            return ok
+        except Exception as e:
+            debug_log(f"intent judge warmup error: {e}", "voice")
+            return False
+
     def judge(
         self,
         segments: List[TranscriptSegment],
