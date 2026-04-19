@@ -132,9 +132,9 @@ LLM failure at any step is non-fatal — the diary update still succeeds, and th
 
 At the start of each reply cycle, the reply engine enriches the system prompt with graph context:
 
-1. **Keyword search**: Uses the same keywords already extracted for diary search to find matching graph nodes (up to 5 results with data previews)
-2. **Recent nodes**: Includes 2-3 recently accessed nodes for conversational continuity
-3. Results are injected as "Stored knowledge about the user" — separate from diary history to preserve provenance
+1. **Question-driven**: Graph enrichment runs only when the query generator produced implicit personal questions. Utility queries (time, maths) and queries whose context is already live skip the graph entirely — the knowledge graph is a Q&A index, not a topic index.
+2. **Question search**: Questions are joined, stop-worded, and used to find matching nodes (up to 5 results with data previews).
+3. Results are injected as "Stored knowledge about the user" — separate from diary history to preserve provenance.
 
 No tool calls needed. The LLM sees relevant graph memories as part of its system context.
 

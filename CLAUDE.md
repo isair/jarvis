@@ -97,3 +97,7 @@ Commit your changes when you finish a fix or feature before moving on to the nex
 Before running `git commit --amend`, always check `git log --oneline -3` first to verify you're amending the correct commit.
 
 Always use British English everywhere (e.g. "colour" not "color", "behaviour" not "behavior", "initialise" not "initialize").
+
+## Prompt-engineering: denial-template mirroring
+
+When a small model keeps producing a canonical denial ("I only have access to the information you have shared in our current conversation", "I don't have any personal information about you", etc.), don't argue against the denial in the system prompt — that rarely wins against strong priors. Instead, phrase the injected context so it literally occupies the semantic slot the denial refers to. If the model denies having "information the user has shared in prior conversations", label the block exactly that. The denial stops triggering because the thing it claims to lack is now visibly present in the prompt. Arguing with the model's priors is expensive; feeding the denial its own words with the data pre-filled is cheap.

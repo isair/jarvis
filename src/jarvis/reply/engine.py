@@ -28,12 +28,25 @@ if TYPE_CHECKING:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-# Stop words excluded from question→node matching (common words that inflate false matches)
+# Stop words excluded from question→node matching (common words that inflate false matches).
+# The list is English-biased — the extractor prompt currently produces English questions. For
+# non-English questions nothing would be filtered here, which is a graceful degradation (noisier
+# but still functional matches) rather than a correctness issue. If the extractor starts emitting
+# other languages, either expand this set or switch to a language-detection-driven filter.
 _STOP_WORDS = frozenset({
     "the", "a", "an", "is", "are", "was", "were", "do", "does", "did", "has", "have", "had",
     "what", "where", "when", "who", "how", "which", "that", "this", "with", "for", "from",
     "about", "user", "their", "they", "them", "and", "or", "but", "not", "any", "some",
 })
+
+# Tokens at or below this length (after stripping punctuation) are dropped even if not in the
+# stop-word set. Cheap language-agnostic backstop against generic 1–2 char noise.
+_MIN_CONTENT_WORD_LEN = 3
+
+
+def _is_content_word(word: str) -> bool:
+    """True if `word` looks like a meaningful content token (not stop word, not too short)."""
+    return bool(word) and len(word) >= _MIN_CONTENT_WORD_LEN and word not in _STOP_WORDS
 
 
 def _match_question(node_data: str, questions: list[str]) -> str:
@@ -49,7 +62,7 @@ def _match_question(node_data: str, questions: list[str]) -> str:
     best_score = 0
 
     for q in questions:
-        words = {w.strip("?.,!") for w in q.lower().split()} - _STOP_WORDS
+        words = {w for w in (w.strip("?.,!'\"") for w in q.lower().split()) if _is_content_word(w)}
         if not words:
             continue
         hits = sum(1 for w in words if w in data_lower)
@@ -59,7 +72,63 @@ def _match_question(node_data: str, questions: list[str]) -> str:
             best_q = q
 
     return best_q
-    from ..memory.conversation import DialogueMemory
+
+
+# ── Live-context helpers ────────────────────────────────────────────────────
+#
+# Both the extractor (needs to know what the assistant already sees so it can
+# skip redundant questions) and the agentic loop (needs fresh time/location
+# each turn) consume the same time+location string. Centralise the lookup to
+# avoid drift and to let `get_location_context_with_timezone`'s cache do its
+# job across the two call sites.
+
+# Max short-term dialogue messages mirrored into the extractor hint, and the
+# per-message truncation length. Kept small — the extractor runs on a tiny
+# model where prompt bloat noticeably slows things down.
+_HINT_RECENT_MESSAGES = 6
+_HINT_MESSAGE_CHAR_LIMIT = 200
+
+
+def _live_time_location_string(cfg) -> str:
+    """Return a one-liner describing current local time and location, or ""."""
+    try:
+        tz_name: Optional[str] = None
+        if not getattr(cfg, 'location_enabled', True):
+            location_context = "Location: Disabled"
+        else:
+            location_context, tz_name = get_location_context_with_timezone(
+                config_ip=getattr(cfg, 'location_ip_address', None),
+                auto_detect=getattr(cfg, 'location_auto_detect', True),
+                resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
+                location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
+            )
+        return f"Current local time: {format_time_context(tz_name)}. {location_context}"
+    except Exception as e:
+        debug_log(f"live time/location lookup failed: {e}", "memory")
+        return ""
+
+
+def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
+    """Compact summary of live context for the query extractor.
+
+    The extractor uses this to skip implicit questions already answerable from
+    what the assistant can see: time, location, and the last few dialogue
+    turns. Pulling those from long-term memory would be redundant.
+    """
+    parts: list[str] = []
+    live = _live_time_location_string(cfg)
+    if live:
+        parts.append(live)
+    if recent_messages:
+        lines: list[str] = []
+        for msg in recent_messages[-_HINT_RECENT_MESSAGES:]:
+            role = msg.get("role", "")
+            content = (msg.get("content") or "").strip().replace("\n", " ")
+            if content:
+                lines.append(f"- {role}: {content[:_HINT_MESSAGE_CHAR_LIMIT]}")
+        if lines:
+            parts.append("Recent dialogue (short-term memory):\n" + "\n".join(lines))
+    return "\n\n".join(parts) if parts else None
 
 
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
@@ -106,12 +175,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     questions: list[str] = []
 
+    context_hint = _build_enrichment_context_hint(cfg, recent_messages)
+
     # Extract keywords and implicit questions (needed by both diary and graph enrichment)
     try:
         search_params = extract_search_params_for_memory(
-            redacted, cfg.ollama_base_url, cfg.ollama_chat_model, cfg.voice_debug,
+            redacted, cfg.ollama_base_url, cfg.ollama_chat_model,
             timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
+            context_hint=context_hint,
         )
         keywords = search_params.get('keywords', [])
         questions = search_params.get('questions', [])
@@ -153,59 +225,67 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"diary enrichment failed: {e}", "memory")
 
-    # Step 4b: Graph memory enrichment (structured knowledge about the user)
+    # Step 4b: Graph memory enrichment (structured knowledge about the user).
+    # The graph is a question-answer index: each node holds knowledge facts the
+    # assistant can use to answer implicit questions behind a query. If the
+    # extractor produced no questions, the query is either utility (time, maths)
+    # or already fully answerable from live context — no reason to crawl the
+    # knowledge graph.
     graph_context = ""
     if enrichment_source in ("all", "graph"):
-        try:
-            from ..memory.graph import GraphMemoryStore
-            graph_store = GraphMemoryStore(cfg.db_path)
+        if not questions:
+            debug_log("skipping graph enrichment: no implicit questions to answer", "memory")
+        else:
+            try:
+                from ..memory.graph import GraphMemoryStore
+                graph_store = GraphMemoryStore(cfg.db_path)
 
-            graph_parts: list[str] = []
-            # Track node name + matched question for user-facing logs
-            node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
+                graph_parts: list[str] = []
+                # Track node name + matched question for user-facing logs
+                node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
-            # Primary: keyword search (uses same keywords extracted above)
-            graph_nodes = []
-            if keywords:
-                graph_nodes = graph_store.search_nodes(" ".join(keywords), limit=5)
-                for node in graph_nodes:
-                    ancestors = graph_store.get_ancestors(node.id)
-                    path = " > ".join(a.name for a in ancestors)
-                    data_preview = node.data[:300] if node.data else ""
-                    if data_preview:
-                        graph_parts.append(f"[{path}] {data_preview}")
-                        matched_q = _match_question(data_preview, questions)
-                        node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
-                        debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
+                # Build search text from the questions, stripped of stop words so
+                # LIKE matching keys off the content words.
+                question_words: list[str] = []
+                seen: set[str] = set()
+                for q in questions:
+                    for w in q.lower().split():
+                        w = w.strip("?.,!'\"")
+                        if _is_content_word(w) and w not in seen:
+                            seen.add(w)
+                            question_words.append(w)
 
-            # Secondary: include a few recently accessed nodes for conversational continuity
-            recent_ids = {n.id for n in graph_nodes}
-            recent_nodes = graph_store.get_recent_nodes(limit=3)
-            for rn in recent_nodes:
-                if rn.id not in recent_ids and rn.data:
-                    data_preview = rn.data[:200]
-                    graph_parts.append(f"[{rn.name}] {data_preview}")
-                    node_annotations.append((rn.name or rn.id[:8], "recently accessed"))
-                    debug_log(f"graph recent: [{rn.name}] ({rn.data_token_count} tokens)", "memory")
+                # Fewer than 2 meaningful words produces noisy LIKE matches against
+                # a single generic term — skip rather than surface irrelevant hits.
+                if len(question_words) < 2:
+                    debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
+                else:
+                    graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
+                    for node in graph_nodes:
+                        ancestors = graph_store.get_ancestors(node.id)
+                        path = " > ".join(a.name for a in ancestors)
+                        data_preview = node.data[:300] if node.data else ""
+                        if data_preview:
+                            graph_parts.append(f"[{path}] {data_preview}")
+                            matched_q = _match_question(data_preview, questions)
+                            node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
+                            debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
-            if graph_parts:
-                graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
-                names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
-                print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
-                for name, reason in node_annotations[:4]:
-                    if reason:
-                        print(f"     {name} → {reason}", flush=True)
-                    else:
-                        print(f"     {name}", flush=True)
-        except Exception as e:
-            debug_log(f"graph enrichment failed: {e}", "memory")
-
-    # Step 5: Build initial system message context only (no monolithic prompt)
-    context = []
-    if conversation_context:
-        context.append(f"Relevant conversation history:\n{conversation_context}")
-    if graph_context:
-        context.append(graph_context)
+                if graph_parts:
+                    graph_context = (
+                        "Information the user has shared with you in prior conversations "
+                        "(you have access to this — it is part of what the user has told "
+                        "you, just not in the current session):\n" + "\n".join(graph_parts)
+                    )
+                    names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
+                    print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
+                    for name, reason in node_annotations[:4]:
+                        if reason:
+                            print(f"     {name} → {reason}", flush=True)
+                        else:
+                            print(f"     {name}", flush=True)
+            except Exception as e:
+                debug_log(f"graph enrichment failed: {e}", "memory")
 
     # Step 6: Tool selection and description
     # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
@@ -278,6 +358,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         if conversation_context:
             guidance.append("\nRelevant conversation history:\n" + conversation_context)
+
+        if graph_context:
+            guidance.append("\n" + graph_context)
 
         if use_text_tools and tools_desc:
             # Text-based tool calling fallback: model returned HTTP 400 for native tools API,
@@ -355,22 +438,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     def _get_context_string() -> str:
         """Get current time and location context as a string."""
-        try:
-            tz_name: Optional[str] = None
-            # Respect global location_enabled flag early to avoid unnecessary work
-            if not getattr(cfg, 'location_enabled', True):
-                location_context = "Location: Disabled"
-            else:
-                location_context, tz_name = get_location_context_with_timezone(
-                    config_ip=getattr(cfg, 'location_ip_address', None),
-                    auto_detect=getattr(cfg, 'location_auto_detect', True),
-                    resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
-                    location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
-                )
-            current_time = format_time_context(tz_name)
-            return f"Current local time: {current_time}. {location_context}"
-        except Exception:
-            return ""
+        return _live_time_location_string(cfg)
 
     def _update_system_message_with_context(messages_list):
         """Update the first system message with fresh context.
