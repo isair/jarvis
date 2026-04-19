@@ -1493,10 +1493,13 @@ class VoiceListener(threading.Thread):
             max_retries = 4
             for attempt in range(max_retries + 1):
                 try:
-                    # Pre-load the model by doing a warmup transcription with silent audio
-                    # This triggers the model download before we need it for real transcription
+                    # Pre-load the model by doing a warmup transcription.
+                    # Use low-amplitude noise (not silence) so the decoder actually runs —
+                    # silent audio trips the no-speech short-circuit and leaves the decode
+                    # path cold, so the first real utterance still pays the full cost.
                     if np is not None:
-                        warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
+                        rng = np.random.default_rng(0)
+                        warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
                         _ = mlx_whisper.transcribe(
                             warmup_audio,
                             path_or_hf_repo=self._mlx_model_repo,
@@ -1729,12 +1732,27 @@ class VoiceListener(threading.Thread):
                 print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
                 return
 
-            # Warm up faster-whisper with a silent-audio transcribe so the
-            # first real utterance doesn't pay the cold-decode cost.
+            # Warm up faster-whisper so the first real utterance doesn't pay
+            # the cold-decode cost. Use low-amplitude noise rather than pure
+            # silence — silence trips faster-whisper's no-speech short-circuit
+            # and the decoder never actually runs. Mirror the real transcribe
+            # parameters so beam search, language detection, and the timestamp
+            # path are all exercised here instead of on the user's first word.
             if np is not None and self.model is not None:
                 try:
-                    warmup_audio = np.zeros(self._samplerate, dtype=np.float32)
-                    segments_iter, _ = self.model.transcribe(warmup_audio, beam_size=1)
+                    cpu_mode = self._whisper_device == "cpu"
+                    rng = np.random.default_rng(0)
+                    warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
+                    try:
+                        segments_iter, _ = self.model.transcribe(
+                            warmup_audio,
+                            language=None,
+                            vad_filter=False,
+                            condition_on_previous_text=not cpu_mode,
+                            without_timestamps=cpu_mode,
+                        )
+                    except TypeError:
+                        segments_iter, _ = self.model.transcribe(warmup_audio, language=None)
                     for _ in segments_iter:
                         pass
                     debug_log("faster-whisper warmup transcription complete", "voice")

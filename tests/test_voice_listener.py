@@ -1603,11 +1603,11 @@ class TestLlmWarmup:
         assert listener._llm_warmup_results["judge"] == ("gemma4:e2b", False)
 
 
-class TestWhisperSilentWarmup:
-    """Tests for the faster-whisper silent-audio warmup transcribe."""
+class TestWhisperWarmup:
+    """Tests for the faster-whisper warmup transcribe."""
 
-    def test_silent_warmup_runs_after_model_load(self):
-        """After a successful WhisperModel load, a silent transcribe is invoked."""
+    def test_warmup_runs_after_model_load(self):
+        """After a successful WhisperModel load, a warmup transcribe is invoked."""
         mock_whisper_model = MagicMock()
         mock_whisper_model.transcribe.return_value = (iter([]), MagicMock())
 
@@ -1641,4 +1641,6 @@ class TestWhisperSilentWarmup:
         first_call_args = mock_whisper_model.transcribe.call_args_list[0]
         audio_arg = first_call_args.args[0]
         assert audio_arg.shape[0] == listener._samplerate
-        assert (audio_arg == 0).all(), "warmup should use silent (zero) audio"
+        # Warmup must use non-silent audio so the decoder actually runs —
+        # silence trips faster-whisper's no-speech short-circuit.
+        assert not (audio_arg == 0).all(), "warmup should not use silent audio"
