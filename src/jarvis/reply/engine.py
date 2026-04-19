@@ -220,7 +220,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 for entry in context_results[:3]:
                     # Show a short preview of each diary entry (first 80 chars)
                     preview = entry.strip().replace("\n", " ")[:80]
-                    print(f"     {preview}", flush=True)
+                    print(f"     · {preview}", flush=True)
                 debug_log(f"diary enrichment: {len(context_results)} results", "memory")
         except Exception as e:
             debug_log(f"diary enrichment failed: {e}", "memory")
@@ -281,9 +281,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
                     for name, reason in node_annotations[:4]:
                         if reason:
-                            print(f"     {name} → {reason}", flush=True)
+                            print(f"     · {name} → {reason}", flush=True)
                         else:
-                            print(f"     {name}", flush=True)
+                            print(f"     · {name}", flush=True)
             except Exception as e:
                 debug_log(f"graph enrichment failed: {e}", "memory")
 
@@ -833,7 +833,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Print error message
         try:
-            print(f"\n⚠️ Jarvis\n{reply}\n", flush=True)
+            indented_reply = "\n  ".join(reply.splitlines())
+            print(f"\n⚠️ Jarvis\n  {indented_reply}\n", flush=True)
         except Exception:
             pass
 
@@ -853,12 +854,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if safe_reply:
         # Print reply with appropriate header
         try:
+            indented_safe_reply = "\n  ".join(safe_reply.splitlines())
             if not getattr(cfg, "voice_debug", False):
-                print(f"\n🤖 Jarvis\n" + safe_reply + "\n", flush=True)
+                print(f"\n🤖 Jarvis\n  {indented_safe_reply}\n", flush=True)
             else:
-                print(f"\n[jarvis]\n" + safe_reply + "\n", flush=True)
+                print(f"\n[jarvis]\n  {indented_safe_reply}\n", flush=True)
         except Exception:
-            print(f"\n[jarvis]\n" + safe_reply + "\n", flush=True)
+            print(f"\n[jarvis]\n  " + "\n  ".join(safe_reply.splitlines()) + "\n", flush=True)
 
         # TTS output - callbacks handled by calling code
         if tts is not None and tts.enabled:

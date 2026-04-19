@@ -2204,7 +2204,7 @@ class VoiceListener(threading.Thread):
             return
 
         # Log successful transcription
-        print(f"  📝 Heard: \"{text}\"", flush=True)
+        print(f"\n{'─' * 50}\n📝 Heard: \"{text}\"", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
