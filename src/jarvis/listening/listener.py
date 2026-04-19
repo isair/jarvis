@@ -20,7 +20,7 @@ from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
-from .intent_judge import IntentJudge, create_intent_judge
+from .intent_judge import IntentJudge, create_intent_judge, warm_up_ollama_model
 from ..debug import debug_log
 
 if TYPE_CHECKING:
@@ -1298,16 +1298,66 @@ class VoiceListener(threading.Thread):
         self._whisper_device = resolved_device
 
         if try_device != device and device in ("auto", "cuda"):
-            print("  ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
-            print("  💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
+            print("     ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
+            print("     💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
         if try_compute != compute:
-            print(f"  ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
+            print(f"     ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
         if resolved_device == "cpu":
-            print(f"  ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
+            print(f"     ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
 
         suffix = f" ({context})" if context else ""
-        print(f"  ✅ Whisper model '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
+        print(f"     🎤 Whisper '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
         return resolved_device
+
+    def _start_llm_warmup(self) -> list[threading.Thread]:
+        """Pre-load chat and intent judge models into Ollama memory.
+
+        Starts up to two daemon threads concurrently so warmup overlaps
+        with Whisper initialisation. When both models point at the same
+        Ollama model, a single warmup covers both (Ollama loads the
+        weights once; ``keep_alive`` keeps them resident for every caller).
+
+        Results land in ``self._llm_warmup_results`` keyed by role. The
+        caller joins the returned threads with a shared deadline before
+        announcing "Listening!" so the ready state actually means ready.
+        """
+        self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
+
+        chat_model = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
+        base_url = str(getattr(self.cfg, "ollama_base_url", "") or "").strip()
+        chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)
+        judge = self._intent_judge
+        judge_model = judge.config.model if judge is not None else ""
+        shared_model = bool(chat_model) and judge_model == chat_model
+
+        threads: list[threading.Thread] = []
+
+        if chat_model and base_url:
+            def _warm_chat() -> None:
+                ok = warm_up_ollama_model(base_url, chat_model, timeout=chat_timeout)
+                self._llm_warmup_results["chat"] = (chat_model, ok)
+                # When chat and judge share a model, one warmup covers both.
+                if shared_model:
+                    self._llm_warmup_results["judge"] = (chat_model, ok)
+
+            threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
+
+        if judge is not None and not shared_model:
+            def _warm_judge() -> None:
+                ok = judge.warm_up()
+                self._llm_warmup_results["judge"] = (judge_model, ok)
+
+            threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
+
+        for t in threads:
+            t.start()
+
+        debug_log(
+            f"LLM warmup started (chat={chat_model or 'n/a'}, "
+            f"judge={judge_model or 'n/a'}, shared={shared_model})",
+            "voice",
+        )
+        return threads
 
     def run(self) -> None:
         """Main voice listening loop."""
@@ -1406,6 +1456,14 @@ class VoiceListener(threading.Thread):
                 debug_log(f"microphone permission check error: {e}", "voice")
                 print(f"  ⚠️  Microphone check error: {e}", flush=True)
 
+        # Kick off LLM warmups in parallel with Whisper load so the first
+        # user engagement doesn't pay cold-load cost on either model. All
+        # warmup output (Whisper + LLMs) is indented under this header to
+        # visually group the phase.
+        print("  🔥 Warming up models...", flush=True)
+        self._llm_warmup_started_at = time.time()
+        self._llm_warmup_threads = self._start_llm_warmup()
+
         # Determine and initialise Whisper backend
         self._whisper_backend = self._determine_whisper_backend()
         model_name = getattr(self.cfg, "whisper_model", "small")
@@ -1430,15 +1488,18 @@ class VoiceListener(threading.Thread):
                 return
 
             self._mlx_model_repo = _get_mlx_model_repo(model_name)
-            print(f"  🔄 Loading MLX Whisper model '{model_name}' (Apple Silicon GPU)...", flush=True)
+            print(f"     🎤 Loading MLX Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
 
             max_retries = 4
             for attempt in range(max_retries + 1):
                 try:
-                    # Pre-load the model by doing a warmup transcription with silent audio
-                    # This triggers the model download before we need it for real transcription
+                    # Pre-load the model by doing a warmup transcription.
+                    # Use low-amplitude noise (not silence) so the decoder actually runs —
+                    # silent audio trips the no-speech short-circuit and leaves the decode
+                    # path cold, so the first real utterance still pays the full cost.
                     if np is not None:
-                        warmup_audio = np.zeros(self._samplerate, dtype=np.float32)  # 1 second of silence
+                        rng = np.random.default_rng(0)
+                        warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
                         _ = mlx_whisper.transcribe(
                             warmup_audio,
                             path_or_hf_repo=self._mlx_model_repo,
@@ -1446,7 +1507,7 @@ class VoiceListener(threading.Thread):
                         )
                         debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
 
-                    print(f"  ✅ MLX Whisper '{model_name}' ready (Apple Silicon GPU acceleration)", flush=True)
+                    print(f"     🎤 MLX Whisper '{model_name}' ready (Apple Silicon GPU)", flush=True)
                     break
                 except Exception as e:
                     error_str = str(e).lower()
@@ -1557,7 +1618,7 @@ class VoiceListener(threading.Thread):
             for try_device, try_compute in configs_to_try:
                 try:
                     cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
-                    print(f"  🔄 Loading Whisper model '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
+                    print(f"     🎤 Loading Whisper '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
                     self.model = WhisperModel(
                         model_name, device=try_device, compute_type=try_compute,
                         cpu_threads=cpu_threads,
@@ -1597,7 +1658,7 @@ class VoiceListener(threading.Thread):
                         cache_cleared = _clear_corrupted_whisper_cache(str(e))
                         if cache_cleared:
                             try:
-                                print(f"  🔄 Re-downloading Whisper model '{model_name}'...", flush=True)
+                                print(f"     🎤 Re-downloading Whisper '{model_name}'...", flush=True)
                                 self.model = WhisperModel(
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
@@ -1670,6 +1731,66 @@ class VoiceListener(threading.Thread):
                 debug_log(f"failed to initialise faster-whisper with any config: {last_error}", "voice")
                 print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
                 return
+
+            # Warm up faster-whisper so the first real utterance doesn't pay
+            # the cold-decode cost. Use low-amplitude noise rather than pure
+            # silence — silence trips faster-whisper's no-speech short-circuit
+            # and the decoder never actually runs. Mirror the real transcribe
+            # parameters so beam search, language detection, and the timestamp
+            # path are all exercised here instead of on the user's first word.
+            if np is not None and self.model is not None:
+                try:
+                    cpu_mode = self._whisper_device == "cpu"
+                    rng = np.random.default_rng(0)
+                    warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
+                    try:
+                        segments_iter, _ = self.model.transcribe(
+                            warmup_audio,
+                            language=None,
+                            vad_filter=False,
+                            condition_on_previous_text=not cpu_mode,
+                            without_timestamps=cpu_mode,
+                        )
+                    except TypeError:
+                        segments_iter, _ = self.model.transcribe(warmup_audio, language=None)
+                    for _ in segments_iter:
+                        pass
+                    debug_log("faster-whisper warmup transcription complete", "voice")
+                except Exception as e:
+                    debug_log(f"faster-whisper warmup failed: {e}", "voice")
+
+        # Wait for LLM warmups before announcing "Listening!" so the first
+        # engagement is responsive. A single 60s budget is shared across
+        # all warmup threads so a slow/down Ollama can't block us from
+        # listening — we'll just pay the cold-load cost on demand.
+        warmup_threads = getattr(self, "_llm_warmup_threads", [])
+        if warmup_threads:
+            budget = 60.0
+            deadline = getattr(self, "_llm_warmup_started_at", time.time()) + budget
+            for t in warmup_threads:
+                remaining = max(0.0, deadline - time.time())
+                t.join(timeout=remaining)
+
+            still_warming = any(t.is_alive() for t in warmup_threads)
+            results = getattr(self, "_llm_warmup_results", {})
+
+            # Trailing space after ⚠️ intentional: the warning glyph renders
+            # narrower than 🧠/💬, so the pad keeps columns aligned.
+            def _print_status(role_key: str, label: str, ok_icon: str) -> None:
+                entry = results.get(role_key)
+                if entry is None:
+                    return
+                name, ok = entry
+                icon = ok_icon if ok else "⚠️ "
+                status = "ready" if ok else "warmup failed — will load on first use"
+                print(f"     {icon} {label} '{name}' {status}", flush=True)
+
+            _print_status("chat", "Chat model", "💬")
+            _print_status("judge", "Intent judge", "🧠")
+
+            if still_warming:
+                debug_log("LLM warmup still running after 60s — continuing without", "voice")
+                print("     ⏳ Some models still warming — continuing anyway", flush=True)
 
         # Audio parameters
         frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))

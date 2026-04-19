@@ -458,6 +458,8 @@ Get API key at [composio.dev](https://composio.dev)
 <details>
 <summary><strong>Common issues</strong></summary>
 
+**First startup takes a bit** - Jarvis pre-warms the Whisper, chat, and intent-judge models before announcing "Listening!" so the first engagement feels instant. This adds a few seconds on cold start and is bounded at 60 s — if Ollama is slow, Jarvis will start listening anyway and load the models on demand.
+
 **Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
 
 **Responses are slow** - Ensure you have enough VRAM (8GB+ for default model; see System Requirements for other models)

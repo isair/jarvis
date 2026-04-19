@@ -23,6 +23,39 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 
 
+def warm_up_ollama_model(base_url: str, model: str, timeout: float) -> bool:
+    """Ask Ollama to load ``model`` into memory with a 30m keep_alive.
+
+    Issues a minimal ``/api/generate`` request so the weights are resident
+    before the first real request. Best-effort — errors are logged and
+    swallowed so callers never crash on warmup failure.
+    """
+    if not REQUESTS_AVAILABLE or not base_url or not model:
+        return False
+    try:
+        response = requests.post(
+            f"{base_url}/api/generate",
+            json={
+                "model": model,
+                "prompt": "",
+                "stream": False,
+                "keep_alive": "30m",
+                "options": {"num_predict": 1},
+            },
+            timeout=timeout,
+        )
+        ok = response.status_code == 200
+        debug_log(
+            f"ollama warmup {'ok' if ok else f'failed HTTP {response.status_code}'} "
+            f"(model={model})",
+            "voice",
+        )
+        return ok
+    except Exception as e:
+        debug_log(f"ollama warmup error (model={model}): {e}", "voice")
+        return False
+
+
 def _extract_json_object(text: str) -> str:
     """Return the first balanced `{...}` object in `text`, or "" if none.
 
@@ -282,6 +315,16 @@ Examples:
         except (json.JSONDecodeError, KeyError) as e:
             debug_log(f"intent judge: failed to parse response: {e}", "voice")
             return None
+
+    def warm_up(self) -> bool:
+        """Trigger Ollama to load the model into memory ahead of first use."""
+        if not self._available:
+            return False
+        return warm_up_ollama_model(
+            self.config.ollama_base_url,
+            self.config.model,
+            timeout=max(self.config.timeout_sec, 60.0),
+        )
 
     def judge(
         self,
