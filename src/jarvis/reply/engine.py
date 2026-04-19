@@ -183,9 +183,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"diary enrichment failed: {e}", "memory")
 
-    # Step 4b: Graph memory enrichment (structured knowledge about the user)
+    # Step 4b: Graph memory enrichment (structured knowledge about the user).
+    # The graph is a question-answer index: each node holds knowledge facts the
+    # assistant can use to answer implicit questions behind a query. If the
+    # extractor produced no questions, the query is either utility (time, maths)
+    # or already fully answerable from live context — no reason to crawl the
+    # knowledge graph.
     graph_context = ""
-    if enrichment_source in ("all", "graph"):
+    if enrichment_source in ("all", "graph") and questions:
         try:
             from ..memory.graph import GraphMemoryStore
             graph_store = GraphMemoryStore(cfg.db_path)
@@ -194,10 +199,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Track node name + matched question for user-facing logs
             node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
-            # Primary: keyword search (uses same keywords extracted above)
-            graph_nodes = []
-            if keywords:
-                graph_nodes = graph_store.search_nodes(" ".join(keywords), limit=5)
+            # Build search text from the questions, stripped of stop words so
+            # LIKE matching keys off the content words.
+            question_words: list[str] = []
+            seen: set[str] = set()
+            for q in questions:
+                for w in q.lower().split():
+                    w = w.strip("?.,!")
+                    if w and w not in _STOP_WORDS and w not in seen:
+                        seen.add(w)
+                        question_words.append(w)
+
+            if question_words:
+                graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
                 for node in graph_nodes:
                     ancestors = graph_store.get_ancestors(node.id)
                     path = " > ".join(a.name for a in ancestors)
@@ -207,16 +221,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         matched_q = _match_question(data_preview, questions)
                         node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
                         debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
-
-            # Secondary: include a few recently accessed nodes for conversational continuity
-            recent_ids = {n.id for n in graph_nodes}
-            recent_nodes = graph_store.get_recent_nodes(limit=3)
-            for rn in recent_nodes:
-                if rn.id not in recent_ids and rn.data:
-                    data_preview = rn.data[:200]
-                    graph_parts.append(f"[{rn.name}] {data_preview}")
-                    node_annotations.append((rn.name or rn.id[:8], "recently accessed"))
-                    debug_log(f"graph recent: [{rn.name}] ({rn.data_token_count} tokens)", "memory")
 
             if graph_parts:
                 graph_context = "Stored knowledge about the user:\n" + "\n".join(graph_parts)
