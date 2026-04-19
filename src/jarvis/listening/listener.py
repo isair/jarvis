@@ -460,11 +460,13 @@ class VoiceListener(threading.Thread):
                         # transcript; without salvage, the user's real speech
                         # would be dropped before the intent judge ever sees it.
                         salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
-                        # Require ≥3 salvaged words to avoid treating Whisper's
-                        # echo-tail hallucinations ("...regions like Steneti")
-                        # as genuine user speech.
-                        if (salvaged and salvaged != text_lower
-                                and len(salvaged.split()) >= 3):
+                        # Require ≥ min_salvage_words to avoid treating Whisper's
+                        # echo-tail hallucinations ("…regions like Steneti") as
+                        # genuine user speech. The threshold lives on the echo
+                        # detector so every salvage site shares one policy.
+                        min_words = self.echo_detector.min_salvage_words
+                        if (salvaged != text_lower
+                                and len(salvaged.split()) >= min_words):
                             debug_log(
                                 f"salvaged user speech from hot-window echo+speech "
                                 f"chunk: '{salvaged}'",
@@ -476,6 +478,8 @@ class VoiceListener(threading.Thread):
                                 flush=True,
                             )
                             self._transcript_buffer.update_last_segment_text(salvaged)
+                            # text_lower now carries the salvaged query — the rest
+                            # of _process_transcript reads from this variable.
                             text_lower = salvaged
                         else:
                             debug_log(f"🔇 Early echo rejection (score={echo_score}): \"{text_lower}\"", "voice")
@@ -525,7 +529,9 @@ class VoiceListener(threading.Thread):
                     getattr(self.cfg, 'tts_rate', 200),
                     utterance_start_time,
                 )
-                if salvaged and salvaged.strip() and salvaged != text_lower:
+                min_words = self.echo_detector.min_salvage_words
+                if (salvaged and salvaged.strip() and salvaged != text_lower
+                        and len(salvaged.split()) >= min_words):
                     debug_log(f"salvaged user speech from echo during TTS: '{salvaged}'", "voice")
                     self._transcript_buffer.update_last_segment_text(salvaged)
                     text_lower = salvaged
@@ -539,6 +545,7 @@ class VoiceListener(threading.Thread):
         # user speech (e.g. "I can only provide... Well you can search for it"), the
         # echo portion was captured during TTS but the transcript arrives after TTS
         # finishes. Try to strip the leading echo and use just the user's speech.
+        # Skip entirely if there's no prior TTS — nothing to match against.
         last_tts_text_for_salvage = self.echo_detector._last_tts_text or ""
         last_tts_finish = self.echo_detector._last_tts_finish_time or 0.0
         # Use echo_tolerance as buffer — speaker/mic latency means the utterance
@@ -552,7 +559,9 @@ class VoiceListener(threading.Thread):
                 getattr(self.cfg, 'tts_rate', 200),
                 utterance_start_time,
             )
-            if salvaged and salvaged.strip() and salvaged != text_lower:
+            min_words = self.echo_detector.min_salvage_words
+            if (salvaged and salvaged.strip() and salvaged != text_lower
+                    and len(salvaged.split()) >= min_words):
                 debug_log(f"salvaged user speech from merged echo+speech chunk: '{salvaged}'", "voice")
                 self._transcript_buffer.update_last_segment_text(salvaged)
                 text_lower = salvaged
