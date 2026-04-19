@@ -164,8 +164,8 @@ class TestGreetingNoToolsLive:
 
         with patch('jarvis.reply.engine.run_tool_with_retries',
                    side_effect=create_mock_tool_run(capture, {
-                       "webSearch": "Possessor (2020) is a science-fiction horror film written and directed by Brandon Cronenberg.",
-                       "fetchWebPage": "Possessor details page.",
+                       "webSearch": "Search result: relevant details about the requested entity.",
+                       "fetchWebPage": "Page content: relevant details about the requested entity.",
                    })):
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
