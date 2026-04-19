@@ -268,13 +268,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"graph enrichment failed: {e}", "memory")
 
-    # Step 5: Build initial system message context only (no monolithic prompt)
-    context = []
-    if conversation_context:
-        context.append(f"Relevant conversation history:\n{conversation_context}")
-    if graph_context:
-        context.append(graph_context)
-
     # Step 6: Tool selection and description
     # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
     mcp_tools = {}
@@ -346,6 +339,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         if conversation_context:
             guidance.append("\nRelevant conversation history:\n" + conversation_context)
+
+        if graph_context:
+            guidance.append("\n" + graph_context)
 
         if use_text_tools and tools_desc:
             # Text-based tool calling fallback: model returned HTTP 400 for native tools API,

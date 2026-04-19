@@ -240,3 +240,88 @@ class TestGraphEnrichmentGating:
             "questions": ["what is the?"],
         })
         assert calls == []
+
+
+class TestGraphContextReachesSystemMessage:
+    """Regression: graph enrichment must reach the LLM system prompt.
+
+    An earlier bug built a `context` list containing graph results but never
+    threaded it into the system message, so the model was told "I know nothing
+    about you" even though 🧠 Knowledge logs showed nodes surfaced.
+    """
+
+    def test_graph_context_appears_in_system_prompt(self):
+        from jarvis.reply.engine import run_reply_engine
+
+        class _Node:
+            def __init__(self):
+                self.id = "n1"
+                self.name = "Food Preferences"
+                self.data = "User loves sushi and spicy ramen."
+                self.data_token_count = 10
+
+        class _Ancestor:
+            name = "Root"
+
+        class _FakeStore:
+            def __init__(self, *a, **kw):
+                pass
+
+            def search_nodes(self, query, limit=5):
+                return [_Node()]
+
+            def get_ancestors(self, node_id):
+                return [_Ancestor()]
+
+        class _DM:
+            def has_recent_messages(self):
+                return False
+
+            def get_recent_messages(self):
+                return []
+
+            def add_message(self, role, content):
+                pass
+
+        cfg = SimpleNamespace(
+            ollama_base_url="http://x",
+            ollama_chat_model="m",
+            ollama_embed_model="e",
+            llm_tools_timeout_sec=0.1,
+            llm_embed_timeout_sec=0.1,
+            llm_chat_timeout_sec=0.1,
+            agentic_max_turns=1,
+            active_profiles=["developer"],
+            voice_debug=False,
+            memory_enrichment_source="all",
+            memory_enrichment_max_results=0,
+            mcps={},
+            location_enabled=False,
+            location_auto_detect=False,
+            location_ip_address=None,
+            location_cgnat_resolve_public_ip=True,
+            db_path=":memory:",
+            tts_engine="piper",
+        )
+
+        captured_messages: list = []
+
+        def fake_chat(**kwargs):
+            captured_messages.extend(kwargs.get("messages", []))
+            return {"message": {"content": "ok", "role": "assistant"}}
+
+        with patch(
+            "jarvis.reply.engine.extract_search_params_for_memory",
+            return_value={"keywords": ["food"], "questions": ["what cuisine does the user enjoy?"]},
+        ), patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
+             patch("jarvis.reply.engine.chat_with_messages", side_effect=fake_chat), \
+             patch("jarvis.tools.selection.select_tools", return_value=[]):
+            run_reply_engine(db=None, cfg=cfg, tts=None, text="what do you know about me?", dialogue_memory=_DM())
+
+        system_msgs = [m for m in captured_messages if m.get("role") == "system"]
+        assert system_msgs, "Expected a system message to be sent to the LLM"
+        joined = "\n".join(m.get("content", "") for m in system_msgs)
+        assert "Stored knowledge about the user" in joined, \
+            f"Graph context missing from system prompt. Got:\n{joined[:500]}"
+        assert "sushi" in joined, \
+            f"Graph node data missing from system prompt. Got:\n{joined[:500]}"
