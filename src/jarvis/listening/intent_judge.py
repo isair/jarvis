@@ -176,6 +176,24 @@ Examples:
         """Build the system prompt with configuration."""
         return self.SYSTEM_PROMPT_TEMPLATE.format(name=self.config.assistant_name)
 
+    def _normalize_aliases(self, text: str) -> str:
+        """Replace wake-word aliases with the primary assistant name.
+
+        Aliases are Whisper mishearings of the wake word (e.g. "Jervis",
+        "Jaivis"). Without normalisation the small judge model sees "Jervis"
+        in the transcript, doesn't know it refers to {name}, and may decide
+        the user is addressing a different person.
+        """
+        if not text or not self.config.aliases:
+            return text
+        # Longest-first avoids a shorter alias matching inside a longer one.
+        for alias in sorted(self.config.aliases, key=len, reverse=True):
+            if not alias:
+                continue
+            pattern = r"\b" + re.escape(alias) + r"\b"
+            text = re.sub(pattern, self.config.assistant_name, text, flags=re.IGNORECASE)
+        return text
+
     def _build_user_prompt(
         self,
         segments: List[TranscriptSegment],
@@ -222,7 +240,8 @@ Examples:
                 markers.append("CURRENT - JUDGE THIS")
 
             marker_str = f" ({', '.join(markers)})" if markers else ""
-            lines.append(f'[{ts}]{marker_str} "{seg.text}"')
+            display_text = self._normalize_aliases(seg.text)
+            lines.append(f'[{ts}]{marker_str} "{display_text}"')
 
         if not segments:
             lines.append("(no speech)")

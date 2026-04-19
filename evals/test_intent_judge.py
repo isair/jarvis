@@ -141,6 +141,7 @@ class MultiSegmentTestCase:
     expected_query_contains: Optional[str]
     expected_query_not_contains: Optional[str] = None
     expected_stop: bool = False
+    aliases: Optional[List[str]] = None
 
 
 MULTI_SEGMENT_TEST_CASES = [
@@ -356,6 +357,37 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_directed=True,
         expected_query_contains="germany",
     ),
+    # Alias (Whisper mishearing) should be treated as the wake word. Without
+    # alias normalisation the small model sees "Jervis" and decides the user
+    # is addressing a different person.
+    MultiSegmentTestCase(
+        name="alias_treated_as_wake_word",
+        segments=[
+            ("Jervis, what time is it in London?", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.8,
+        expected_directed=True,
+        expected_query_contains="time",
+        aliases=["jervis", "jaivis", "jervis", "javis"],
+    ),
+    # Alias mid-utterance after narrative context — the model must still
+    # recognise the addressee as the assistant and resolve the vague reference.
+    MultiSegmentTestCase(
+        name="alias_after_narrative_context",
+        segments=[
+            ("The new iPhone looks pretty cool", False),
+            ("I heard the camera is amazing", False),
+            ("Jaivis how much does that cost", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1004.0,
+        expected_directed=True,
+        expected_query_contains="iphone",
+        aliases=["jervis", "jaivis", "jervis", "javis"],
+    ),
     # Wake word mid-utterance after narrative buffer, addressing the assistant.
     # Real-world case: user was discussing Mata Hari in the background, then
     # turned to the assistant with "Jarvis, do you know what she's talking about,
@@ -437,6 +469,7 @@ def run_intent_judge_multi_segment(case: "MultiSegmentTestCase"):
 
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
+        aliases=list(case.aliases or []),
         model="gemma4:e2b",
         timeout_sec=10.0,
     ))
