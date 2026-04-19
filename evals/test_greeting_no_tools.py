@@ -137,6 +137,59 @@ class TestGreetingNoToolsLive:
 
     @pytest.mark.eval
     @requires_judge_llm
+    @pytest.mark.parametrize("query", [
+        pytest.param("what do you know about the Possessor movie", id="Live unknown entity: Possessor (film)"),
+        pytest.param("tell me about the book Piranesi", id="Live unknown entity: Piranesi (book)"),
+    ])
+    def test_unknown_named_entity_triggers_web_search_live(
+        self,
+        query: str,
+        mock_config,
+        eval_db,
+        eval_dialogue_memory,
+    ):
+        """Live test: questions about specific named entities should trigger a web lookup.
+
+        The model should recognise it has no concrete facts about the entity and call
+        webSearch rather than denying knowledge or asking for a link.
+        """
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+        is_small = _is_small_model(JUDGE_MODEL)
+
+        capture = ToolCallCapture()
+
+        with patch('jarvis.reply.engine.run_tool_with_retries',
+                   side_effect=create_mock_tool_run(capture, {
+                       "webSearch": "Possessor (2020) is a science-fiction horror film written and directed by Brandon Cronenberg.",
+                       "fetchWebPage": "Possessor details page.",
+                   })):
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory,
+            )
+
+        print(f"\n  Live Unknown-Entity Test ({JUDGE_MODEL}):")
+        print(f"  Query: '{query}'")
+        print(f"  Tools called: {capture.tool_names() or 'none'}")
+        print(f"  Response: {(response or '')[:120]}...")
+        print(f"  Model size: {'small' if is_small else 'large'}")
+
+        if not capture.has_tool("webSearch"):
+            msg = (
+                f"Query about unknown named entity should trigger webSearch. "
+                f"Called: {capture.tool_names() or 'none'}. Response: {(response or '')[:200]}"
+            )
+            if is_small:
+                pytest.xfail(f"Small model {JUDGE_MODEL} did not call webSearch. {msg}")
+            else:
+                pytest.fail(msg)
+
+    @pytest.mark.eval
+    @requires_judge_llm
     def test_weather_still_triggers_tools_live(
         self,
         mock_config,

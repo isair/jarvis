@@ -100,7 +100,10 @@ _TOOL_CONSTRAINTS_BASE = """GREETING HANDLING:
 When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
 
 USER INSTRUCTIONS:
-When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests."""
+When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests.
+
+UNKNOWN NAMED ENTITIES:
+If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch to look it up. Do NOT reply that you have no information or ask the user for a link — perform the lookup yourself. Only skip the lookup if the entity is one you can state specific facts about (title, year, creator, plot, etc.) without guessing."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE
