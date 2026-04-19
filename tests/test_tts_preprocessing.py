@@ -3,6 +3,7 @@
 import pytest
 from src.jarvis.output.tts import (
     _preprocess_for_speech,
+    _strip_markdown_for_speech,
     _extract_domain_description,
     _estimate_tts_duration,
     DEFAULT_WPM,
@@ -109,6 +110,96 @@ class TestPreprocessForSpeech:
         # Should say "example.com" not "www.example.com"
         assert "www." not in result
         assert "example.com" in result
+
+
+class TestStripMarkdownForSpeech:
+    """Tests that markdown formatting is stripped before TTS reads the text aloud.
+
+    Piper and similar TTS engines read literal characters — "**bold**" becomes
+    "asterisk asterisk bold asterisk asterisk" if the markers aren't stripped.
+    """
+
+    def test_strips_bold_asterisks(self):
+        assert _strip_markdown_for_speech("this is **important** info") == "this is important info"
+
+    def test_strips_bold_underscores(self):
+        assert _strip_markdown_for_speech("this is __important__ info") == "this is important info"
+
+    def test_strips_italic_asterisks(self):
+        assert _strip_markdown_for_speech("this is *emphasised* text") == "this is emphasised text"
+
+    def test_strips_italic_underscores(self):
+        assert _strip_markdown_for_speech("this is _emphasised_ text") == "this is emphasised text"
+
+    def test_preserves_word_internal_underscores(self):
+        # Variable-name-style underscores must survive so spoken code/identifiers
+        # aren't mangled into concatenated words.
+        assert _strip_markdown_for_speech("call my_function now") == "call my_function now"
+
+    def test_strips_strikethrough(self):
+        assert _strip_markdown_for_speech("was ~~wrong~~ right") == "was wrong right"
+
+    def test_strips_inline_code(self):
+        assert _strip_markdown_for_speech("run `ls -la` in the shell") == "run ls -la in the shell"
+
+    def test_strips_fenced_code_block(self):
+        text = "here is some code:\n```python\nprint('hi')\n```\ndone"
+        result = _strip_markdown_for_speech(text)
+        assert "```" not in result
+        assert "print('hi')" in result
+
+    def test_strips_heading_markers(self):
+        text = "# Title\n## Subtitle\nbody"
+        result = _strip_markdown_for_speech(text)
+        assert "Title" in result
+        assert "Subtitle" in result
+        assert "#" not in result
+
+    def test_strips_bullet_list_markers(self):
+        text = "- first item\n- second item\n* third item"
+        result = _strip_markdown_for_speech(text)
+        for item in ("first item", "second item", "third item"):
+            assert item in result
+        assert "- " not in result
+        assert "* " not in result
+
+    def test_strips_numbered_list_markers(self):
+        text = "1. first\n2. second\n3) third"
+        result = _strip_markdown_for_speech(text)
+        for item in ("first", "second", "third"):
+            assert item in result
+        # No leading digit-and-punct sequences remain.
+        assert "1." not in result
+        assert "3)" not in result
+
+    def test_preserves_plain_text(self):
+        text = "hello there, how are you today?"
+        assert _strip_markdown_for_speech(text) == text
+
+    def test_handles_empty_string(self):
+        assert _strip_markdown_for_speech("") == ""
+
+    def test_real_world_combined_case(self):
+        # The exact failure case from the field session: model produced a
+        # bulleted list with bolded items; TTS spoke "asterisk asterisk" for
+        # each one. After stripping, the text should be speakable plain prose.
+        text = (
+            "1. **Find information about the movie** (like plot, cast, release date)?\n"
+            "2. **Watch the movie?**\n"
+            "3. **Find a link to the movie?**"
+        )
+        result = _strip_markdown_for_speech(text)
+        assert "*" not in result
+        assert "**" not in result
+        for fragment in ("Find information about the movie", "Watch the movie", "Find a link to the movie"):
+            assert fragment in result
+
+    def test_preprocess_strips_markdown_end_to_end(self):
+        # Full pipeline: URL handling + markdown stripping in one call.
+        text = "See **[the docs](https://docs.example.com/api)** for details"
+        result = _preprocess_for_speech(text)
+        assert "**" not in result
+        assert "Link to a page under docs.example.com" in result
 
 
 class TestEstimateTtsDuration:

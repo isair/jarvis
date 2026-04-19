@@ -199,15 +199,67 @@ def _extract_domain_description(url: str) -> tuple[str, bool]:
         return url, True
 
 
+def _strip_markdown_for_speech(text: str) -> str:
+    """Strip markdown formatting so TTS doesn't read syntax characters aloud.
+
+    Small models often produce markdown (``**bold**``, bullet lists, headings)
+    even when told to be conversational. Piper and similar engines read the
+    syntax characters literally ("asterisk asterisk bold asterisk asterisk").
+    This function removes the markup while preserving the words inside it.
+
+    Handled:
+    - Fenced code blocks ``` ```lang\\ncode\\n``` ``` → inner text only
+    - Inline code ``` `x` ``` → ``x``
+    - Bold ``**x**`` / ``__x__`` → ``x``
+    - Italic ``*x*`` / ``_x_`` → ``x`` (word-internal underscores preserved)
+    - Strikethrough ``~~x~~`` → ``x``
+    - Leading heading markers ``# ``, ``## `` … at line start → removed
+    - Leading bullet markers ``- ``, ``* ``, ``+ `` at line start → removed
+    - Leading numbered-list markers ``1. ``, ``2) `` at line start → removed
+    """
+    if not text:
+        return text
+
+    # Fenced code blocks: keep inner content, drop fences and language tag.
+    text = re.sub(r"```[a-zA-Z0-9_-]*\n?([\s\S]*?)```", r"\1", text)
+
+    # Inline code: keep inner content.
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+
+    # Bold / strikethrough (before italic so the double-char form matches first).
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    text = re.sub(r"~~([^~]+)~~", r"\1", text)
+
+    # Italic with asterisk: single * not flanked by another *.
+    text = re.sub(r"(?<!\*)\*([^*\s][^*]*?)\*(?!\*)", r"\1", text)
+    # Italic with underscore: require word boundaries so we don't eat
+    # underscores inside identifiers like "some_variable_name".
+    text = re.sub(r"(?<!\w)_([^_\n]+?)_(?!\w)", r"\1", text)
+
+    # Line-leading markers: headings, bullets, numbered lists.
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = re.sub(r"^\s*#{1,6}\s+", "", line)        # headings
+        stripped = re.sub(r"^\s*[-*+]\s+", "", stripped)     # bullets
+        stripped = re.sub(r"^\s*\d+[.)]\s+", "", stripped)    # numbered
+        cleaned.append(stripped)
+    return "\n".join(cleaned)
+
+
 def _preprocess_for_speech(text: str) -> str:
     """
-    Preprocess text for TTS by converting links to readable descriptions.
+    Preprocess text for TTS by converting links to readable descriptions and
+    stripping markdown formatting.
 
     Handles:
     - Markdown links: [text](url) → "Link to domain.com with the text 'text'" or
       "Link to a page under domain.com with the text 'text'"
     - Raw URLs: https://domain.com → "domain.com homepage" or
       https://domain.com/path → "a page under domain.com"
+    - Markdown formatting (bold, italic, code, headings, lists) → stripped so
+      TTS engines don't read syntax characters (``**``, ``#``, ``-``) aloud.
     """
     # Pattern for markdown links: [text](url)
     markdown_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
@@ -243,6 +295,9 @@ def _preprocess_for_speech(text: str) -> str:
 
     # Replace raw URLs
     result = re.sub(raw_url_pattern, replace_raw_url, result)
+
+    # Strip any remaining markdown so TTS doesn't read syntax aloud.
+    result = _strip_markdown_for_speech(result)
 
     return result
 

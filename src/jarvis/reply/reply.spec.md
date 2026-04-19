@@ -92,7 +92,8 @@ Design principles enforced by the engine:
 8. Output and Memory Update
    - Remove any tool protocol markers (e.g., lines beginning with a reserved prefix) from the final response.
    - Print reply with a concise header; optionally include debug labeling.
-   - If speech synthesis is enabled, speak the reply and, upon completion, trigger the follow-up listening window if configured.
+   - If speech synthesis is enabled, pass the reply through the TTS preprocessor (link-to-description rewriting and markdown stripping — see `src/jarvis/output/tts.py::_preprocess_for_speech`) before speaking. Markdown stripping is required because small models often emit `**bold**`, bullets, and headings despite `VOICE_STYLE` guidance, and Piper-style TTS engines read the syntax characters literally ("asterisk asterisk ..."). The `VOICE_STYLE` prompt also explicitly forbids markdown — belt-and-suspenders.
+   - After speech finishes, trigger the follow-up listening window if configured.
    - Add the interaction (sanitized user/assistant texts) to short-term dialogue memory; ignore failures.
 
 ### Reply-only Branch Checklist
