@@ -470,6 +470,11 @@ class VoiceListener(threading.Thread):
                                 f"chunk: '{salvaged}'",
                                 "voice",
                             )
+                            print(
+                                f"  ✂️ Stripped echo prefix, kept: \"{salvaged[:60]}"
+                                f"{'...' if len(salvaged) > 60 else ''}\"",
+                                flush=True,
+                            )
                             self._transcript_buffer.update_last_segment_text(salvaged)
                             text_lower = salvaged
                         else:
