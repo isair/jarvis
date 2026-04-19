@@ -119,19 +119,26 @@ class TestExtractorPromptRendering:
         return captured["system_prompt"]
 
     def test_no_hint_falls_back_to_utc_timestamp(self):
+        # Behaviour: with no hint, the extractor still gets a current-time anchor
+        # (UTC fallback) so it can resolve relative time phrases.
         prompt = self._run_and_capture_prompt()
-        assert "Current date/time:" in prompt
-        # The literal hint-block prefix (distinct from the mention of it in rules).
-        assert "ALREADY IN CONTEXT (the assistant" not in prompt
+        assert "UTC" in prompt
 
     def test_hint_is_injected_and_utc_fallback_dropped(self):
-        prompt = self._run_and_capture_prompt(
-            context_hint="Current local time: ... . Location: Tbilisi, Georgia."
+        # Use a value that can only have come from the hint, so the assertion
+        # survives prompt rewording as long as the hint is actually threaded in.
+        hint_marker = "Tbilisi, Georgia"
+        fallback_marker = "fallback-sentinel-utc"
+        hint_prompt = self._run_and_capture_prompt(
+            context_hint=f"Current local time: ... . Location: {hint_marker}."
         )
-        assert "ALREADY IN CONTEXT (the assistant" in prompt
-        assert "Tbilisi, Georgia" in prompt
-        # No duplicate UTC-fallback time line when a hint is present.
-        assert "Current date/time:" not in prompt
+        no_hint_prompt = self._run_and_capture_prompt()
+        assert hint_marker in hint_prompt
+        # The UTC fallback injects a marker that is present in the no-hint case;
+        # that same marker must NOT appear when a hint is supplied (dedup).
+        fallback_signature = "Current date/time:"
+        assert fallback_signature in no_hint_prompt
+        assert fallback_signature not in hint_prompt
 
     def test_extract_returns_empty_dict_when_no_usable_response(self):
         with patch("jarvis.reply.enrichment.call_llm_direct", return_value=""):

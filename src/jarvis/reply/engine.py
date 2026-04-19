@@ -28,12 +28,25 @@ if TYPE_CHECKING:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-# Stop words excluded from question→node matching (common words that inflate false matches)
+# Stop words excluded from question→node matching (common words that inflate false matches).
+# The list is English-biased — the extractor prompt currently produces English questions. For
+# non-English questions nothing would be filtered here, which is a graceful degradation (noisier
+# but still functional matches) rather than a correctness issue. If the extractor starts emitting
+# other languages, either expand this set or switch to a language-detection-driven filter.
 _STOP_WORDS = frozenset({
     "the", "a", "an", "is", "are", "was", "were", "do", "does", "did", "has", "have", "had",
     "what", "where", "when", "who", "how", "which", "that", "this", "with", "for", "from",
     "about", "user", "their", "they", "them", "and", "or", "but", "not", "any", "some",
 })
+
+# Tokens at or below this length (after stripping punctuation) are dropped even if not in the
+# stop-word set. Cheap language-agnostic backstop against generic 1–2 char noise.
+_MIN_CONTENT_WORD_LEN = 3
+
+
+def _is_content_word(word: str) -> bool:
+    """True if `word` looks like a meaningful content token (not stop word, not too short)."""
+    return bool(word) and len(word) >= _MIN_CONTENT_WORD_LEN and word not in _STOP_WORDS
 
 
 def _match_question(node_data: str, questions: list[str]) -> str:
@@ -49,7 +62,7 @@ def _match_question(node_data: str, questions: list[str]) -> str:
     best_score = 0
 
     for q in questions:
-        words = {w.strip("?.,!") for w in q.lower().split()} - _STOP_WORDS
+        words = {w for w in (w.strip("?.,!'\"") for w in q.lower().split()) if _is_content_word(w)}
         if not words:
             continue
         hits = sum(1 for w in words if w in data_lower)
@@ -90,7 +103,8 @@ def _live_time_location_string(cfg) -> str:
                 location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
             )
         return f"Current local time: {format_time_context(tz_name)}. {location_context}"
-    except Exception:
+    except Exception as e:
+        debug_log(f"live time/location lookup failed: {e}", "memory")
         return ""
 
 
@@ -218,59 +232,60 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # or already fully answerable from live context — no reason to crawl the
     # knowledge graph.
     graph_context = ""
-    if enrichment_source in ("all", "graph") and not questions:
-        debug_log("skipping graph enrichment: no implicit questions to answer", "memory")
-    if enrichment_source in ("all", "graph") and questions:
-        try:
-            from ..memory.graph import GraphMemoryStore
-            graph_store = GraphMemoryStore(cfg.db_path)
+    if enrichment_source in ("all", "graph"):
+        if not questions:
+            debug_log("skipping graph enrichment: no implicit questions to answer", "memory")
+        else:
+            try:
+                from ..memory.graph import GraphMemoryStore
+                graph_store = GraphMemoryStore(cfg.db_path)
 
-            graph_parts: list[str] = []
-            # Track node name + matched question for user-facing logs
-            node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
+                graph_parts: list[str] = []
+                # Track node name + matched question for user-facing logs
+                node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
-            # Build search text from the questions, stripped of stop words so
-            # LIKE matching keys off the content words.
-            question_words: list[str] = []
-            seen: set[str] = set()
-            for q in questions:
-                for w in q.lower().split():
-                    w = w.strip("?.,!'\"")
-                    if w and w not in _STOP_WORDS and w not in seen:
-                        seen.add(w)
-                        question_words.append(w)
+                # Build search text from the questions, stripped of stop words so
+                # LIKE matching keys off the content words.
+                question_words: list[str] = []
+                seen: set[str] = set()
+                for q in questions:
+                    for w in q.lower().split():
+                        w = w.strip("?.,!'\"")
+                        if _is_content_word(w) and w not in seen:
+                            seen.add(w)
+                            question_words.append(w)
 
-            # Fewer than 2 meaningful words produces noisy LIKE matches against
-            # a single generic term — skip rather than surface irrelevant hits.
-            if len(question_words) < 2:
-                debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
-            else:
-                graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
-                for node in graph_nodes:
-                    ancestors = graph_store.get_ancestors(node.id)
-                    path = " > ".join(a.name for a in ancestors)
-                    data_preview = node.data[:300] if node.data else ""
-                    if data_preview:
-                        graph_parts.append(f"[{path}] {data_preview}")
-                        matched_q = _match_question(data_preview, questions)
-                        node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
-                        debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
+                # Fewer than 2 meaningful words produces noisy LIKE matches against
+                # a single generic term — skip rather than surface irrelevant hits.
+                if len(question_words) < 2:
+                    debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
+                else:
+                    graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
+                    for node in graph_nodes:
+                        ancestors = graph_store.get_ancestors(node.id)
+                        path = " > ".join(a.name for a in ancestors)
+                        data_preview = node.data[:300] if node.data else ""
+                        if data_preview:
+                            graph_parts.append(f"[{path}] {data_preview}")
+                            matched_q = _match_question(data_preview, questions)
+                            node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
+                            debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
-            if graph_parts:
-                graph_context = (
-                    "Information the user has shared with you in prior conversations "
-                    "(you have access to this — it is part of what the user has told "
-                    "you, just not in the current session):\n" + "\n".join(graph_parts)
-                )
-                names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
-                print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
-                for name, reason in node_annotations[:4]:
-                    if reason:
-                        print(f"     {name} → {reason}", flush=True)
-                    else:
-                        print(f"     {name}", flush=True)
-        except Exception as e:
-            debug_log(f"graph enrichment failed: {e}", "memory")
+                if graph_parts:
+                    graph_context = (
+                        "Information the user has shared with you in prior conversations "
+                        "(you have access to this — it is part of what the user has told "
+                        "you, just not in the current session):\n" + "\n".join(graph_parts)
+                    )
+                    names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
+                    print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
+                    for name, reason in node_annotations[:4]:
+                        if reason:
+                            print(f"     {name} → {reason}", flush=True)
+                        else:
+                            print(f"     {name}", flush=True)
+            except Exception as e:
+                debug_log(f"graph enrichment failed: {e}", "memory")
 
     # Step 6: Tool selection and description
     # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
