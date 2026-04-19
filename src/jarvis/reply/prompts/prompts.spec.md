@@ -70,11 +70,15 @@ When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, c
 
 USER INSTRUCTIONS:
 When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests.
+
+UNKNOWN NAMED ENTITIES:
+If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch to look it up. Do NOT reply that you have no information or ask the user for a link — perform the lookup yourself. Only skip the lookup if the entity is one you can state specific facts about (title, year, creator, plot, etc.) without guessing.
 ```
 
 **Design Rationale:**
 - Constraints are narrowly scoped to specific problematic cases
 - Covers greetings AND behavioral instructions (both don't require tools)
+- Includes a positive rule for unknown named entities — small models otherwise deflect ("I don't have information about X") instead of calling webSearch
 - It does NOT restrict web search for current information queries
 - It does NOT prevent tools from being used for legitimate tasks
 - Small models should still use tools when the user asks about news, weather, etc.

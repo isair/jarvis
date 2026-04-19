@@ -265,13 +265,11 @@ prompts = get_system_prompts(model_size)
 | `tool_constraints` | Not included | Explicit list of when NOT to use tools |
 
 **Small Model Constraints:**
-Small models receive an explicit list of scenarios where tools should NOT be used:
-- Greetings in any language (hello, ni hao, bonjour, etc.)
-- Small talk, thank you, goodbye
-- Questions answerable from general knowledge
-- Casual conversation
+Small models receive explicit guidance on when NOT to use tools and, symmetrically, when they MUST use them:
+- Skip tools for: greetings in any language (hello, ni hao, bonjour, etc.), small talk, thank you/goodbye, and behavioural instructions ("use Celsius", "be more brief").
+- Use `webSearch` for: questions about a specific named entity (film, book, song, game, product, person, company, place, event) when the model cannot cite concrete facts about that exact entity.
 
-This prevents issues like calling `webSearch` for "ni hao" (Chinese greeting).
+This prevents issues like calling `webSearch` for "ni hao" (Chinese greeting) while also preventing the opposite failure mode — denying knowledge of a specific named entity instead of looking it up.
 
 See `src/jarvis/reply/prompts/prompts.spec.md` for full prompt architecture documentation.
 
