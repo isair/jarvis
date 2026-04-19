@@ -65,6 +65,32 @@ INTENT_JUDGE_TEST_CASES = [
         expected_directed=True,
         expected_query_contains="mum",
     ),
+    # Self-contained imperative with an intentionally open subject ("something",
+    # "anything", "a joke") — these are valid queries and must not be treated
+    # as vague references or standalone "re-issue prior question" imperatives.
+    # Regression: gemma4:e2b was returning directed=false with reasoning "no
+    # extractable query" on "Jarvis say something please" because it conflated
+    # the open subject with a topic-less question.
+    IntentJudgeTestCase(
+        name="wake_word_open_imperative_say_something",
+        transcript="Jarvis say something please",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.5,
+        expected_directed=True,
+        expected_query_contains="say something",
+        expected_query_not_contains="jarvis",
+    ),
+    IntentJudgeTestCase(
+        name="wake_word_open_imperative_tell_me_a_joke",
+        transcript="Jarvis tell me a joke",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.5,
+        expected_directed=True,
+        expected_query_contains="joke",
+        expected_query_not_contains="jarvis",
+    ),
     # Same-segment context synthesis (distinct from simple wake+Q)
     IntentJudgeTestCase(
         name="context_synthesis_weather_opinion",
