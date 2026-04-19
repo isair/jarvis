@@ -44,6 +44,31 @@ INTENT_JUDGE_TEST_CASES = [
         expected_query_contains="time",
         expected_query_not_contains="jarvis",
     ),
+    # Wake word at sentence end, adjacent to a named entity. Regression guard:
+    # the judge previously left "Jarvis" in the query, causing the reply engine
+    # to treat "Possessor Jarvis" as the film title instead of "Possessor".
+    IntentJudgeTestCase(
+        name="wake_word_trailing_after_named_entity",
+        transcript="what do you know about the movie called Possessor Jarvis",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1001.5,
+        expected_directed=True,
+        expected_query_contains="possessor",
+        expected_query_not_contains="jarvis",
+    ),
+    # Wake word mid-sentence (not at start, not at end). Ensures the judge
+    # removes every occurrence, not just the leading one.
+    IntentJudgeTestCase(
+        name="wake_word_mid_sentence",
+        transcript="hey Jarvis what's the weather in London",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.3,
+        expected_directed=True,
+        expected_query_contains="weather",
+        expected_query_not_contains="jarvis",
+    ),
     # Wake word + command/imperative addressed to the assistant (not a question)
     IntentJudgeTestCase(
         name="wake_word_command_timer",
