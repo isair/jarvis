@@ -278,6 +278,17 @@ Create a summary that:
 3. Focuses on facts, decisions, and context that would be useful for future conversations
 4. Includes any personal information, preferences, or important events mentioned
 5. Maintains a neutral, factual tone
+6. Records what the user asked about and what was established as true — NOT the assistant's conversational missteps. Do NOT narrate moments where the assistant failed to answer, said it lacked information, offered to search, deflected, declined, or clarified its own limitations. Those events are transient and do not generalise; preserving them in the diary trains future sessions to repeat the same failures.
+   - If the assistant eventually answered (e.g. after calling a tool), summarise the final answer only.
+   - If the topic was raised but never resolved, record only the topic and the user's intent — strip out every phrase describing the assistant's inability, uncertainty, or offers to help.
+   - Never write phrases like "the assistant did not have/does not have information", "the assistant could not", "the assistant offered to search", "the assistant was unable", "the assistant clarified that it…", "the assistant lacks…", or their equivalents in any language.
+
+   Example of what NOT to write:
+     BAD: "The user asked about the book Piranesi. The assistant stated it did not have specific information on that book."
+   Example of the correct output:
+     GOOD: "The user asked about the book Piranesi."
+
+   This rule applies in any language.
 
 Also extract 3-5 main topics as comma-separated keywords."""
 
