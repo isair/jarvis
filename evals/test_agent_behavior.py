@@ -1180,6 +1180,14 @@ class TestHelpfulness:
             "only have access to the information you",
             "only have access to what you",
             "i don't have any information about you",
+            # Long-term memory denial templates
+            "do not have long-term",
+            "don't have long-term",
+            "no long-term memory",
+            "do not store personal details",
+            "don't store personal details",
+            "forgotten between sessions",
+            "outside of our conversation history",
         ]
         denied = next((p for p in denial_phrases if p in response_lower), None)
         assert denied is None, (
@@ -1200,4 +1208,66 @@ class TestHelpfulness:
         )
 
         print(f"   ✅ Response referenced stored facts: {matched_facts}")
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    def test_does_not_deny_long_term_memory_live(
+        self, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """
+        Live eval: asking the assistant to remember something must not trigger
+        a 'I have no long-term memory across sessions' denial.
+
+        Jarvis *does* have persistent memory (the knowledge graph + diary), so
+        replying with "I can't remember things between sessions" is a factually
+        wrong hedge that small models slip into. This eval locks in the fix:
+        system-prompt directive + banned phrasings.
+        """
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config.memory_enrichment_source = "all"
+
+        query = "please remember that I'm vegetarian"
+
+        with patch("jarvis.reply.engine.extract_search_params_for_memory",
+                   return_value={"keywords": ["vegetarian", "diet"], "questions": []}), \
+             patch("jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[]), \
+             patch("jarvis.reply.engine.get_location_context_with_timezone",
+                   return_value=("Location: Hackney, London, UK", "Europe/London")):
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory,
+            )
+
+        response = response or ""
+        response_lower = response.lower()
+
+        print(f"\n📊 Long-Term Memory Self-Awareness (live):")
+        print(f"   Query: {query}")
+        print(f"   Model: {JUDGE_MODEL}")
+        print(f"   Response: {response[:300]}")
+
+        memory_denials = [
+            "do not have long-term",
+            "don't have long-term",
+            "no long-term memory",
+            "do not store personal details",
+            "don't store personal details",
+            "forgotten between sessions",
+            "lose that information when",
+            "only within this session",
+            "only for this conversation",
+            "only for our current conversation",
+            "do not retain",
+            "don't retain",
+        ]
+        denied = next((p for p in memory_denials if p in response_lower), None)
+        assert denied is None, (
+            f"Model denied having long-term memory. Matched: {denied!r}\n"
+            f"Response: {response[:400]}"
+        )
+        print(f"   ✅ No long-term-memory denial")
 

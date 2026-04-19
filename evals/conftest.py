@@ -123,6 +123,7 @@ TEST_DESCRIPTIONS = {
     "test_no_deflection_for_answerable_queries_live": "Live: no deflection for answerable queries",
     "test_tool_retry_after_failure_live": "Live: tool retry after initial failure",
     "test_graph_knowledge_surfaced_in_reply_live": "Live: graph-enriched facts surface in reply, no denial",
+    "test_does_not_deny_long_term_memory_live": "Live: assistant does not deny having long-term memory",
 }
 
 
