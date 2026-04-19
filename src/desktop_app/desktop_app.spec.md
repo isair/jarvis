@@ -200,9 +200,9 @@ Updates are only available in bundled mode (PyInstaller builds).
 
 | Platform | Strategy |
 |----------|----------|
-| **macOS** | Uses AppleScript to move current app to trash, move new app in place, and relaunch (synchronous, works because Unix allows moving running apps) |
-| **Windows** | Creates a batch script that waits for the current process (by PID via `tasklist`) to exit, then replaces the executable and relaunches |
-| **Linux** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, then replaces the directory and relaunches |
+| **macOS** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, moves the old `.app` aside to `Jarvis.app.backup` (one-generation rollback), moves the new bundle in, strips `com.apple.quarantine` so Gatekeeper doesn't re-prompt on unsigned builds, and relaunches via `open`. No Finder/AppleScript automation. Pattern mirrors Squirrel.Mac's `ShipIt` helper. |
+| **Windows** | Creates a batch script that waits for the current process (by PID via `tasklist`) to exit, then runs the Inno Setup installer with `/SILENT` so the installer's own progress window provides visual feedback during install, then relaunches the upgraded exe. Rollback is handled by Inno Setup's own in-session rollback + retained uninstaller data. |
+| **Linux** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, moves the old directory to `Jarvis.backup` for rollback, moves the new directory in, and relaunches |
 
 ### Update Flow (Windows/Linux)
 
@@ -231,6 +231,9 @@ sequenceDiagram
 - **Diary is saved before update installation**: The `pre_install_callback` mechanism ensures the diary is saved before the update process begins, so no data is lost
 - **Asset ID tracking**: For develop channel updates (where version stays "latest"), we track the GitHub asset ID to detect new builds
 - **Robust Windows update**: The batch script waits for the actual process to exit (by PID) rather than using a fixed timeout, ensuring the update doesn't fail due to slow shutdown
+- **Visible Windows install progress**: The Inno Setup installer runs with `/SILENT` (not `/VERYSILENT`) so its own progress window is visible while the install runs — bridging the gap between the download dialog closing and the new app launching, which would otherwise look like a hang
+- **Quarantine stripping (macOS)**: The shell script runs `xattr -dr com.apple.quarantine` on the newly-installed bundle. Builds are unsigned (ad-hoc signing breaks Qt WebEngine's symlinks — see `release.yml`), so without this step Gatekeeper may re-trigger the "unidentified developer" prompt on every update
+- **One-generation rollback (macOS, Linux)**: The previous `.app` / directory is moved aside to `<name>.backup` rather than deleted outright, so a user can restore the prior version manually if the new one fails to launch. The backup from the previous update is cleared before creating a new one, so at most one backup exists on disk at a time. This is a simplified version of Squirrel's versioned-folder rollback — enough safety for a single-bundle install, without the architectural overhead
 
 ## Memory Viewer
 

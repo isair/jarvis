@@ -466,8 +466,12 @@ class TestInstallUpdateWindows:
             assert "tasklist" in batch_content
             assert "Process exited" in batch_content
 
-            # Verify the installer is run silently (not the old move/replace approach)
-            assert "/VERYSILENT" in batch_content
+            # Verify the installer is run silently (not the old move/replace approach).
+            # We use /SILENT rather than /VERYSILENT so Inno Setup shows its own
+            # progress window during install — otherwise the user sees nothing
+            # between the download dialog closing and the new app launching.
+            assert "/SILENT" in batch_content
+            assert "/VERYSILENT" not in batch_content
             assert "/SUPPRESSMSGBOXES" in batch_content
             assert "move /y" not in batch_content
 
@@ -516,11 +520,95 @@ class TestInstallUpdateWindows:
 
         # The launch must come after the installer line so the new binary is
         # in place when it runs.
-        installer_idx = batch_content.find("/VERYSILENT")
+        installer_idx = batch_content.find("/SILENT")
         launch_idx = batch_content.find(f'start "" "{mock_app_path}"')
         assert installer_idx != -1, "installer line missing"
         assert launch_idx != -1, "start line for upgraded exe missing"
         assert launch_idx > installer_idx, "launch must follow install"
+
+
+class TestInstallUpdateMacos:
+    """Tests for macOS update installation."""
+
+    @pytest.mark.unit
+    def test_shell_script_waits_for_pid_and_relaunches(self, tmp_path):
+        """macOS installer must wait for the current PID to exit, replace the
+        bundle with plain file ops (no Finder automation), and relaunch.
+
+        The previous AppleScript/Finder approach was failing mid-install on
+        some machines — it would trash the old app, prompt for file-editing
+        permission, then error out, leaving the user with no app. The shell
+        script approach matches Linux and avoids Finder entirely.
+        """
+        import os
+        import zipfile
+        from unittest.mock import patch, MagicMock
+
+        zip_path = tmp_path / "update.zip"
+        app_source = tmp_path / "zip_content" / "Jarvis.app"
+        app_source.mkdir(parents=True)
+        (app_source / "Contents").mkdir()
+        (app_source / "Contents" / "Info.plist").write_bytes(b"mock plist")
+
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in app_source.rglob("*"):
+                if f.is_file():
+                    zf.write(f, arcname=str(f.relative_to(tmp_path / "zip_content")))
+
+        mock_app_path = tmp_path / "Applications" / "Jarvis.app"
+        mock_app_path.mkdir(parents=True)
+        (mock_app_path / "existing").write_bytes(b"old bundle")
+
+        from desktop_app.updater import install_update_macos
+
+        script_content_captured = []
+
+        def capture_popen(args, **kwargs):
+            if len(args) == 1 and args[0].endswith("update.sh"):
+                script_path = Path(args[0])
+                if script_path.exists():
+                    script_content_captured.append(script_path.read_text())
+            return MagicMock()
+
+        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                result = install_update_macos(zip_path)
+
+        assert result is True
+        assert len(script_content_captured) == 1
+        script_content = script_content_captured[0]
+
+        current_pid = os.getpid()
+        assert f"kill -0 {current_pid}" in script_content
+        assert "sleep 1" in script_content
+        # No Finder automation
+        assert "osascript" not in script_content
+        assert "Finder" not in script_content
+        # Bundle is replaced and relaunched
+        assert "mv " in script_content
+        assert "open " in script_content
+
+        # Previous bundle is preserved as a .backup for rollback, not deleted.
+        # This is important: if the new version fails to launch, the user can
+        # restore the backup manually.
+        backup_path = str(mock_app_path) + ".backup"
+        assert backup_path in script_content
+        assert f"mv '{mock_app_path}' '{backup_path}'" in script_content
+        # The old .backup from the previous update is cleared first.
+        assert f"rm -rf '{backup_path}'" in script_content
+
+        # Quarantine xattr is stripped so Gatekeeper doesn't re-prompt on every
+        # update for unsigned builds.
+        assert "xattr -dr com.apple.quarantine" in script_content
+
+        clear_backup_idx = script_content.find(f"rm -rf '{backup_path}'")
+        move_to_backup_idx = script_content.find(f"mv '{mock_app_path}' '{backup_path}'")
+        install_idx = script_content.find(f"mv '") # first mv is to backup, find install
+        xattr_idx = script_content.find("xattr -dr com.apple.quarantine")
+        open_idx = script_content.find("open ")
+        assert clear_backup_idx < move_to_backup_idx, "must clear old backup before creating new one"
+        assert move_to_backup_idx < xattr_idx, "backup happens before xattr strip"
+        assert xattr_idx < open_idx, "xattr strip must precede launch"
 
 
 class TestInstallUpdateLinux:
@@ -575,6 +663,11 @@ class TestInstallUpdateLinux:
                 assert "while" in script_content
                 assert "sleep 1" in script_content
                 assert "Process exited" in script_content
+
+                # Previous directory is kept as .backup for rollback.
+                backup_path = str(mock_app_dir) + ".backup"
+                assert backup_path in script_content
+                assert f"mv '{mock_app_dir}' '{backup_path}'" in script_content
 
 
 class TestPathEscaping:

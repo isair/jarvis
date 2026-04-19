@@ -338,17 +338,17 @@ def is_frozen() -> bool:
 def install_update_macos(download_path: Path) -> bool:
     """Install update on macOS.
 
-    Strategy:
-    1. Extract zip to temp location
-    2. Move current app to trash
-    3. Move new app to original location
-    4. Launch new app
-    5. Exit current app
+    Strategy mirrors Linux: write a shell script that waits for the current
+    process to exit, replaces the .app bundle with `rm -rf` + `mv`, relaunches
+    via `open`, and cleans up temp. Using plain Unix file operations avoids
+    the Finder/AppleScript automation prompts that were failing mid-install
+    and leaving users with a trashed app and no replacement.
     """
     import zipfile
 
     app_path = get_app_path()
     temp_dir = Path(tempfile.mkdtemp())
+    current_pid = os.getpid()
 
     try:
         with zipfile.ZipFile(download_path, "r") as zf:
@@ -359,29 +359,43 @@ def install_update_macos(download_path: Path) -> bool:
         if not new_app_path.exists():
             raise FileNotFoundError("Jarvis.app not found in download")
 
-        # Use AppleScript to move to trash and replace
-        # Escape paths to prevent injection if paths contain quotes
-        escaped_app = _escape_applescript_path(app_path)
-        escaped_new_app = _escape_applescript_path(new_app_path)
-        escaped_parent = _escape_applescript_path(app_path.parent)
-        script = f'''
-        tell application "Finder"
-            move POSIX file "{escaped_app}" to trash
-            move POSIX file "{escaped_new_app}" to folder "{escaped_parent}"
-        end tell
-        '''
-        subprocess.run(["osascript", "-e", script], check=True)
+        escaped_app = _escape_shell_path(app_path)
+        escaped_backup = _escape_shell_path(app_path.with_suffix(app_path.suffix + ".backup"))
+        escaped_new_app = _escape_shell_path(new_app_path)
+        escaped_temp = _escape_shell_path(temp_dir)
 
-        # Launch new app
-        subprocess.Popen(["open", str(app_path.parent / "Jarvis.app")])
+        # The quarantine strip is essential for unsigned builds: without it,
+        # Gatekeeper may re-prompt with "unidentified developer" on every
+        # update. Keeping the previous bundle as .backup provides a one-step
+        # rollback if the new version fails to launch.
+        script_path = temp_dir / "update.sh"
+        script_content = f'''#!/bin/bash
+echo "Updating Jarvis..."
+echo "Waiting for process {current_pid} to exit..."
+while kill -0 {current_pid} 2>/dev/null; do
+    sleep 1
+done
+echo "Process exited, applying update..."
+rm -rf {escaped_backup}
+if [ -e {escaped_app} ]; then
+    mv {escaped_app} {escaped_backup}
+fi
+mv {escaped_new_app} {escaped_app}
+xattr -dr com.apple.quarantine {escaped_app} 2>/dev/null || true
+open {escaped_app}
+rm -rf {escaped_temp}
+'''
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        subprocess.Popen([str(script_path)], start_new_session=True)
 
         return True
 
     except Exception as e:
         debug_log(f"macOS update failed: {e}", "updater")
-        return False
-    finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+        return False
 
 
 def install_update_windows(download_path: Path) -> bool:
@@ -417,11 +431,13 @@ def install_update_windows(download_path: Path) -> bool:
 
         batch_script = temp_dir / "update.bat"
         # Wait for the current process to exit by checking if PID still exists.
-        # This is more reliable than a fixed timeout since the app may take time
-        # to shut down (e.g., saving diary entries).
         # tasklist returns errorlevel 0 if process found, 1 if not found.
-        # After the silent installer finishes the installer's own [Run] launch
-        # step is skipped (skipifsilent), so we relaunch the upgraded exe here.
+        # We use /SILENT (not /VERYSILENT) so Inno Setup shows its own progress
+        # window during install — otherwise the user sees nothing between the
+        # download dialog closing and the new app launching, which can take
+        # long enough to feel like a hang. The installer's own [Run] launch
+        # step is still skipped under /SILENT (skipifsilent), so we relaunch
+        # the upgraded exe ourselves.
         batch_content = f'''@echo off
 echo Updating Jarvis...
 echo Waiting for process {current_pid} to exit...
@@ -432,7 +448,7 @@ if not errorlevel 1 (
     goto wait_loop
 )
 echo Process exited, running installer...
-"{escaped_new_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+"{escaped_new_exe}" /SILENT /SUPPRESSMSGBOXES /NORESTART
 echo Launching updated Jarvis...
 start "" "{escaped_installed_exe}"
 rmdir /s /q "{escaped_temp}"
@@ -482,14 +498,14 @@ def install_update_linux(download_path: Path) -> bool:
 
         # Escape paths using single quotes to prevent shell injection
         escaped_app_dir = _escape_shell_path(app_dir)
+        escaped_backup = _escape_shell_path(app_dir.with_name(app_dir.name + ".backup"))
         escaped_new_app = _escape_shell_path(new_app_dir)
         escaped_temp = _escape_shell_path(temp_dir)
         escaped_jarvis = _escape_shell_path(app_dir / "Jarvis")
 
         script_path = temp_dir / "update.sh"
-        # Wait for the current process to exit by checking if PID still exists.
-        # This is more reliable than a fixed timeout since the app may take time
-        # to shut down (e.g., saving diary entries).
+        # Keeping the previous directory as .backup gives the user a one-step
+        # rollback if the new version fails to launch.
         script_content = f'''#!/bin/bash
 echo "Updating Jarvis..."
 echo "Waiting for process {current_pid} to exit..."
@@ -497,7 +513,10 @@ while kill -0 {current_pid} 2>/dev/null; do
     sleep 1
 done
 echo "Process exited, applying update..."
-rm -rf {escaped_app_dir}
+rm -rf {escaped_backup}
+if [ -e {escaped_app_dir} ]; then
+    mv {escaped_app_dir} {escaped_backup}
+fi
 mv {escaped_new_app} {escaped_app_dir}
 {escaped_jarvis} &
 rm -rf {escaped_temp}
