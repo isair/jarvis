@@ -120,6 +120,74 @@ class TestIntentJudge:
         )
         assert "HOT WINDOW" in prompt
 
+    def test_build_user_prompt_normalises_aliases(self):
+        """Aliases (Whisper variants) are replaced with the assistant name in the prompt."""
+        config = IntentJudgeConfig(
+            assistant_name="Jarvis",
+            aliases=["jervis", "jaivis", "jar is"],
+        )
+        judge = IntentJudge(config)
+        segments = [
+            TranscriptSegment("Jervis what time is it", 1000.0, 1001.0),
+            TranscriptSegment("Jaivis tell me a joke", 1002.0, 1003.0),
+            TranscriptSegment("hey Jar is, are you there", 1004.0, 1005.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=1000.5,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=False,
+        )
+        assert "Jervis" not in prompt
+        assert "Jaivis" not in prompt
+        assert "Jar is" not in prompt
+        # Each aliased segment is rewritten to use the primary wake word.
+        assert prompt.count("Jarvis") >= 3
+
+    def test_build_user_prompt_alias_word_boundary(self):
+        """Alias normalisation respects word boundaries (won't eat substrings)."""
+        config = IntentJudgeConfig(assistant_name="Jarvis", aliases=["jar"])
+        judge = IntentJudge(config)
+        segments = [
+            TranscriptSegment("put the jar on the table", 1000.0, 1001.0),
+        ]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=False,
+        )
+        # "jar" as a standalone word still gets normalised — that's expected
+        # given the user configured it as an alias.
+        assert "Jarvis" in prompt
+        # But "jarring" would NOT be replaced if it appeared.
+        segments2 = [TranscriptSegment("the noise was jarring", 1000.0, 1001.0)]
+        prompt2 = judge._build_user_prompt(
+            segments2,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=False,
+        )
+        assert "jarring" in prompt2
+        assert "Jarvisring" not in prompt2
+
+    def test_build_user_prompt_no_aliases_unchanged(self):
+        """With no aliases configured, segment text is passed through unchanged."""
+        config = IntentJudgeConfig(assistant_name="Jarvis", aliases=[])
+        judge = IntentJudge(config)
+        segments = [TranscriptSegment("Jervis what time", 1000.0, 1001.0)]
+        prompt = judge._build_user_prompt(
+            segments,
+            wake_timestamp=None,
+            last_tts_text="",
+            last_tts_finish_time=0.0,
+            in_hot_window=False,
+        )
+        assert "Jervis" in prompt
+
     def test_build_user_prompt_with_tts(self):
         """User prompt includes TTS info."""
         judge = IntentJudge()

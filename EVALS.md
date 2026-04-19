@@ -4,13 +4,13 @@
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **156/164 passed (95.1%)** across all categories
+**Overall:** 🟢 **158/166 passed (95.2%)** across all categories
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
 | 🤖 Agent behaviour | `gemma4:e2b` | 56 | 7 | 0 | 🟢 88.9% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 65 | 1 | 0 | 🟢 98.5% |
-| 🎤 Intent judge | `gemma4:e2b` (fixed) | 30 | 0 | 0 | 🟢 100.0% |
+| 🎤 Intent judge | `gemma4:e2b` (fixed) | 32 | 0 | 0 | 🟢 100.0% |
 | 🔍 Tool selection | `nomic-embed-text` (fixed) | 5 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
@@ -103,6 +103,8 @@
 
 | Test Case | Pass Rate | Status |
 |-----------|-----------|:------:|
+| alias_after_narrative_context | 1/1 (100%) | ✅ |
+| alias_treated_as_wake_word | 1/1 (100%) | ✅ |
 | buffer_echo_then_followup_hot_window | 1/1 (100%) | ✅ |
 | context_synthesis_weather_opinion | 1/1 (100%) | ✅ |
 | context_synthesis_with_prior_ambient | 1/1 (100%) | ✅ |
