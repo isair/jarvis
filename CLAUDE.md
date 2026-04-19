@@ -32,11 +32,17 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit 
 
 When pushing commits to a PR, always update the PR title and body to cover the entire changeset.
 
+After creating a PR, run the `/review-pr` skill on it before considering the task complete.
+
 Squash-merged commits on `develop` should only carry the PR number in the title (e.g. `(#171)`), never the originating issue number. Issue references belong in the commit body as `Closes #NNN` so that they auto-close when the commit reaches `main` on release.
 
 ## Issue Triage
 
 Never close an issue because its fix landed on `develop`. GitHub auto-closes issues when the `Closes #NNN` commit reaches `main` during a release, so a manual close on a develop-only fix is premature and drops the auto-close signal. The only legitimate manual closures are: duplicates (reference the canonical issue), insufficient info, user-environment issues, or not-a-bug.
+
+Before assuming you understand a reported issue, re-read the report and check whether key usage details are actually stated. If something is ambiguous (e.g. were they using the wake word? which model? which OS?), ask clarifying questions or offer guidance on correct usage rather than jumping to a diagnosis. Keep issues open until at least 2 weeks of reporter inactivity after a clarifying question or suggested fix — don't close them for silence before then.
+
+If you discover a past comment you made that was premature, wrong, or missed the point, edit or delete the original comment rather than leaving it and posting a follow-up correction. A clean thread is easier for reporters to follow than a trail of self-corrections.
 
 ## Releases
 
