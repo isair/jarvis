@@ -145,6 +145,7 @@ WAKE WORD MODE:
 - If standalone imperative command ("answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer") NOT a question -> re-issue prior question
   Variants: "answered that", "answers that", "answering that" = same imperative (Whisper tense errors)
   Exception: If segment has BOTH imperative + new question -> new question wins
+  This rule ONLY applies to imperatives that explicitly reference a prior thing ("that", "my question", "answer"). Self-contained imperatives with open subjects ("say something", "tell me a joke", "tell me anything", "give me advice", "surprise me") are valid queries — pass them through literally, do NOT treat them as vague or as needing a prior question.
 - Query must be answerable alone (without the transcript)
 
 HOT WINDOW MODE (no wake word needed):
@@ -169,6 +170,8 @@ Output JSON only:
 
 Examples:
 - "Jarvis what time is it" -> {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word + question"}}
+- "Jarvis say something please" -> {{"directed": true, "query": "say something please", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
+- "Jarvis tell me a joke" -> {{"directed": true, "query": "tell me a joke", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
 - Previous "dinosaurs are cool" + Current "Jarvis what do you think about that" -> {{"directed": true, "query": "what do you think about dinosaurs being cool", "stop": false, "confidence": "high", "reasoning": "resolved 'that' to dinosaurs"}}
 - Previous "How's the weather?" + Current "Jarvis answer that" -> {{"directed": true, "query": "how is the weather", "stop": false, "confidence": "high", "reasoning": "imperative -> re-issue prior question"}}
 - Hot window, user says "I think absurdism is better" -> {{"directed": true, "query": "I think absurdism is better", "stop": false, "confidence": "high", "reasoning": "user statement in hot window"}}

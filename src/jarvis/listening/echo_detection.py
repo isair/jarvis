@@ -29,8 +29,14 @@ class EchoDetector:
         self._last_tts_text: str = ""
         self._tts_energy_baseline: float = 0.0
         self._tts_exact_duration: Optional[float] = None  # Exact audio duration from Piper
-        # Acceptance policy
-        self._min_overlap_accept_words: int = 3  # require at least this many words to overlap
+        # Acceptance policy — shared threshold for any salvage decision:
+        # the minimum word count required both for the overlapped prefix and
+        # for the non-echo remainder we keep. 3 is low enough to admit short
+        # natural follow-ups ("tell me more please") while high enough to
+        # reject Whisper's echo-tail hallucinations ("…regions like Steneti").
+        self.min_salvage_words: int = 3
+        # Backwards-compat alias — older callers used the overlap name.
+        self._min_overlap_accept_words: int = self.min_salvage_words
         
         # Utterance timing
         self._utterance_start_time: float = 0.0

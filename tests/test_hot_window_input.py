@@ -568,6 +568,116 @@ class TestEchoAndUserSpeechInSameChunk:
         assert _accepted_query(listener) == "tell me more"
         listener.state_manager.stop()
 
+    @patch("builtins.print")
+    def test_early_echo_check_salvages_trailing_user_speech(self, _print):
+        """Early echo check must salvage user speech appended after an echo prefix.
+
+        Whisper often merges the tail of TTS echo with the user's follow-up into
+        one transcript. The early fuzzy echo check used to reject the whole chunk,
+        so the user's real speech was dropped before the intent judge could see it.
+        """
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        tts_text = (
+            "I do have a tool to check the weather, but I need to use it with a "
+            "location. I can check the forecast for London for you right now."
+        )
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="yeah go ahead and do that"))
+
+        # Mixed chunk: exact tail of TTS echo + user's follow-up
+        listener._process_transcript(
+            "I can check the forecast for London for you right now. "
+            "Yeah, go ahead and do that.",
+            utterance_energy=0.01,
+        )
+
+        query = _accepted_query(listener)
+        assert query != "", "Trailing user speech should be salvaged, not rejected as echo"
+        assert "go ahead" in query.lower()
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_early_echo_salvage_accepts_at_minimum_word_count(self, _print):
+        """Salvaged remainder at exactly min_salvage_words should be accepted."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        min_words = listener.echo_detector.min_salvage_words
+
+        tts_text = "The weather is going to be sunny today in London."
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        follow_up_words = ["thanks", "tell", "me", "more", "please"][:min_words]
+        follow_up = " ".join(follow_up_words)
+        _install_intent_judge(listener, _make_judgment(directed=True, query=follow_up))
+
+        listener._process_transcript(
+            f"{tts_text} {follow_up}",
+            utterance_energy=0.01,
+        )
+
+        assert _accepted_query(listener) != "", (
+            f"Remainder of exactly {min_words} words should be salvaged"
+        )
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_early_echo_salvage_rejects_below_minimum_word_count(self, _print):
+        """Salvaged remainder below min_salvage_words should be rejected as echo."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        min_words = listener.echo_detector.min_salvage_words
+
+        tts_text = "The weather is going to be sunny today in London."
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        short_tail = " ".join(["really", "nice"][: max(min_words - 1, 1)])
+        judge = _install_intent_judge(listener, _make_judgment(
+            directed=True, query=short_tail, reasoning="should not be consulted"))
+
+        listener._process_transcript(
+            f"{tts_text} {short_tail}",
+            utterance_energy=0.01,
+        )
+
+        assert _accepted_query(listener) == "", (
+            f"Remainder below {min_words} words should be rejected"
+        )
+        judge.judge.assert_not_called()
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_early_echo_salvage_rejects_when_no_prefix_match(self, _print):
+        """If cleanup_leading_echo can't strip any prefix, fall back to rejection."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        tts_text = "alpha beta gamma delta epsilon zeta"
+        listener.echo_detector.track_tts_start(tts_text)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        judge = _install_intent_judge(listener, _make_judgment(
+            directed=False, query="", reasoning="should not be consulted"))
+
+        # Shares enough words with TTS to clear partial_ratio >= 70 (marks it
+        # echo) but the tokens are in a different order so cleanup_leading_echo
+        # cannot find a matching prefix — nothing to salvage.
+        listener._process_transcript(
+            "beta alpha delta gamma zeta epsilon",
+            utterance_energy=0.01,
+        )
+
+        assert _accepted_query(listener) == "", (
+            "Chunk with no strippable prefix should be rejected as pure echo"
+        )
+        judge.judge.assert_not_called()
+        listener.state_manager.stop()
+
 
 # ---------------------------------------------------------------------------
 # Tests: Grace period boundaries
