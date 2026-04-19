@@ -1073,3 +1073,131 @@ class TestHelpfulness:
                 f"Response: {(response or '')[:300]}"
             )
 
+    @pytest.mark.eval
+    @requires_judge_llm
+    def test_graph_knowledge_surfaced_in_reply_live(
+        self, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """
+        Live eval: when graph enrichment injects stored knowledge about the user,
+        the LLM must use it — not deny having any personal information.
+
+        Reproduces the observed failure where asking "tell me something about
+        myself" surfaced 5 knowledge nodes yet the model still replied "I only
+        know what you have told me in this current conversation". The graph
+        context is now framed as the model's own knowledge; this eval locks
+        that behaviour in so any regression (prompt drift, block framing, or
+        silent drop like the earlier orphan-list bug) is caught.
+        """
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+        # Graph enrichment is opt-in via this setting; MockConfig defaults it off.
+        mock_config.memory_enrichment_source = "all"
+
+        class _Node:
+            def __init__(self, id_, name, data):
+                self.id = id_
+                self.name = name
+                self.data = data
+                self.data_token_count = max(1, len(data) // 4)
+
+        class _Ancestor:
+            def __init__(self, name):
+                self.name = name
+
+        nodes = [
+            _Node(
+                "n-food",
+                "Food Preferences",
+                "The user loves Thai food (especially pad see ew) and "
+                "regularly cooks homemade ramen on Sundays.",
+            ),
+            _Node(
+                "n-fitness",
+                "Fitness & Wellness",
+                "The user boxes three times a week at Trenches Gym in Hackney "
+                "and has been training consistently since 2023.",
+            ),
+            _Node(
+                "n-work",
+                "Work",
+                "The user is a software engineer at Equals Money and works "
+                "primarily on a local voice-assistant side-project called Jarvis.",
+            ),
+        ]
+
+        class _FakeStore:
+            def __init__(self, *a, **kw):
+                pass
+
+            def search_nodes(self, query, limit=5):
+                return nodes[:limit]
+
+            def get_ancestors(self, node_id):
+                return [_Ancestor("Root")]
+
+        # Extractor must produce questions so graph enrichment runs.
+        fake_extract = {
+            "keywords": ["personal", "interests", "preferences"],
+            "questions": [
+                "what are the user's hobbies and interests?",
+                "what food does the user like?",
+                "where does the user work?",
+            ],
+        }
+
+        query = "what do you know about my hobbies, interests, and work?"
+
+        with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=fake_extract), \
+             patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
+             patch("jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[]), \
+             patch("jarvis.reply.engine.get_location_context_with_timezone",
+                   return_value=("Location: Hackney, London, UK", "Europe/London")):
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory,
+            )
+
+        response = response or ""
+        response_lower = response.lower()
+
+        print(f"\n📊 Graph Knowledge Surfaced in Reply (live):")
+        print(f"   Query: {query}")
+        print(f"   Model: {JUDGE_MODEL}")
+        print(f"   Response: {response[:300]}")
+
+        # Deflection phrases that indicate the model ignored the stored knowledge.
+        denial_phrases = [
+            "don't have any personal",
+            "do not have any personal",
+            "don't have personal information",
+            "no personal information",
+            "i don't know anything about you",
+            "i only know what you",
+            "only have access to the information you",
+            "only have access to what you",
+            "i don't have any information about you",
+        ]
+        denied = next((p for p in denial_phrases if p in response_lower), None)
+        assert denied is None, (
+            f"Model denied knowing personal info despite graph enrichment providing it. "
+            f"Matched denial phrase: {denied!r}\nResponse: {response[:400]}"
+        )
+
+        # At least one concrete fact from the stored nodes should appear.
+        fact_keywords = [
+            "thai", "pad see ew", "ramen",
+            "box", "trenches", "hackney", "gym",
+            "equals money", "software engineer", "jarvis",
+        ]
+        matched_facts = [kw for kw in fact_keywords if kw in response_lower]
+        assert matched_facts, (
+            f"Response did not reference any stored knowledge. "
+            f"Expected at least one of: {fact_keywords}\nResponse: {response[:400]}"
+        )
+
+        print(f"   ✅ Response referenced stored facts: {matched_facts}")
+
