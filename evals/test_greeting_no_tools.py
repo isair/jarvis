@@ -140,6 +140,12 @@ class TestGreetingNoToolsLive:
     @pytest.mark.parametrize("query", [
         pytest.param("what do you know about the Possessor movie", id="Live unknown entity: Possessor (film)"),
         pytest.param("tell me about the book Piranesi", id="Live unknown entity: Piranesi (book)"),
+        # Permission-framed phrasing. Regression: the small model previously
+        # read "what can you tell me" as "tell me what you can do" and deflected
+        # with "I can search the web if you'd like" instead of calling webSearch.
+        pytest.param("what can you tell me about the movie Possessor", id="Live unknown entity: permission-framed (Possessor)"),
+        # "Have you heard of" is another common permission-framed variant.
+        pytest.param("have you heard of the film Piranesi", id="Live unknown entity: have-you-heard-of (Piranesi)"),
     ])
     def test_unknown_named_entity_triggers_web_search_live(
         self,
