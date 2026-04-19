@@ -1486,3 +1486,159 @@ class TestWhisperRateLimitRetry:
                             # Should have only tried once — no retry
                             mock_class.assert_called_once()
                             assert listener.model is None
+
+
+def _make_listener_for_warmup(
+    chat_model: str = "llama3.1",
+    judge_model: str | None = "gemma4:e2b",
+    base_url: str = "http://127.0.0.1:11434",
+):
+    """Construct a VoiceListener with enough stubs to exercise warmup only."""
+    with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+        with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+            with patch("jarvis.listening.listener.sd") as mock_sd:
+                mock_sd.query_devices.return_value = [
+                    {"name": "Test Mic", "max_input_channels": 1}
+                ]
+
+                from jarvis.listening.listener import VoiceListener
+                from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
+
+                mock_cfg = _create_mock_config()
+                mock_cfg.ollama_chat_model = chat_model
+                mock_cfg.ollama_base_url = base_url
+                mock_cfg.llm_tools_timeout_sec = 8.0
+                mock_cfg.intent_judge_model = judge_model or ""
+                mock_cfg.intent_judge_timeout_sec = 10.0
+                mock_cfg.intent_judge_thinking_enabled = False
+                mock_cfg.wake_word = "jarvis"
+                mock_cfg.wake_aliases = []
+
+                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+
+                if judge_model is not None:
+                    listener._intent_judge = IntentJudge(
+                        IntentJudgeConfig(model=judge_model, ollama_base_url=base_url)
+                    )
+                else:
+                    listener._intent_judge = None
+                return listener
+
+
+class TestLlmWarmup:
+    """Tests for VoiceListener._start_llm_warmup orchestration."""
+
+    def test_spawns_threads_for_chat_and_distinct_judge(self):
+        """Two threads when chat and judge point at different models."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", judge_model="gemma4:e2b"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_ollama_model", return_value=True
+        ) as chat_warm, patch(
+            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+        ) as judge_warm:
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert len(threads) == 2
+        assert chat_warm.call_args.args[1] == "llama3.1"
+        assert judge_warm.call_args.args[1] == "gemma4:e2b"
+        assert listener._llm_warmup_results["chat"] == ("llama3.1", True)
+        assert listener._llm_warmup_results["judge"] == ("gemma4:e2b", True)
+
+    def test_deduplicates_when_chat_and_judge_share_model(self):
+        """One warmup covers both roles when models match."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", judge_model="llama3.1"
+        )
+        with patch("jarvis.listening.listener.warm_up_ollama_model", return_value=True) as warm:
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert len(threads) == 1
+        assert warm.call_count == 1
+        assert listener._llm_warmup_results["chat"] == ("llama3.1", True)
+        assert listener._llm_warmup_results["judge"] == ("llama3.1", True)
+
+    def test_judge_only_when_no_chat_model(self):
+        """Judge still warms when chat model is absent."""
+        listener = _make_listener_for_warmup(chat_model="", judge_model="gemma4:e2b")
+        with patch(
+            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+        ) as warm:
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert len(threads) == 1
+        assert warm.call_count == 1
+        assert listener._llm_warmup_results["judge"] == ("gemma4:e2b", True)
+        assert "chat" not in listener._llm_warmup_results
+
+    def test_empty_when_nothing_to_warm(self):
+        """No threads returned when chat and judge are both absent."""
+        listener = _make_listener_for_warmup(chat_model="", judge_model=None)
+        threads = listener._start_llm_warmup()
+        assert threads == []
+        assert listener._llm_warmup_results == {}
+
+    def test_records_failure_from_helper(self):
+        """A False return from the helper shows up in the results dict."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", judge_model="gemma4:e2b"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_ollama_model", return_value=False
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=False
+        ):
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert listener._llm_warmup_results["chat"] == ("llama3.1", False)
+        assert listener._llm_warmup_results["judge"] == ("gemma4:e2b", False)
+
+
+class TestWhisperSilentWarmup:
+    """Tests for the faster-whisper silent-audio warmup transcribe."""
+
+    def test_silent_warmup_runs_after_model_load(self):
+        """After a successful WhisperModel load, a silent transcribe is invoked."""
+        mock_whisper_model = MagicMock()
+        mock_whisper_model.transcribe.return_value = (iter([]), MagicMock())
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch(
+                        "jarvis.listening.listener.WhisperModel",
+                        return_value=mock_whisper_model,
+                    ):
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [
+                                {"name": "Test Mic", "max_input_channels": 1}
+                            ]
+                            # Skip actual audio streaming — we only care about init.
+                            mock_sd.InputStream.side_effect = RuntimeError("stop here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_cfg = _create_mock_config()
+                            mock_cfg.ollama_chat_model = ""
+                            mock_cfg.ollama_base_url = ""
+                            mock_cfg.intent_judge_model = ""
+                            listener = VoiceListener(
+                                MagicMock(), mock_cfg, MagicMock(), MagicMock()
+                            )
+                            listener.run()
+
+        assert mock_whisper_model.transcribe.called, "warmup transcribe should have fired"
+        first_call_args = mock_whisper_model.transcribe.call_args_list[0]
+        audio_arg = first_call_args.args[0]
+        assert audio_arg.shape[0] == listener._samplerate
+        assert (audio_arg == 0).all(), "warmup should use silent (zero) audio"
