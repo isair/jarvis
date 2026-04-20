@@ -74,18 +74,29 @@ class TestMemoryDigestSurfacesIdentityFacts:
 
         lowered = digest.lower()
         surfaced_fact = "boxing" in lowered or "e3" in lowered
-        surfaced_math_topic = (
-            "rectangle" in lowered
-            or "7 by 9" in lowered
-            or "area of" in lowered
+        # Past Q&A topics that must stay out of an identity digest. The
+        # field-incident topic (rectangle area) is the primary guard;
+        # currency and boiling-point are included because they are
+        # numeric/factoid Q&As with no user-preference character — the
+        # exact failure class the identity rule targets.
+        surfaced_past_qa = any(
+            kw in lowered
+            for kw in (
+                "rectangle",
+                "7 by 9",
+                "area of",
+                "usd",
+                "gbp",
+                "boiling",
+            )
         )
         assert surfaced_fact, (
             f"Digest did not surface the user-stated boxing/location fact "
             f"for an identity query. Got: {digest!r}"
         )
-        assert not surfaced_math_topic, (
-            f"Digest surfaced a past Q&A topic (rectangle area) as if it "
-            f"were a fact about the user. Got: {digest!r}"
+        assert not surfaced_past_qa, (
+            f"Digest surfaced past Q&A topics as if they were facts "
+            f"about the user. Got: {digest!r}"
         )
 
     def test_identity_query_surfaces_multiple_user_facts_when_present(self):
@@ -119,6 +130,13 @@ class TestMemoryDigestSurfacesIdentityFacts:
         assert facts_hit >= 2, (
             f"Digest surfaced fewer than 2 of the 3 user-stated facts for "
             f"an identity query. Got: {digest!r}"
+        )
+        past_qa_leak = any(
+            kw in lowered for kw in ("usd", "gbp", "boiling")
+        )
+        assert not past_qa_leak, (
+            f"Digest leaked a past Q&A topic into an identity-query "
+            f"digest. Got: {digest!r}"
         )
 
     def test_identity_query_with_only_past_qa_returns_none_or_no_false_facts(self):
