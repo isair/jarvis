@@ -159,6 +159,129 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
         return None
 
 
+def _brave_search(query: str, api_key: str, count: int = 5
+                  ) -> List[Tuple[str, str]]:
+    """Query Brave Search's JSON API and return (title, url) pairs.
+
+    Brave is the opt-in primary fallback when DDG is blocked. It's a paid
+    API with a 2,000 req/month free tier — we only call it when the user
+    has explicitly supplied a key, so there's no hidden external egress.
+    Returns an empty list on any error (bad key, network, 429, etc.) so
+    the caller can fall through to the next fallback rather than abort.
+    """
+    if not api_key:
+        return []
+    try:
+        response = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": count},
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": api_key,
+            },
+            timeout=6,
+        )
+        if response.status_code != 200:
+            debug_log(
+                f"Brave Search returned status {response.status_code}",
+                "web",
+            )
+            return []
+        data = response.json() or {}
+        web = data.get("web") or {}
+        results = web.get("results") or []
+        pairs: List[Tuple[str, str]] = []
+        for r in results[:count]:
+            url = (r.get("url") or "").strip()
+            title = (r.get("title") or "").strip()
+            if url and title and _is_public_url(url):
+                pairs.append((title, url))
+        return pairs
+    except Exception as e:
+        debug_log(f"Brave Search failed: {e}", "web")
+        return []
+
+
+def _wikipedia_summary(query: str, lang: str = "en"
+                      ) -> Optional[Tuple[str, str, str]]:
+    """Last-resort Wikipedia lookup.
+
+    Returns `(title, url, extract)` for the best match, or None on miss.
+    Tries the REST summary endpoint directly first (works for exact-title
+    queries), then falls back to opensearch for fuzzy title resolution.
+    Uses `lang.wikipedia.org` so the reply is in the user's spoken
+    language when Whisper gave us a non-English code.
+
+    We deliberately do NOT reuse the generic cascade fetcher: the REST
+    summary API returns a curated `extract` field — short, clean, no
+    navigation cruft — which is a better fit for the untrusted-extract
+    fence than the full HTML page.
+    """
+    lang = (lang or "en").strip().lower() or "en"
+    # Sanitise: Wikipedia's language subdomains are 2–3 letter codes. If
+    # Whisper returned something odd, fall back to English rather than
+    # hitting a non-existent subdomain.
+    if not lang.isalpha() or not (2 <= len(lang) <= 3):
+        lang = "en"
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Jarvis-VoiceAssistant/1.0 (https://github.com/isair/jarvis)",
+    }
+    # Resolve a likely title via opensearch — cheaper and handles "what
+    # is possessor movie" ↔ "Possessor (film)" without us having to
+    # second-guess capitalisation.
+    try:
+        import urllib.parse
+        search_url = f"https://{lang}.wikipedia.org/w/api.php"
+        search_resp = requests.get(
+            search_url,
+            params={
+                "action": "opensearch",
+                "search": query,
+                "limit": 1,
+                "namespace": 0,
+                "format": "json",
+            },
+            headers=headers,
+            timeout=5,
+        )
+        if search_resp.status_code != 200:
+            debug_log(
+                f"Wikipedia opensearch status {search_resp.status_code}",
+                "web",
+            )
+            return None
+        payload = search_resp.json()
+        titles = payload[1] if len(payload) > 1 else []
+        if not titles:
+            return None
+        title = titles[0]
+        summary_url = (
+            f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
+            + urllib.parse.quote(title, safe="")
+        )
+        summary_resp = requests.get(summary_url, headers=headers, timeout=5)
+        if summary_resp.status_code != 200:
+            debug_log(
+                f"Wikipedia summary status {summary_resp.status_code}",
+                "web",
+            )
+            return None
+        summary_data = summary_resp.json() or {}
+        extract = (summary_data.get("extract") or "").strip()
+        if not extract:
+            return None
+        page_url = (
+            (summary_data.get("content_urls") or {}).get("desktop", {}).get("page")
+            or f"https://{lang}.wikipedia.org/wiki/"
+            + urllib.parse.quote(title.replace(" ", "_"), safe="")
+        )
+        return (summary_data.get("title") or title, page_url, extract)
+    except Exception as e:
+        debug_log(f"Wikipedia fallback failed: {e}", "web")
+        return None
+
+
 class WebSearchTool(Tool):
     """Tool for performing web searches using DuckDuckGo."""
 
@@ -226,6 +349,15 @@ class WebSearchTool(Tool):
             # Web search parsing
             search_results: list[str] = []
             result_urls: List[Tuple[str, str]] = []  # (title, url) pairs for auto-fetch
+            # When DDG serves its bot-challenge page ("Unfortunately, bots use
+            # DuckDuckGo too…"), it responds with HTTP 400 and a body that
+            # contains an `anomaly-modal` CAPTCHA and a form posting to
+            # `//duckduckgo.com/anomaly.js`. Without detecting this, the tool
+            # either silently emits zero results wrapped in a "use this
+            # information" envelope (model confabulates) or, when a header
+            # link slips through the filter, reports "Found 1 result" for a
+            # page that contains no results at all.
+            ddg_rate_limited = False
             try:
                 import urllib.parse
                 from bs4 import BeautifulSoup
@@ -233,8 +365,24 @@ class WebSearchTool(Tool):
                 ddg_lite_url = f"https://lite.duckduckgo.com/lite/?q={encoded_query}"
                 headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
                 ddg_response = requests.get(ddg_lite_url, headers=headers, timeout=10)
-                if ddg_response.status_code == 200:
-                    soup = BeautifulSoup(ddg_response.content, 'html.parser')
+                body_bytes = ddg_response.content or b""
+                # Challenge detection: HTTP 202/400/429 is the strongest signal,
+                # but DDG has also been observed serving 200 with the anomaly
+                # modal embedded. Check the body for the stable structural
+                # markers (CSS class / form action) rather than human-readable
+                # copy — those are English-only and CLAUDE.md asks us to avoid
+                # hardcoded language patterns.
+                if (ddg_response.status_code in (202, 400, 429)
+                        or b"anomaly-modal" in body_bytes
+                        or b"anomaly.js" in body_bytes):
+                    ddg_rate_limited = True
+                    debug_log(
+                        f"DuckDuckGo bot-challenge detected (status "
+                        f"{ddg_response.status_code}); skipping result parse",
+                        "web",
+                    )
+                elif ddg_response.status_code == 200:
+                    soup = BeautifulSoup(body_bytes, 'html.parser')
                     links = soup.find_all('a', href=True)
                     result_count = 0
                     debug_log(f"Found {len(links)} total links on DDG page", "web")
@@ -331,7 +479,117 @@ class WebSearchTool(Tool):
                         )
                         break
 
-            if not search_results:
+            # Fallback chain: DDG failed to give us a usable answer (either
+            # rate-limited, or returned links but no fetch succeeded, or
+            # returned nothing at all) AND we don't have an instant answer
+            # to lean on. Try Brave (opt-in, keyed) first, then Wikipedia
+            # (zero-config, always-on by default). Each fallback updates
+            # the same fetched_content / result_urls state the envelope
+            # selection below reads, so a success looks identical to a
+            # successful DDG fetch downstream.
+            used_source: Optional[str] = None  # "brave" | "wikipedia" | None
+            need_fallback = (
+                not instant_results
+                and not fetched_content
+                and (ddg_rate_limited or not result_urls or fetch_attempted_any)
+            )
+            if need_fallback:
+                brave_key = getattr(cfg, "brave_search_api_key", "") or ""
+                if brave_key:
+                    context.user_print("🦁 Falling back to Brave Search…")
+                    brave_pairs = _brave_search(search_query, brave_key)
+                    if brave_pairs:
+                        # Replace the DDG link list with Brave's — provenance
+                        # in the payload should match the source we actually
+                        # used to answer.
+                        result_urls = brave_pairs
+                        search_results = []
+                        for i, (title, url) in enumerate(brave_pairs, start=1):
+                            search_results.append(f"{i}. **{title}**")
+                            search_results.append(f"   Link: {url}")
+                            search_results.append("")
+                        # Run the same cascade fetcher across Brave's top 3.
+                        candidates = brave_pairs[:3]
+                        fetch_attempted_any = True
+                        results_by_rank = {}
+                        with ThreadPoolExecutor(
+                            max_workers=len(candidates)
+                        ) as pool:
+                            future_to_rank = {
+                                pool.submit(_fetch_page_content, url): rank
+                                for rank, (_t, url) in enumerate(candidates)
+                            }
+                            try:
+                                for fut in as_completed(
+                                    future_to_rank,
+                                    timeout=_CASCADE_WALL_CLOCK_SEC,
+                                ):
+                                    rank = future_to_rank[fut]
+                                    try:
+                                        results_by_rank[rank] = fut.result()
+                                    except Exception:
+                                        results_by_rank[rank] = None
+                                    if 0 in results_by_rank and results_by_rank[0]:
+                                        break
+                            except TimeoutError:
+                                pass
+                        for rank in range(len(candidates)):
+                            content = results_by_rank.get(rank)
+                            if content:
+                                fetched_content = content
+                                used_source = "brave"
+                                debug_log(
+                                    f"Brave fetched {len(content)} chars from "
+                                    f"result #{rank + 1}",
+                                    "web",
+                                )
+                                break
+                        if not fetched_content:
+                            debug_log(
+                                "Brave returned results but no fetch succeeded",
+                                "web",
+                            )
+
+            # Wikipedia: last-resort, runs if we still have no content. The
+            # REST summary endpoint is key-free and gives us a curated
+            # extract in the user's spoken language (via Whisper-detected
+            # ISO code on the tool context). Narrower than a full web
+            # search by nature but perfect for the entity/definition
+            # queries that dominate voice use.
+            if (
+                not instant_results
+                and not fetched_content
+                and getattr(cfg, "wikipedia_fallback_enabled", True)
+            ):
+                lang = (context.language or "en").strip().lower() or "en"
+                context.user_print(
+                    f"📚 Falling back to Wikipedia ({lang})…"
+                )
+                wiki = _wikipedia_summary(search_query, lang=lang)
+                if wiki:
+                    title, url, extract = wiki
+                    fetched_content = extract
+                    used_source = "wikipedia"
+                    # Overwrite link list so provenance matches the answer.
+                    result_urls = [(title, url)]
+                    search_results = [
+                        f"1. **{title}**",
+                        f"   Link: {url}",
+                        "",
+                    ]
+                    fetch_attempted_any = True
+                    debug_log(
+                        f"Wikipedia ({lang}) returned {len(extract)} chars for "
+                        f"'{title}'",
+                        "web",
+                    )
+
+            # If DDG served its bot-challenge page we have neither links nor
+            # content. Skip the generic "Search Information" fallback — it
+            # reads like a search-result payload and lets the model
+            # confabulate — and let the envelope selection below emit a
+            # dedicated rate-limit message instead.
+            if not search_results and not ddg_rate_limited:
                 search_results.extend([
                     "🔍 **Search Information**",
                     f"   I wasn't able to find current results for '{search_query}'.",
@@ -385,7 +643,26 @@ class WebSearchTool(Tool):
             # answer. This is the field failure mode observed 2026-04-20 on
             # 'Possessor movie': no instant answer + fetch-all-failed →
             # reply collapsed to 'Links to sources like Wikipedia'.
-            if all_results:
+            # Rate-limit path takes precedence over everything except an
+            # instant answer (instant answers hit a different DDG endpoint
+            # — api.duckduckgo.com — and can succeed even when /lite/ is
+            # challenged). If we were blocked AND have no instant answer
+            # AND no fetched content, emit an honest envelope that tells
+            # the model to admit the block rather than paper over it.
+            if ddg_rate_limited and not instant_results and not fetched_content:
+                reply_text = (
+                    f"Web search for '{search_query}' was blocked by DuckDuckGo's "
+                    f"bot-protection challenge, so no results could be retrieved "
+                    f"this time. Your reply must: (1) tell the user the search "
+                    f"engine temporarily blocked the request; (2) suggest they "
+                    f"try again shortly or search manually. Your reply must NOT "
+                    f"contain any specific facts about the topic (dates, names, "
+                    f"numbers, events, etc.) — even if you recall them — because "
+                    f"nothing was actually retrieved. If you state any such fact, "
+                    f"you have failed. Keep the reply to two short sentences at "
+                    f"most."
+                )
+            elif all_results:
                 content_missing = (
                     fetch_attempted_any and not fetched_content and not instant_results
                 )
@@ -457,7 +734,27 @@ class WebSearchTool(Tool):
                     pass
             try:
                 count_results = len([r for r in (search_results or []) if r.strip() and not r.startswith("   ")])
-                if count_results > 0:
+                if used_source == "brave":
+                    context.user_print(
+                        f"✅ Answered via Brave Search ({count_results} results)."
+                    )
+                elif used_source == "wikipedia":
+                    context.user_print(
+                        "✅ Answered via Wikipedia fallback."
+                    )
+                elif ddg_rate_limited and not instant_results:
+                    # A rate-limit page occasionally has a header link that
+                    # slips past the result filter; printing "Found 1 result"
+                    # over a bot-challenge page is actively misleading during
+                    # field triage. Surface the block directly instead.
+                    # (If we still got an instant answer from api.ddg.com —
+                    # a separate endpoint — we prefer the normal success
+                    # line below, since the user got a useful reply.)
+                    context.user_print(
+                        "🚧 DuckDuckGo served a bot-challenge page — "
+                        "search blocked, no results retrieved."
+                    )
+                elif count_results > 0:
                     context.user_print(f"✅ Found {count_results} results.")
                 else:
                     context.user_print("⚠️ No web results found.")

@@ -264,6 +264,14 @@ class VoiceListener(threading.Thread):
         self._should_stop = False
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
+        # ISO-639-1 code Whisper detected for the most recent utterance.
+        # Updated at every successful transcription site (MLX + faster-
+        # whisper) and consumed by `_dispatch_query` so downstream tools
+        # can pick locale-appropriate resources (e.g. tr.wikipedia.org).
+        # One-utterance-at-a-time voice flow means the read in
+        # `_dispatch_query` always matches the write from the Whisper
+        # call that produced the transcript.
+        self._last_detected_language: Optional[str] = None
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
@@ -1078,7 +1086,10 @@ class VoiceListener(threading.Thread):
 
         # Process the query (keep thinking tune playing during processing)
         try:
-            reply = run_reply_engine(self.db, self.cfg, None, query, self.dialogue_memory)
+            reply = run_reply_engine(
+                self.db, self.cfg, None, query, self.dialogue_memory,
+                language=self._last_detected_language,
+            )
         except Exception as e:
             # Log the error visibly - this should never happen silently
             print(f"\n  ❌ Reply engine error: {e}", flush=True)
@@ -2191,6 +2202,12 @@ class VoiceListener(threading.Thread):
                         language=None,
                     )
 
+                # Capture Whisper's auto-detected language (ISO-639-1) so
+                # downstream tools can pick locale-appropriate resources.
+                detected = result.get("language")
+                if isinstance(detected, str) and detected:
+                    self._last_detected_language = detected
+
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
                 min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
                 marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
@@ -2240,6 +2257,12 @@ class VoiceListener(threading.Thread):
                     except TypeError:
                         segments, _info = self.model.transcribe(audio, language=None)
                     segments_list = list(segments)
+                # Capture the detected language (faster-whisper exposes it
+                # on the info object). Guard against older API variants
+                # where the attribute may be absent.
+                detected = getattr(_info, "language", None)
+                if isinstance(detected, str) and detected:
+                    self._last_detected_language = detected
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:

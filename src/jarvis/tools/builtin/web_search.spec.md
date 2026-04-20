@@ -80,6 +80,20 @@ The tool emits one of two envelopes depending on what the pipeline produced:
   > state any such fact, you have failed. Keep the reply to two short
   > sentences at most.
 
+- **Rate-limited envelope** (DDG served its bot-protection challenge
+  page AND no instant answer was available): same anti-confabulation
+  framing as the links-only envelope, but names the block explicitly so
+  the reply is "the search engine temporarily blocked the request, try
+  again shortly" instead of a confabulated answer.
+
+  Detection looks at both the HTTP status (202 / 400 / 429) and
+  structural markers in the response body (`anomaly-modal` CSS class,
+  `anomaly.js` form action). We avoid keying on English-language
+  copy — DDG's challenge markup is stable across locales, the copy is
+  not. Without this, a header link on the challenge page occasionally
+  slipped past the result filter and produced a phantom "Found 1 result"
+  over a zero-facts payload.
+
 The links-only envelope is a field-derived guardrail: without it, small
 and mid-size models convert "here's a list of URLs" into "here are some
 links to Wikipedia" (a deflection the user perceives as a wrong answer),
@@ -87,11 +101,53 @@ and larger models confabulate specifics from prior knowledge while claiming
 they couldn't fetch. Assertive language ("you have failed") is required —
 a softer "please don't invent" lets chatty larger models wriggle past.
 
+### Fallback chain
+
+When the DDG pipeline yields no usable content (rate-limited, empty, or
+link list without any successful fetch) **and** there is no instant
+answer, the tool walks a fallback chain before giving up:
+
+1. **Brave Search** (opt-in, keyed). Runs only when
+   `brave_search_api_key` is set. JSON API at
+   `api.search.brave.com/res/v1/web/search`. Top 5 results feed the same
+   cascade fetcher used for DDG so rank preference and the untrusted
+   fence are preserved. Free tier: 2,000 queries/month; Brave is a paid
+   dependency, so it is never auto-enabled.
+2. **Wikipedia** (zero-config, on by default). Runs when
+   `wikipedia_fallback_enabled` is True. Uses the host matching the
+   ISO-639-1 language Whisper auto-detected for the current utterance
+   (`context.language`) — falls back to English when the code is missing
+   or syntactically invalid. Fetches an opensearch title and then the
+   REST summary endpoint; the curated `extract` field goes into the
+   fence directly (no HTML scraping, cleaner payload).
+3. **Honest block envelope** — if every provider fails, the envelope
+   admits it and forbids unverified facts (same framing as the
+   links-only envelope).
+
+Rate-limit detection fires regardless of fallback availability: the
+`🚧 DuckDuckGo served a bot-challenge page` console line is printed when
+DDG blocks us and no instant answer was available, even if a fallback
+then rescues the query. The `✅ Answered via …` line afterwards tells
+field-triage which provider actually carried the reply.
+
+### Per-utterance language
+
+`ToolContext.language` carries the ISO-639-1 code Whisper detected at
+the listener site. It is currently consumed only by the Wikipedia
+fallback to pick the right subdomain, but any future locale-sensitive
+tool can read it. `None` on non-voice entrypoints (evals, unit tests,
+text input) — tools must treat `None` as "no signal" and choose a safe
+default.
+
 ### Configuration
 
 - `web_search_enabled` (bool, default `true`): disable the tool entirely
   via config. When disabled, the tool returns a user-visible "disabled"
   message and does not hit the network.
+- `brave_search_api_key` (str, default `""`): opt-in Brave key. Empty
+  string means "not configured" — the tool skips straight to Wikipedia.
+- `wikipedia_fallback_enabled` (bool, default `true`): zero-config last
+  resort. Set to `false` to disable the Wikipedia network call entirely.
 
 ### Behavioural guarantees for tests
 
@@ -106,6 +162,10 @@ Regression tests assert:
    private/loopback/link-local/metadata/multicast IPs.
 4. **Injection fence**: Content is wrapped in BEGIN/END UNTRUSTED WEB
    EXTRACT delimiters with the hostile payload strictly between them.
+5. **Rate-limit detection**: A DDG challenge response (HTTP 400 or
+   `anomaly-modal` / `anomaly.js` in body) produces the rate-limited
+   envelope, not a phantom result count and not a "use this information"
+   envelope over empty payload.
 
 ### Non-goals
 

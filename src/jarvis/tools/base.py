@@ -20,7 +20,8 @@ class ToolContext:
         original_prompt: str,
         redacted_text: str,
         max_retries: int,
-        user_print: Callable[[str], None]
+        user_print: Callable[[str], None],
+        language: Optional[str] = None,
     ):
         self.db = db
         self.cfg = cfg
@@ -29,6 +30,12 @@ class ToolContext:
         self.redacted_text = redacted_text
         self.max_retries = max_retries
         self.user_print = user_print
+        # ISO-639-1 code of the language Whisper auto-detected for the current
+        # utterance (e.g. "en", "tr", "de"). None when the tool is invoked
+        # outside the voice path (evals, unit tests, text entry) — tools must
+        # treat absence as "no signal" and fall back to their own default
+        # rather than assuming English.
+        self.language = language
 
 
 class Tool(ABC):
@@ -88,7 +95,8 @@ class Tool(ABC):
         original_prompt: str,
         redacted_text: str,
         max_retries: int,
-        user_print: Callable[[str], None]
+        user_print: Callable[[str], None],
+        language: Optional[str] = None,
     ) -> ToolExecutionResult:
         """Execute the tool (internal method used by registry).
 
@@ -102,6 +110,7 @@ class Tool(ABC):
             original_prompt=original_prompt,
             redacted_text=redacted_text,
             max_retries=max_retries,
-            user_print=user_print
+            user_print=user_print,
+            language=language,
         )
         return self.run(tool_args, context)

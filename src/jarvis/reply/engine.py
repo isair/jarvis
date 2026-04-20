@@ -537,7 +537,8 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
 
 
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
-                    text: str, dialogue_memory: "DialogueMemory") -> Optional[str]:
+                    text: str, dialogue_memory: "DialogueMemory",
+                    language: Optional[str] = None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -547,6 +548,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         tts: Text-to-speech engine (optional)
         text: User query text
         dialogue_memory: Dialogue memory instance
+        language: ISO-639-1 code Whisper detected for this utterance (e.g.
+            "en", "tr"). Threaded through to tool execution so tools like
+            web_search can pick locale-appropriate resources (e.g. the
+            right Wikipedia host). None when invoked outside the voice
+            path — tools then fall back to their own default.
 
     Returns:
         Generated reply text or None
@@ -1355,6 +1361,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 original_prompt="",
                 redacted_text=redacted,
                 max_retries=1,
+                language=language,
             )
 
             # Handle stop tool - end conversation without response

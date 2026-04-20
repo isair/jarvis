@@ -49,6 +49,8 @@ class MockConfig:
     tts_chatterbox_exaggeration: float = 0.5
     tts_chatterbox_cfg_weight: float = 0.5
     web_search_enabled: bool = True
+    brave_search_api_key: str = ""
+    wikipedia_fallback_enabled: bool = True
     llm_tools_timeout_sec: float = 8.0
     llm_embed_timeout_sec: float = 10.0
     llm_chat_timeout_sec: float = 45.0

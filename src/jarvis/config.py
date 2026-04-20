@@ -186,6 +186,17 @@ class Settings:
 
     # Web Search
     web_search_enabled: bool
+    # Optional Brave Search API key. When set, Brave is used as the primary
+    # fallback when DuckDuckGo is rate-limited or returns no usable content.
+    # Empty string means "not configured" — the tool then falls through to
+    # the always-on Wikipedia fallback. Free tier is 2,000 queries/month.
+    brave_search_api_key: str
+    # Zero-config Wikipedia fallback toggle. When True (default), the tool
+    # queries Wikipedia's REST summary API as a last resort before giving up
+    # with the honest "blocked" envelope. Privacy-light (public API, no key,
+    # no account) and language-aware via the Whisper-detected utterance
+    # language.
+    wikipedia_fallback_enabled: bool
 
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
@@ -442,6 +453,8 @@ def get_default_config() -> Dict[str, Any]:
 
         # Web Search
         "web_search_enabled": True,
+        "brave_search_api_key": "",
+        "wikipedia_fallback_enabled": True,
 
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
@@ -598,6 +611,8 @@ def load_settings() -> Settings:
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
+    brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
+    wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
     dictation_enabled = bool(merged.get("dictation_enabled", True))
     dictation_hotkey = str(merged.get("dictation_hotkey", _default_dictation_hotkey())).strip()
     dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
@@ -718,6 +733,8 @@ def load_settings() -> Settings:
 
         # Web Search
         web_search_enabled=web_search_enabled,
+        brave_search_api_key=brave_search_api_key,
+        wikipedia_fallback_enabled=wikipedia_fallback_enabled,
 
         # Dictation
         dictation_enabled=dictation_enabled,
