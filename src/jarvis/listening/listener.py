@@ -1362,7 +1362,17 @@ class VoiceListener(threading.Thread):
         chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)
         judge = self._intent_judge
         judge_model = judge.config.model if judge is not None else ""
-        shared_model = bool(chat_model) and judge_model == chat_model
+        shared_judge = bool(chat_model) and judge_model == chat_model
+
+        # Tool router — only warmed when the LLM selection strategy is active
+        # AND the router points at a model distinct from chat/judge. An empty
+        # `tool_router_model` means "reuse chat_model", so no extra warmup is
+        # needed (chat warmup covers it). Skipping warmup for non-LLM
+        # strategies avoids loading a model that won't be used this session.
+        strategy = str(getattr(self.cfg, "tool_selection_strategy", "") or "").lower()
+        router_model_cfg = str(getattr(self.cfg, "tool_router_model", "") or "").strip()
+        router_model = router_model_cfg if strategy == "llm" else ""
+        shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
         threads: list[threading.Thread] = []
 
@@ -1371,24 +1381,37 @@ class VoiceListener(threading.Thread):
                 ok = warm_up_ollama_model(base_url, chat_model, timeout=chat_timeout)
                 self._llm_warmup_results["chat"] = (chat_model, ok)
                 # When chat and judge share a model, one warmup covers both.
-                if shared_model:
+                if shared_judge:
                     self._llm_warmup_results["judge"] = (chat_model, ok)
+                # Router reusing chat_model is already covered.
+                if router_model and router_model == chat_model:
+                    self._llm_warmup_results["router"] = (chat_model, ok)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
-        if judge is not None and not shared_model:
+        if judge is not None and not shared_judge:
             def _warm_judge() -> None:
                 ok = judge.warm_up()
                 self._llm_warmup_results["judge"] = (judge_model, ok)
+                if router_model and router_model == judge_model:
+                    self._llm_warmup_results["router"] = (judge_model, ok)
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
+
+        if router_model and base_url and not shared_router:
+            def _warm_router() -> None:
+                ok = warm_up_ollama_model(base_url, router_model, timeout=chat_timeout)
+                self._llm_warmup_results["router"] = (router_model, ok)
+
+            threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
         for t in threads:
             t.start()
 
         debug_log(
             f"LLM warmup started (chat={chat_model or 'n/a'}, "
-            f"judge={judge_model or 'n/a'}, shared={shared_model})",
+            f"judge={judge_model or 'n/a'}, router={router_model or 'n/a'}, "
+            f"shared_judge={shared_judge}, shared_router={shared_router})",
             "voice",
         )
         return threads
@@ -1821,6 +1844,7 @@ class VoiceListener(threading.Thread):
 
             _print_status("chat", "Chat model", "💬")
             _print_status("judge", "Intent judge", "🧠")
+            _print_status("router", "Tool router", "🔧")
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")
