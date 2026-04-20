@@ -218,10 +218,14 @@ def is_fixed_model_test(result: TestResult) -> bool:
     fixed_model_classes = [
         "IntentJudge",  # TestIntentJudgeAccuracy, TestIntentJudgeMultiSegment, etc.
         "ProcessedSegmentFiltering",  # Intent judge processed segment filtering
-        "ToolSelectionFiltering",  # Uses fixed nomic-embed-text
     ]
+    fixed_model_exact_classes = {
+        "TestToolSelectionFiltering",  # Embedding strategy, pinned to nomic-embed-text (exact match so TestToolSelectionFilteringLLM isn't bucketed here)
+    }
 
     if result.class_name:
+        if result.class_name in fixed_model_exact_classes:
+            return True
         for class_pattern in fixed_model_classes:
             if class_pattern in result.class_name:
                 return True
@@ -310,7 +314,7 @@ def _classify_fixed_model(result: TestResult) -> Optional[Tuple[str, str]]:
         )
     ):
         return ("intent_judge", "gemma4:e2b")
-    if "ToolSelectionFiltering" in cls:
+    if cls == "TestToolSelectionFiltering":
         return ("tool_selection", "nomic-embed-text")
     return None
 

@@ -4,14 +4,16 @@
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **240/256 passed (93.8%)** across all categories
+**Overall:** 🟢 **249/266 passed (93.6%)** across all categories
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
 | 🤖 Agent behaviour | `gemma4:e2b` | 92 | 10 | 0 | 🟢 90.2% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 102 | 3 | 0 | 🟢 97.1% |
 | 🎤 Intent judge | `gemma4:e2b` (fixed) | 41 | 3 | 0 | 🟢 93.2% |
-| 🔍 Tool selection | `nomic-embed-text` (fixed) | 5 | 0 | 0 | 🟢 100.0% |
+| 🔍 Tool selection (embedding) | `nomic-embed-text` (fixed) | 5 | 0 | 0 | 🟢 100.0% |
+| 🔍 Tool selection (LLM) | `gemma4:e2b` | 5 | 0 | 0 | 🟢 100.0% |
+| 🔍 Tool selection (LLM) | `gpt-oss:20b` | 4 | 1 | 0 | 🟢 80.0% |
 
 ### 💡 Model Selection Guide
 
@@ -192,6 +194,8 @@
 
 ## 🔍 Tool selection
 
+### Embedding strategy
+
 > Pinned to `nomic-embed-text` (embedding-based filter). Not affected by the judge model.
 
 | Test Case | Pass Rate | Status |
@@ -201,6 +205,18 @@
 | meal recall selects fetchMeals and few others | 1/1 (100%) | ✅ |
 | weather query selects getWeather and few others | 1/1 (100%) | ✅ |
 | web search query selects webSearch and few others | 1/1 (100%) | ✅ |
+
+### LLM strategy (default)
+
+> Exercises the default `llm` router strategy against each supported chat model.
+
+| Test Case | gemma4:e2b | gpt-oss:20b |
+|-----------|----------:|----------:|
+| weather query selects getWeather and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| meal logging selects logMeal and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| web search query selects webSearch and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 
 ---
 
