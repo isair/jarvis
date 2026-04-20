@@ -111,7 +111,13 @@ TOOL_INCENTIVES_SMALL = (
 TOOL_GUIDANCE_SMALL = (
     "You have access to tools - use them when the task requires external data or actions. "
     "After receiving tool results, use the data to answer the user's question conversationally. "
-    "Extract relevant information and present it naturally - never output raw JSON or data structures."
+    "Extract relevant information and present it naturally - never output raw JSON or data structures. "
+    "CRITICAL fidelity rule: when answering using a tool result, every specific fact in your reply "
+    "(names, dates, cast, authors, places, plot details, numbers) must come from the tool result or "
+    "from the user's own messages. Do NOT add cast, plot, release years, authors, or other specifics "
+    "from your prior knowledge — even if they feel plausible. If the tool returned only a short summary, "
+    "answer using only that summary. If the result doesn't contain what the user asked, say so rather "
+    "than filling the gap from memory."
 )
 
 # Explicit constraints for small models - focused specifically on the greeting case

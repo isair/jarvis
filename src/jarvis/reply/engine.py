@@ -507,16 +507,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Select tools relevant to this query (strategy controlled by config)
     from ..tools.selection import select_tools, ToolSelectionStrategy
     try:
-        strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "embedding"))
+        strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
-        strategy = ToolSelectionStrategy.EMBEDDING
+        strategy = ToolSelectionStrategy.LLM
     allowed_tools = select_tools(
         query=redacted,
         builtin_tools=BUILTIN_TOOLS,
         mcp_tools=mcp_tools,
         strategy=strategy,
         llm_base_url=cfg.ollama_base_url,
-        llm_model=cfg.ollama_chat_model,
+        # Router model falls back to the chat model when not explicitly set.
+        # Keeps single-model setups working without extra config, while
+        # allowing power users to route with a cheaper/faster model.
+        llm_model=(getattr(cfg, "tool_router_model", "") or cfg.ollama_chat_model),
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),

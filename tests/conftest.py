@@ -54,6 +54,7 @@ class MockConfig:
     llm_chat_timeout_sec: float = 45.0
     agentic_max_turns: int = 8
     tool_selection_strategy: str = "embedding"
+    tool_router_model: str = ""
     memory_enrichment_max_results: int = 5
     memory_enrichment_source: str = "diary"
     location_enabled: bool = True

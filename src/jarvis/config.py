@@ -168,6 +168,9 @@ class Settings:
     # Agentic Loop
     agentic_max_turns: int
     tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
+    # When `tool_selection_strategy == "llm"`, this model does the routing.
+    # Empty string means "reuse `ollama_chat_model`" (the default).
+    tool_router_model: str
 
     # Location Services
     location_enabled: bool
@@ -410,7 +413,11 @@ def get_default_config() -> Dict[str, Any]:
 
         # Agentic Loop
         "agentic_max_turns": 8,
-        "tool_selection_strategy": "embedding",
+        "tool_selection_strategy": "llm",
+        # Empty string = reuse ollama_chat_model for routing. Override to a
+        # smaller/faster model (e.g. "qwen2.5:3b") to decouple routing cost
+        # from reply cost — useful when the chat model is large.
+        "tool_router_model": "",
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -566,9 +573,10 @@ def load_settings() -> Settings:
     if memory_enrichment_source not in ("all", "diary", "graph"):
         memory_enrichment_source = "diary"
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
-    tool_selection_strategy = str(merged.get("tool_selection_strategy", "embedding")).lower()
+    tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
-        tool_selection_strategy = "embedding"
+        tool_selection_strategy = "llm"
+    tool_router_model = str(merged.get("tool_router_model", "") or "").strip()
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -684,6 +692,7 @@ def load_settings() -> Settings:
         memory_enrichment_source=memory_enrichment_source,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
+        tool_router_model=tool_router_model,
 
         # Location Services
         location_enabled=location_enabled,
