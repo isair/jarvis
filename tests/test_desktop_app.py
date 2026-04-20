@@ -14,6 +14,38 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
+class TestEntryPointImports:
+    """Guardrails for the PyInstaller entry point (src/desktop_app/app.py).
+
+    PyInstaller freezes app.py as __main__ with no parent package, so any
+    relative import (`from .foo import ...`) raises ImportError at launch
+    and the bundled app exits silently. Regression guard for the #242 bug
+    where `from .paths import get_log_dir` inside get_crash_paths() broke
+    every macOS launch.
+    """
+
+    def test_app_py_has_no_relative_imports(self):
+        """app.py is the frozen entry point — must use absolute imports only."""
+        import ast
+        from pathlib import Path
+
+        app_py = Path(__file__).parent.parent / "src" / "desktop_app" / "app.py"
+        tree = ast.parse(app_py.read_text(encoding="utf-8"))
+
+        relative_imports = [
+            f"line {node.lineno}: from {'.' * node.level}{node.module or ''} import ..."
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level > 0
+        ]
+
+        assert not relative_imports, (
+            "app.py is the PyInstaller entry point and runs as __main__ with "
+            "no package context. Relative imports will raise ImportError at "
+            "launch. Use `from desktop_app.X import ...` instead.\n"
+            "Offenders:\n  " + "\n  ".join(relative_imports)
+        )
+
+
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 
