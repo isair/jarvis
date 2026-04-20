@@ -143,6 +143,30 @@ class TestRouterPicksToolsWhenContextDoesNotAnswer:
                 f"see test docstring."
             )
 
+    def test_followup_naming_place_routes_to_getWeather(self):
+        """Field capture 2026-04-20: assistant asked "Which city should I
+        check the weather for?" and the user replied "I'm in London". The
+        router saw only "I'm in London" as the query and returned 'none' —
+        reading it as idle chatter instead of a continuation.
+
+        With the split-hint prompt (KNOWN FACTS + RECENT DIALOGUE), the
+        router must merge intent across turns and route to getWeather."""
+        hint = (
+            "Current local time: Sunday, 2026-04-20 17:42 UTC.\n\n"
+            "Recent dialogue (short-term memory):\n"
+            "- user: what's the weather like?\n"
+            "- assistant: Which city should I check the weather for?"
+        )
+        selected = _route("I'm in London", hint)
+        print(f"\n  Selected: {selected}")
+        if "getWeather" not in selected:
+            pytest.xfail(
+                f"Router did not resolve follow-up 'I'm in London' after the "
+                f"assistant asked for a city. Got: {selected}. Known small-"
+                f"model limit — the prompt change lands first, the eval "
+                f"tracks the improvement."
+            )
+
     def test_no_hint_at_all_still_routes_sensibly(self):
         """With context_hint=None (e.g. first turn, location lookup failed
         entirely), the router must still work — selecting content-relevant

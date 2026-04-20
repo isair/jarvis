@@ -479,3 +479,65 @@ class TestLLMStrategy:
         # Ranking is preserved — first N from the router's list survive.
         assert non_mandatory[0] == "webSearch"
         assert "nonExistentTool" not in result
+
+    @pytest.mark.unit
+    def test_context_hint_splits_into_known_facts_and_recent_dialogue(self):
+        """When the hint carries a 'Recent dialogue' subsection, the router
+        prompt must surface facts and dialogue under separate labels so the
+        router can read a short follow-up ("I'm in London") as a continuation
+        of the prior turn rather than as standalone idle chatter."""
+        captured = {}
+
+        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+            captured["sys"] = sys
+            captured["user"] = user
+            return "getWeather"
+
+        hint = (
+            "Current local time: Sunday, 2026-04-20 17:42 (Europe/London).\n\n"
+            "Recent dialogue (short-term memory):\n"
+            "- user: what's the weather like?\n"
+            "- assistant: Sure — where should I check?"
+        )
+        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
+            select_tools(
+                "I'm in London",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.LLM,
+                llm_base_url="http://localhost",
+                llm_model="test",
+                context_hint=hint,
+            )
+
+        assert "KNOWN FACTS" in captured["user"]
+        assert "RECENT DIALOGUE" in captured["user"]
+        # Dialogue lines must actually reach the prompt under the dialogue label.
+        dialogue_idx = captured["user"].index("RECENT DIALOGUE")
+        assert "where should I check" in captured["user"][dialogue_idx:]
+        # System prompt must tell the router to treat follow-ups as continuations.
+        assert "continuation" in captured["sys"].lower()
+
+    @pytest.mark.unit
+    def test_context_hint_without_dialogue_uses_known_facts_only(self):
+        """When the hint carries no dialogue subsection (first turn, no
+        recent messages), the router must still work — the facts flow
+        through under the KNOWN FACTS label with no dialogue block."""
+        captured = {}
+
+        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+            captured["user"] = user
+            return "getWeather"
+
+        hint = "Current local time: Sunday, 2026-04-20 17:42 (Europe/London)."
+        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
+            select_tools(
+                "what's the weather?",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.LLM,
+                llm_base_url="http://localhost",
+                llm_model="test",
+                context_hint=hint,
+            )
+
+        assert "KNOWN FACTS" in captured["user"]
+        assert "RECENT DIALOGUE" not in captured["user"]

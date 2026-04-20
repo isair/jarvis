@@ -62,19 +62,6 @@ Saturday: Heavy rain, 10°C, 90% rain
 Sunday: Showers, 11°C, 50% rain
 """
 
-MOCK_MEMORY_RESULTS = """Past conversations about health goals:
-[2024-01-10] User mentioned wanting to lose 10 pounds by March
-[2024-01-12] User said they're targeting 1800 calories per day
-[2024-01-14] User logged a gym workout - 45 min cardio
-"""
-
-MOCK_USER_INTERESTS_MEMORY = """Past conversations about user interests:
-[2024-12-15] User said they're passionate about space exploration and astronomy
-[2024-12-20] User mentioned they follow AI and machine learning developments closely
-[2024-12-22] User talked about their interest in renewable energy and climate tech
-[2025-01-02] User expressed excitement about quantum computing breakthroughs
-"""
-
 MOCK_NUTRITION_DATA = """Today's nutrition (so far):
 - Oatmeal breakfast: 320 kcal, 12g protein
 - Chicken salad lunch: 450 kcal, 35g protein
@@ -354,7 +341,6 @@ class TestMultiStepReasoning:
         query = "should I order pizza tonight?"
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {
-            "recallConversation": MOCK_MEMORY_RESULTS,
             "fetchMeals": MOCK_NUTRITION_DATA,
         })
 
@@ -364,9 +350,9 @@ class TestMultiStepReasoning:
             call_count += 1
 
             if call_count == 1:
-                # Agent should recall health goals
+                # Memory enrichment has already surfaced health goals into the
+                # system prompt — the agent should go straight to fetchMeals.
                 return create_mock_llm_response("", [
-                    create_tool_call("recallConversation", {"search_query": "health goals diet"}),
                     create_tool_call("fetchMeals", {})
                 ])
             return create_mock_llm_response(
@@ -386,86 +372,15 @@ class TestMultiStepReasoning:
         print(f"   Tools called: {[c['name'] for c in capture.calls]}")
         print(f"   Response: {response[:100] if response else 'None'}...")
 
-        # Should use both memory and nutrition tools
+        # Enrichment surfaces the health goals; agent only needs fetchMeals.
         tools_used = [c["name"] for c in capture.calls]
-        assert "recallConversation" in tools_used or "fetchMeals" in tools_used, \
-            f"Should use memory or nutrition tools. Used: {tools_used}"
+        assert "fetchMeals" in tools_used, \
+            f"Should fetch today's meals for nutrition context. Used: {tools_used}"
 
         # Response should reference calorie info
         if response:
             assert "calor" in response.lower() or "kcal" in response.lower(), \
                 "Response should mention calorie context"
-
-    @pytest.mark.eval
-    def test_personalized_news_uses_memory_for_interests(self, mock_config, eval_db, eval_dialogue_memory):
-        """
-        Agent uses memory to understand user interests for personalized queries.
-
-        Scenario: User asks "what news might interest me?"
-        Expected: Agent should recall user's interests from memory BEFORE searching
-        """
-        from jarvis.reply.engine import run_reply_engine
-
-        query = "what are some news from today that might interest me?"
-        capture = ToolCallCapture()
-
-        mock_tool_run = create_mock_tool_run(capture, {
-            "recallConversation": MOCK_USER_INTERESTS_MEMORY,
-            "webSearch": "AI breakthrough, SpaceX launch, quantum computing milestone",
-        })
-
-        call_count = 0
-        has_recalled_memory = False
-
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
-            nonlocal call_count, has_recalled_memory
-            call_count += 1
-
-            if call_count == 1:
-                # Agent should first recall user interests from memory
-                return create_mock_llm_response("", [
-                    create_tool_call("recallConversation", {"search_query": "interests hobbies preferences"})
-                ])
-            elif call_count == 2:
-                has_recalled_memory = True
-                # After getting interests, search for news about those topics
-                return create_mock_llm_response("", [
-                    create_tool_call("webSearch", {"search_query": "AI machine learning space exploration news today"})
-                ])
-            return create_mock_llm_response(
-                "Based on your interests in AI, space exploration, and quantum computing, here are today's highlights: "
-                "A major AI breakthrough was announced, SpaceX completed another launch, and there's exciting news in quantum computing."
-            )
-
-        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
-             patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["news", "interest", "hobbies"]}):
-
-            response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
-
-        print(f"\n📊 Personalized Query Handling:")
-        print(f"   Query: {query}")
-        print(f"   Tools called: {[c['name'] for c in capture.calls]}")
-        print(f"   Response: {response[:120] if response else 'None'}...")
-
-        # CRITICAL: Agent should use memory to understand user interests
-        tools_used = [c["name"] for c in capture.calls]
-
-        # Either memory was recalled via tool OR memory enrichment should have provided interests
-        # For this test, we specifically check that recallConversation was called
-        assert "recallConversation" in tools_used, \
-            f"Agent should recall user interests from memory. Tools used: {tools_used}"
-
-        # Then it should search based on those interests
-        assert "webSearch" in tools_used, \
-            f"Agent should search for news after understanding interests. Tools used: {tools_used}"
-
-        # Verify memory was checked BEFORE searching
-        recall_index = tools_used.index("recallConversation")
-        search_index = tools_used.index("webSearch")
-        assert recall_index < search_index, \
-            "Agent should recall interests BEFORE searching for news"
-
 
 # =============================================================================
 # Memory Enrichment Evaluations
@@ -579,8 +494,8 @@ class TestMemoryEnrichment:
         """
         Verify that enrichment results are included in the system message.
 
-        When enrichment finds relevant memory, it should be available to the LLM
-        without needing to call recallConversation explicitly.
+        When enrichment finds relevant memory, it should be available to the
+        LLM directly via the system prompt — no tool call required.
         """
         from jarvis.reply.engine import run_reply_engine
 
@@ -620,12 +535,11 @@ class TestMemoryEnrichment:
             "Enrichment results should be in system message context"
 
     @pytest.mark.eval
-    def test_llm_uses_enrichment_without_redundant_tool_call(self, mock_config, eval_db, eval_dialogue_memory):
+    def test_llm_uses_enrichment_for_personalised_queries(self, mock_config, eval_db, eval_dialogue_memory):
         """
-        When enrichment provides sufficient context, LLM should use it directly
-        without redundantly calling recallConversation.
-
-        This tests the efficiency of the memory system - no duplicate lookups.
+        When enrichment provides sufficient context (user interests), the LLM
+        should read them from the system prompt and route to webSearch with an
+        interest-flavoured query, rather than asking the user.
         """
         from jarvis.reply.engine import run_reply_engine
 
@@ -675,15 +589,11 @@ class TestMemoryEnrichment:
         print(f"   Tools called: {tools_used}")
         print(f"   Response: {(response or '')[:100]}...")
 
-        # Should NOT call recallConversation since enrichment already provided context
-        assert "recallConversation" not in tools_used, \
-            f"LLM should use enrichment context, not redundantly call recallConversation. Tools: {tools_used}"
-
         # Should proceed to webSearch with interests-informed query
         assert "webSearch" in tools_used, \
             f"LLM should search based on enriched interests. Tools: {tools_used}"
 
-        print(f"   ✅ Enrichment used efficiently (no redundant tool call)")
+        print(f"   ✅ Enrichment surfaced interests, webSearch routed")
 
 
 # =============================================================================
@@ -760,7 +670,6 @@ class TestLiveEndToEnd:
         ]
 
         mock_tool_run = create_mock_tool_run(capture, {
-            "recallConversation": MOCK_USER_INTERESTS_MEMORY,
             "webSearch": "AI breakthrough announced, SpaceX launch successful, quantum computing milestone reached",
             "fetchWebPage": "Full article about AI and space news...",
         })

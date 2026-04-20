@@ -148,9 +148,9 @@ sequenceDiagram
   Engine->>Engine: Redact
   Engine->>ShortMem: recent_messages()
   Engine->>Recall: extract recall params (LLM)
-  alt keywords present AND RECALL_CONVERSATION allowed
-    Engine->>Tools: recall_conversation(args)
-    Tools-->>Engine: memory_context (optional)
+  alt keywords present
+    Engine->>Store: search conversation memory (diary + graph)
+    Store-->>Engine: memory_context (optional)
   end
   
   loop Agentic Loop (max agentic_max_turns)

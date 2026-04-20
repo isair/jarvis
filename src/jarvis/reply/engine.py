@@ -81,7 +81,14 @@ def _resolve_tool_router_model(cfg) -> str:
 # is more likely a considered answer and shouldn't be steamrolled.
 
 _FORCE_CONFAB_MAX_LEN = 400  # chars; above this, assume a substantive reply
-_GEMMA_LEAK_MARKERS = ("tool_code", "<unused", "google_search.search")
+# Markers that signal raw model-internal tool-calling syntax leaked into the
+# user-visible reply. `tool_calls:` covers the OpenAI-style JSON array literal
+# small models emit when they ignore native tool calling and dump the array
+# into prose instead (field capture 2026-04-20: gemma4:e2b produced
+# `tool_calls: [{"id": "call_1", ... "arguments": "{\"location\": \"London\"}}"]}`
+# on a routing-loss turn, and the malformed JSON caused the parser to skip it
+# and leak it verbatim to TTS).
+_GEMMA_LEAK_MARKERS = ("tool_code", "<unused", "google_search.search", "tool_calls:")
 
 
 def _content_has_gemma_leak(content: str) -> bool:
@@ -93,12 +100,15 @@ def _content_has_gemma_leak(content: str) -> bool:
 
 
 def _scrub_gemma_leak(content: str) -> str:
-    """Strip raw tool_code / <unusedN> / google_search.search fragments from
-    reply text before it reaches the user. Best-effort: we just delete the
-    offending spans and collapse surrounding whitespace. The force-invoke
-    flow replaces the visible reply with the real tool-driven answer, so
-    this only matters on the unlikely path where force-invoke doesn't fire
-    but leak markers are still present.
+    """Strip raw tool_code / <unusedN> / google_search.search / tool_calls: JSON
+    fragments from reply text before it reaches the user. Best-effort: we just
+    delete the offending spans and collapse surrounding whitespace.
+
+    Applied on two paths: (1) before recording content in message history when
+    the force-invoke safety net fires, (2) unconditionally at the final
+    reply-assembly point, so leaks still reach the scrubber on the branch
+    where force-invoke doesn't fire (e.g. router picked only `stop`, model
+    emitted a fabricated getWeather tool_calls array).
     """
     if not content:
         return content
@@ -110,6 +120,17 @@ def _scrub_gemma_leak(content: str) -> str:
     )
     cleaned = re.sub(r"<unused\d+>", " ", cleaned)
     cleaned = re.sub(r"google_search\.search\s*\([^)]*\)", " ", cleaned)
+    # `tool_calls: [...]` literal JSON — match from the marker through the end
+    # of content. The model's JSON is often malformed (extra/missing braces),
+    # so we can't rely on balanced parsing; instead we take the conservative
+    # position that any prose after a `tool_calls:` block is almost certainly
+    # continued tool-call JSON rather than a real reply.
+    cleaned = re.sub(
+        r"tool_calls\s*:\s*\[.*",
+        " ",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
 
@@ -498,6 +519,17 @@ _HINT_RECENT_MESSAGES = 6
 _HINT_MESSAGE_CHAR_LIMIT = 200
 
 
+# Tools whose output is already structured, concise, and small-model-friendly.
+# Digesting them throws away substantive data (e.g. a 7-day forecast being
+# summarised down to just the current conditions because the distil is
+# capped at 4–5 sentences). Add tools here only when their output is
+# consistently <~2 KB AND the user commonly wants the full payload rather
+# than a fact note.
+_DIGEST_SKIP_TOOLS = frozenset({
+    "getWeather",
+})
+
+
 def _maybe_digest_tool_result(
     cfg,
     query: str,
@@ -514,6 +546,19 @@ def _maybe_digest_tool_result(
     content the caller should append — the raw payload when digestion is off,
     short-circuits, returns NONE, or fails.
     """
+    # Per-tool skip list: some tools already produce compact structured output
+    # (weather forecast, calculator result) that loses important detail when
+    # passed through the fact-note distil. Field capture 2026-04-20: a
+    # 7-day forecast got digested down to "current conditions only" and the
+    # reply model dutifully said it had no forecast for the rest of the week.
+    if tool_name in _DIGEST_SKIP_TOOLS:
+        debug_log(
+            f"tool digest [{tool_name}]: skipped (in _DIGEST_SKIP_TOOLS) — "
+            f"raw payload {len(raw_tool_result)}ch",
+            "tools",
+        )
+        return raw_tool_result
+
     tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
     if tool_digest_cfg is None:
         tool_digest_enabled = (
@@ -1584,7 +1629,26 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
+    # Final leak scrub: small models occasionally emit model-internal tool
+    # syntax (gemma `tool_code` blocks, OpenAI-style `tool_calls: [...]`
+    # JSON) even on turns where the force-invoke path doesn't fire — e.g.
+    # when the router chose only `stop` so there's no real tool to force.
+    # Scrubbing here guarantees those fragments never reach TTS regardless
+    # of which upstream branch let them through.
+    if _content_has_gemma_leak(reply):
+        scrubbed = _scrub_gemma_leak(reply)
+        debug_log(
+            f"  🧹 Scrubbed leak fragments from final reply "
+            f"({len(reply)}ch → {len(scrubbed)}ch)",
+            "planning",
+        )
+        reply = scrubbed
     safe_reply = reply.strip()
+    if not safe_reply:
+        # Scrubbing removed everything; treat as a no-reply turn so the
+        # user gets a polite error instead of silence.
+        safe_reply = "Sorry, I had trouble processing that. Could you try again?"
+        reply = safe_reply
     if safe_reply:
         # Print reply with appropriate header
         try:

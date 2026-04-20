@@ -273,18 +273,48 @@ def _select_llm(
         "query is clearly about one thing; never return more than 5. "
         "Return 'none' if no tools are needed — this covers greetings and "
         "small talk, AND any query the main assistant can already answer "
-        "from the ALREADY IN CONTEXT block below (if present). Do NOT pick "
-        "a tool just because its domain is loosely adjacent to the query; if "
-        "the answer is already visible in context, 'none' is correct. "
+        "from the KNOWN FACTS block below (if present). Do NOT pick a tool "
+        "just because its domain is loosely adjacent to the query; if the "
+        "answer is already visible in the KNOWN FACTS block, 'none' is correct. "
+        "If a RECENT DIALOGUE block is present, read the current query as a "
+        "continuation of that dialogue: a short follow-up (e.g. naming a "
+        "place, confirming an option, answering a clarifying question the "
+        "assistant just asked) should route to the tool that answers the "
+        "COMBINED intent across turns, not to 'none'. "
         "Output nothing else — no explanations, no prose, no code fences."
     )
     hint_section = ""
     if context_hint and context_hint.strip():
-        hint_section = (
-            "ALREADY IN CONTEXT (the main assistant can already see this at "
-            "reply time, so no tool is needed to surface these facts):\n"
-            f"{context_hint.strip()}\n\n"
-        )
+        raw_hint = context_hint.strip()
+        # The hint builder emits two optional subsections: a time/location
+        # fact line, and a "Recent dialogue (short-term memory):" block.
+        # Surface them under router-specific labels so the prompt above can
+        # refer to them by name without the caller having to know.
+        dialogue_marker = "Recent dialogue (short-term memory):"
+        if dialogue_marker in raw_hint:
+            facts_part, _, dialogue_part = raw_hint.partition(dialogue_marker)
+            facts_part = facts_part.strip()
+            dialogue_part = dialogue_part.strip()
+            blocks: list[str] = []
+            if facts_part:
+                blocks.append(
+                    "KNOWN FACTS (the main assistant can already see these at "
+                    "reply time, so no tool is needed to surface them):\n"
+                    f"{facts_part}"
+                )
+            if dialogue_part:
+                blocks.append(
+                    "RECENT DIALOGUE (most recent last — interpret the current "
+                    "query as a continuation of this exchange):\n"
+                    f"{dialogue_part}"
+                )
+            hint_section = "\n\n".join(blocks) + "\n\n"
+        else:
+            hint_section = (
+                "KNOWN FACTS (the main assistant can already see these at "
+                "reply time, so no tool is needed to surface them):\n"
+                f"{raw_hint}\n\n"
+            )
     user_prompt = (
         f"{hint_section}"
         f"Available tools:\n{catalogue}\n\n"

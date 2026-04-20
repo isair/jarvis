@@ -13,7 +13,6 @@ from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
 from .builtin.fetch_web_page import FetchWebPageTool
-from .builtin.recall_conversation import RecallConversationTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
 from .builtin.nutrition.delete_meal import DeleteMealTool
@@ -23,7 +22,6 @@ from .builtin.stop import StopTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
-from ..memory.conversation import search_conversation_memory
 from ..debug import debug_log
 
 
@@ -33,7 +31,6 @@ BUILTIN_TOOLS = {
     "webSearch": WebSearchTool(),
     "localFiles": LocalFilesTool(),
     "fetchWebPage": FetchWebPageTool(),
-    "recallConversation": RecallConversationTool(),
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
     "deleteMeal": DeleteMealTool(),
