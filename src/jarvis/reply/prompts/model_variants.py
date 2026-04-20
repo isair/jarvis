@@ -112,7 +112,18 @@ TOOL_CONSTRAINTS_LARGE = (
     "and let it fill the rest. Do NOT reply with a clarifying question like \"which "
     "location?\" for an argument the tool auto-derives. Concretely: \"how's the "
     "weather today\" must trigger getWeather immediately with no arguments, not a "
-    "question back to the user."
+    "question back to the user.\n\n"
+    "SELF-CONTAINED TOOL ARGUMENTS:\n"
+    "When you call any tool with a free-form text argument (search queries, lookup "
+    "strings, question fields — whatever the tool calls them), the string you pass "
+    "must be a self-contained version of the user's intent. Resolve pronouns, "
+    "ellipsis, and implicit references from the conversation so far — the tool does "
+    "NOT see prior turns. If turn 1 was about Harry Styles and turn 2 asks \"what "
+    "are his most famous songs?\", the argument must name Harry Styles explicitly, "
+    "not echo the literal utterance. Prefer a compact keyword phrasing over a "
+    "conversational sentence: \"Harry Styles most famous songs\" beats \"what are "
+    "his most famous songs\". This applies to every tool you call, not just "
+    "webSearch."
 )
 
 
@@ -181,7 +192,10 @@ Any phrasing that requests information about a named entity is a search trigger 
 Only skip the lookup if you can state concrete facts about the exact entity (title, year, creator, plot) without guessing. A diary or memory mention of the entity's name only confirms the topic came up — it does NOT give you facts you can state. Never invent plot, cast, release year, themes, or other specifics from prior knowledge. If you do not have facts from a tool result in this turn, you must call webSearch.
 
 ARGUMENTS THE TOOL CAN AUTO-DERIVE:
-If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool in the SAME turn with whatever arguments you do have — even zero — and let the tool fill the rest. Do NOT ask the user to supply that argument. Do NOT reply with a clarifying question like "which location?" or "where are you?" when the tool's description already states it auto-derives that argument. Concretely: a message like "how's the weather today" must trigger getWeather immediately with no arguments, NOT a question back to the user. Asking for an argument the tool auto-derives wastes a turn and frustrates the user."""
+If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool in the SAME turn with whatever arguments you do have — even zero — and let the tool fill the rest. Do NOT ask the user to supply that argument. Do NOT reply with a clarifying question like "which location?" or "where are you?" when the tool's description already states it auto-derives that argument. Concretely: a message like "how's the weather today" must trigger getWeather immediately with no arguments, NOT a question back to the user. Asking for an argument the tool auto-derives wastes a turn and frustrates the user.
+
+SELF-CONTAINED TOOL ARGUMENTS:
+Whenever you call any tool with a free-form text argument (a search query, lookup string, question field — whatever the tool names it), the string you pass MUST be a self-contained restatement of the user's intent. Resolve pronouns, ellipsis, and implicit references from earlier turns yourself — the tool does NOT see the conversation history, it only sees the argument you pass. If the previous turn was about "Harry Styles" and the user now asks "what are his most famous songs?", the argument must be something like "Harry Styles most famous songs", NOT "what are his most famous songs". Prefer a compact keyword phrase over a conversational sentence. Never pass the user's literal utterance through when it contains unresolved pronouns, "that", "those", "it", "his", "her", "their", or similar references. This applies to every tool — webSearch, Wikipedia, MCP tools, all of them."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE

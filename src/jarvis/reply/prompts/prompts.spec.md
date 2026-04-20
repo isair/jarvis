@@ -74,6 +74,7 @@ Sections (both sizes — small repeats twice):
 - **USER INSTRUCTIONS** — behavioural instructions (units, brevity, language, tone) are acknowledged directly.
 - **UNKNOWN NAMED ENTITIES** — any information request about a specific named entity calls webSearch in the SAME turn, silently; the enumeration of request phrasings ("tell me about X", "have you heard of X", etc. — in any language) is framed as a semantic category, not as blacklisted English tokens.
 - **ARGUMENTS THE TOOL CAN AUTO-DERIVE** — if a tool's description says it has a default for an argument (e.g. getWeather → user's location), call the tool without asking the user for that argument.
+- **SELF-CONTAINED TOOL ARGUMENTS** — free-form text arguments passed to any tool (search queries, lookup strings, etc.) must be a self-contained restatement of intent with pronouns and ellipsis resolved from conversation history. Tools don't see prior turns. This applies to every tool, including MCP tools we don't own — the rule lives in the system prompt rather than each tool's schema so it generalises.
 
 **Design Rationale:**
 - Constraints are narrowly scoped to specific problematic cases

@@ -288,6 +288,126 @@ class TestFollowUpContext:
 
 
 # =============================================================================
+# Self-Contained Tool Argument Evaluations (Live LLM)
+# =============================================================================
+
+
+MOCK_HARRY_STYLES_SEARCH = """Web search results for 'Harry Styles':
+
+**Content from top result:**
+Harry Styles is an English singer and songwriter, born 1 February 1994.
+He rose to fame as a member of the boy band One Direction and has since
+released several solo albums including Fine Line (2019) and Harry's House (2022).
+
+**Other search results:**
+1. **Harry Styles - Wikipedia** - https://en.wikipedia.org/wiki/Harry_Styles
+"""
+
+MOCK_HARRY_STYLES_SONGS_SEARCH = """Web search results for 'Harry Styles most famous songs':
+
+**Content from top result:**
+Harry Styles' most famous songs include:
+- "Watermelon Sugar" (2019)
+- "As It Was" (2022)
+- "Sign of the Times" (2017)
+- "Adore You" (2019)
+
+**Other search results:**
+1. **Harry Styles Discography** - https://en.wikipedia.org/wiki/Harry_Styles_discography
+"""
+
+
+class TestSelfContainedToolArguments:
+    """
+    Tests that follow-up queries with unresolved pronouns produce tool calls
+    whose arguments resolve the referent from conversation history.
+
+    A tool does not see prior turns — if the model passes "what are his most
+    famous songs?" to webSearch, the search will miss the entity and return
+    irrelevant results. The model must rewrite the argument to something like
+    "Harry Styles most famous songs".
+    """
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    def test_follow_up_resolves_pronoun_in_search_query(
+        self, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """
+        Scenario:
+        - Turn 1: "Who is Harry Styles?" -> webSearch("Harry Styles ...")
+        - Turn 2: "What are his most famous songs?" -> webSearch argument
+                  MUST contain "Harry Styles" (pronoun resolved from context).
+        """
+        from jarvis.reply.engine import run_reply_engine
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        capture = ToolCallCapture()
+
+        def mock_tool_run(db, cfg, tool_name, tool_args, **kwargs):
+            from jarvis.tools.types import ToolExecutionResult
+            capture.record(tool_name, tool_args or {})
+            if tool_name == "webSearch":
+                args_str = str(tool_args).lower() if tool_args else ""
+                if "song" in args_str or "music" in args_str or "album" in args_str:
+                    return ToolExecutionResult(success=True, reply_text=MOCK_HARRY_STYLES_SONGS_SEARCH)
+                return ToolExecutionResult(success=True, reply_text=MOCK_HARRY_STYLES_SEARCH)
+            return ToolExecutionResult(success=True, reply_text="OK")
+
+        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: Kensington, UK", None)):
+
+            # Turn 1: establish entity
+            capture.clear()
+            run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text="Who is Harry Styles?",
+                dialogue_memory=eval_dialogue_memory
+            )
+            turn1_calls = list(capture.calls)
+
+            # Turn 2: follow-up with pronoun
+            capture.clear()
+            response2 = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text="What are his most famous songs?",
+                dialogue_memory=eval_dialogue_memory
+            )
+            turn2_calls = list(capture.calls)
+
+        print(f"\n📊 Self-contained tool arguments — Harry Styles follow-up:")
+        print(f"   Turn 1 calls: {turn1_calls}")
+        print(f"   Turn 2 calls: {turn2_calls}")
+        print(f"   Turn 2 response: {(response2 or '')[:120]}...")
+
+        # Turn 2 must call a search-capable tool
+        search_calls = [c for c in turn2_calls if c["name"] == "webSearch"]
+        assert search_calls, (
+            f"Turn 2 should call webSearch to answer the follow-up. "
+            f"Got: {[c['name'] for c in turn2_calls]}"
+        )
+
+        # Every search call's string argument must name the entity
+        for call in search_calls:
+            args = call["args"] or {}
+            arg_values = " ".join(
+                str(v) for v in args.values() if isinstance(v, str)
+            ).lower()
+            assert "harry" in arg_values or "styles" in arg_values, (
+                f"❌ PRONOUN-RESOLUTION BUG: webSearch argument did not include "
+                f"the entity from the previous turn.\n"
+                f"   Args: {args}\n"
+                f"   Expected the string to contain 'Harry' or 'Styles' — the "
+                f"tool has no access to conversation history, so 'his' must be "
+                f"resolved by the model before the tool call."
+            )
+
+        print(f"   ✅ webSearch argument resolved the pronoun correctly")
+
+
+# =============================================================================
 # Extended Multi-Turn Evaluations (Live LLM)
 # =============================================================================
 
