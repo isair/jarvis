@@ -513,8 +513,11 @@ def search_conversation_memory_by_keywords(
                 date_str = result_text[1:11] if result_text.startswith('[') and len(result_text) > 11 else ''
                 scored_results.append((float(score) if score else 0.0, date_str, result_text))
 
-        # Sort by relevance score DESC, then date DESC (newer wins ties)
-        scored_results.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        # Sort newest-first so recency-superseding works at the injection site:
+        # when two entries disagree, the model sees the newer one first and the
+        # preamble in the reply engine tells it to treat the newer entry as the
+        # user's current understanding. Fall back to relevance score as tiebreak.
+        scored_results.sort(key=lambda x: (x[1], x[0]), reverse=True)
         contexts = [text for _, _, text in scored_results]
 
         debug_log(f"      ✅ found {len(contexts)} keyword search results", "memory")

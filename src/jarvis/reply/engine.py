@@ -362,7 +362,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
 
         if conversation_context:
-            guidance.append("\nRelevant conversation history:\n" + conversation_context)
+            guidance.append(
+                "\nRelevant conversation history (newest first, dated as "
+                "[YYYY-MM-DD]). When entries disagree, treat the most recent "
+                "entry as the user's current understanding and preferences — "
+                "it supersedes older entries:\n" + conversation_context
+            )
 
         if graph_context:
             guidance.append("\n" + graph_context)
