@@ -289,22 +289,21 @@ Create a summary that:
      GOOD: "The user asked about the book Piranesi."
 
    This rule applies in any language.
-7. CRITICAL — never record the assistant's substantive claims about third-party entities (films, books, products, companies, people, places, events, scientific facts, definitions) as if they were fact. The assistant may hallucinate; its unverified answers must not be immortalised in the diary as truth.
-   - If the assistant stated something about an entity without a tool call visible in the conversation, DO NOT summarise that content as fact. Record only that the user asked about the topic.
-   - Phrases like "the assistant provided information stating X is Y", "the assistant explained that X is Y", "X is Y (per the assistant)" are ALL wrong when X is a third-party named entity. Strip the claim; keep the topic.
-   - Weather, time, location, user's own data, and other clearly tool-grounded information is fine to record as fact.
-   - User-stated facts about themselves (preferences, biography, plans, decisions) are ALWAYS safe to record verbatim.
+7. CRITICAL attribution rule — record what was SAID faithfully, but make clear WHO said it. The diary is a log of the conversation, not a fact sheet, so preserve the actual content (including the assistant's answers, because a later session may need them — and because the user may later correct a wrong answer, and we want the whole chain on record). What must not happen is quietly promoting an assistant claim into an unattributed fact, because the assistant may hallucinate.
+   - When the assistant states something about a third-party entity (film, book, product, company, person, place, event, scientific fact, definition), always attribute it in the summary: write "the assistant said/stated/explained X" rather than "X". The attribution lets downstream readers treat the claim with appropriate skepticism.
+   - Never paraphrase an attributed claim into an unattributed assertion. "The assistant said Possessor is a 2006 film by Brandon Cronenberg" is fine (attribution preserved). "Possessor is a 2006 film by Brandon Cronenberg" is NOT (attribution stripped — now reads as established fact).
+   - If the user later corrects the assistant, record both: the initial claim AND the correction. That's how the final state becomes recoverable — never delete earlier claims when a correction comes in.
+   - Weather, time, location, calculator results, and other clearly tool-grounded data can be recorded as fact without attribution caveats — the tool output is the authority.
+   - User-stated facts about themselves (preferences, biography, plans, decisions) are always safe to record verbatim as user facts.
 
-   Example of what NOT to write:
-     BAD: "The user asked about the movie Possessor. The assistant provided information stating it is a 2006 science fiction film directed by Brandon Cronenberg, exploring themes of identity."
-   Example of the correct output:
-     GOOD: "The user asked about the movie Possessor."
+   Example — attributed assistant claim (preserves information, flags provenance):
+     GOOD: "The user asked about the movie Possessor; the assistant said it is a 2006 science fiction film directed by Brandon Cronenberg."
+     BAD (unattributed — reads as established fact, will poison downstream): "The user asked about the movie Possessor. It is a 2006 science fiction film directed by Brandon Cronenberg."
 
-   Another example:
-     BAD: "The assistant explained that Piranesi is a novel by Susanna Clarke published in 2020."
-     GOOD: "The user asked about the book Piranesi."
+   Example — correction chain preserved:
+     GOOD: "The user asked about Possessor; the assistant said it is a 2006 film, the user corrected that it is from 2020."
 
-   But this is fine (tool-grounded + user-stated):
+   Example — tool-grounded + user-stated, no attribution caveats needed:
      OK: "The weather in Hackney was 10.6°C and partly cloudy. The user said they prefer Thai over Indian food."
 
    This rule applies in any language.

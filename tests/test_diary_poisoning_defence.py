@@ -64,34 +64,50 @@ class TestSummariserForbidsDeflectionNarration:
             "transient",
         )), "Summariser prompt must explain why failure narration is harmful."
 
-    def test_prompt_forbids_recording_assistant_entity_claims_as_fact(self):
+    def test_prompt_requires_attribution_for_assistant_entity_claims(self):
         """Regression for the real-world Possessor poisoning.
 
         Field DB contained a diary entry reading:
-          "The user initially inquired about the movie *Possessor*, and the
+          "The user initially inquired about the movie Possessor, and the
            assistant provided information stating it is a 2006 science
            fiction film directed by Brandon Cronenberg..."
 
-        The assistant had hallucinated the year; the summariser recorded the
-        claim as fact; the downstream digest then echoed it into the next
-        session's system prompt. Root cause: no rule against recording the
-        assistant's *substantive* claims about third-party entities (only
-        against recording its *failures*). This test locks that rule in.
+        The assistant had hallucinated the year; the summariser recorded
+        the claim under an "the assistant provided information stating…"
+        wrapper but the digest later stripped the attribution, and the
+        claim ended up in the next session's system prompt as if it were
+        established fact.
+
+        The right fix is attribution preservation, not content deletion —
+        we want the summariser to be faithful (so corrections and
+        tool-grounded answers survive in the log) while making clear WHO
+        said WHAT, so downstream readers can calibrate trust.
         """
         prompt = self._capture_system_prompt()
         lowered = prompt.lower()
-        # Must explicitly warn against recording assistant claims about
-        # named third-party entities (films/books/products/people).
-        assert "substantive claims" in lowered or "assistant may hallucinate" in lowered or (
-            "third-party" in lowered and "entities" in lowered
+        # The prompt must require attribution for assistant entity claims.
+        assert "attribut" in lowered, (
+            "Summariser prompt must require attribution of assistant claims "
+            "(e.g. write 'the assistant said X' rather than bare 'X')."
+        )
+        # Must warn against promoting attributed claims into unattributed
+        # assertions — that's the exact failure mode that poisoned the DB.
+        assert "unattributed" in lowered or "without attribution" in lowered or (
+            "strip" in lowered and "attribution" in lowered
         ), (
-            "Summariser prompt must forbid recording assistant claims about "
-            "third-party named entities as fact."
+            "Summariser prompt must forbid stripping attribution from an "
+            "assistant claim (unattributed claims poison downstream)."
         )
         # Concrete good/bad example pair showing the failure mode.
         assert "possessor" in lowered or "piranesi" in lowered, (
-            "Summariser prompt should include a concrete good/bad example for "
-            "third-party entity claim recording."
+            "Summariser prompt should include a concrete good/bad example "
+            "for attributed assistant claims."
+        )
+        # Must handle the correction chain — user correcting the assistant
+        # should result in BOTH being logged, not silent replacement.
+        assert "correct" in lowered, (
+            "Summariser prompt must explain how to handle user corrections "
+            "of assistant claims (preserve both; don't replace silently)."
         )
 
     def test_prompt_is_language_agnostic(self):
