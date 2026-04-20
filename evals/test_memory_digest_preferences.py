@@ -118,11 +118,12 @@ class TestMemoryDigestSurfacesPreferenceSignals:
         # Neither snippet is in the films/entertainment domain. The digest
         # should either return empty or at least not falsely invent a film
         # preference from population statistics or Python debugging.
-        lowered = digest.lower()
-        fabricated = any(
-            t in lowered for t in ("film", "movie", "watch", "series", "show")
-        )
-        assert not fabricated or not digest, (
-            f"Digest fabricated a film preference from unrelated snippets. "
-            f"Got: {digest!r}"
-        )
+        if digest:
+            lowered = digest.lower()
+            fabricated = any(
+                t in lowered for t in ("film", "movie", "watch", "series", "show")
+            )
+            assert not fabricated, (
+                f"Digest fabricated a film preference from unrelated snippets. "
+                f"Got: {digest!r}"
+            )
