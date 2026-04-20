@@ -877,6 +877,74 @@ class TestInstallUpdateMacos:
             f"expected `ditto -x -k <src> <dest>`, got {ditto_calls[0]}"
         )
 
+    @pytest.mark.unit
+    def test_falls_back_to_zipfile_when_ditto_missing(self, tmp_path):
+        """When ditto is absent (non-macOS CI), extraction must fall back to
+        zipfile rather than raising FileNotFoundError. Non-macOS hosts never
+        hit this path in production, but the safety net keeps the unit suite
+        runnable off-macOS — regressing that would silently break CI."""
+        import zipfile
+        from desktop_app.updater import _extract_macos_bundle
+
+        zip_path = tmp_path / "bundle.zip"
+        payload_dir = tmp_path / "payload"
+        payload_dir.mkdir()
+        (payload_dir / "hello.txt").write_text("hi")
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.write(payload_dir / "hello.txt", arcname="hello.txt")
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        missing_ditto = tmp_path / "does_not_exist"
+        assert not missing_ditto.exists()
+
+        with patch("desktop_app.updater.DITTO_PATH", str(missing_ditto)):
+            _extract_macos_bundle(zip_path, dest)
+
+        assert (dest / "hello.txt").read_text() == "hi", (
+            "fallback must still extract the zip when ditto is unavailable"
+        )
+
+    @pytest.mark.unit
+    def test_ditto_extraction_failure_surfaces_as_install_failure(self, tmp_path):
+        """If ditto exits non-zero, install_update_macos must catch the
+        CalledProcessError and return False so the UI shows the generic
+        update-failed dialog — never crash the app or leave a half-applied
+        bundle behind."""
+        import zipfile
+
+        zip_path = tmp_path / "update.zip"
+        app_source = tmp_path / "zip_content" / "Jarvis.app" / "Contents"
+        app_source.mkdir(parents=True)
+        (app_source / "Info.plist").write_bytes(b"mock")
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in (tmp_path / "zip_content").rglob("*"):
+                if f.is_file():
+                    zf.write(f, arcname=str(f.relative_to(tmp_path / "zip_content")))
+
+        mock_app_path = tmp_path / "Applications" / "Jarvis.app"
+        mock_app_path.mkdir(parents=True)
+
+        fake_ditto = tmp_path / "fake_ditto"
+        fake_ditto.write_text("")
+
+        def fake_run(args, **kwargs):
+            raise subprocess.CalledProcessError(returncode=1, cmd=args)
+
+        from desktop_app.updater import install_update_macos
+
+        with patch("desktop_app.updater.DITTO_PATH", str(fake_ditto)):
+            with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+                with patch("desktop_app.updater.subprocess.run", side_effect=fake_run):
+                    with patch("desktop_app.updater.subprocess.Popen", return_value=MagicMock()) as popen:
+                        result = install_update_macos(zip_path)
+
+        assert result is False, "ditto failure must surface as install-failed"
+        assert not popen.called, (
+            "must not launch the relaunch script after extraction failed"
+        )
+
 
 class TestInstallUpdateLinux:
     """Tests for Linux update installation."""
