@@ -171,3 +171,91 @@ class TestMemoryDigestSurfacesIdentityFacts:
             f"Digest fabricated a user-preference claim from past Q&A "
             f"topics. Got: {digest!r}"
         )
+
+    def test_identity_query_does_not_trigger_recommendation_engagement_rule(self):
+        """Cross-rule guard: the recommendation-engagement rule says past
+        interactions count as preference signals for 'what should I watch'.
+        An IDENTITY query with the same film-engagement diary must not
+        mistakenly treat the films as facts about the user — the identity
+        rule still applies and past Q&A topics stay out unless the snippet
+        explicitly says the user is into that topic."""
+        diary = [
+            "[2026-04-20] The user asked about the movie Titanic; the "
+            "assistant summarised its plot and noted it is a 1997 film "
+            "directed by James Cameron.",
+            "[2026-04-19] The conversation focused on the film Possessor; "
+            "the assistant said it is a 2020 sci-fi horror by Brandon "
+            "Cronenberg.",
+            "[2026-04-10] The user said they live in East London and work "
+            "as a software engineer.",
+        ]
+        digest = self._digest("what do you know about me?", diary)
+        print(f"\n  Digest: {digest!r}")
+
+        if not digest:
+            pytest.xfail(
+                f"Small judge model {JUDGE_MODEL} returned NONE for an "
+                f"identity query despite user-stated facts present."
+            )
+
+        lowered = digest.lower()
+        user_fact_surfaced = any(
+            kw in lowered
+            for kw in ("east london", "software engineer", "engineer")
+        )
+        assert user_fact_surfaced, (
+            f"Digest did not surface the user-stated location/occupation "
+            f"fact for an identity query. Got: {digest!r}"
+        )
+        # The film Q&As must NOT be presented as user facts. The identity
+        # rule's "not a fact unless the snippet says the user is into it"
+        # clause must override the recommendation-engagement rule here.
+        film_presented_as_user_fact = any(
+            phrase in lowered
+            for phrase in (
+                "the user likes",
+                "the user enjoys",
+                "the user is a fan",
+                "the user is into",
+                "taste signal",
+                "already covered",
+            )
+        )
+        assert not film_presented_as_user_fact, (
+            f"Digest applied the recommendation-engagement rule to an "
+            f"identity query: films framed as user taste/preference. "
+            f"Got: {digest!r}"
+        )
+
+    def test_recommendation_query_still_surfaces_engagement_when_user_facts_present(self):
+        """Reverse cross-rule guard: a recommendation query alongside
+        user-stated facts must still surface engagement-as-preference.
+        The identity rule's 'prefer user-stated facts' must not suppress
+        the recommendation rule's engagement signals."""
+        diary = [
+            "[2026-04-20] The user asked about the movie Titanic; the "
+            "assistant summarised its plot and noted it is a 1997 film "
+            "directed by James Cameron.",
+            "[2026-04-19] The conversation focused on the film Possessor; "
+            "the assistant said it is a 2020 sci-fi horror by Brandon "
+            "Cronenberg.",
+            "[2026-04-10] The user said they live in East London.",
+        ]
+        digest = self._digest("what should I watch tonight?", diary)
+        print(f"\n  Digest: {digest!r}")
+
+        if not digest:
+            pytest.xfail(
+                f"Small judge model {JUDGE_MODEL} returned NONE for a "
+                f"recommendation query despite engagement signals present."
+            )
+
+        lowered = digest.lower()
+        engagement_surfaced = any(
+            kw in lowered for kw in ("titanic", "possessor")
+        )
+        assert engagement_surfaced, (
+            f"Digest suppressed engagement-as-preference signals on a "
+            f"recommendation query, likely because the identity rule "
+            f"dominated. Got: {digest!r}"
+        )
