@@ -460,7 +460,15 @@ class VoiceListener(threading.Thread):
                         # of TTS echo with the user's follow-up into a single
                         # transcript; without salvage, the user's real speech
                         # would be dropped before the intent judge ever sees it.
+                        # Try exact-word cleanup first (cheapest, most precise),
+                        # then fall back to the rightmost-boundary scan which
+                        # handles Whisper mis-transcriptions at the echo/speech
+                        # join ("explores" → "laws") that exact matching can't.
                         salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
+                        if salvaged == text_lower:
+                            salvaged_alt = self.echo_detector.salvage_after_echo_tail(text_lower)
+                            if salvaged_alt:
+                                salvaged = salvaged_alt
                         # Require ≥ min_salvage_words to avoid treating Whisper's
                         # echo-tail hallucinations ("…regions like Steneti") as
                         # genuine user speech. The threshold lives on the echo
@@ -560,6 +568,16 @@ class VoiceListener(threading.Thread):
                 getattr(self.cfg, 'tts_rate', 200),
                 utterance_start_time,
             )
+            # If the prefix-based salvage fails or truncates too aggressively
+            # (Whisper-mangled echo boundary → exact cleanup misses; fuzzy
+            # prefix iteration prefers shortest suffix), fall through to the
+            # rightmost-boundary scan which recovers the full follow-up.
+            boundary_salvaged = self.echo_detector.salvage_after_echo_tail(text_lower)
+            if boundary_salvaged and (
+                salvaged is None or salvaged == text_lower
+                or len(boundary_salvaged.split()) > len(salvaged.split())
+            ):
+                salvaged = boundary_salvaged
             min_words = self.echo_detector.min_salvage_words
             if (salvaged and salvaged.strip() and salvaged != text_lower
                     and len(salvaged.split()) >= min_words):
