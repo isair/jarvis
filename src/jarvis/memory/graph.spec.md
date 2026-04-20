@@ -198,6 +198,14 @@ The graph memory system lives alongside the existing diary system (conversation_
 
 Users can import existing diary data into the graph via the "Import from Diary" button in the Memory Viewer. This processes all historical summaries through the extract-and-place pipeline, building the graph structure organically.
 
+### Diary Summariser Hygiene
+
+Diary entries (written by the summariser in `conversation.py::generate_conversation_summary`) feed both direct retrieval and graph extraction. A corrupted summary poisons every downstream consumer, so the summariser prompt enforces a small set of hygiene rules:
+
+- **No deflection narration.** The summariser must not record the assistant's own failures, uncertainty, or offers to search. Those events are transient and, if preserved, prime future sessions to repeat the pattern.
+- **Attribution preservation.** Claims the assistant made about third-party entities must be attributed ("the assistant said X") rather than promoted into unattributed facts. User corrections and the original claim are both retained.
+- **Topic separation.** Unrelated topics must never be welded into one grammatical clause — no shared "and", shared appositive, or shared relative clause across distinct referents. Each topic gets its own sentence. A welded clause like "the film X and the character Y, identified as Z" is read by downstream retrievers as a single claim about both referents and corrupts future enrichment.
+
 ## Privacy
 
 All data is stored locally in the user's SQLite database. No data leaves the device. The graph store has no network dependencies.

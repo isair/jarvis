@@ -117,6 +117,55 @@ class TestSummariserForbidsDeflectionNarration:
             "Summariser rule must explicitly apply across languages."
         )
 
+    def test_prompt_forbids_welding_unrelated_topics(self):
+        """Regression for the Possessor/Jarvis field incident.
+
+        Field DB contained a diary entry reading:
+          "The conversation focused on the movie 'Possessor' and the character
+           'Jarvis,' identified as the artificial intelligence from the
+           Marvel Cinematic Universe, created by Tony Stark and later
+           embodied by Vision."
+
+        Two distinct topics (the 2020 Cronenberg film Possessor, and the MCU
+        AI character named Jarvis) were welded into one clause via "and" plus
+        a dangling appositive. Downstream enrichment treated the MCU
+        description as pertaining to Possessor, and a later session produced
+        a plausible-but-wrong reply grounded in the corrupted summary.
+
+        The rule is a sibling to the attribution rule: attribution without
+        topic-separation still permits compound clauses, and compound clauses
+        are the mechanism by which unrelated facts get retrieved together.
+        """
+        prompt = self._capture_system_prompt()
+        lowered = prompt.lower()
+
+        # Must forbid joining unrelated topics.
+        assert any(phrase in lowered for phrase in (
+            "do not weld",
+            "not weld",
+            "one topic per sentence",
+            "separate sentence",
+            "separate sentences",
+        )), (
+            "Summariser prompt must forbid welding unrelated topics into one clause."
+        )
+
+        # Must name the specific linguistic mechanism (shared appositive /
+        # dangling modifier) — otherwise small models won't recognise the
+        # failure mode.
+        assert "appositive" in lowered or "relative clause" in lowered or "dangl" in lowered, (
+            "Summariser prompt must name the shared-appositive / dangling-modifier "
+            "mechanism so small models recognise the failure mode."
+        )
+
+        # Concrete good/bad example using the field-observed Possessor/Jarvis
+        # case (the same one used elsewhere in the prompt — but here about
+        # topic separation, not attribution).
+        assert "jarvis" in lowered and "possessor" in lowered, (
+            "Summariser prompt should include the Possessor/Jarvis topic-welding "
+            "BAD→GOOD example."
+        )
+
 
 class TestDiaryEnrichmentInjectionFraming:
     """The reply engine must frame diary enrichment as reference-only, not as instructions."""
