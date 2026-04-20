@@ -78,8 +78,9 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         re.DOTALL,
     )
     if tc_literal:
+        raw_literal = tc_literal.group(1)
         try:
-            arr = json.loads(tc_literal.group(1))
+            arr = json.loads(raw_literal)
             if isinstance(arr, list) and arr:
                 first = arr[0]
                 if isinstance(first, dict) and isinstance(first.get("function"), dict):
@@ -101,7 +102,66 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                     if name:
                         return name, parsed_args, tool_call_id
         except Exception:
-            pass
+            # Lenient fallback: small models sometimes emit *almost* valid
+            # `tool_calls: [...]` JSON but drop one or two closing braces. If
+            # strict json.loads fails, regex-extract name + arguments directly.
+            # Captured from gemma4:e2b field output on 2026-04-20:
+            #   tool_calls: [{"id":"call_1",... "arguments": "{\"location\": \"Tbilisi\"}}"]
+            # — missing the closing `}` for the function object and the call
+            # object. Without this fallback the raw tool_calls line leaks as
+            # the reply, so the user sees JSON instead of an answer.
+            name_match = re.search(r'"name"\s*:\s*"([^"]+)"', raw_literal)
+            if name_match:
+                name = name_match.group(1).strip()
+                if name in known_names:
+                    args_match = re.search(
+                        r'"arguments"\s*:\s*(\{.*?\}|"(?:[^"\\]|\\.)*")',
+                        raw_literal,
+                        re.DOTALL,
+                    )
+                    parsed_args: dict = {}
+                    if args_match:
+                        raw = args_match.group(1)
+                        def _lenient_json_object(candidate: str) -> dict | None:
+                            """Parse a JSON object, trimming trailing garbage."""
+                            candidate = candidate.strip()
+                            # Greedy-trim trailing chars until a balanced
+                            # object parses cleanly. Handles the common
+                            # small-model "extra closing braces" bug.
+                            for end in range(len(candidate), 0, -1):
+                                chunk = candidate[:end]
+                                if not chunk.endswith("}"):
+                                    continue
+                                try:
+                                    parsed = json.loads(chunk)
+                                    if isinstance(parsed, dict):
+                                        return parsed
+                                except Exception:
+                                    continue
+                            return None
+
+                        if raw.startswith('"'):
+                            # arguments is a JSON string (possibly
+                            # double-encoded JSON inside); try to unwrap.
+                            try:
+                                unwrapped = json.loads(raw)
+                            except Exception:
+                                unwrapped = raw.strip('"')
+                            if isinstance(unwrapped, str):
+                                inner = _lenient_json_object(unwrapped)
+                                if inner is not None:
+                                    parsed_args = inner
+                                else:
+                                    parsed_args = {"query": unwrapped}
+                            elif isinstance(unwrapped, dict):
+                                parsed_args = unwrapped
+                        else:
+                            lenient = _lenient_json_object(raw)
+                            if lenient is not None:
+                                parsed_args = lenient
+                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
+                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
+                    return name, parsed_args, tool_call_id
 
     # Form: gemma's native `tool_code` block. Gemma models are trained to emit
     # tool calls as Python-style code, e.g.

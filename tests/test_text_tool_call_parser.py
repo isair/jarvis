@@ -63,6 +63,36 @@ class TestCanonicalToolCallsArrayLiteral:
         assert args.get("search_query") == "Piranesi book"
 
 
+class TestMalformedCanonicalToolCallsLenientFallback:
+    """Form 1b: small models emit *almost* valid `tool_calls: [...]` JSON but
+    drop one or two closing braces. Without a lenient fallback the raw line
+    leaks as the reply. Captured from gemma4:e2b field output 2026-04-20."""
+
+    def test_parses_despite_missing_closing_braces(self):
+        # Verbatim from gemma4:e2b: two closing braces missing before the `]`.
+        content = (
+            'tool_calls: [{"id": "call_1", "type": "function", '
+            '"function": {"name": "getWeather", '
+            '"arguments": "{\\"location\\": \\"Tbilisi, Georgia\\"}}"]'
+        )
+        name, args, _ = _extract(content, tool_name="getWeather")
+        assert name == "getWeather"
+        # The inner arguments JSON should survive the unwrap so the tool
+        # layer receives the real location instead of a raw string blob.
+        assert args.get("location") == "Tbilisi, Georgia"
+
+    def test_lenient_fallback_rejects_unknown_tool_names(self):
+        # Even with the lenient fallback, only tools in known_names get
+        # dispatched — no inventing tools from malformed JSON.
+        content = (
+            'tool_calls: [{"id": "call_1", "type": "function", '
+            '"function": {"name": "fileSystem_write", '
+            '"arguments": "{\\"path\\": \\"/tmp/x\\"}}"]'
+        )
+        name, _args, _ = _extract(content, tool_name="webSearch")
+        assert name is None
+
+
 class TestSimplifiedColonForm:
     """Form 2: `toolName: key: value`."""
 
