@@ -87,6 +87,11 @@ TOOL_GUIDANCE_LARGE = (
 # concern. We keep a shorter version here (large models follow concise
 # instructions reliably; repetition and worked examples are only needed for
 # small models).
+#
+# NB: constraints are intentionally phrased without any language-specific
+# negative examples ("would you like me to", "if you'd like", etc.) because
+# this assistant supports an arbitrary set of languages. We describe the
+# BEHAVIOUR to avoid, not English tokens that happen to express it.
 TOOL_CONSTRAINTS_LARGE = (
     "UNKNOWN NAMED ENTITIES:\n"
     "When the user asks about a specific named thing (a film, book, song, game, "
@@ -96,7 +101,16 @@ TOOL_CONSTRAINTS_LARGE = (
     "plausible-sounding prior — if you are not certain, look it up. "
     "A diary or memory entry mentioning the entity's name only confirms the topic came "
     "up before; it does NOT give you facts you can restate. "
-    "Do not announce the search or ask permission — just call the tool, then answer."
+    "Do not announce the search or ask permission — just call the tool, then answer. "
+    "Any phrasing that requests information about a named entity (\"tell me about X\", "
+    "\"have you heard of X\", and equivalents in any language) is a search trigger, "
+    "not a capability question about yourself.\n\n"
+    "ARGUMENTS THE TOOL CAN AUTO-DERIVE:\n"
+    "Tools may state in their description that an argument has a sensible default "
+    "(for example getWeather uses the user's current location when none is given). "
+    "Do NOT ask the user to supply an argument the tool already handles — just call "
+    "the tool with whatever arguments you do have, and let it fill the rest. Asking "
+    "for an argument the tool auto-derives wastes a turn and frustrates the user."
 )
 
 
@@ -136,16 +150,27 @@ TOOL_GUIDANCE_SMALL = (
 # See: "The Power of Noise: Redefining Retrieval for RAG Systems" (arXiv:2401.14887)
 # and "Lost in the Middle: How Language Models Use Long Contexts" (arXiv:2307.03172)
 # Repetition places the constraint both early (primacy) and late (recency) in the prompt.
+# NB: these constraints are intentionally phrased WITHOUT language-specific
+# examples of forbidden phrasing ("would you like me to", "I can search", etc.)
+# because this assistant supports an arbitrary set of languages. We describe
+# the BEHAVIOURS to avoid, not English tokens that happen to express them.
+# Small models still get enough structure to follow because each rule is
+# stated in imperative form with a concrete trigger + action.
 _TOOL_CONSTRAINTS_BASE = """GREETING HANDLING:
-When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
+When the user's message is a greeting or casual social phrase (whatever language), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
 
 USER INSTRUCTIONS:
-When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests.
+When the user gives you instructions about how to behave or respond (units, brevity, language, tone), acknowledge and respond directly WITHOUT calling tools. These are behavioural instructions, not data requests.
 
 UNKNOWN NAMED ENTITIES:
-If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch to look it up. Never offer or ask permission to search — do not say "I can search", "I could look that up", "would you like me to search", "let me know if you want me to", "if you'd like". Once you've decided a tool is needed, call it in the SAME turn, silently. Do NOT reply that you have no information, ask the user for a link, or announce what you are about to do — just perform the lookup and then answer. Only skip the lookup if the entity is one you can state specific facts about (title, year, creator, plot, etc.) without guessing. This rule applies regardless of how the user phrases the request ("what do you know about X", "what can you tell me about X", "tell me about X", "tell me more about X", "have you heard of X") — all are requests for information, not questions about your capabilities.
+If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch in the SAME turn — silently. Do not offer to search, do not ask permission to search, do not announce the search, do not say you have no information and stop. If the query names the entity clearly enough to search, SEARCH — do not ask the user to disambiguate first. Clarifying BEFORE a tool call is a deflection; clarifying AFTER the tool returns nothing useful is fine.
 
-Do NOT ask the user to clarify which X they mean before calling the tool. If the query contains enough to search ("the movie Possessor", "the book Piranesi"), search first. Clarifying questions BEFORE the tool call is a deflection pattern; clarification AFTER the tool returns nothing useful is acceptable. Do NOT invent plot, cast, release year, themes, or any other facts about a named entity from your own prior — even if the diary/context mentions the name, a diary mention only confirms the topic came up, it does NOT give you facts you can state. If you do not have facts from a tool result in this turn, you must call webSearch."""
+Any phrasing that requests information about a named entity is a search trigger — the request doesn't have to contain the word "search". Treat "tell me about X", "tell me more about X", "what do you know about X", "what can you tell me about X", "have you heard of X", and their equivalents in any language as information requests about X, not as capability questions about yourself. The correct response is to look X up and answer — not to describe what you can or cannot do.
+
+Only skip the lookup if you can state concrete facts about the exact entity (title, year, creator, plot) without guessing. A diary or memory mention of the entity's name only confirms the topic came up — it does NOT give you facts you can state. Never invent plot, cast, release year, themes, or other specifics from prior knowledge. If you do not have facts from a tool result in this turn, you must call webSearch.
+
+ARGUMENTS THE TOOL CAN AUTO-DERIVE:
+If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool without asking the user for that argument. Do not ask the user to supply something the tool already handles — that wastes a turn and frustrates the user."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE
