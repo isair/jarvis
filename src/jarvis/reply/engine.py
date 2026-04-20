@@ -14,6 +14,7 @@ from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory, digest_memory_for_query
+from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
@@ -1136,6 +1137,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     max_turns = cfg.agentic_max_turns
     turn = 0
 
+    # Per-reply session id used to group prompt dumps on disk when
+    # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
+    # identifier stays stable even if dumping is toggled mid-loop.
+    _dump_session_id = new_session_id()
+    if _prompt_dump_enabled():
+        print(f"  📝 Prompt dump enabled (session {_dump_session_id})", flush=True)
+
     # Visible progress indicator before LLM loop (helps diagnose hangs)
     print(f"  💬 Generating response...", flush=True)
     debug_log(f"Starting LLM conversation loop (max {max_turns} turns)...", "planning")
@@ -1160,6 +1168,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Send messages to Ollama — try native tool calling first, fall back to text-based
         # if the model returns HTTP 400 (native tools API not supported).
+        _dump_tools_schema = None if use_text_tools else tools_json_schema
         try:
             llm_resp = chat_with_messages(
                 base_url=cfg.ollama_base_url,
@@ -1167,8 +1176,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
-                tools=None if use_text_tools else tools_json_schema,
+                tools=_dump_tools_schema,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+            )
+            dump_reply_turn(
+                session_id=_dump_session_id,
+                turn=turn,
+                query=text,
+                model=cfg.ollama_chat_model,
+                messages=messages,
+                tools_schema=_dump_tools_schema,
+                use_text_tools=use_text_tools,
+                response=llm_resp,
             )
         except ToolsNotSupportedError:
             # Model doesn't support the native tools API — switch to text-based tool calling
@@ -1190,6 +1209,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 extra_options=None,
                 tools=None,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+            )
+            dump_reply_turn(
+                session_id=_dump_session_id,
+                turn=turn,
+                query=text,
+                model=cfg.ollama_chat_model,
+                messages=messages,
+                tools_schema=None,
+                use_text_tools=True,
+                response=llm_resp,
             )
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
