@@ -363,14 +363,26 @@ def install_update_macos(download_path: Path) -> bool:
         escaped_backup = _escape_shell_path(app_path.with_suffix(app_path.suffix + ".backup"))
         escaped_new_app = _escape_shell_path(new_app_path)
         escaped_temp = _escape_shell_path(temp_dir)
+        escaped_binary = _escape_shell_path(app_path / "Contents" / "MacOS" / "Jarvis")
+        log_path = Path.home() / "Library" / "Logs" / "Jarvis" / "updater.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        escaped_log = _escape_shell_path(log_path)
 
         # The quarantine strip is essential for unsigned builds: without it,
         # Gatekeeper may re-prompt with "unidentified developer" on every
         # update. Keeping the previous bundle as .backup provides a one-step
         # rollback if the new version fails to launch.
+        #
+        # After the mv swap, LaunchServices still has the old bundle's inode
+        # cached, so a bare `open` can silently no-op. `lsregister -f` forces
+        # a re-scan, `open -n` forces a fresh instance, and if that still
+        # fails we exec the bundle's inner binary directly. Script output is
+        # appended to ~/Library/Logs/Jarvis/updater.log so future failures
+        # leave a trace — the script runs detached with no terminal.
         script_path = temp_dir / "update.sh"
         script_content = f'''#!/bin/bash
-echo "Updating Jarvis..."
+exec >> {escaped_log} 2>&1
+echo "=== Jarvis update $(date) ==="
 echo "Waiting for process {current_pid} to exit..."
 while kill -0 {current_pid} 2>/dev/null; do
     sleep 1
@@ -382,7 +394,15 @@ if [ -e {escaped_app} ]; then
 fi
 mv {escaped_new_app} {escaped_app}
 xattr -dr com.apple.quarantine {escaped_app} 2>/dev/null || true
-open {escaped_app}
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+if [ -x "$LSREGISTER" ]; then
+    "$LSREGISTER" -f {escaped_app} || true
+fi
+echo "Relaunching..."
+if ! open -n {escaped_app}; then
+    echo "open failed (exit $?), execing binary directly"
+    nohup {escaped_binary} >/dev/null 2>&1 &
+fi
 rm -rf {escaped_temp}
 '''
         script_path.write_text(script_content)

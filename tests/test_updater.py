@@ -610,6 +610,21 @@ class TestInstallUpdateMacos:
         assert move_to_backup_idx < xattr_idx, "backup happens before xattr strip"
         assert xattr_idx < open_idx, "xattr strip must precede launch"
 
+        # LaunchServices caches the old bundle inode across the mv swap, so a
+        # bare `open` silently no-ops. Re-register the bundle and force a new
+        # instance, and fall back to execing the inner binary if `open` fails
+        # — otherwise the update "installs" but never relaunches.
+        assert "lsregister" in script_content
+        assert "open -n" in script_content
+        binary_path = str(mock_app_path / "Contents" / "MacOS" / "Jarvis")
+        assert binary_path in script_content, "fallback must exec the bundle's inner binary"
+        lsregister_idx = script_content.find("lsregister")
+        assert xattr_idx < lsregister_idx < open_idx, "lsregister must run after xattr and before open"
+
+        # Script output must be captured to a log file — otherwise detached
+        # failures leave no trace and we can't diagnose future relaunch bugs.
+        assert "Library/Logs/Jarvis/updater.log" in script_content
+
 
 class TestInstallUpdateLinux:
     """Tests for Linux update installation."""
