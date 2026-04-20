@@ -319,9 +319,10 @@ Behaviour:
 - **Multi-batch fallback**: if the raw result exceeds the per-batch cap, it's split on paragraph boundaries (blank-line-separated) so envelope framing and fence markers stay in whichever chunk contains them; each chunk is distilled independently and surviving notes are joined.
 - **Source attribution preserved**: the distil prompt requires a source framing ("According to the web extract…", "The search result says…"); bare claims are explicitly forbidden. This keeps the untrusted-vs-established-fact distinction visible to the main model.
 - **No new facts**: the distil is forbidden from adding facts not present in the tool output — no year, cast, director etc. unless they appear verbatim in the payload.
-- **NONE sentinel**: when the distil judges nothing relevant it returns NONE; the caller keeps the raw payload (suppressing it entirely is worse than a noisy substrate).
+- **NONE sentinel**: when the distil judges nothing relevant it returns NONE; the caller keeps the raw payload (suppressing it entirely is worse than a noisy substrate). A user-facing `🧩 Tool digest: no relevant facts — using raw payload (Nch)` line prints on this branch so the fallback is visible in the field.
 - **Length cap**: each per-batch digest is truncated to `_TOOL_DIGEST_MAX_CHARS` (600 chars) with an ellipsis.
-- **User-facing logging**: prints `🧩 Tool digest: N chars — "preview…"` when the digest replaces the raw payload. Debug logs under the `tools` category record raw→digest size plus batch counts.
+- **Timeout**: both digests (memory and tool-result) share `llm_digest_timeout_sec` (default 8 s), kept separate from `llm_tools_timeout_sec` (which can reach minutes for long-running tool execution) so a hung distil can't stall the reply loop for five minutes per turn.
+- **User-facing logging**: prints `🧩 Tool digest: N chars — "preview…"` when the digest replaces the raw payload, or the NONE fallback line above. Debug logs under the `tools` category record raw→digest size plus batch counts.
 - **Raw payload preserved in debug**: the debug logs capture the original length so field captures can compare digested vs raw behaviour.
 
 ### Logging and Privacy

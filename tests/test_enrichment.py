@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from jarvis.reply.engine import _build_enrichment_context_hint, _match_question
+from jarvis.reply.engine import (
+    _build_enrichment_context_hint,
+    _match_question,
+    _maybe_digest_tool_result,
+)
 from jarvis.reply.enrichment import extract_search_params_for_memory
 
 
@@ -544,6 +548,17 @@ class TestDigestToolResultForQuery:
             mock_llm.assert_not_called()
         assert result == ""
 
+    def test_whitespace_only_input_returns_empty(self):
+        """Whitespace-only tool output collapses to empty before any LLM call."""
+        from jarvis.reply.enrichment import digest_tool_result_for_query
+
+        with patch("jarvis.reply.enrichment.call_llm_direct") as mock_llm:
+            result = digest_tool_result_for_query(
+                tool_result="   \n\n   \t   ", **self._base_kwargs()
+            )
+            mock_llm.assert_not_called()
+        assert result == ""
+
     def test_short_result_passes_through_unchanged(self):
         """Below _TOOL_DIGEST_MIN_CHARS, the raw text is cheap; no LLM call."""
         from jarvis.reply.enrichment import digest_tool_result_for_query
@@ -657,3 +672,143 @@ class TestDigestToolResultForQuery:
 
         assert call_count["n"] >= 2
         assert "note 1" in result
+
+    def test_multi_batch_llm_failure_returns_empty(self):
+        """If every chunk's distil raises, the combined digest collapses to empty."""
+        from jarvis.reply.enrichment import (
+            _TOOL_DIGEST_BATCH_MAX_CHARS,
+            digest_tool_result_for_query,
+        )
+
+        paragraphs = [f"Section {i}: " + ("fact " * 220) for i in range(6)]
+        payload = "\n\n".join(paragraphs)
+        assert len(payload) > _TOOL_DIGEST_BATCH_MAX_CHARS
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            side_effect=RuntimeError("upstream flake"),
+        ):
+            result = digest_tool_result_for_query(
+                tool_result=payload, **self._base_kwargs()
+            )
+        assert result == ""
+
+    def test_multi_batch_partial_llm_failure_keeps_surviving_notes(self):
+        """A single chunk raising must not abort the whole digest."""
+        from jarvis.reply.enrichment import (
+            _TOOL_DIGEST_BATCH_MAX_CHARS,
+            digest_tool_result_for_query,
+        )
+
+        paragraphs = [f"Section {i}: " + ("fact " * 220) for i in range(4)]
+        payload = "\n\n".join(paragraphs)
+        assert len(payload) > _TOOL_DIGEST_BATCH_MAX_CHARS
+
+        calls = {"n": 0}
+
+        def fake_llm(**_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("mid-loop flake")
+            return f"According to the tool output, note {calls['n']}."
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            side_effect=fake_llm,
+        ):
+            result = digest_tool_result_for_query(
+                tool_result=payload, **self._base_kwargs()
+            )
+        # First and later calls succeed — surviving notes survive.
+        assert "note 1" in result
+
+
+# ── Engine helper: _maybe_digest_tool_result ───────────────────────────
+
+
+class TestMaybeDigestToolResult:
+    """Gating and fallback behaviour of the engine-side wiring."""
+
+    def _cfg(self, **overrides):
+        defaults = dict(
+            ollama_base_url="http://x",
+            ollama_chat_model="llama3.1:8b",  # LARGE by default
+            llm_digest_timeout_sec=1.0,
+            llm_thinking_enabled=False,
+            tool_result_digest_enabled=None,  # auto
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_disabled_passes_through_raw(self):
+        cfg = self._cfg(tool_result_digest_enabled=False)
+        raw = "some tool output" * 100
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct"
+        ) as mock_llm:
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="q", tool_name="webSearch", raw_tool_result=raw,
+            )
+            mock_llm.assert_not_called()
+        assert out == raw
+
+    def test_auto_off_for_large_model(self):
+        """Large-model default must not trigger the distil."""
+        cfg = self._cfg(ollama_chat_model="llama3.1:70b")
+        raw = "payload " * 200
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct"
+        ) as mock_llm:
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="q", tool_name="webSearch", raw_tool_result=raw,
+            )
+            mock_llm.assert_not_called()
+        assert out == raw
+
+    def test_auto_on_for_small_model(self):
+        cfg = self._cfg(ollama_chat_model="gemma4:e2b")
+        raw = "payload " * 200
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value="According to the tool output, Y.",
+        ):
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="q", tool_name="webSearch", raw_tool_result=raw,
+            )
+        assert "according to" in out.lower()
+
+    def test_none_result_falls_back_to_raw(self):
+        cfg = self._cfg(tool_result_digest_enabled=True)
+        raw = "payload " * 200
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value="NONE",
+        ):
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="q", tool_name="webSearch", raw_tool_result=raw,
+            )
+        assert out == raw
+
+    def test_llm_exception_falls_back_to_raw(self):
+        cfg = self._cfg(tool_result_digest_enabled=True)
+        raw = "payload " * 200
+        with patch(
+            "jarvis.reply.enrichment.digest_tool_result_for_query",
+            side_effect=RuntimeError("boom"),
+        ):
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="q", tool_name="webSearch", raw_tool_result=raw,
+            )
+        assert out == raw
+
+    def test_short_payload_returns_raw_without_round_trip(self):
+        cfg = self._cfg(tool_result_digest_enabled=True)
+        short = "14 °C and cloudy."
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct"
+        ) as mock_llm:
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="q", tool_name="getWeather", raw_tool_result=short,
+            )
+            mock_llm.assert_not_called()
+        assert out == short

@@ -498,6 +498,87 @@ _HINT_RECENT_MESSAGES = 6
 _HINT_MESSAGE_CHAR_LIMIT = 200
 
 
+def _maybe_digest_tool_result(
+    cfg,
+    query: str,
+    tool_name: str,
+    raw_tool_result: str,
+) -> str:
+    """Return the effective tool-role message content, digested if applicable.
+
+    Extracted from the reply loop so the gating logic is testable in isolation
+    and the reply loop stays readable. Gates on ``tool_result_digest_enabled``
+    (``None`` = auto-on for SMALL models). Prints user-facing logs for each
+    outcome (digest applied / NONE fallback / digest disabled) so the console
+    matches the memory-digest visibility convention. Always returns the
+    content the caller should append — the raw payload when digestion is off,
+    short-circuits, returns NONE, or fails.
+    """
+    tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
+    if tool_digest_cfg is None:
+        tool_digest_enabled = (
+            detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL
+        )
+    else:
+        tool_digest_enabled = bool(tool_digest_cfg)
+
+    if not tool_digest_enabled:
+        return raw_tool_result
+
+    try:
+        digested = digest_tool_result_for_query(
+            query=query,
+            tool_name=tool_name,
+            tool_result=raw_tool_result,
+            ollama_base_url=cfg.ollama_base_url,
+            ollama_chat_model=cfg.ollama_chat_model,
+            timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
+            thinking=getattr(cfg, 'llm_thinking_enabled', False),
+        )
+    except Exception as e:
+        debug_log(
+            f"tool result digest step failed (non-fatal): {e}",
+            "tools",
+        )
+        return raw_tool_result
+
+    if digested and digested != raw_tool_result:
+        flat = digested.replace("\n", " ")
+        preview = flat[:80] + ("…" if len(flat) > 80 else "")
+        print(
+            f"  🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
+            flush=True,
+        )
+        debug_log(
+            f"tool digest [{tool_name}]: raw payload "
+            f"({len(raw_tool_result)}ch) replaced by digest "
+            f"({len(digested)}ch)",
+            "tools",
+        )
+        return digested
+
+    if not digested:
+        # The distil judged nothing relevant. Keep the raw payload —
+        # suppressing it entirely would be worse than a possibly-noisy
+        # substrate. Mirror the memory-digest visibility so the user can
+        # see the pass ran and fell back explicitly.
+        print(
+            f"  🧩 Tool digest: no relevant facts — using raw payload "
+            f"({len(raw_tool_result)} chars)",
+            flush=True,
+        )
+        debug_log(
+            f"tool digest [{tool_name}]: NONE returned, keeping raw "
+            f"payload ({len(raw_tool_result)}ch)",
+            "tools",
+        )
+        return raw_tool_result
+
+    # digested == raw_tool_result (short-circuit pass-through below
+    # _TOOL_DIGEST_MIN_CHARS). No round-trip happened; don't log.
+    return raw_tool_result
+
+
 def _live_time_location_string(cfg) -> str:
     """Return a one-liner describing current local time and location, or ""."""
     try:
@@ -742,7 +823,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 graph_parts=raw_graph_parts,
                 ollama_base_url=cfg.ollama_base_url,
                 ollama_chat_model=cfg.ollama_chat_model,
-                timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+                timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
             # Replace the raw injections with the digest note (or nothing
@@ -1393,61 +1474,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # Tool-result digest for small models. Long tool payloads
                 # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
                 # push ~2B models into "describe the structure back" or
-                # prior-confabulation failure modes. A cheap distil pass
-                # boils the payload down to a short attributed fact note.
-                # Gated on `tool_result_digest_enabled` (default: auto-on
-                # for SMALL); preserves the raw payload in debug logs so
-                # field captures can compare digested vs raw.
-                raw_tool_result = result.reply_text
-                tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
-                if tool_digest_cfg is None:
-                    tool_digest_enabled = (
-                        detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL
-                    )
-                else:
-                    tool_digest_enabled = bool(tool_digest_cfg)
-
-                effective_result = raw_tool_result
-                if tool_digest_enabled:
-                    try:
-                        digested = digest_tool_result_for_query(
-                            query=redacted,
-                            tool_name=tool_name,
-                            tool_result=raw_tool_result,
-                            ollama_base_url=cfg.ollama_base_url,
-                            ollama_chat_model=cfg.ollama_chat_model,
-                            timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
-                            thinking=getattr(cfg, 'llm_thinking_enabled', False),
-                        )
-                    except Exception as e:
-                        debug_log(
-                            f"tool result digest step failed (non-fatal): {e}",
-                            "tools",
-                        )
-                        digested = raw_tool_result
-                    if digested and digested != raw_tool_result:
-                        flat = digested.replace("\n", " ")
-                        preview = flat[:80] + ("…" if len(flat) > 80 else "")
-                        print(
-                            f"  🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
-                            flush=True,
-                        )
-                        debug_log(
-                            f"tool digest [{tool_name}]: raw payload "
-                            f"({len(raw_tool_result)}ch) replaced by digest "
-                            f"({len(digested)}ch)",
-                            "tools",
-                        )
-                        effective_result = digested
-                    elif not digested:
-                        # The distil judged nothing relevant. Keep the raw
-                        # payload — suppressing it entirely would be worse
-                        # than a possibly-noisy substrate.
-                        debug_log(
-                            f"tool digest [{tool_name}]: NONE returned, "
-                            f"keeping raw payload ({len(raw_tool_result)}ch)",
-                            "tools",
-                        )
+                # prior-confabulation failure modes. The helper encapsulates
+                # the gating, distil round-trip, NONE fallback, and logging.
+                effective_result = _maybe_digest_tool_result(
+                    cfg=cfg,
+                    query=redacted,
+                    tool_name=tool_name,
+                    raw_tool_result=result.reply_text,
+                )
 
                 if use_text_tools:
                     messages.append({

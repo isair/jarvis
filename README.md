@@ -228,6 +228,28 @@ CUDA is detected automatically — no configuration needed.
 
 </details>
 
+<details>
+<summary><strong>Small-Model Digest Passes (Advanced)</strong></summary>
+
+Small chat models (~2B, e.g. `gemma4:e2b`) degrade sharply as their prompt grows. Jarvis runs two cheap distil passes to keep the prompt tight:
+
+- **Memory digest** — boils diary + graph recall into a short relevance-filtered note before injecting it as background context.
+- **Tool-result digest** — boils a raw tool payload (especially webSearch UNTRUSTED WEB EXTRACT blocks) into a short attributed fact note before it reaches the main reply model.
+
+Both auto-enable for small models and stay off for large models that ground on raw payloads reliably. Override in `~/.config/jarvis/config.json`:
+
+```json
+{
+  "memory_digest_enabled": null,          // null = auto-on for SMALL, false to force off, true to force on
+  "tool_result_digest_enabled": null,     // same semantics
+  "llm_digest_timeout_sec": 8.0           // tight ceiling shared by both passes
+}
+```
+
+Field logs show `🧩 Memory digest: …` and `🧩 Tool digest: …` lines when a pass ran, so you can see when the substrate was replaced.
+
+</details>
+
 ## Dictation Mode — Free WisprFlow Alternative
 
 Hold a hotkey to record speech, release to paste the transcription into any app. Works everywhere — your editor, browser, chat, terminal. Completely local, completely free.
