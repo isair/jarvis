@@ -78,6 +78,11 @@ class Settings:
     ollama_chat_model: str
     llm_chat_timeout_sec: float
     llm_tools_timeout_sec: float
+    # Tight deadline for the cheap distil passes used by memory_digest and
+    # tool_result_digest. Separate from `llm_tools_timeout_sec` because
+    # those paths run a small classification-shaped LLM call, not a
+    # long-running tool — a 5-minute ceiling there would stall replies.
+    llm_digest_timeout_sec: float
     llm_embedding_timeout_sec: float
     llm_profile_select_timeout_sec: float
 
@@ -169,6 +174,12 @@ class Settings:
     # (the default), it auto-enables for SMALL models (≤7B) and stays off
     # for larger models that can handle raw dumps. Set explicitly to force.
     memory_digest_enabled: Optional[bool]
+    # Distil raw tool-result payloads (e.g. webSearch extracts) into a
+    # short, attributed fact note via a cheap LLM pass before appending
+    # them as tool-role messages. When None (the default), it auto-enables
+    # for SMALL models (≤7B) and stays off for larger models that ground
+    # on the raw payload reliably. Set explicitly to force on/off.
+    tool_result_digest_enabled: Optional[bool]
 
     # Agentic Loop
     agentic_max_turns: int
@@ -331,6 +342,9 @@ def get_default_config() -> Dict[str, Any]:
         "ollama_chat_model": DEFAULT_CHAT_MODEL,
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
+        # Cheap distil passes should fail fast — a hung digest call would
+        # block the reply loop per tool call, amplified by agentic turns.
+        "llm_digest_timeout_sec": 8.0,
         "llm_embedding_timeout_sec": 60.0,
         "llm_profile_select_timeout_sec": 30.0,
 
@@ -428,6 +442,10 @@ def get_default_config() -> Dict[str, Any]:
         "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
         # None = auto (on for small models, off for large). Set true/false to force.
         "memory_digest_enabled": None,
+        # Distil raw tool results (e.g. webSearch extracts) into a short
+        # attributed fact note for small models. Same auto semantics as
+        # memory_digest_enabled.
+        "tool_result_digest_enabled": None,
 
         # Agentic Loop
         "agentic_max_turns": 8,
@@ -599,6 +617,12 @@ def load_settings() -> Settings:
         memory_digest_enabled = None
     else:
         memory_digest_enabled = bool(_digest_raw)
+    _tool_digest_raw = merged.get("tool_result_digest_enabled", None)
+    tool_result_digest_enabled: Optional[bool]
+    if _tool_digest_raw is None:
+        tool_result_digest_enabled = None
+    else:
+        tool_result_digest_enabled = bool(_tool_digest_raw)
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
@@ -624,6 +648,7 @@ def load_settings() -> Settings:
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
+    llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
@@ -638,6 +663,7 @@ def load_settings() -> Settings:
         ollama_chat_model=ollama_chat_model,
         llm_chat_timeout_sec=llm_chat_timeout_sec,
         llm_tools_timeout_sec=llm_tools_timeout_sec,
+        llm_digest_timeout_sec=llm_digest_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
         llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
 
@@ -720,6 +746,7 @@ def load_settings() -> Settings:
         memory_search_max_results=memory_search_max_results,
         memory_enrichment_source=memory_enrichment_source,
         memory_digest_enabled=memory_digest_enabled,
+        tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
         tool_router_model=tool_router_model,

@@ -13,7 +13,11 @@ from ..tools.registry import run_tool_with_retries, generate_tools_description, 
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
-from .enrichment import extract_search_params_for_memory, digest_memory_for_query
+from .enrichment import (
+    extract_search_params_for_memory,
+    digest_memory_for_query,
+    digest_tool_result_for_query,
+)
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from ..tools.selection import select_tools, ToolSelectionStrategy
@@ -494,6 +498,87 @@ _HINT_RECENT_MESSAGES = 6
 _HINT_MESSAGE_CHAR_LIMIT = 200
 
 
+def _maybe_digest_tool_result(
+    cfg,
+    query: str,
+    tool_name: str,
+    raw_tool_result: str,
+) -> str:
+    """Return the effective tool-role message content, digested if applicable.
+
+    Extracted from the reply loop so the gating logic is testable in isolation
+    and the reply loop stays readable. Gates on ``tool_result_digest_enabled``
+    (``None`` = auto-on for SMALL models). Prints user-facing logs for each
+    outcome (digest applied / NONE fallback / digest disabled) so the console
+    matches the memory-digest visibility convention. Always returns the
+    content the caller should append — the raw payload when digestion is off,
+    short-circuits, returns NONE, or fails.
+    """
+    tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
+    if tool_digest_cfg is None:
+        tool_digest_enabled = (
+            detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL
+        )
+    else:
+        tool_digest_enabled = bool(tool_digest_cfg)
+
+    if not tool_digest_enabled:
+        return raw_tool_result
+
+    try:
+        digested = digest_tool_result_for_query(
+            query=query,
+            tool_name=tool_name,
+            tool_result=raw_tool_result,
+            ollama_base_url=cfg.ollama_base_url,
+            ollama_chat_model=cfg.ollama_chat_model,
+            timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
+            thinking=getattr(cfg, 'llm_thinking_enabled', False),
+        )
+    except Exception as e:
+        debug_log(
+            f"tool result digest step failed (non-fatal): {e}",
+            "tools",
+        )
+        return raw_tool_result
+
+    if digested and digested != raw_tool_result:
+        flat = digested.replace("\n", " ")
+        preview = flat[:80] + ("…" if len(flat) > 80 else "")
+        print(
+            f"  🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
+            flush=True,
+        )
+        debug_log(
+            f"tool digest [{tool_name}]: raw payload "
+            f"({len(raw_tool_result)}ch) replaced by digest "
+            f"({len(digested)}ch)",
+            "tools",
+        )
+        return digested
+
+    if not digested:
+        # The distil judged nothing relevant. Keep the raw payload —
+        # suppressing it entirely would be worse than a possibly-noisy
+        # substrate. Mirror the memory-digest visibility so the user can
+        # see the pass ran and fell back explicitly.
+        print(
+            f"  🧩 Tool digest: no relevant facts — using raw payload "
+            f"({len(raw_tool_result)} chars)",
+            flush=True,
+        )
+        debug_log(
+            f"tool digest [{tool_name}]: NONE returned, keeping raw "
+            f"payload ({len(raw_tool_result)}ch)",
+            "tools",
+        )
+        return raw_tool_result
+
+    # digested == raw_tool_result (short-circuit pass-through below
+    # _TOOL_DIGEST_MIN_CHARS). No round-trip happened; don't log.
+    return raw_tool_result
+
+
 def _live_time_location_string(cfg) -> str:
     """Return a one-liner describing current local time and location, or ""."""
     try:
@@ -738,7 +823,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 graph_parts=raw_graph_parts,
                 ollama_base_url=cfg.ollama_base_url,
                 ollama_chat_model=cfg.ollama_chat_model,
-                timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+                timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
             # Replace the raw injections with the digest note (or nothing
@@ -1386,10 +1471,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             # Append tool result
             if result.reply_text:
+                # Tool-result digest for small models. Long tool payloads
+                # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
+                # push ~2B models into "describe the structure back" or
+                # prior-confabulation failure modes. The helper encapsulates
+                # the gating, distil round-trip, NONE fallback, and logging.
+                effective_result = _maybe_digest_tool_result(
+                    cfg=cfg,
+                    query=redacted,
+                    tool_name=tool_name,
+                    raw_tool_result=result.reply_text,
+                )
+
                 if use_text_tools:
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool result: {tool_name}]\n{result.reply_text}",
+                        "content": f"[Tool result: {tool_name}]\n{effective_result}",
                         "tool_name": tool_name,  # kept for duplicate detection
                     })
                 else:
@@ -1397,9 +1494,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
-                        "content": result.reply_text,
+                        "content": effective_result,
                     })
-                debug_log(f"    ✅ tool result appended ({len(result.reply_text)} chars)", "planning")
+                debug_log(f"    ✅ tool result appended ({len(effective_result)} chars)", "planning")
 
                 # Note: We don't add a guidance system message here because adding system messages
                 # after the conversation starts breaks native tool calling in models like Llama 3.2.
