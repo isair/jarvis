@@ -1,9 +1,9 @@
 ---
 name: triage
 description: >
-  Triage open GitHub issues and discussions on the Jarvis repo. Sweeps for
-  untriaged reports, replies to awaiting-user threads when new info lands,
-  applies the right labels, closes duplicates, and edits past owner comments
+  Triage open GitHub issues and discussions on the Jarvis repo. Sweep for
+  untriaged reports, reply to awaiting-user threads when new info lands,
+  apply the right labels, close duplicates, and edit past owner comments
   rather than stacking follow-ups. Use after a release or any time the user
   says "triage issues", "triage discussions", or similar.
 ---
@@ -15,7 +15,7 @@ not memory. Stay friendly, specific, and short.
 
 ## Step 1. Pull the state
 
-Run these in parallel:
+Run these as parallel Bash tool calls (one message, two tool uses), not as chained shell commands:
 
 ```bash
 gh issue list --state open --limit 50 --json number,title,author,createdAt,updatedAt,labels,comments \
@@ -31,8 +31,8 @@ Classify each thread into one of:
 
 - **Untriaged**: no owner (`isair`) reply yet. Act now.
 - **Awaiting reporter**: labelled `question` or the last comment is from the owner asking for details. Leave it unless the reporter has replied with new info. Per repo policy, do not close for silence before 2 weeks of reporter inactivity.
-- **Owner tracking**: filed by `isair` as an internal task. Skip unless a user has commented.
-- **Resolved-pending-release**: fix is on `develop`. Never close manually. Release (`git merge --ff-only develop` → `main`) auto-closes via `Closes #NNN`.
+- **Owner tracking**: filed by `isair` as an internal task. Skip unless a non-owner has commented with a question or new information, in which case treat it like a normal untriaged thread.
+- **Resolved-pending-release**: fix is on `develop`. Never close manually. Release (`git merge --ff-only develop` → `main`) auto-closes via `Closes #NNN`. Detect this by scanning recent `develop` commits (`gh pr list --base develop --state merged --limit 20`) for references to the issue number before you reply, so you can tell the reporter "this is fixed in the next release" rather than asking for more info.
 
 ## Step 2. Fetch details for the untriaged
 
@@ -53,13 +53,13 @@ Common Jarvis patterns and what they mean:
 
 | Symptom in log | Likely cause | Ask for |
 |----------------|--------------|---------|
-| Repeated `📝 Heard: "Thank you."`, `"you..."`, `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Windows Sound → Input level bar check; which mic they intend to use. |
-| `🧠 Intent judge: unavailable (timeout or error)` | Known; improved in v1.25.1. | Version, and retry on latest. |
+| Repeated `📝 Heard: "Thank you."`, `"you..."`, `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Ask them to check the input level bar (Windows Sound settings, or macOS System Settings → Sound → Input) actually moves when they speak, and confirm which mic they intend to use. |
+| `🧠 Intent judge: unavailable (timeout or error)` | Known; improved in v1.25.1 (bump this version as newer fixes ship). | Version they're on, and retry on latest. |
 | `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Download-time crash, platform-specific. Not the same as 429 throttling. | Keep open as its own bug. Workaround: manual `ollama pull ...` and relaunch. |
 | `LLM connection error: ... RemoteDisconnected` | Ollama dropped. Upstream, not Jarvis. | `ollama run <model>` health check; Ollama version. |
 | `setup_wizard.py ... _install_next_model` fatal | Real bug on our side. | Which model had just finished, which was about to start; `ollama list` after crash; `~/Library/Logs/DiagnosticReports/Jarvis-*.ips` on macOS. |
 | `Low confidence` lines only, no `Heard:` ever | Mic is captured but utterances are under the confidence floor. Usually mic placement or wrong device. | Same as first row. |
-| `📍 Location features are not available` | Cosmetic. Optional. | Reassure, don't diagnose. |
+| `📍 Location features are not available` | Not an error. Location is optional and only affects weather / local-time context. | Reassure, don't diagnose. Point at the MaxMind GeoLite2 signup if they actually want it. |
 
 **Do not ask obviously-answered questions.** If the log shows the wizard was
 pulling models, Ollama is by definition installed and running. If the log shows
@@ -112,7 +112,7 @@ gh api graphql -f query='mutation($id:ID!,$body:String!){addDiscussionComment(in
   -F id=<discussion node id> -f body="@user, ..."
 ```
 
-Get the discussion `id` field from the Step 1 GraphQL output.
+Get the discussion `id` field from the Step 1 GraphQL output. It's the outer `id` on the discussion node, not the inner `id` inside `comments.nodes` (that one is the comment's node id, used in Step 6 for edits).
 
 ## Step 6. Clean up your own past comments
 
