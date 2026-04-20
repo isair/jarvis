@@ -869,6 +869,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+        # Same compact context the memory extractor uses, so the router can
+        # judge "already answerable from live context → 'none'" directly
+        # from the visible data rather than from enumerated special-cases.
+        # Degrades gracefully: if time/location lookup failed, context_hint
+        # is None or partial and the router simply picks on content.
+        context_hint=context_hint,
     )
     # Surface tool selection in the user-visible console so it's debuggable
     # without voice_debug. When the list is very long the most-relevant
