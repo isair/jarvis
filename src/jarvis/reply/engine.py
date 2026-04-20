@@ -15,6 +15,7 @@ from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
+from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
 import uuid
@@ -54,6 +55,116 @@ def _resolve_tool_router_model(cfg) -> str:
         if candidate:
             return candidate
     return ""
+
+
+# ── Force-invocation safety net ─────────────────────────────────────────────
+#
+# Small models (e.g. gemma4:e2b, ~2B params) sometimes ignore the tool
+# router's selection. Two failure modes observed in a 2026-04-20 field session:
+#
+#   1. The model emits gemma's native Google-training tool_code syntax
+#      targeting a tool that isn't in the routed allow-list (e.g.
+#      google_search.search when only getWeather is routed). The parser
+#      can't dispatch it, so the raw syntax leaks to the user.
+#
+#   2. The model emits a short confident reply from its priors without
+#      invoking any tool — a confabulation for an unknown named entity.
+#
+# When the router confidently picked exactly ONE real tool and the reply
+# looks like either failure mode, this helper forces an invocation of the
+# router's pick. Gated to SMALL models only: on large models a short reply
+# is more likely a considered answer and shouldn't be steamrolled.
+
+_FORCE_CONFAB_MAX_LEN = 400  # chars; above this, assume a substantive reply
+_GEMMA_LEAK_MARKERS = ("tool_code", "<unused", "google_search.search")
+
+
+def _content_has_gemma_leak(content: str) -> bool:
+    """True if the reply contains gemma's native tool_code fallback syntax."""
+    if not content:
+        return False
+    lowered = content.lower()
+    return any(marker in lowered for marker in _GEMMA_LEAK_MARKERS)
+
+
+def _scrub_gemma_leak(content: str) -> str:
+    """Strip raw tool_code / <unusedN> / google_search.search fragments from
+    reply text before it reaches the user. Best-effort: we just delete the
+    offending spans and collapse surrounding whitespace. The force-invoke
+    flow replaces the visible reply with the real tool-driven answer, so
+    this only matters on the unlikely path where force-invoke doesn't fire
+    but leak markers are still present.
+    """
+    if not content:
+        return content
+    cleaned = re.sub(
+        r"(?:```)?\s*tool_code\b.*?(?:```|<unused\d+>|\Z)",
+        " ",
+        content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(r"<unused\d+>", " ", cleaned)
+    cleaned = re.sub(r"google_search\.search\s*\([^)]*\)", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
+
+
+def _maybe_force_router_tool(
+    content: str,
+    allowed_tools,
+    cfg,
+    user_query: str,
+):
+    """Decide whether to force-invoke the router's single pick.
+
+    Returns (tool_name, tool_args, tool_call_id) on fire, or None to skip.
+
+    Gating (ALL must hold for a force-invoke to happen):
+      - Model is classified SMALL by detect_model_size.
+      - Router picked exactly one real tool (plus optionally "stop").
+      - Content signals either a gemma tool_code leak OR a short
+        confabulation (non-empty, under _FORCE_CONFAB_MAX_LEN chars).
+      - The tool's required args can either be left empty, or can be
+        trivially derived (currently: search_query ← user_query).
+    """
+    model = getattr(cfg, "ollama_chat_model", None)
+    if detect_model_size(model) != ModelSize.SMALL:
+        return None
+
+    real_tools = [t for t in (allowed_tools or []) if t and t != "stop"]
+    if len(real_tools) != 1:
+        return None
+
+    tool_name = real_tools[0]
+    tool = BUILTIN_TOOLS.get(tool_name)
+    if tool is None:
+        return None
+
+    has_leak = _content_has_gemma_leak(content)
+    stripped = (content or "").strip()
+    is_short_confab = bool(stripped) and len(stripped) <= _FORCE_CONFAB_MAX_LEN
+    if not (has_leak or is_short_confab):
+        return None
+
+    # Derive args from the tool's schema.
+    schema = getattr(tool, "inputSchema", {}) or {}
+    required = schema.get("required", []) or []
+    args: dict = {}
+    if required:
+        # Only auto-derive the common case: a single search_query slot
+        # filled from the user's own turn. Anything more exotic is too
+        # risky to guess — bail out and let the normal flow continue.
+        if set(required) == {"search_query"} and user_query:
+            args = {"search_query": user_query.strip()}
+        else:
+            return None
+
+    debug_log(
+        f"  🛟 force-invoke safety net firing: {tool_name}(args={args}) "
+        f"[leak={has_leak}, short_confab={is_short_confab}]",
+        "planning",
+    )
+    return tool_name, args, f"call_force_{uuid.uuid4().hex[:8]}"
 
 
 def _extract_text_tool_call(content_field: str, known_names: set):
@@ -588,7 +699,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             mcp_tools = {}
 
     # Select tools relevant to this query (strategy controlled by config)
-    from ..tools.selection import select_tools, ToolSelectionStrategy
     try:
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
@@ -1030,6 +1140,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Extract tool call if present
         t_name, t_args, t_call_id = _extract_structured_tool_call(llm_resp)
+
+        # Force-invocation safety net for small models that ignore the router.
+        # Only applies on the FIRST turn (a later turn has real tool results
+        # in-context, so a short reply is a genuine conclusion, not confab).
+        if not t_name and turn == 1:
+            forced = _maybe_force_router_tool(
+                content=content,
+                allowed_tools=allowed_tools,
+                cfg=cfg,
+                user_query=text,
+            )
+            if forced is not None:
+                t_name, t_args, t_call_id = forced
+                # Scrub any leaked gemma tool_code fragments from the
+                # content we're about to record in the message history
+                # so a subsequent turn can't echo them to the user.
+                content = _scrub_gemma_leak(content)
 
         # ALWAYS append the assistant's response to messages exactly as received
         assistant_msg = {"role": "assistant", "content": content}

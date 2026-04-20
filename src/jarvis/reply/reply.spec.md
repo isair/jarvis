@@ -70,6 +70,15 @@ Design principles enforced by the engine:
        - `content` field: Natural language response to user
    - Note: System messages are NOT added after the conversation starts, as this breaks native tool calling in models like Llama 3.2
 
+   Force-invocation safety net (small models only):
+   - After the first-turn response is parsed, if NO tool call was extracted and ALL of the following hold, the engine force-invokes the router's pick:
+     1. The chat model is classified SMALL by `detect_model_size` (e.g. gemma4:e2b, :1b/:3b/:7b tags).
+     2. The tool router selected exactly ONE real tool (plus the optional `stop` sentinel).
+     3. The assistant's content either contains gemma's native `tool_code` / `<unusedN>` / `google_search.search` fallback markers (parser couldn't dispatch them against the routed allow-list), OR is a short reply (≤ 400 chars) — both signals of a small-model confabulation that ignored the router.
+     4. The tool's required args are either empty OR derivable from the user's own turn (currently only the `{search_query}` case).
+   - On fire, raw gemma leak fragments are scrubbed from the assistant message before it enters the history so they cannot resurface in a later reply. The router-picked tool is then executed normally and its result drives the next turn.
+   - Gating exists to avoid overriding genuine reasoning on larger models and to avoid picking arbitrarily when the router's choice was ambiguous (multiple real tools).
+
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
      - **Tool calls**: Use `tool_calls` field to request data or actions
