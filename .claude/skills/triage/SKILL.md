@@ -23,7 +23,7 @@ gh issue list --state open --limit 50 --json number,title,author,createdAt,updat
 ```
 
 ```bash
-gh api graphql -f query='{repository(owner:"isair",name:"jarvis"){discussions(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title author{login} category{name} updatedAt comments(last:5){totalCount nodes{author{login} createdAt body}}}}}}' \
+gh api graphql -f query='{repository(owner:"isair",name:"jarvis"){discussions(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number title author{login} category{name} updatedAt comments(last:5){totalCount nodes{id author{login} createdAt body}}}}}}' \
   --jq '.data.repository.discussions.nodes'
 ```
 
@@ -79,7 +79,7 @@ Available labels: `bug`, `question`, `duplicate`, `enhancement`, `documentation`
 
 Conventions:
 
-- Empty-body or needs-info bug reports: label `bug,question`, retitle to `"<one-line symptom> (awaiting details)"` or similar so the backlog scannable.
+- Empty-body or needs-info bug reports: label `bug,question`, retitle to `"<one-line symptom> (awaiting details)"` or similar so the backlog is scannable.
 - Duplicates: label `duplicate`, leave one short comment pointing at the canonical issue, close with `--reason "not planned"`.
 - Real confirmed crashes: label `bug` (and `voice` if audio-related), retitle to pin the failure site from the traceback (e.g. `"Crash on first-run setup wizard during model install (macOS, v1.26.0)"`).
 
@@ -87,7 +87,7 @@ Reply tone:
 
 - Open with `Hi @user, thanks for filing this! 👋`
 - State the diagnosis (what the log shows) before the asks.
-- Use bullet lists with **bold labels** for asks. Keep to 3–5 asks max.
+- Use bullet lists with **bold labels** for asks. Keep to 3 to 5 asks max.
 - Friendly emojis: 👋 🙏 🚀 🧠 🎤 🔊 📝.
 - **No em dashes (—) anywhere in user-facing writing.** Use commas, full stops, colons, or parentheses.
 - **British English** (colour, behaviour, initialise).
@@ -126,7 +126,13 @@ Issue comment edit:
 gh api -X PATCH repos/isair/jarvis/issues/comments/<commentId> -f body="..."
 ```
 
-Discussion comment edit (get the comment node id via `gh api graphql` on the discussion):
+Discussion comment edit. First grab the comment node id (the `last:5` window usually covers recent owner replies):
+
+```bash
+gh api graphql -f query='{repository(owner:"isair",name:"jarvis"){discussion(number:N){comments(last:5){nodes{id author{login} createdAt body}}}}}'
+```
+
+Then update it:
 
 ```bash
 gh api graphql -f query='mutation($id:ID!,$body:String!){updateDiscussionComment(input:{commentId:$id,body:$body}){comment{url}}}' \
