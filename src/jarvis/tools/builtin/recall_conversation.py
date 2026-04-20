@@ -120,4 +120,5 @@ class RecallConversationTool(Tool):
 
         except Exception as e:
             debug_log(f"recallConversation: error {e}", "memory")
+            context.user_print("⚠️ Error searching conversation memory.")
             return ToolExecutionResult(success=False, reply_text="Sorry, I had trouble searching my conversation memory.")
