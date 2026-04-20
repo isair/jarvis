@@ -245,7 +245,7 @@ def setup_crash_logging():
 
 def get_crash_paths() -> tuple[Path, Path, Path]:
     """Get paths for crash log, marker, and previous crash log."""
-    from .paths import get_log_dir
+    from desktop_app.paths import get_log_dir
     log_dir = get_log_dir()
 
     crash_log = log_dir / "jarvis_desktop_crash.log"
