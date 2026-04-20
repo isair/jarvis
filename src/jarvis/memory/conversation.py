@@ -289,6 +289,25 @@ Create a summary that:
      GOOD: "The user asked about the book Piranesi."
 
    This rule applies in any language.
+7. CRITICAL — never record the assistant's substantive claims about third-party entities (films, books, products, companies, people, places, events, scientific facts, definitions) as if they were fact. The assistant may hallucinate; its unverified answers must not be immortalised in the diary as truth.
+   - If the assistant stated something about an entity without a tool call visible in the conversation, DO NOT summarise that content as fact. Record only that the user asked about the topic.
+   - Phrases like "the assistant provided information stating X is Y", "the assistant explained that X is Y", "X is Y (per the assistant)" are ALL wrong when X is a third-party named entity. Strip the claim; keep the topic.
+   - Weather, time, location, user's own data, and other clearly tool-grounded information is fine to record as fact.
+   - User-stated facts about themselves (preferences, biography, plans, decisions) are ALWAYS safe to record verbatim.
+
+   Example of what NOT to write:
+     BAD: "The user asked about the movie Possessor. The assistant provided information stating it is a 2006 science fiction film directed by Brandon Cronenberg, exploring themes of identity."
+   Example of the correct output:
+     GOOD: "The user asked about the movie Possessor."
+
+   Another example:
+     BAD: "The assistant explained that Piranesi is a novel by Susanna Clarke published in 2020."
+     GOOD: "The user asked about the book Piranesi."
+
+   But this is fine (tool-grounded + user-stated):
+     OK: "The weather in Hackney was 10.6°C and partly cloudy. The user said they prefer Thai over Indian food."
+
+   This rule applies in any language.
 
 Also extract 3-5 main topics as comma-separated keywords."""
 

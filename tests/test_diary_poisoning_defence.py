@@ -64,6 +64,36 @@ class TestSummariserForbidsDeflectionNarration:
             "transient",
         )), "Summariser prompt must explain why failure narration is harmful."
 
+    def test_prompt_forbids_recording_assistant_entity_claims_as_fact(self):
+        """Regression for the real-world Possessor poisoning.
+
+        Field DB contained a diary entry reading:
+          "The user initially inquired about the movie *Possessor*, and the
+           assistant provided information stating it is a 2006 science
+           fiction film directed by Brandon Cronenberg..."
+
+        The assistant had hallucinated the year; the summariser recorded the
+        claim as fact; the downstream digest then echoed it into the next
+        session's system prompt. Root cause: no rule against recording the
+        assistant's *substantive* claims about third-party entities (only
+        against recording its *failures*). This test locks that rule in.
+        """
+        prompt = self._capture_system_prompt()
+        lowered = prompt.lower()
+        # Must explicitly warn against recording assistant claims about
+        # named third-party entities (films/books/products/people).
+        assert "substantive claims" in lowered or "assistant may hallucinate" in lowered or (
+            "third-party" in lowered and "entities" in lowered
+        ), (
+            "Summariser prompt must forbid recording assistant claims about "
+            "third-party named entities as fact."
+        )
+        # Concrete good/bad example pair showing the failure mode.
+        assert "possessor" in lowered or "piranesi" in lowered, (
+            "Summariser prompt should include a concrete good/bad example for "
+            "third-party entity claim recording."
+        )
+
     def test_prompt_is_language_agnostic(self):
         """The rule must apply to all languages, not only English."""
         prompt = self._capture_system_prompt()
