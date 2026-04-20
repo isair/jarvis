@@ -51,26 +51,41 @@ class TestPromptComponents:
     """Tests for get_system_prompts function."""
 
     def test_small_model_has_tool_constraints(self):
-        """Small models get explicit tool constraints."""
+        """Small models get explicit tool constraints covering every rule.
+
+        Constraints are phrased language-agnostically (per CLAUDE.md: no
+        hardcoded English greetings / English unit names / etc.), so we
+        assert against BEHAVIOURAL sections, not specific tokens in one
+        language.
+        """
         from jarvis.reply.prompts import get_system_prompts, ModelSize
 
         prompts = get_system_prompts(ModelSize.SMALL)
 
         assert prompts.tool_constraints is not None
-        # Should have greeting constraints
-        assert "greeting" in prompts.tool_constraints.lower()
-        assert "ni hao" in prompts.tool_constraints.lower()
-        # Should have user instruction constraints
-        assert "user instructions" in prompts.tool_constraints.lower()
-        assert "celsius" in prompts.tool_constraints.lower()
+        text = prompts.tool_constraints.lower()
+        # Each section header must be present — they structure the rules.
+        for section in (
+            "greeting handling",
+            "user instructions",
+            "unknown named entities",
+            "arguments the tool can auto-derive",
+        ):
+            assert section in text, f"Missing section {section!r} in small-model constraints"
 
-    def test_large_model_no_tool_constraints(self):
-        """Large models don't have explicit tool constraints."""
+    def test_large_model_has_tool_constraints(self):
+        """Large models also get constraints — a shorter restatement of the
+        named-entity and auto-derive rules. gpt-oss:20b and similar
+        confabulate specifics and occasionally ask for tool args the tool
+        already auto-derives, so the large variant is not a no-op."""
         from jarvis.reply.prompts import get_system_prompts, ModelSize
 
         prompts = get_system_prompts(ModelSize.LARGE)
 
-        assert prompts.tool_constraints is None
+        assert prompts.tool_constraints is not None
+        text = prompts.tool_constraints.lower()
+        assert "unknown named entities" in text
+        assert "arguments the tool can auto-derive" in text
 
     def test_small_model_balanced_incentives(self):
         """Small models get balanced tool incentives - use tools but not for greetings."""
@@ -132,44 +147,57 @@ class TestPromptComponents:
         has_constraints = any("greeting" in p.lower() for p in prompt_list)
         assert has_constraints, "Small model should include greeting constraints"
 
-    def test_large_model_to_list_no_constraints(self):
-        """Large model to_list() doesn't include explicit greeting constraints."""
+    def test_large_model_to_list_includes_constraints(self):
+        """Large model to_list() now includes tool constraints too. The large
+        variant covers the named-entity and auto-derive rules — without it,
+        larger models confabulate for unfamiliar entities or nag the user
+        for args the tool already auto-derives (field failure 2026-04-20).
+        """
         from jarvis.reply.prompts import get_system_prompts, ModelSize
 
         prompts = get_system_prompts(ModelSize.LARGE)
         prompt_list = prompts.to_list()
 
-        # Should have fewer items (no tool_constraints)
-        assert len(prompt_list) == 5
+        # Both sizes now carry all 6 components.
+        assert len(prompt_list) == 6
 
-        # Explicit greeting constraints should NOT be in the list
-        has_greeting_constraint = any("GREETING HANDLING" in p for p in prompt_list)
-        assert not has_greeting_constraint, "Large model should not include explicit greeting constraints"
+        has_named_entity_rule = any("UNKNOWN NAMED ENTITIES" in p for p in prompt_list)
+        assert has_named_entity_rule, "Large model should include the named-entity rule"
+        has_auto_derive_rule = any("AUTO-DERIVE" in p for p in prompt_list)
+        assert has_auto_derive_rule, "Large model should include the auto-derive rule"
 
 
 class TestPromptLanguageAgnosticism:
     """Tests that prompts are language-agnostic."""
 
-    def test_greeting_examples_multilingual(self):
-        """Tool constraints include greetings in multiple languages."""
+    def test_greeting_rule_is_language_agnostic(self):
+        """Greeting handling must NOT list language-specific greeting tokens.
+
+        CLAUDE.md forbids hardcoded language patterns — the assistant
+        supports arbitrary languages, and listing 'hello' / 'ni hao' /
+        'bonjour' both biases the model toward those languages and gives a
+        false sense of coverage. The new rule describes the SEMANTIC
+        category ("a greeting or casual social phrase, whatever language"),
+        letting the model rely on its own multilingual understanding."""
         from jarvis.reply.prompts import get_system_prompts, ModelSize
 
         prompts = get_system_prompts(ModelSize.SMALL)
         constraints = prompts.tool_constraints.lower()
 
-        # Should include examples in multiple languages
-        languages_covered = [
-            ("hello", "English"),
-            ("ni hao", "Chinese"),
-            ("bonjour", "French"),
-            ("hola", "Spanish"),
-            ("merhaba", "Turkish"),
-            ("ciao", "Italian"),
-        ]
+        # The section itself must be present.
+        assert "greeting handling" in constraints
 
-        for greeting, language in languages_covered:
-            assert greeting in constraints, \
-                f"Missing {language} greeting '{greeting}' in constraints"
+        # None of the old English-biased greeting tokens should be hard-coded
+        # into the prompt any more.
+        for token in ("ni hao", "bonjour", "hola", "merhaba", "ciao"):
+            assert token not in constraints, (
+                f"Stale language-specific token {token!r} is still hardcoded in "
+                "the constraints — the rule should describe the category, not "
+                "enumerate language-specific surface forms."
+            )
+
+        # The language-agnostic phrasing must be present.
+        assert "whatever language" in constraints or "any language" in constraints
 
     def test_greeting_constraint_is_narrow(self):
         """Greeting constraint is narrowly scoped, not overly restrictive."""

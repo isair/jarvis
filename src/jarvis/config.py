@@ -3,7 +3,7 @@ import sys
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 
 
@@ -164,10 +164,18 @@ class Settings:
     memory_enrichment_max_results: int
     memory_search_max_results: int
     memory_enrichment_source: str  # "all", "diary", or "graph"
+    # Distil diary + graph into a short relevance-filtered note via a cheap
+    # LLM pass before injecting into the reply system prompt. When None
+    # (the default), it auto-enables for SMALL models (≤7B) and stays off
+    # for larger models that can handle raw dumps. Set explicitly to force.
+    memory_digest_enabled: Optional[bool]
 
     # Agentic Loop
     agentic_max_turns: int
     tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
+    # When `tool_selection_strategy == "llm"`, this model does the routing.
+    # Empty string means "reuse `ollama_chat_model`" (the default).
+    tool_router_model: str
 
     # Location Services
     location_enabled: bool
@@ -407,10 +415,17 @@ def get_default_config() -> Dict[str, Any]:
         "memory_enrichment_max_results": 10,
         "memory_search_max_results": 15,
         "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
+        # None = auto (on for small models, off for large). Set true/false to force.
+        "memory_digest_enabled": None,
 
         # Agentic Loop
         "agentic_max_turns": 8,
-        "tool_selection_strategy": "embedding",
+        "tool_selection_strategy": "llm",
+        # Empty string = reuse intent_judge_model (small, fast, already warm
+        # for wake-word paths), falling back to ollama_chat_model only if the
+        # judge model isn't set. Override to decouple routing from both —
+        # useful when you want routing on a dedicated smaller model.
+        "tool_router_model": "",
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -565,10 +580,17 @@ def load_settings() -> Settings:
     memory_enrichment_source = str(merged.get("memory_enrichment_source", "diary")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
         memory_enrichment_source = "diary"
+    _digest_raw = merged.get("memory_digest_enabled", None)
+    memory_digest_enabled: Optional[bool]
+    if _digest_raw is None:
+        memory_digest_enabled = None
+    else:
+        memory_digest_enabled = bool(_digest_raw)
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
-    tool_selection_strategy = str(merged.get("tool_selection_strategy", "embedding")).lower()
+    tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
-        tool_selection_strategy = "embedding"
+        tool_selection_strategy = "llm"
+    tool_router_model = str(merged.get("tool_router_model", "") or "").strip()
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -682,8 +704,10 @@ def load_settings() -> Settings:
         memory_enrichment_max_results=memory_enrichment_max_results,
         memory_search_max_results=memory_search_max_results,
         memory_enrichment_source=memory_enrichment_source,
+        memory_digest_enabled=memory_digest_enabled,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
+        tool_router_model=tool_router_model,
 
         # Location Services
         location_enabled=location_enabled,

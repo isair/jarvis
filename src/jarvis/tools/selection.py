@@ -35,11 +35,28 @@ _ALWAYS_INCLUDED = {"stop"}
 # Prevents overly aggressive filtering that would leave the model with nothing useful.
 _MIN_SELECTED = 3
 
+# Maximum number of tools to return from similarity-based strategies. A high
+# cap keeps the prompt small enough that small models (gemma4:e2b) don't drift
+# to their training priors under token pressure. When the top-ranked tool is a
+# clear winner and the rest are noise, we want 3–5 tools, not 29.
+_MAX_SELECTED = 8
+
 # Relative similarity threshold for embedding strategy.
 # A tool is kept when its cosine similarity >= top_score * _RELATIVE_THRESHOLD.
 # This adapts to the actual score distribution rather than using a fixed cutoff
 # that either passes everything (too low) or nothing (too high).
-_RELATIVE_THRESHOLD = 0.85
+#
+# Set high (0.97) because nomic-embed-text gives a very high baseline
+# similarity across all tools (most pairs land in the 0.6–0.8 range regardless
+# of semantic overlap). A looser threshold like 0.85 lets nearly every tool
+# through, defeating the filter. 0.97 keeps only the tools genuinely close to
+# the top match.
+_RELATIVE_THRESHOLD = 0.97
+
+# Hard cap on tools returned by the LLM router. Small routing models
+# (gemma4:e2b and similar) sometimes echo the entire catalogue; the cap
+# guarantees the downstream prompt stays compact regardless.
+_LLM_MAX_SELECTED = 5
 
 # Common English stop-words excluded from keyword matching.
 _STOP_WORDS = frozenset({
@@ -239,13 +256,16 @@ def _select_llm(
 
     sys_prompt = (
         "You are a tool router. Given a user query and a list of available tools, "
-        "return ONLY a comma-separated list of tool names that might be useful. "
-        "Return 'none' if no tools are needed. No explanations."
+        "pick AT MOST the 5 most relevant tools for the query and return ONLY a "
+        "comma-separated list of their exact names. Prefer fewer (1-3) when the "
+        "query is clearly about one thing; never return more than 5. "
+        "Return 'none' if no tools are needed (e.g. greetings, small talk). "
+        "Output nothing else — no explanations, no prose, no code fences."
     )
     user_prompt = (
         f"Available tools:\n{catalogue}\n\n"
         f"User query: {query}\n\n"
-        "Which tools (comma-separated)?"
+        "Top tools (comma-separated, max 5):"
     )
 
     try:
@@ -268,10 +288,19 @@ def _select_llm(
 
     known = set(builtin_tools.keys()) | set(mcp_tools.keys())
     selected: List[str] = []
+    # Chatty routers wrap names in backticks, bullet them, or emit bracketed
+    # JSON-ish lists. Strip every punctuation char that can't appear in a tool
+    # name before matching, so the extraction is robust to formatting drift.
+    _STRIP_CHARS = "'\"`*-_[](){}<>,.:;!?\\ "
     for token in re.split(r"[,\s]+", resp):
-        clean = token.strip().strip("'\"")
+        clean = token.strip(_STRIP_CHARS)
         if clean in known and clean not in selected:
             selected.append(clean)
+
+    # Hard cap — a chatty router that ignores the prompt cap must not bloat
+    # the downstream tool list. Preserve order (model's ranking).
+    if len(selected) > _LLM_MAX_SELECTED:
+        selected = selected[:_LLM_MAX_SELECTED]
 
     selected = _ensure_always_included(selected, builtin_tools, mcp_tools)
 

@@ -427,4 +427,55 @@ class TestLLMStrategy:
             )
         assert "webSearch" in result
         assert "getWeather" in result
+
+    @pytest.mark.unit
+    def test_parses_markdown_and_backtick_wrapped_names(self):
+        """Chatty routers wrap names in backticks, bullets, or JSON brackets.
+        The parser must strip that formatting before matching — a literal
+        `webSearch` should resolve to the tool called webSearch, not be
+        silently dropped as an unknown token."""
+        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+            # A realistic worst case combining bullets, backticks, and a
+            # bracketed list tail — all of which have appeared from gemma-class
+            # routers in practice.
+            return "- `webSearch`, * `getWeather`, [logMeal]"
+
+        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
+            result = select_tools(
+                "chatty router",
+                _builtin(), {},
+                strategy=ToolSelectionStrategy.LLM,
+                llm_base_url="http://localhost",
+                llm_model="test",
+            )
+        assert "webSearch" in result
+        assert "getWeather" in result
+        assert "logMeal" in result
+
+    @pytest.mark.unit
+    def test_caps_chatty_router_output_at_max(self):
+        """A router that echoes the whole catalogue must still produce a
+        compact selection — the hard cap guarantees downstream prompt size."""
+        from jarvis.tools.selection import _LLM_MAX_SELECTED
+
+        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+            return "webSearch, getWeather, logMeal, fetchMeals, screenshot, localFiles, homeassistant__turn_on"
+
+        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
+            result = select_tools(
+                "arbitrary query",
+                _builtin(), _mcp(),
+                strategy=ToolSelectionStrategy.LLM,
+                llm_base_url="http://localhost",
+                llm_model="test",
+            )
+        # Non-mandatory selections are capped; always-included tools are
+        # appended on top of that cap.
+        non_mandatory = [t for t in result if t not in _ALWAYS_INCLUDED]
+        assert len(non_mandatory) <= _LLM_MAX_SELECTED, (
+            f"Expected at most {_LLM_MAX_SELECTED} non-mandatory tools, got "
+            f"{len(non_mandatory)}: {non_mandatory}"
+        )
+        # Ranking is preserved — first N from the router's list survive.
+        assert non_mandatory[0] == "webSearch"
         assert "nonExistentTool" not in result

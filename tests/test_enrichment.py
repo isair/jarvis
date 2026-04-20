@@ -332,3 +332,163 @@ class TestGraphContextReachesSystemMessage:
             f"Graph context missing from system prompt. Got:\n{joined[:500]}"
         assert "sushi" in joined, \
             f"Graph node data missing from system prompt. Got:\n{joined[:500]}"
+
+
+# ── Memory digest ──────────────────────────────────────────────────────
+
+
+class TestDigestMemoryForQuery:
+    """Behaviour of digest_memory_for_query — the cheap LLM pass that
+    distils diary + graph dumps into a compact note before injecting into
+    small-model system prompts.
+    """
+
+    def _base_kwargs(self):
+        return dict(
+            query="what did we discuss about cooking?",
+            ollama_base_url="http://x",
+            ollama_chat_model="gemma4",
+            timeout_sec=1.0,
+            thinking=False,
+        )
+
+    def test_empty_inputs_returns_empty(self):
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        result = digest_memory_for_query(
+            diary_entries=[], graph_parts=[], **self._base_kwargs()
+        )
+        assert result == ""
+
+    def test_short_input_passes_through_unchanged(self):
+        """Below _DIGEST_MIN_CHARS, the raw block is already cheap; no LLM call."""
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        short_entry = "[2026-04-20] Brief chat about coffee."
+        with patch("jarvis.reply.enrichment.call_llm_direct") as mock_llm:
+            result = digest_memory_for_query(
+                diary_entries=[short_entry], graph_parts=[], **self._base_kwargs()
+            )
+            # The raw block is short — we never call the distil LLM.
+            mock_llm.assert_not_called()
+        assert short_entry in result
+
+    def test_none_sentinel_returns_empty(self):
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        big_entry = "[2026-04-20] " + ("x " * 300)
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value="NONE",
+        ):
+            result = digest_memory_for_query(
+                diary_entries=[big_entry], graph_parts=[], **self._base_kwargs()
+            )
+        assert result == ""
+
+    def test_bracketed_none_variants_return_empty(self):
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        big_entry = "[2026-04-20] " + ("x " * 300)
+        for variant in ["(NONE)", "[NONE]", "none.", "N/A"]:
+            with patch(
+                "jarvis.reply.enrichment.call_llm_direct",
+                return_value=variant,
+            ):
+                result = digest_memory_for_query(
+                    diary_entries=[big_entry], graph_parts=[], **self._base_kwargs()
+                )
+            assert result == "", f"Variant {variant!r} should yield empty digest"
+
+    def test_returns_digest_when_model_finds_relevance(self):
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        big_entry = "[2026-04-20] Long cooking chat. " + ("detail " * 100)
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value="User previously discussed cooking Thai curry on 2026-04-20.",
+        ):
+            result = digest_memory_for_query(
+                diary_entries=[big_entry], graph_parts=[], **self._base_kwargs()
+            )
+        assert "cooking Thai curry" in result
+
+    def test_truncates_oversized_digest(self):
+        from jarvis.reply.enrichment import (
+            _DIGEST_MAX_CHARS,
+            digest_memory_for_query,
+        )
+
+        big_entry = "[2026-04-20] " + ("x " * 300)
+        overflow = "A " * 600  # 1200 chars — well past _DIGEST_MAX_CHARS
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value=overflow,
+        ):
+            result = digest_memory_for_query(
+                diary_entries=[big_entry], graph_parts=[], **self._base_kwargs()
+            )
+        assert len(result) <= _DIGEST_MAX_CHARS + 1  # +1 for the ellipsis
+        assert result.endswith("…")
+
+    def test_llm_failure_returns_empty(self):
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        big_entry = "[2026-04-20] " + ("x " * 300)
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = digest_memory_for_query(
+                diary_entries=[big_entry], graph_parts=[], **self._base_kwargs()
+            )
+        assert result == ""
+
+    def test_batches_when_total_exceeds_cap(self):
+        """Dumps larger than _DIGEST_BATCH_MAX_CHARS get split into batches."""
+        from jarvis.reply.enrichment import (
+            _DIGEST_BATCH_MAX_CHARS,
+            digest_memory_for_query,
+        )
+
+        # Five entries each ~1000 chars → ~5 KB total, clearly multi-batch.
+        entries = [
+            f"[2026-04-{10 + i:02d}] " + ("detail " * 140)
+            for i in range(5)
+        ]
+        assert sum(len(e) for e in entries) > _DIGEST_BATCH_MAX_CHARS
+
+        call_count = {"n": 0}
+
+        def fake_llm(**kwargs):
+            call_count["n"] += 1
+            # Alternate NONE / relevant so we also exercise the filter.
+            return "NONE" if call_count["n"] % 2 == 0 else f"Note {call_count['n']}."
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            side_effect=fake_llm,
+        ):
+            result = digest_memory_for_query(
+                diary_entries=entries, graph_parts=[], **self._base_kwargs()
+            )
+
+        # Multiple batches triggered → multiple LLM calls.
+        assert call_count["n"] >= 2
+        # Surviving notes are joined; NONE batches drop out.
+        assert "Note 1." in result
+
+    def test_graph_parts_alone_produce_digest(self):
+        """Graph is in alpha and optional — exercise the graph-only path."""
+        from jarvis.reply.enrichment import digest_memory_for_query
+
+        # Pad with enough chars to clear the MIN threshold.
+        graph = ["[Preferences > Food] " + ("User loves ramen. " * 40)]
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value="User enjoys ramen.",
+        ):
+            result = digest_memory_for_query(
+                diary_entries=[], graph_parts=graph, **self._base_kwargs()
+            )
+        assert "ramen" in result

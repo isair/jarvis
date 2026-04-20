@@ -752,3 +752,70 @@ class TestFullTTSFallbackSalvage:
 
         # Should return None (nothing salvaged) or original text
         assert result is None or result == heard
+
+
+class TestRightmostEchoBoundarySalvage:
+    """Field regression: follow-up that starts with a Whisper-mangled echo tail.
+
+    Captured from a real session on 2026-04-20:
+      TTS said:  "The movie Possessor is a psychological thriller that
+                  explores themes of surveillance and identity."
+      User said: "Who made it?"
+      Whisper heard: "laws, themes of surveillance and identity. Who made it?"
+
+    The user started speaking inside the 3s follow-up hot window, and
+    Whisper merged the mic-captured echo tail with the real follow-up.
+    Every salvage path in the codebase before this commit either returned
+    the text unchanged (exact-word cleanup — fails because 'laws' doesn't
+    match 'explores') or truncated the salvage to just 'made it?' (fuzzy
+    prefix iteration picks the SHORTEST suffix first). Both are wrong:
+    the whole follow-up — 'Who made it?' — must survive so the intent
+    judge can dispatch it.
+    """
+
+    @pytest.fixture
+    def detector_with_tts(self):
+        import time as _time
+        d = EchoDetector()
+        tts = (
+            "The movie Possessor is a psychological thriller that "
+            "explores themes of surveillance and identity."
+        )
+        now = _time.time()
+        d._last_tts_text = tts
+        d._tts_start_time = now - 10.0
+        d._last_tts_finish_time = now - 1.0
+        d._tts_exact_duration = 9.0
+        return d, now
+
+    def test_salvages_full_follow_up_after_whisper_mangled_echo_prefix(self, detector_with_tts):
+        detector, now = detector_with_tts
+        heard = "laws, themes of surveillance and identity.  Who made it?"
+
+        result = detector.salvage_after_echo_tail(heard)
+
+        assert result is not None, "expected a salvage, got None (rejection)"
+        lowered = result.lower()
+        # All three words of the real follow-up must survive the salvage.
+        assert "who" in lowered
+        assert "made" in lowered
+        assert "it" in lowered
+        # None of the echo-tail filler should leak through.
+        assert "surveillance" not in lowered
+        assert "identity" not in lowered
+        assert "themes" not in lowered
+        assert "laws" not in lowered
+
+    def test_returns_none_when_heard_is_pure_echo(self, detector_with_tts):
+        detector, _now = detector_with_tts
+        heard = "themes of surveillance and identity"
+        # Nothing non-echo after the tail — nothing to salvage.
+        result = detector.salvage_after_echo_tail(heard)
+        assert result is None
+
+    def test_returns_none_when_heard_shares_nothing_with_tts(self, detector_with_tts):
+        detector, _now = detector_with_tts
+        heard = "what is the weather tomorrow in London"
+        # No echo prefix at all — no salvage needed; caller keeps the text as-is.
+        result = detector.salvage_after_echo_tail(heard)
+        assert result is None

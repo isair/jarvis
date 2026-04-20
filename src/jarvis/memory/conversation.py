@@ -278,6 +278,35 @@ Create a summary that:
 3. Focuses on facts, decisions, and context that would be useful for future conversations
 4. Includes any personal information, preferences, or important events mentioned
 5. Maintains a neutral, factual tone
+6. Records what the user asked about and what was established as true — NOT the assistant's conversational missteps. Do NOT narrate moments where the assistant failed to answer, said it lacked information, offered to search, deflected, declined, or clarified its own limitations. Those events are transient and do not generalise; preserving them in the diary trains future sessions to repeat the same failures.
+   - If the assistant eventually answered (e.g. after calling a tool), summarise the final answer only.
+   - If the topic was raised but never resolved, record only the topic and the user's intent — strip out every phrase describing the assistant's inability, uncertainty, or offers to help.
+   - Never write phrases like "the assistant did not have/does not have information", "the assistant could not", "the assistant offered to search", "the assistant was unable", "the assistant clarified that it…", "the assistant lacks…", or their equivalents in any language.
+
+   Example of what NOT to write:
+     BAD: "The user asked about the book Piranesi. The assistant stated it did not have specific information on that book."
+   Example of the correct output:
+     GOOD: "The user asked about the book Piranesi."
+
+   This rule applies in any language.
+7. CRITICAL attribution rule — record what was SAID faithfully, but make clear WHO said it. The diary is a log of the conversation, not a fact sheet, so preserve the actual content (including the assistant's answers, because a later session may need them — and because the user may later correct a wrong answer, and we want the whole chain on record). What must not happen is quietly promoting an assistant claim into an unattributed fact, because the assistant may hallucinate.
+   - When the assistant states something about a third-party entity (film, book, product, company, person, place, event, scientific fact, definition), always attribute it in the summary: write "the assistant said/stated/explained X" rather than "X". The attribution lets downstream readers treat the claim with appropriate skepticism.
+   - Never paraphrase an attributed claim into an unattributed assertion. "The assistant said Possessor is a 2006 film by Brandon Cronenberg" is fine (attribution preserved). "Possessor is a 2006 film by Brandon Cronenberg" is NOT (attribution stripped — now reads as established fact).
+   - If the user later corrects the assistant, record both: the initial claim AND the correction. That's how the final state becomes recoverable — never delete earlier claims when a correction comes in.
+   - Weather, time, location, calculator results, and other clearly tool-grounded data can be recorded as fact without attribution caveats — the tool output is the authority.
+   - User-stated facts about themselves (preferences, biography, plans, decisions) are always safe to record verbatim as user facts.
+
+   Example — attributed assistant claim (preserves information, flags provenance):
+     GOOD: "The user asked about the movie Possessor; the assistant said it is a 2006 science fiction film directed by Brandon Cronenberg."
+     BAD (unattributed — reads as established fact, will poison downstream): "The user asked about the movie Possessor. It is a 2006 science fiction film directed by Brandon Cronenberg."
+
+   Example — correction chain preserved:
+     GOOD: "The user asked about Possessor; the assistant said it is a 2006 film, the user corrected that it is from 2020."
+
+   Example — tool-grounded + user-stated, no attribution caveats needed:
+     OK: "The weather in Hackney was 10.6°C and partly cloudy. The user said they prefer Thai over Indian food."
+
+   This rule applies in any language.
 
 Also extract 3-5 main topics as comma-separated keywords."""
 
@@ -799,9 +828,20 @@ def update_diary_from_dialogue_memory(
                         thinking=thinking,
                         date_utc=today,
                     )
-                    if stored > 0:
-                        print(f"  🧠 Knowledge graph: learned {stored} new facts", flush=True)
-                    debug_log(f"graph memory: stored {stored} facts from dialogue", "memory")
+                    if stored:
+                        print(f"  🧠 Knowledge graph: learned {len(stored)} new facts", flush=True)
+                        # Show each new fact with the node it landed in so the
+                        # user can eyeball whether the extraction and placement
+                        # are working. Cap preview length per fact so a long
+                        # extracted fact doesn't blow up the console line.
+                        for fact, node_name in stored[:6]:
+                            preview = fact.replace("\n", " ").strip()
+                            if len(preview) > 90:
+                                preview = preview[:90].rstrip() + "…"
+                            print(f"     · {preview} → {node_name}", flush=True)
+                        if len(stored) > 6:
+                            print(f"     · …and {len(stored) - 6} more", flush=True)
+                    debug_log(f"graph memory: stored {len(stored)} facts from dialogue", "memory")
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
 

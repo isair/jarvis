@@ -7,8 +7,22 @@ from typing import Optional, Dict, Any, List, Callable, Tuple
 import os
 
 
-# LLM-as-judge configuration
-JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gpt-oss:20b")
+# LLM-as-judge / model-under-test configuration.
+#
+# This single knob does double duty: it's both the model the eval uses as
+# the chat LLM being tested AND the judge used to assess open-ended
+# responses. Field failures on the production default surface here first,
+# so the default MUST match what users actually run — which is the smallest
+# supported model in the README ("gemma4:e2b"), not the largest we
+# internally test against. Opt into larger models with EVAL_JUDGE_MODEL=…
+# when you want a sanity check of the upper tier.
+#
+# Historical note: the default was gpt-oss:20b until 2026-04-20, at which
+# point two field regressions on gemma4:e2b (tool selected but not invoked;
+# native "tool_code" fallback syntax) slipped past CI because the evals
+# were only testing the 20B tier. Defaulting to the small tier is the
+# cheapest way to stop that happening again.
+JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gemma4:e2b")
 JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
 
 

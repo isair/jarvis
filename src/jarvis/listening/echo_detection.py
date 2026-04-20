@@ -308,6 +308,97 @@ class EchoDetector:
 
         return heard_text
     
+    def salvage_after_echo_tail(self, heard_text: str) -> Optional[str]:
+        """Find the rightmost echo-like window in heard and salvage the rest.
+
+        The existing salvage paths (cleanup_leading_echo, the fuzzy Phase 3
+        inside cleanup_leading_echo_during_tts) both have a blind spot for
+        the common field pattern where:
+
+          * Whisper mis-transcribes the first echo word (e.g. 'explores' →
+            'laws'), breaking exact word-match salvage.
+          * The real follow-up is short (1–3 words: "Who made it?"), so the
+            fuzzy iteration — which prefers the shortest suffix — truncates
+            it by one word ("made it" instead of "who made it").
+
+        This helper scans right-to-left over word boundaries in `heard` and
+        asks: does the window of N words ending here look like it came
+        from the TTS tail? The rightmost position where that's true marks
+        the end of the echo; everything after it is the user's real speech.
+
+        Returns the salvaged tail, or None when the text is pure echo,
+        pure non-echo, or too short to reason about.
+
+        Kept separate from the existing salvage helpers rather than merged
+        into them so their current behaviour (and callers) don't change —
+        this runs as a last-resort salvage when the others return unchanged.
+        """
+        if not heard_text or not self._last_tts_text:
+            return None
+
+        tts_text = self._last_tts_text.lower().strip()
+        heard_words_raw = heard_text.strip().split()
+        heard_words = [w.lower() for w in heard_words_raw]
+        if len(heard_words) < 4:
+            # Too short to contain both echo and follow-up.
+            return None
+
+        # Look at the tail of TTS — the part most likely to have leaked into
+        # the mic. ~20 words is enough to cover the typical phrase-length
+        # echoes without picking up mid-response content.
+        tts_words = tts_text.split()
+        tail_words = tts_words[-20:] if len(tts_words) > 20 else tts_words
+        tts_tail = " ".join(tail_words)
+        tts_tail_normalized = self._normalize_for_comparison(tts_tail)
+
+        # Window size for the "does this look like echo?" probe. Small enough
+        # to find a boundary precisely; large enough that coincidental word
+        # overlap (a single shared word like "the") doesn't score high.
+        window_size = 5
+        echo_threshold = 85  # partial_ratio score that counts as "echo-like"
+
+        # Scan boundaries right-to-left so we find the RIGHTMOST echo window.
+        # The salvage is heard_words[boundary:], so a higher boundary means
+        # more echo stripped and more follow-up preserved.
+        best_boundary: Optional[int] = None
+        min_suffix_words = self.min_salvage_words
+        # Boundary must leave at least min_suffix_words after it, and have
+        # at least window_size words before it to form a meaningful window.
+        max_boundary = len(heard_words) - min_suffix_words
+        min_boundary = window_size
+
+        for boundary in range(max_boundary, min_boundary - 1, -1):
+            window = " ".join(heard_words[boundary - window_size:boundary])
+            window_normalized = self._normalize_for_comparison(window)
+            score = fuzz.partial_ratio(window_normalized, tts_tail_normalized)
+            if score < echo_threshold:
+                continue
+
+            suffix_words = heard_words[boundary:]
+            # Guard: suffix itself must NOT look like echo, otherwise we're
+            # salvaging an echo continuation.
+            suffix_normalized = self._normalize_for_comparison(" ".join(suffix_words))
+            suffix_score = fuzz.partial_ratio(suffix_normalized, tts_tail_normalized)
+            if suffix_score >= 70:
+                continue
+
+            best_boundary = boundary
+            break
+
+        if best_boundary is None:
+            return None
+
+        # Rebuild the salvage preserving original capitalisation/punctuation.
+        salvaged = " ".join(heard_words_raw[best_boundary:]).strip()
+        if not salvaged:
+            return None
+        debug_log(
+            f"salvage_after_echo_tail: boundary={best_boundary}, "
+            f"salvaged='{salvaged}'",
+            "echo",
+        )
+        return salvaged
+
     def _salvage_suffix_from_echo(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> Optional[str]:
         """Check if heard text has user speech after a TTS echo prefix.
 

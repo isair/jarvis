@@ -460,7 +460,15 @@ class VoiceListener(threading.Thread):
                         # of TTS echo with the user's follow-up into a single
                         # transcript; without salvage, the user's real speech
                         # would be dropped before the intent judge ever sees it.
+                        # Try exact-word cleanup first (cheapest, most precise),
+                        # then fall back to the rightmost-boundary scan which
+                        # handles Whisper mis-transcriptions at the echo/speech
+                        # join ("explores" → "laws") that exact matching can't.
                         salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
+                        if salvaged == text_lower:
+                            salvaged_alt = self.echo_detector.salvage_after_echo_tail(text_lower)
+                            if salvaged_alt:
+                                salvaged = salvaged_alt
                         # Require ≥ min_salvage_words to avoid treating Whisper's
                         # echo-tail hallucinations ("…regions like Steneti") as
                         # genuine user speech. The threshold lives on the echo
@@ -560,6 +568,16 @@ class VoiceListener(threading.Thread):
                 getattr(self.cfg, 'tts_rate', 200),
                 utterance_start_time,
             )
+            # If the prefix-based salvage fails or truncates too aggressively
+            # (Whisper-mangled echo boundary → exact cleanup misses; fuzzy
+            # prefix iteration prefers shortest suffix), fall through to the
+            # rightmost-boundary scan which recovers the full follow-up.
+            boundary_salvaged = self.echo_detector.salvage_after_echo_tail(text_lower)
+            if boundary_salvaged and (
+                salvaged is None or salvaged == text_lower
+                or len(boundary_salvaged.split()) > len(salvaged.split())
+            ):
+                salvaged = boundary_salvaged
             min_words = self.echo_detector.min_salvage_words
             if (salvaged and salvaged.strip() and salvaged != text_lower
                     and len(salvaged.split()) >= min_words):
@@ -1362,7 +1380,23 @@ class VoiceListener(threading.Thread):
         chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)
         judge = self._intent_judge
         judge_model = judge.config.model if judge is not None else ""
-        shared_model = bool(chat_model) and judge_model == chat_model
+        shared_judge = bool(chat_model) and judge_model == chat_model
+
+        # Tool router — only warmed when the LLM selection strategy is active
+        # AND the router points at a model distinct from chat/judge. An empty
+        # `tool_router_model` means "reuse the intent-judge model (small, fast,
+        # already loaded for wake-word paths) or the chat model as a last
+        # resort". Resolve the same way the reply engine does so warmup targets
+        # whatever the engine will actually call. Skipping warmup for non-LLM
+        # strategies avoids loading a model that won't be used this session.
+        strategy = str(getattr(self.cfg, "tool_selection_strategy", "") or "").lower()
+        # Use the same resolution helper the reply engine uses so warmup
+        # targets the model the engine will actually call. Keeping a single
+        # source of truth prevents drift between warmup and runtime.
+        from ..reply.engine import _resolve_tool_router_model
+        router_model_effective = _resolve_tool_router_model(self.cfg)
+        router_model = router_model_effective if strategy == "llm" else ""
+        shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
         threads: list[threading.Thread] = []
 
@@ -1371,24 +1405,37 @@ class VoiceListener(threading.Thread):
                 ok = warm_up_ollama_model(base_url, chat_model, timeout=chat_timeout)
                 self._llm_warmup_results["chat"] = (chat_model, ok)
                 # When chat and judge share a model, one warmup covers both.
-                if shared_model:
+                if shared_judge:
                     self._llm_warmup_results["judge"] = (chat_model, ok)
+                # Router reusing chat_model is already covered.
+                if router_model and router_model == chat_model:
+                    self._llm_warmup_results["router"] = (chat_model, ok)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
-        if judge is not None and not shared_model:
+        if judge is not None and not shared_judge:
             def _warm_judge() -> None:
                 ok = judge.warm_up()
                 self._llm_warmup_results["judge"] = (judge_model, ok)
+                if router_model and router_model == judge_model:
+                    self._llm_warmup_results["router"] = (judge_model, ok)
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
+
+        if router_model and base_url and not shared_router:
+            def _warm_router() -> None:
+                ok = warm_up_ollama_model(base_url, router_model, timeout=chat_timeout)
+                self._llm_warmup_results["router"] = (router_model, ok)
+
+            threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
         for t in threads:
             t.start()
 
         debug_log(
             f"LLM warmup started (chat={chat_model or 'n/a'}, "
-            f"judge={judge_model or 'n/a'}, shared={shared_model})",
+            f"judge={judge_model or 'n/a'}, router={router_model or 'n/a'}, "
+            f"shared_judge={shared_judge}, shared_router={shared_router})",
             "voice",
         )
         return threads
@@ -1821,6 +1868,7 @@ class VoiceListener(threading.Thread):
 
             _print_status("chat", "Chat model", "💬")
             _print_status("judge", "Intent judge", "🧠")
+            _print_status("router", "Tool router", "🔧")
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")

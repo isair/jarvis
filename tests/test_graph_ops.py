@@ -411,7 +411,11 @@ class TestUpdateGraphFromDialogue:
             ollama_chat_model="model",
         )
 
-        assert stored == 2
+        assert len(stored) == 2
+        # Each entry is (fact, node_name); the caller uses these for logging.
+        for fact, node_name in stored:
+            assert isinstance(fact, str) and fact
+            assert isinstance(node_name, str) and node_name
         root = store.get_node("root")
         assert "jazz" in root.data
         assert "Acme" in root.data
@@ -428,7 +432,7 @@ class TestUpdateGraphFromDialogue:
             ollama_chat_model="model",
         )
 
-        assert stored == 0
+        assert stored == []
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_extraction_failure_returns_zero(self, mock_llm, store):
@@ -442,4 +446,4 @@ class TestUpdateGraphFromDialogue:
             ollama_chat_model="model",
         )
 
-        assert stored == 0
+        assert stored == []

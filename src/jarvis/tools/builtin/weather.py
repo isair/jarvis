@@ -54,7 +54,10 @@ class WeatherTool(Tool):
         return (
             "Get current weather conditions and forecast (hourly for today, daily for the next week). "
             "Use this for ANY weather question — current, later today, tomorrow, this week, etc. "
-            "If no location specified, uses the user's current location automatically."
+            "This tool takes NO required arguments: call it with {} when the user "
+            "doesn't name a specific city. The user's current location is "
+            "auto-detected — do NOT ask the user where they are, and do NOT reply "
+            "with a clarifying question like 'I need a location'; just call this tool."
         )
 
     @property
@@ -64,7 +67,7 @@ class WeatherTool(Tool):
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "City name or location (e.g., 'London', 'New York', 'Tokyo'). If omitted, uses the user's current detected location."
+                    "description": "OPTIONAL. City name or location (e.g., 'London', 'New York', 'Tokyo'). Only set this if the user explicitly named a place different from their own location. If omitted, the tool auto-uses the user's current detected location — never ask the user for this argument."
                 }
             },
             "required": []
@@ -175,9 +178,17 @@ class WeatherTool(Tool):
                 debug_log("    📍 No location provided, using user's detected coordinates", "tools")
                 user_loc = self._get_user_location(context)
                 if not user_loc:
+                    # Auto-detection genuinely failed (GeoIP disabled, network
+                    # down, or user hasn't configured it). This is the ONE case
+                    # where asking the user for a location is correct — the
+                    # tool has tried and cannot derive it. The reply_text is
+                    # what the LLM will relay to the user.
                     return ToolExecutionResult(
                         success=False,
-                        reply_text="I couldn't determine your location. Please specify a city name."
+                        reply_text=(
+                            "I couldn't auto-detect your location. "
+                            "Please tell me which city to check the weather for."
+                        )
                     )
 
                 lat = user_loc["lat"]
