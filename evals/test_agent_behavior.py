@@ -193,6 +193,9 @@ class TestContextUtilization:
 
         query = "how's the weather?"
         user_location = "Berlin, Germany"
+        # This test checks that location context flows into the webSearch query;
+        # bypass the router so webSearch is exposed regardless of its own routing.
+        mock_config.tool_selection_strategy = "all"
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {"webSearch": MOCK_WEATHER_SEARCH})
 
@@ -277,6 +280,10 @@ class TestToolUsage:
         from jarvis.reply.engine import run_reply_engine
 
         query = "how's the weather this week?"
+        # This test exercises tool-chaining behaviour; the context-aware router
+        # is tested elsewhere. Force ALL tools so the mocked chat can freely
+        # issue webSearch → fetchWebPage calls.
+        mock_config.tool_selection_strategy = "all"
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {
             "webSearch": MOCK_WEATHER_SEARCH,
@@ -339,6 +346,9 @@ class TestMultiStepReasoning:
         from jarvis.reply.engine import run_reply_engine
 
         query = "should I order pizza tonight?"
+        # Bypass the context-aware tool router so fetchMeals is exposed to the
+        # mocked chat. Router behaviour is covered by dedicated router tests.
+        mock_config.tool_selection_strategy = "all"
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {
             "fetchMeals": MOCK_NUTRITION_DATA,
