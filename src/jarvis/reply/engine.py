@@ -576,10 +576,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         mcp_tools=mcp_tools,
         strategy=strategy,
         llm_base_url=cfg.ollama_base_url,
-        # Router model falls back to the chat model when not explicitly set.
-        # Keeps single-model setups working without extra config, while
-        # allowing power users to route with a cheaper/faster model.
-        llm_model=(getattr(cfg, "tool_router_model", "") or cfg.ollama_chat_model),
+        # Router model falls back to the intent-judge model when not explicitly
+        # set, and then to the chat model as a last resort. Routing is a
+        # classification job (same shape as intent judging), so reusing the
+        # judge model gives us a small/fast default that's already warmed and
+        # loaded for wake-word paths — not the large chat model whose weights
+        # we don't want to touch mid-reply. Power users can still override
+        # tool_router_model explicitly.
+        llm_model=(
+            getattr(cfg, "tool_router_model", "")
+            or getattr(cfg, "intent_judge_model", "")
+            or cfg.ollama_chat_model
+        ),
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),

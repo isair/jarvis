@@ -88,5 +88,5 @@ Called from the reply engine (Step 6) before `generate_tools_json_schema()` and 
 
 - Key: `tool_router_model`
 - Type: `str`
-- Default: `""` (empty string — reuse `ollama_chat_model`)
-- Effect: when `tool_selection_strategy == "llm"`, this model is used for the routing call. Empty value falls back to the configured chat model so single-model setups need no extra config. Override to a smaller/faster model (e.g. `"qwen2.5:3b"`) to decouple routing cost from reply generation cost when running a large chat model.
+- Default: `""` (empty string — resolves to `intent_judge_model`, then `ollama_chat_model`)
+- Effect: when `tool_selection_strategy == "llm"`, this model is used for the routing call. Resolution order for the empty default: `intent_judge_model` first (small, fast, already warm for wake-word paths and structurally the same classification job), then `ollama_chat_model` as a last resort. Override `tool_router_model` explicitly to decouple routing from both — useful when you want routing on a dedicated third model.

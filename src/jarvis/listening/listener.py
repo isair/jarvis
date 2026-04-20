@@ -1384,12 +1384,19 @@ class VoiceListener(threading.Thread):
 
         # Tool router — only warmed when the LLM selection strategy is active
         # AND the router points at a model distinct from chat/judge. An empty
-        # `tool_router_model` means "reuse chat_model", so no extra warmup is
-        # needed (chat warmup covers it). Skipping warmup for non-LLM
+        # `tool_router_model` means "reuse the intent-judge model (small, fast,
+        # already loaded for wake-word paths) or the chat model as a last
+        # resort". Resolve the same way the reply engine does so warmup targets
+        # whatever the engine will actually call. Skipping warmup for non-LLM
         # strategies avoids loading a model that won't be used this session.
         strategy = str(getattr(self.cfg, "tool_selection_strategy", "") or "").lower()
         router_model_cfg = str(getattr(self.cfg, "tool_router_model", "") or "").strip()
-        router_model = router_model_cfg if strategy == "llm" else ""
+        router_model_effective = (
+            router_model_cfg
+            or str(getattr(self.cfg, "intent_judge_model", "") or "").strip()
+            or chat_model
+        )
+        router_model = router_model_effective if strategy == "llm" else ""
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
         threads: list[threading.Thread] = []

@@ -414,9 +414,10 @@ def get_default_config() -> Dict[str, Any]:
         # Agentic Loop
         "agentic_max_turns": 8,
         "tool_selection_strategy": "llm",
-        # Empty string = reuse ollama_chat_model for routing. Override to a
-        # smaller/faster model (e.g. "qwen2.5:3b") to decouple routing cost
-        # from reply cost — useful when the chat model is large.
+        # Empty string = reuse intent_judge_model (small, fast, already warm
+        # for wake-word paths), falling back to ollama_chat_model only if the
+        # judge model isn't set. Override to decouple routing from both —
+        # useful when you want routing on a dedicated smaller model.
         "tool_router_model": "",
 
         # Stop Commands
