@@ -123,20 +123,39 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         )
         if tool_code_match:
             block = tool_code_match.group(1)
-            # Strip `print(...)` wrapper if present, keep the inner call.
-            for call_match in re.finditer(
-                r"(?:print\s*\(\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
-                block,
-            ):
-                call_name = call_match.group(1)
-                if call_name == "print":
+            # Track search-intent calls made against hallucinated tools so we
+            # can fall back to webSearch if no real tool match is found.
+            search_fallback_query: Optional[str] = None
+            # Identifiers that signal "search the web" intent even when wrapped
+            # in a hallucinated module path (e.g. google_search.search(...),
+            # wikipedia.run(...), duckduckgo(...)). Matching is substring-based
+            # on the call's leftmost identifier or the whole expression.
+            _search_intent_substrings = (
+                "search", "google", "wiki", "duckduckgo", "bing", "browse", "lookup",
+            )
+
+            # Iterate over calls in order. Match both `toolName(...)` and
+            # `module.method(...)` so we can recover search intent from the
+            # latter. The first group is the first identifier, the optional
+            # second group is `.method` (present for module-style calls), and
+            # the third group is the args.
+            call_pattern = re.compile(
+                r"(?:print\s*\(\s*)?"
+                r"([A-Za-z_][A-Za-z0-9_]*)"
+                r"(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?"
+                r"\s*\(([^)]*)\)"
+            )
+            for call_match in call_pattern.finditer(block):
+                head = call_match.group(1)
+                tail = call_match.group(2)  # None unless module.method form
+                raw_args = call_match.group(3).strip()
+                if head == "print":
                     continue
-                if call_name not in known_names:
-                    continue
-                raw_args = call_match.group(2).strip()
+
+                # Parse args once; reused by both real-dispatch and fallback.
                 parsed_args: dict = {}
+                positional_query: Optional[str] = None
                 if raw_args:
-                    # Try Python-kwargs form: `key="value", key2=123`
                     kwarg_pairs = re.findall(
                         r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(".*?"|\'.*?\'|[^,]+)',
                         raw_args,
@@ -146,9 +165,32 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                             v = v.strip().strip('"').strip("'")
                             parsed_args[k] = v
                     else:
-                        # Single positional string argument.
-                        parsed_args = {"query": raw_args.strip().strip('"').strip("'")}
-                return call_name, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
+                        positional_query = raw_args.strip().strip('"').strip("'")
+                        parsed_args = {"query": positional_query}
+
+                # Case 1: bare call matches a real tool.
+                if tail is None and head in known_names:
+                    return head, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
+
+                # Case 2: search-intent hallucination — save a fallback query
+                # in case no real tool call matches later in the block.
+                if search_fallback_query is None:
+                    head_lower = head.lower()
+                    tail_lower = (tail or "").lower()
+                    if any(tok in head_lower or tok in tail_lower for tok in _search_intent_substrings):
+                        # Prefer a semantic arg (`query`, `q`, `search_query`) when
+                        # the model used kwargs; else the positional string.
+                        for key in ("search_query", "query", "q", "text", "input"):
+                            if key in parsed_args and parsed_args[key]:
+                                search_fallback_query = parsed_args[key]
+                                break
+                        if not search_fallback_query and positional_query:
+                            search_fallback_query = positional_query
+
+            # No real-tool match found in the block. If we saw search intent
+            # and webSearch is registered, route to it with the captured query.
+            if search_fallback_query and "webSearch" in known_names:
+                return "webSearch", {"search_query": search_fallback_query}, f"call_{uuid.uuid4().hex[:8]}"
 
     if not known_names:
         return None, None, None
@@ -479,6 +521,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
     )
+    # Surface tool selection in the user-visible console so it's debuggable
+    # without voice_debug. When the list is very long the most-relevant
+    # handful is already enough signal (the full list is in debug_log).
+    _selected_preview = ", ".join(allowed_tools[:8]) + (
+        f" (+{len(allowed_tools) - 8} more)" if len(allowed_tools) > 8 else ""
+    )
+    print(
+        f"  🔧 Tools ({strategy.value}): {len(allowed_tools)} selected — {_selected_preview}",
+        flush=True,
+    )
     debug_log(f"  🔧 Tool selection ({strategy.value}): {len(allowed_tools)} tools selected", "planning")
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
@@ -578,12 +630,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
                 "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
                 "a bare name is not a valid call and the tool will not run.\n"
-                "- Never invoke tools that are not in the list above. Do NOT call "
-                "`wikipedia.run(...)`, `google.search(...)`, `python()`, or any other "
-                "name that is not listed. The ONLY tools that exist are: "
-                f"{allowed_name_list or '(see list above)'}.\n"
-                "- Do not wrap the call in `tool_code`, `python`, or any code fence. "
-                "Emit the `tool_calls: [...]` line and nothing else.\n"
+                "- Never invoke tools that are not in the list above. The ONLY tools "
+                f"that exist are: {allowed_name_list or '(see list above)'}. "
+                "Module-style calls like `google_search.search(query=...)` or "
+                "`wikipedia.run(...)` will fail — use one of the listed tool names "
+                "with its exact input schema.\n"
                 "- On the NEXT turn, after tool results arrive, answer the user "
                 "conversationally in plain sentences."
             )

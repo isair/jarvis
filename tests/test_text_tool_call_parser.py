@@ -143,14 +143,14 @@ class TestGemmaToolCodeBlockForm:
         assert name == "webSearch"
         assert args.get("search_query") == "Blade Runner 2049"
 
-    def test_ignores_hallucinated_module_style_calls(self):
-        """The model often invents tools that aren't in the registry — e.g.
-        `wikipedia.run("...")`. We must not dispatch them; the caller will
-        see (None, None, None) and can surface the parse failure."""
+    def test_ignores_non_search_hallucinated_module_calls(self):
+        """Hallucinated module.method calls that aren't obviously search-intent
+        must NOT be dispatched (we can't know what the model wanted). Only
+        search-shaped hallucinations get routed (covered separately)."""
         content = (
             "tool_code\n"
-            'print(wikipedia.run("Blade Runner 2049"))\n'
-            'print(google.search("Blade Runner 2049"))\n'
+            'print(fileSystem.write("/tmp/x", "y"))\n'
+            'print(database.query("select *"))\n'
         )
         name, _args, _ = _extract(content)
         assert name is None
@@ -166,3 +166,52 @@ class TestGemmaToolCodeBlockForm:
         name, args, _ = _extract(content)
         assert name == "webSearch"
         assert args.get("search_query") == "Blade Runner 2049"
+
+
+class TestSearchIntentFallbackRouting:
+    """When gemma hallucinates a search-intent tool (`google_search.search(...)`,
+    `wikipedia.run(...)`, etc.) we'd previously return None and let the raw
+    tool_code block leak as the reply. Route those to the real `webSearch`
+    tool instead, preserving the user's query."""
+
+    def test_routes_google_search_to_webSearch(self):
+        # Verbatim from a 2026-04-20 field log on gemma4:e2b.
+        content = (
+            "tool_code\n"
+            'print(google_search.search(query="what is the movie possess"))<unused88>'
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "what is the movie possess"
+
+    def test_routes_wikipedia_run_to_webSearch(self):
+        content = (
+            "tool_code\n"
+            'print(wikipedia.run("Blade Runner 2049"))<unused88>'
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "Blade Runner 2049"
+
+    def test_does_not_route_when_webSearch_not_registered(self):
+        """If webSearch isn't in the allowed tool list, don't invent it."""
+        import jarvis.reply.engine as engine_mod
+
+        content = (
+            "tool_code\n"
+            'print(google_search.search(query="x"))'
+        )
+        # known_names deliberately excludes webSearch.
+        name, _args, _ = engine_mod._extract_text_tool_call(content, {"fetchWebPage"})
+        assert name is None
+
+    def test_prefers_real_tool_over_search_fallback(self):
+        """If a real tool also appears in the block, prefer it."""
+        content = (
+            "tool_code\n"
+            'print(google_search.search(query="X"))\n'
+            'print(webSearch(search_query="X different"))\n'
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "X different"
