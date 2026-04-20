@@ -428,6 +428,31 @@ class WebSearchTool(Tool):
                     context.user_print(f"✅ Found {count_results} results.")
                 else:
                     context.user_print("⚠️ No web results found.")
+                # Surface whether we actually pulled page content for the top
+                # link. Without this line, "📄 Reading top result..." alone
+                # doesn't tell you if the fetch succeeded — a silent TLS /
+                # timeout / decode failure looks identical to success in the
+                # console, which makes field triage of "model deflected"
+                # reports (2026-04-20) much harder than it needs to be.
+                if fetch_attempted_any:
+                    if fetched_content:
+                        # First non-empty line, trimmed to 80 chars for a
+                        # compact one-liner that shows we have real facts.
+                        snippet = ""
+                        for ln in fetched_content.splitlines():
+                            ln = ln.strip()
+                            if ln:
+                                snippet = ln[:80] + ("…" if len(ln) > 80 else "")
+                                break
+                        context.user_print(
+                            f"   📰 Top-result content: {len(fetched_content)} chars"
+                            + (f' — "{snippet}"' if snippet else "")
+                        )
+                    else:
+                        context.user_print(
+                            "   ⚠️ Top-result content not fetched — reply will "
+                            "be links-only."
+                        )
             except Exception:
                 pass
 
