@@ -54,7 +54,10 @@ class WeatherTool(Tool):
         return (
             "Get current weather conditions and forecast (hourly for today, daily for the next week). "
             "Use this for ANY weather question — current, later today, tomorrow, this week, etc. "
-            "If no location specified, uses the user's current location automatically."
+            "This tool takes NO required arguments: call it with {} when the user "
+            "doesn't name a specific city. The user's current location is "
+            "auto-detected — do NOT ask the user where they are, and do NOT reply "
+            "with a clarifying question like 'I need a location'; just call this tool."
         )
 
     @property
@@ -64,7 +67,7 @@ class WeatherTool(Tool):
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "City name or location (e.g., 'London', 'New York', 'Tokyo'). If omitted, uses the user's current detected location."
+                    "description": "OPTIONAL. City name or location (e.g., 'London', 'New York', 'Tokyo'). Only set this if the user explicitly named a place different from their own location. If omitted, the tool auto-uses the user's current detected location — never ask the user for this argument."
                 }
             },
             "required": []
