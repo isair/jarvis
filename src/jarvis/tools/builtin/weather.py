@@ -178,9 +178,17 @@ class WeatherTool(Tool):
                 debug_log("    📍 No location provided, using user's detected coordinates", "tools")
                 user_loc = self._get_user_location(context)
                 if not user_loc:
+                    # Auto-detection genuinely failed (GeoIP disabled, network
+                    # down, or user hasn't configured it). This is the ONE case
+                    # where asking the user for a location is correct — the
+                    # tool has tried and cannot derive it. The reply_text is
+                    # what the LLM will relay to the user.
                     return ToolExecutionResult(
                         success=False,
-                        reply_text="I couldn't determine your location. Please specify a city name."
+                        reply_text=(
+                            "I couldn't auto-detect your location. "
+                            "Please tell me which city to check the weather for."
+                        )
                     )
 
                 lat = user_loc["lat"]
