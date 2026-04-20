@@ -168,16 +168,34 @@ class WebSearchTool(Tool):
             except Exception as ddg_error:
                 debug_log(f"DuckDuckGo search failed: {ddg_error}", "web")
 
-            # Auto-fetch content from first result to provide actual data
+            # Auto-fetch content from top results to provide actual data.
+            # Cascade through up to the first 3 results: small-model replies
+            # collapse to "here are some links" when the Content block is empty,
+            # so we try harder to populate it. Field failures on 2026-04-20
+            # showed top-1 fetches silently returning None (timeout / TLS /
+            # decode) — stopping at one attempt left the reply answerless.
             fetched_content: Optional[str] = None
+            fetch_attempted_any = False
             if result_urls and not instant_results:
                 # Only fetch if we don't already have instant answers
-                first_title, first_url = result_urls[0]
-                debug_log(f"Auto-fetching content from top result: {first_url}", "web")
                 context.user_print("📄 Reading top result...")
-                fetched_content = _fetch_page_content(first_url)
-                if fetched_content:
-                    debug_log(f"Fetched {len(fetched_content)} chars from top result", "web")
+                for attempt_idx, (attempt_title, attempt_url) in enumerate(result_urls[:3]):
+                    fetch_attempted_any = True
+                    debug_log(
+                        f"Auto-fetching content from result #{attempt_idx + 1}: {attempt_url}",
+                        "web",
+                    )
+                    fetched_content = _fetch_page_content(attempt_url)
+                    if fetched_content:
+                        debug_log(
+                            f"Fetched {len(fetched_content)} chars from result #{attempt_idx + 1}",
+                            "web",
+                        )
+                        break
+                    debug_log(
+                        f"Fetch failed for result #{attempt_idx + 1}, trying next",
+                        "web",
+                    )
 
             if not search_results:
                 search_results.extend([
@@ -210,14 +228,35 @@ class WebSearchTool(Tool):
                     all_results.append("**Other search results:**")
                 all_results.extend(search_results)
 
-            # Format results with explicit instruction for the LLM to use this data
-            # Small LLMs often need explicit guidance to use tool results
+            # Format results with explicit instruction for the LLM to use this data.
+            # Small LLMs often need explicit guidance to use tool results.
+            #
+            # When we attempted to fetch page content but every attempt failed,
+            # the payload ends up as just a link list with no facts to answer
+            # from. In that case we label the envelope so the model produces an
+            # honest "I couldn't read the pages" reply rather than either
+            # hallucinating facts or pretending the links themselves are an
+            # answer. This is the field failure mode observed 2026-04-20 on
+            # 'Possessor movie': no instant answer + fetch-all-failed →
+            # reply collapsed to 'Links to sources like Wikipedia'.
             if all_results:
-                reply_text = (
-                    f"Here are the web search results for '{search_query}'. "
-                    f"Use this information to reply to the user's query:\n\n"
-                    + "\n".join(all_results)
+                content_missing = (
+                    fetch_attempted_any and not fetched_content and not instant_results
                 )
+                if content_missing:
+                    envelope = (
+                        f"Web search for '{search_query}' returned links but none of the top "
+                        f"pages could be fetched for reading. Tell the user you couldn't read "
+                        f"the page contents this time, and — if they'd find it useful — offer "
+                        f"to summarise one of the following links if they pick one, or to retry. "
+                        f"Do NOT invent facts about the topic from prior knowledge.\n\n"
+                    )
+                else:
+                    envelope = (
+                        f"Here are the web search results for '{search_query}'. "
+                        f"Use this information to reply to the user's query:\n\n"
+                    )
+                reply_text = envelope + "\n".join(all_results)
             else:
                 reply_text = (
                     f"The web search for '{search_query}' returned no results. "

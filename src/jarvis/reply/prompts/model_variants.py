@@ -75,7 +75,10 @@ TOOL_GUIDANCE_LARGE = (
     "release years, authors, or other specifics from your prior — even if they feel plausible. If the tool "
     "returned only a short summary, answer using only that summary; do not extend it with invented detail. "
     "If the tool result doesn't contain what the user asked for, say so and offer to look up more rather "
-    "than filling the gap from memory."
+    "than filling the gap from memory. "
+    "When a webSearch result includes a '**Content from top result:**' section, quote its specific facts "
+    "(names, dates, roles, plot) rather than deferring to the '**Other search results:**' link list. "
+    "The links are provenance, not a substitute for an answer."
 )
 
 # Large models also confabulate on named entities — e.g. gpt-oss:20b produces a
@@ -117,7 +120,13 @@ TOOL_GUIDANCE_SMALL = (
     "from the user's own messages. Do NOT add cast, plot, release years, authors, or other specifics "
     "from your prior knowledge — even if they feel plausible. If the tool returned only a short summary, "
     "answer using only that summary. If the result doesn't contain what the user asked, say so rather "
-    "than filling the gap from memory."
+    "than filling the gap from memory. "
+    "When a tool result contains a section labelled '**Content from top result:**', pull the specific "
+    "facts (names, dates, roles, plot, numbers) from that section and state them in your reply. Do NOT "
+    "defer to the '**Other search results:**' link list by saying things like 'here are some links' or "
+    "'sources like Wikipedia' — those links are for your reference only; the user wants the facts, not "
+    "the URLs. If the Content section has the answer, give it; only fall back to mentioning sources when "
+    "the Content section is empty or clearly off-topic."
 )
 
 # Explicit constraints for small models - focused specifically on the greeting case
