@@ -318,6 +318,13 @@ class TestReplyUsesNewerDiaryEntry:
     def test_reply_reflects_newer_entry(
         self, case, model, mock_config, eval_db, eval_dialogue_memory
     ):
+        # The chat model under test is parametrised internally (to attach xfail
+        # to the small model). The harness-level judge-model loop re-runs this
+        # whole file once per judge phase, which is noise here (the judge model
+        # doesn't affect the reply engine's diary handling). Skip in the small
+        # judge phase so each (case, chat-model) pair runs exactly once.
+        if "gemma4" in JUDGE_MODEL:
+            pytest.skip("Chat model is parametrised here; only runs once per eval session (large judge phase)")
         case = case.values[0] if hasattr(case, 'values') else case
 
         from jarvis.reply.engine import run_reply_engine

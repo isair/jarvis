@@ -4,11 +4,11 @@
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **249/266 passed (93.6%)** across all categories
+**Overall:** 🟢 **248/263 passed (94.3%)** across all categories
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
-| 🤖 Agent behaviour | `gemma4:e2b` | 92 | 10 | 0 | 🟢 90.2% |
+| 🤖 Agent behaviour | `gemma4:e2b` | 91 | 8 | 4 | 🟢 91.9% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 102 | 3 | 0 | 🟢 97.1% |
 | 🎤 Intent judge | `gemma4:e2b` (fixed) | 41 | 3 | 0 | 🟢 93.2% |
 | 🔍 Tool selection (embedding) | `nomic-embed-text` (fixed) | 5 | 0 | 0 | 🟢 100.0% |
@@ -38,8 +38,8 @@
 | Bad: empty acknowledgment | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: generic greeting ignores query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Diet changed from bulking to cutting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Diet changed from bulking to cutting-gemma4:e2b | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
-| Diet changed from bulking to cutting-gpt-oss:20b | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Diet changed from bulking to cutting-gemma4:e2b | ➖ | 🔸 1/1 XFAIL |
+| Diet changed from bulking to cutting-gpt-oss:20b | ➖ | ✅ 1/1 (100%) |
 | Enrichment results appear in system message | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Extraction with explicit quantities | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Follow-up references previous turn context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -77,8 +77,8 @@
 | Nutrition: chicken with broccoli | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: oatmeal with banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Office days changed from Mon/Wed to Mon/Thu | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Office days changed from Mon/Wed to Mon/Thu-gemma4:e2b | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Office days changed from Mon/Wed to Mon/Thu-gpt-oss:20b | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Office days changed from Mon/Wed to Mon/Thu-gemma4:e2b | ➖ | ✅ 1/1 (100%) |
+| Office days changed from Mon/Wed to Mon/Thu-gpt-oss:20b | ➖ | ✅ 1/1 (100%) |
 | Reframing: life events framed as facts with temporal context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: requests become knowledge, not interaction descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
