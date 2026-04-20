@@ -136,7 +136,16 @@ class TestDiarySummariserHygieneLive:
         import re
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', summary) if s.strip()]
 
-        mcu_tokens = ("marvel", "stark", "vision", "avenger", "cinematic universe", "mcu")
+        # Tight phrase-level tokens — naked substrings like "vision" or "stark"
+        # collide with common English words and would false-positive.
+        mcu_tokens = (
+            "tony stark",
+            "marvel cinematic",
+            "mcu",
+            "embodied by vision",
+            "avengers",
+            "iron man",
+        )
 
         welded = []
         for s in sentences:
