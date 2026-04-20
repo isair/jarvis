@@ -39,11 +39,7 @@ Squash-merged commits on `develop` should only carry the PR number in the title 
 
 ## Issue Triage
 
-Never close an issue because its fix landed on `develop`. GitHub auto-closes issues when the `Closes #NNN` commit reaches `main` during a release, so a manual close on a develop-only fix is premature and drops the auto-close signal. The only legitimate manual closures are: duplicates (reference the canonical issue), insufficient info, user-environment issues, or not-a-bug.
-
-Before assuming you understand a reported issue, re-read the report and check whether key usage details are actually stated. If something is ambiguous (e.g. were they using the wake word? which model? which OS?), ask clarifying questions or offer guidance on correct usage rather than jumping to a diagnosis. Keep issues open until at least 2 weeks of reporter inactivity after a clarifying question or suggested fix — don't close them for silence before then.
-
-If you discover a past comment you made that was premature, wrong, or missed the point, edit or delete the original comment rather than leaving it and posting a follow-up correction. A clean thread is easier for reporters to follow than a trail of self-corrections.
+Use the `/triage` skill for triaging open issues and discussions. It owns the full workflow, diagnosis patterns, labelling conventions, and reply tone.
 
 ## Releases
 
@@ -98,6 +94,8 @@ Commit your changes when you finish a fix or feature before moving on to the nex
 Before running `git commit --amend`, always check `git log --oneline -3` first to verify you're amending the correct commit.
 
 Always use British English everywhere (e.g. "colour" not "color", "behaviour" not "behavior", "initialise" not "initialize").
+
+Do not use em dashes (—) in GitHub issue/PR/discussion replies or any user-facing writing. Prefer a comma, a full stop, a colon, or parentheses depending on the clause. This applies to replies you post on the user's behalf and to text generated for them.
 
 ## Prompt-engineering: denial-template mirroring
 
