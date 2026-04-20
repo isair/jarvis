@@ -108,9 +108,11 @@ TOOL_CONSTRAINTS_LARGE = (
     "ARGUMENTS THE TOOL CAN AUTO-DERIVE:\n"
     "Tools may state in their description that an argument has a sensible default "
     "(for example getWeather uses the user's current location when none is given). "
-    "Do NOT ask the user to supply an argument the tool already handles — just call "
-    "the tool with whatever arguments you do have, and let it fill the rest. Asking "
-    "for an argument the tool auto-derives wastes a turn and frustrates the user."
+    "Call the tool in the SAME turn with whatever arguments you have — even zero — "
+    "and let it fill the rest. Do NOT reply with a clarifying question like \"which "
+    "location?\" for an argument the tool auto-derives. Concretely: \"how's the "
+    "weather today\" must trigger getWeather immediately with no arguments, not a "
+    "question back to the user."
 )
 
 
@@ -170,7 +172,7 @@ Any phrasing that requests information about a named entity is a search trigger 
 Only skip the lookup if you can state concrete facts about the exact entity (title, year, creator, plot) without guessing. A diary or memory mention of the entity's name only confirms the topic came up — it does NOT give you facts you can state. Never invent plot, cast, release year, themes, or other specifics from prior knowledge. If you do not have facts from a tool result in this turn, you must call webSearch.
 
 ARGUMENTS THE TOOL CAN AUTO-DERIVE:
-If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool without asking the user for that argument. Do not ask the user to supply something the tool already handles — that wastes a turn and frustrates the user."""
+If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool in the SAME turn with whatever arguments you do have — even zero — and let the tool fill the rest. Do NOT ask the user to supply that argument. Do NOT reply with a clarifying question like "which location?" or "where are you?" when the tool's description already states it auto-derives that argument. Concretely: a message like "how's the weather today" must trigger getWeather immediately with no arguments, NOT a question back to the user. Asking for an argument the tool auto-derives wastes a turn and frustrates the user."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE
