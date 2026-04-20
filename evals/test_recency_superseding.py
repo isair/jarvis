@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from unittest.mock import patch
 
 import pytest
 
@@ -272,4 +273,105 @@ Question: Based on these entries, what is the current/latest information about: 
             f"Judge identified wrong date as newer. "
             f"Expected {case.new_date}, got {verdict.get('newer_date')}. "
             f"Reasoning: {verdict.get('reasoning')}"
+        )
+
+
+# =============================================================================
+# Tests: End-to-End — reply engine honours newer diary entries
+# =============================================================================
+
+# Models to exercise end-to-end. The small model is expected to be flaky on this
+# task (conflicting facts + recency reasoning), so it's marked xfail rather than
+# skipped — we still want to catch a surprise improvement.
+_E2E_MODELS = [
+    pytest.param("gpt-oss:20b", id="gpt-oss:20b"),
+    pytest.param(
+        "gemma4:e2b",
+        id="gemma4:e2b",
+        marks=pytest.mark.xfail(
+            reason="Small model flakes on recency-superseding — tracked, not blocking",
+            strict=False,
+        ),
+    ),
+]
+
+
+def _query_for_case(case: "SupersedingCase") -> str:
+    """Build a natural-language query that targets the entity in conflict."""
+    desc = case.description.lower()
+    if "office" in desc:
+        return "Which days do I go into the office these days?"
+    if "diet" in desc:
+        return "What does my current diet look like — calories and protein?"
+    return f"What's the latest on: {case.description}?"
+
+
+@pytest.mark.eval
+class TestReplyUsesNewerDiaryEntry:
+    """End-to-end: with conflicting diary entries, the reply should reflect
+    the newer one. Exercises the full reply engine (enrichment retrieval,
+    injection ordering, and preamble framing)."""
+
+    @requires_judge_llm
+    @pytest.mark.parametrize("model", _E2E_MODELS)
+    @pytest.mark.parametrize("case", SUPERSEDING_CASES)
+    def test_reply_reflects_newer_entry(
+        self, case, model, mock_config, eval_db, eval_dialogue_memory
+    ):
+        case = case.values[0] if hasattr(case, 'values') else case
+
+        from jarvis.reply.engine import run_reply_engine
+
+        # Seed diary with older (wrong) then newer (correct) entry.
+        eval_db.upsert_conversation_summary(
+            date_utc=case.old_date,
+            summary=case.old_entry,
+            topics=",".join(case.search_keywords),
+            source_app="test",
+        )
+        eval_db.upsert_conversation_summary(
+            date_utc=case.new_date,
+            summary=case.new_entry,
+            topics=",".join(case.search_keywords),
+            source_app="test",
+        )
+
+        mock_config.ollama_chat_model = model
+        mock_config.memory_enrichment_source = "diary"
+
+        query = _query_for_case(case)
+
+        with patch(
+            'jarvis.reply.engine.get_location_context_with_timezone',
+            return_value=("Location: London, United Kingdom", None),
+        ):
+            reply = run_reply_engine(
+                db=eval_db,
+                cfg=mock_config,
+                tts=None,
+                text=query,
+                dialogue_memory=eval_dialogue_memory,
+            )
+
+        assert reply and reply.strip(), f"[{model}] Reply engine returned empty response"
+
+        reply_lower = reply.lower()
+        has_newer = any(kw.lower() in reply_lower for kw in case.newer_value_keywords)
+        has_only_older = (
+            not has_newer
+            and any(kw.lower() in reply_lower for kw in case.older_value_keywords)
+        )
+
+        print(f"\n  🤖 {model} reply to: {query}")
+        print(f"     {reply[:240]}")
+        print(f"     newer kws {case.newer_value_keywords} present: {has_newer}")
+
+        assert not has_only_older, (
+            f"[{model}] Reply used ONLY older info "
+            f"({case.older_value_keywords}) and ignored newer entry "
+            f"({case.newer_value_keywords}).\nReply: {reply}"
+        )
+        assert has_newer, (
+            f"[{model}] Reply did not reflect newer diary entry "
+            f"({case.newer_value_keywords}).\nReply: {reply}"
         )

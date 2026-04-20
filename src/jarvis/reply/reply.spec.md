@@ -49,7 +49,7 @@ Design principles enforced by the engine:
    - Start with the unified `SYSTEM_PROMPT`.
    - Append ASR note: inputs come from speech transcription and may include errors; prefer user intent and ask brief clarifying questions when uncertain.
    - Append the tool-use protocol (allowed response formats and MCP invocation format if configured).
-   - Append `Relevant conversation history:` when enrichment produced context.
+   - Append `Relevant conversation history:` when enrichment produced context. Entries are ordered newest-first (with `[YYYY-MM-DD]` prefixes preserved) and the preamble instructs the model that when entries disagree, the most recent entry reflects the user's current understanding and supersedes older entries. This prevents stale diary facts from overriding more recent corrections.
    - Append `Tools:` with the dynamically generated tool descriptions (including configured MCP servers, if any) and guidance for preferring real data over shell commands.
 
 6. Agentic Messages Loop with Dynamic Context
