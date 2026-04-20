@@ -192,6 +192,57 @@ class TestWebSearchTool:
         assert "even if you recall them" in lowered
         assert "you have failed" in lowered
 
+    @patch('src.jarvis.tools.builtin.web_search._fetch_page_content')
+    @patch('requests.get')
+    def test_envelope_directs_extraction_when_content_fetched(self, mock_get, mock_fetch):
+        """When page content WAS fetched, the envelope must push the model to
+        extract facts from the UNTRUSTED WEB EXTRACT fence rather than
+        describe the structure of the payload.
+
+        Field log on 2026-04-20 showed gemma4:e2b, staring at 1503 chars of
+        Wikipedia content in the fence, reply with "Movie Title: Not
+        explicitly stated in the search snippets, but the context strongly
+        suggests a film" — describing the structure instead of reading the
+        title that was right there. The fix is an imperative envelope that
+        names the deflection pattern as a don't-do, points at the fence,
+        and tells the model what shape the reply should take.
+        """
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {}
+        instant.raise_for_status = Mock()
+        lite = Mock()
+        lite.status_code = 200
+        lite.content = (
+            b'<html><body>'
+            b'<a href="https://wiki.test/possessor">Possessor (film) - Wikipedia</a>'
+            b'</body></html>'
+        )
+        mock_get.side_effect = [instant, lite]
+        mock_fetch.return_value = (
+            "Possessor is a 2020 science fiction psychological horror film "
+            "written and directed by Brandon Cronenberg."
+        )
+
+        result = self.tool.run({"search_query": "possessor movie"}, self.context)
+
+        assert result.success is True
+        lowered = result.reply_text.lower()
+        # Must point the model at the fence as the source of the answer.
+        assert "inside the untrusted web extract fence" in lowered
+        # Must tell it to extract specific facts, not describe structure.
+        assert "extract the specific facts" in lowered
+        # Must explicitly name the deflection patterns we saw in the field
+        # so the model recognises and avoids them.
+        assert "do not describe the structure" in lowered
+        assert "snippets refer to" in lowered or "link to wikipedia" in lowered
+        # Must reassure: if the fence has content, the answer is there.
+        assert "you have enough to answer" in lowered
+        # The fetched content must still be fenced as untrusted data (the
+        # security framing is preserved alongside the extraction directive).
+        assert "<<<BEGIN UNTRUSTED WEB EXTRACT>>>" in result.reply_text
+        assert "Brandon Cronenberg" in result.reply_text
+
     def test_is_public_url_rejects_private_and_non_http(self):
         """SSRF guard: loopback, private, link-local, metadata, and non-http URLs
         must all be rejected before we ever issue a request."""

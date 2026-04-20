@@ -402,6 +402,39 @@ class WebSearchTool(Tool):
                         f"you state any such fact, you have failed. Keep the reply to two "
                         f"short sentences at most.\n\n"
                     )
+                elif fetched_content:
+                    # Happy path: we fetched real page content for the top
+                    # result. Small models (gemma4:e2b, 2B) observed in the
+                    # field consistently describe the STRUCTURE of this
+                    # payload ("the snippets refer to a film", "there is a
+                    # link to Wikipedia") instead of extracting facts from
+                    # the content block. The envelope therefore spells out,
+                    # in imperative terms, what the reply must contain and
+                    # what it must not sound like. The signals that work
+                    # for a 2B model are: explicit negative examples of
+                    # the deflection phrasing, a pointer to the exact
+                    # section to read, and a one-line template of the
+                    # expected answer shape. Previously the envelope was
+                    # just "use this information" — far too permissive.
+                    envelope = (
+                        f"Here are the web search results for '{search_query}'. "
+                        f"The answer the user needs is INSIDE the UNTRUSTED WEB "
+                        f"EXTRACT fence below — it contains the actual page "
+                        f"content (title, facts, details). Read that fence, "
+                        f"extract the specific facts (names, years, cast, "
+                        f"roles, plot, numbers) relevant to the user's query, "
+                        f"and state them in plain prose as your reply. The "
+                        f"'Other search results' section below the fence is "
+                        f"just a link list for provenance — do NOT rely on it "
+                        f"as the answer.\n\n"
+                        f"DO NOT describe the structure of these results "
+                        f"(\"the snippets refer to…\", \"there is a link to "
+                        f"Wikipedia\", \"the title is not explicitly stated\", "
+                        f"\"I cannot provide a synopsis based only on this "
+                        f"text\"). The title and core facts ARE present inside "
+                        f"the fence; read them and state them. If the fence is "
+                        f"non-empty, you have enough to answer.\n\n"
+                    )
                 else:
                     envelope = (
                         f"Here are the web search results for '{search_query}'. "
