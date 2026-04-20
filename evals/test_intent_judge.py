@@ -8,7 +8,7 @@ See PR description / commit message for the dedup rationale.
 import pytest
 from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Union
 
 from helpers import JUDGE_MODEL, JUDGE_BASE_URL, is_judge_llm_available
 
@@ -26,8 +26,8 @@ class IntentJudgeTestCase:
     in_hot_window: bool
     wake_timestamp: Optional[float]
     expected_directed: bool
-    expected_query_contains: Optional[str]
-    expected_query_not_contains: Optional[str] = None
+    expected_query_contains: Optional[Union[str, List[str]]]
+    expected_query_not_contains: Optional[Union[str, List[str]]] = None
     expected_stop: bool = False
 
 
@@ -219,8 +219,8 @@ class MultiSegmentTestCase:
     in_hot_window: bool
     wake_timestamp: Optional[float]
     expected_directed: bool
-    expected_query_contains: Optional[str]
-    expected_query_not_contains: Optional[str] = None
+    expected_query_contains: Optional[Union[str, List[str]]]
+    expected_query_not_contains: Optional[Union[str, List[str]]] = None
     expected_stop: bool = False
     aliases: Optional[List[str]] = None
 
@@ -469,6 +469,84 @@ MULTI_SEGMENT_TEST_CASES = [
         expected_query_contains="iphone",
         aliases=["jervis", "jaivis", "jervis", "javis"],
     ),
+    # Buried target sentence amid interleaved unrelated chatter (multi-topic
+    # disambiguation). Two separate topics coexist in the buffer — iPhone
+    # pricing thread and an unrelated Yankees game discussion. The wake-word
+    # segment contains a vague reference ("it") that must resolve to the
+    # correct thread (iPhone), not the most recent unrelated topic.
+    MultiSegmentTestCase(
+        name="buried_target_amid_unrelated_chatter",
+        segments=[
+            ("The new iPhone looks pretty cool", False),
+            ("Did you see the Yankees game last night", False),
+            ("I heard the camera is amazing on that phone", False),
+            ("Yeah that was a great play in the ninth inning", False),
+            ("Jarvis how much does it cost", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1008.5,
+        expected_directed=True,
+        expected_query_contains="iphone",
+        expected_query_not_contains="yankees",
+    ),
+    # Same buried-target disambiguation, but the wake-word question has no
+    # explicit pronoun ("what's the price" instead of "how much does it cost").
+    # The judge must still resolve the topic from prior segments — a query of
+    # "what's the price" is not answerable alone.
+    MultiSegmentTestCase(
+        name="buried_target_topicless_question",
+        segments=[
+            ("so anyway the meeting ran really long yesterday", False),
+            ("did you catch the ball game", False),
+            ("the new iPhone is out", False),
+            ("yeah they lost again though", False),
+            ("I want the pro model", False),
+            ("Jarvis what's the price", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1010.5,
+        expected_directed=True,
+        # Parent-noun rule: resolving to a sub-item ("pro model") must also
+        # include the parent noun/brand ("iPhone") — "pro model" alone is
+        # not self-contained.
+        expected_query_contains=["iphone", "pro"],
+        expected_query_not_contains="ball game",
+    ),
+    # Vague reference "they" — the AirPods are the only plural antecedent
+    # that can be cost-queried, so "how much do they cost" must resolve to
+    # the AirPods thread and include the brand/noun in the query.
+    MultiSegmentTestCase(
+        name="buried_target_plural_vague_ref_they",
+        segments=[
+            ("the AirPods sound great", False),
+            ("yeah the bass is really punchy", False),
+            ("Jarvis how much do they cost", False),
+        ],
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1006.5,
+        expected_directed=True,
+        expected_query_contains="airpods",
+    ),
+    # Hot-window override: a topic-less follow-up ("tell me more") in hot
+    # window must stay directed=true even though a topic-rich earlier buffer
+    # would otherwise trigger the topic-resolution heuristic. The HOT WINDOW
+    # rule must win over the "topic-less question" vague-reference rule.
+    MultiSegmentTestCase(
+        name="hot_window_override_topicless_followup",
+        segments=[
+            ("the new iPhone is out", False),
+            ("I want the pro model", False),
+            ("tell me more", False),
+        ],
+        last_tts_text="The iPhone 16 Pro has a titanium frame and a new camera system.",
+        in_hot_window=True,
+        wake_timestamp=None,
+        expected_directed=True,
+        expected_query_contains=None,
+    ),
     # Wake word mid-utterance after narrative buffer, addressing the assistant.
     # Real-world case: user was discussing Mata Hari in the background, then
     # turned to the assistant with "Jarvis, do you know what she's talking about,
@@ -500,6 +578,15 @@ KNOWN_FAILING_CASES: set = set()
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
+def _as_substring_list(value):
+    """Normalise an expected_query_contains / _not_contains value to a list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
 
 def create_transcript_segment(
     text: str,
@@ -645,16 +732,17 @@ class TestIntentJudgeAccuracy:
             f"Expected stop={case.expected_stop}, got {result.stop}. "
             f"Reasoning: {result.reasoning}"
         )
-        if case.expected_query_contains:
-            assert case.expected_query_contains.lower() in result.query.lower(), (
-                f"Expected query to contain '{case.expected_query_contains}', "
+        for needle in _as_substring_list(case.expected_query_contains):
+            assert needle.lower() in (result.query or "").lower(), (
+                f"Expected query to contain '{needle}', "
                 f"got '{result.query}'. Reasoning: {result.reasoning}"
             )
-        if case.expected_query_not_contains and result.query:
-            assert case.expected_query_not_contains.lower() not in result.query.lower(), (
-                f"Expected query to NOT contain '{case.expected_query_not_contains}', "
-                f"got '{result.query}'. Reasoning: {result.reasoning}"
-            )
+        if result.query:
+            for needle in _as_substring_list(case.expected_query_not_contains):
+                assert needle.lower() not in result.query.lower(), (
+                    f"Expected query to NOT contain '{needle}', "
+                    f"got '{result.query}'. Reasoning: {result.reasoning}"
+                )
 
 
 class TestIntentJudgePromptQuality:
@@ -759,16 +847,17 @@ class TestIntentJudgeMultiSegment:
             f"Expected stop={case.expected_stop}, got {result.stop}. "
             f"Reasoning: {result.reasoning}"
         )
-        if case.expected_query_contains:
-            assert case.expected_query_contains.lower() in result.query.lower(), (
-                f"Expected query to contain '{case.expected_query_contains}', "
+        for needle in _as_substring_list(case.expected_query_contains):
+            assert needle.lower() in (result.query or "").lower(), (
+                f"Expected query to contain '{needle}', "
                 f"got '{result.query}'. Reasoning: {result.reasoning}"
             )
-        if case.expected_query_not_contains and result.query:
-            assert case.expected_query_not_contains.lower() not in result.query.lower(), (
-                f"Expected query to NOT contain '{case.expected_query_not_contains}', "
-                f"got '{result.query}'. Reasoning: {result.reasoning}"
-            )
+        if result.query:
+            for needle in _as_substring_list(case.expected_query_not_contains):
+                assert needle.lower() not in result.query.lower(), (
+                    f"Expected query to NOT contain '{needle}', "
+                    f"got '{result.query}'. Reasoning: {result.reasoning}"
+                )
 
 
 class TestProcessedSegmentFiltering:
