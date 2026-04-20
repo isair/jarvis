@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
 
       - name: 🐍 Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -134,7 +134,7 @@ jobs:
           Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
 
       - name: 📤 Upload Windows artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: Jarvis-Windows
           path: dist/Jarvis-Windows-x64.zip
@@ -216,7 +216,7 @@ jobs:
           ditto -c -k --keepParent Jarvis.app Jarvis-macOS-${{ matrix.arch }}.zip
 
       - name: 📤 Upload macOS artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: Jarvis-macOS-${{ matrix.arch }}
           path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
@@ -291,7 +291,7 @@ jobs:
           tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
 
       - name: 📤 Upload Linux artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: Jarvis-Linux
           path: dist/Jarvis-Linux-x64.tar.gz
@@ -308,7 +308,7 @@ jobs:
 
     steps:
       - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -318,7 +318,7 @@ jobs:
           find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort
 
       - name: 📎 Attach binaries to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.semantic-release.outputs.new_release_git_tag }}
           # Use glob to upload only artifacts that exist
@@ -439,7 +439,7 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -449,7 +449,7 @@ jobs:
           find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort
 
       - name: 📝 Create/Update Latest Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: Latest Development Build
