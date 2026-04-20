@@ -307,6 +307,15 @@ Create a summary that:
      OK: "The weather in Hackney was 10.6°C and partly cloudy. The user said they prefer Thai over Indian food."
 
    This rule applies in any language.
+8. CRITICAL topic-separation rule — do NOT weld unrelated topics into one grammatical clause. If the conversation covered two distinct subjects (e.g. a film and a person, a recipe and a weather query, two different named entities), write a separate sentence for each, each with its own subject and verb. A welded clause reads to downstream retrievers — and to other LLMs enriching future replies — as a single claim about both referents, and silently corrupts the record.
+   - One topic per sentence. Never join two unrelated topics with "and", a shared appositive, or a shared relative clause.
+   - Never let an appositive or relative clause dangle over more than one topic. "X and Y, identified as Z" reads as Z describing both X and Y — this is the exact failure mode.
+
+   Example — two distinct topics raised in the same conversation (a film, and the name "Jarvis" meaning the MCU character). The BAD version welded them so downstream readers treated the MCU description as pertaining to the film:
+     BAD: "The conversation focused on the movie Possessor and the character Jarvis, identified as the artificial intelligence from the Marvel Cinematic Universe, created by Tony Stark and later embodied by Vision."
+     GOOD: "The user asked about the movie Possessor; the assistant said it is a 2020 science-fiction horror film directed by Brandon Cronenberg. Separately, the user asked about the name Jarvis; the assistant said the MCU character Jarvis is an AI created by Tony Stark and later embodied by Vision."
+
+   This rule applies in any language.
 
 Also extract 3-5 main topics as comma-separated keywords."""
 

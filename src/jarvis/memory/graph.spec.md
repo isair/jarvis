@@ -198,6 +198,10 @@ The graph memory system lives alongside the existing diary system (conversation_
 
 Users can import existing diary data into the graph via the "Import from Diary" button in the Memory Viewer. This processes all historical summaries through the extract-and-place pipeline, building the graph structure organically.
 
+### Diary Summariser Hygiene
+
+Graph extraction ingests diary summaries, so the graph inherits whatever corruption the summary contains. Summariser hygiene rules (no deflection narration, attribution preservation, topic separation) are documented in [`summariser.spec.md`](summariser.spec.md).
+
 ## Privacy
 
 All data is stored locally in the user's SQLite database. No data leaves the device. The graph store has no network dependencies.
