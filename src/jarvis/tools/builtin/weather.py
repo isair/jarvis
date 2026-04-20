@@ -52,12 +52,11 @@ class WeatherTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Get current weather conditions and forecast (hourly for today, daily for the next week). "
-            "Use this for ANY weather question — current, later today, tomorrow, this week, etc. "
-            "This tool takes NO required arguments: call it with {} when the user "
-            "doesn't name a specific city. The user's current location is "
-            "auto-detected — do NOT ask the user where they are, and do NOT reply "
-            "with a clarifying question like 'I need a location'; just call this tool."
+            "Weather only (current + forecast). NOT for time-of-day, date, or "
+            "location questions — those are already in the assistant's context. "
+            "Use for ANY weather question: now, later today, tomorrow, this week. "
+            "Call with {} — user location is auto-detected. Do NOT ask the user "
+            "where they are or request a city; just call this tool with empty args."
         )
 
     @property

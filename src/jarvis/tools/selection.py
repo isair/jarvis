@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Dict, List, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from ..debug import debug_log
 
@@ -241,8 +241,20 @@ def _select_llm(
     llm_base_url: str,
     llm_model: str,
     llm_timeout_sec: float,
+    context_hint: Optional[str] = None,
 ) -> List[str]:
-    """Ask a lightweight LLM call which tools are relevant."""
+    """Ask a lightweight LLM call which tools are relevant.
+
+    ``context_hint`` is an optional compact summary of what the main assistant
+    can already see at reply time (current local time, user's resolved
+    location, recent dialogue). When provided, the router is told that any
+    fact visible in that block needs no tool — a query fully answerable from
+    the hint should return 'none'. This avoids enumerating specific cases
+    ("time is known", "location is known") in the prompt: the router sees the
+    actual data and judges for itself. Gracefully degrades when the hint is
+    missing or partial (e.g. location failed to resolve) — the router simply
+    has less context and falls back to tool-selection on content.
+    """
     from ..llm import call_llm_direct
 
     catalogue_lines: List[str] = []
@@ -259,13 +271,25 @@ def _select_llm(
         "pick AT MOST the 5 most relevant tools for the query and return ONLY a "
         "comma-separated list of their exact names. Prefer fewer (1-3) when the "
         "query is clearly about one thing; never return more than 5. "
-        "Return 'none' if no tools are needed (e.g. greetings, small talk). "
+        "Return 'none' if no tools are needed — this covers greetings and "
+        "small talk, AND any query the main assistant can already answer "
+        "from the ALREADY IN CONTEXT block below (if present). Do NOT pick "
+        "a tool just because its domain is loosely adjacent to the query; if "
+        "the answer is already visible in context, 'none' is correct. "
         "Output nothing else — no explanations, no prose, no code fences."
     )
+    hint_section = ""
+    if context_hint and context_hint.strip():
+        hint_section = (
+            "ALREADY IN CONTEXT (the main assistant can already see this at "
+            "reply time, so no tool is needed to surface these facts):\n"
+            f"{context_hint.strip()}\n\n"
+        )
     user_prompt = (
+        f"{hint_section}"
         f"Available tools:\n{catalogue}\n\n"
         f"User query: {query}\n\n"
-        "Top tools (comma-separated, max 5):"
+        "Top tools (comma-separated, max 5, or 'none'):"
     )
 
     try:
@@ -326,6 +350,7 @@ def select_tools(
     llm_timeout_sec: float = 8.0,
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
+    context_hint: Optional[str] = None,
 ) -> List[str]:
     """
     Return a list of tool names relevant to *query*.
@@ -355,6 +380,7 @@ def select_tools(
         return _select_llm(
             query, builtin_tools, mcp_tools,
             llm_base_url, llm_model, llm_timeout_sec,
+            context_hint=context_hint,
         )
     else:
         return _all_tool_names(builtin_tools, mcp_tools)

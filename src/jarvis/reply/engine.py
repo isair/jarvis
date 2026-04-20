@@ -599,11 +599,15 @@ def _live_time_location_string(cfg) -> str:
 
 
 def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
-    """Compact summary of live context for the query extractor.
+    """Compact summary of live context for the query extractor and tool router.
 
-    The extractor uses this to skip implicit questions already answerable from
-    what the assistant can see: time, location, and the last few dialogue
-    turns. Pulling those from long-term memory would be redundant.
+    Consumed by both ``extract_search_params_for_memory`` (skips implicit
+    memory questions already answerable from live context) and
+    ``select_tools`` (opts out with 'none' when the query is answerable from
+    the same block). Keep the output schema stable: both consumers treat the
+    string as opaque and the router's prompt tells the model that any fact
+    NOT literally shown here is unknown, so silent format drift would lead
+    to either missed tool calls or stale memory pulls.
     """
     parts: list[str] = []
     live = _live_time_location_string(cfg)
@@ -869,6 +873,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+        # Same compact context the memory extractor uses, so the router can
+        # judge "already answerable from live context → 'none'" directly
+        # from the visible data rather than from enumerated special-cases.
+        # Degrades gracefully: if time/location lookup failed, context_hint
+        # is None or partial and the router simply picks on content.
+        context_hint=context_hint,
     )
     # Surface tool selection in the user-visible console so it's debuggable
     # without voice_debug. When the list is very long the most-relevant
