@@ -245,14 +245,8 @@ def setup_crash_logging():
 
 def get_crash_paths() -> tuple[Path, Path, Path]:
     """Get paths for crash log, marker, and previous crash log."""
-    if sys.platform == "darwin":
-        log_dir = Path.home() / "Library" / "Logs" / "Jarvis"
-    elif sys.platform == "win32":
-        log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
-    else:
-        log_dir = Path.home() / ".jarvis"
-
-    log_dir.mkdir(parents=True, exist_ok=True)
+    from .paths import get_log_dir
+    log_dir = get_log_dir()
 
     crash_log = log_dir / "jarvis_desktop_crash.log"
     crash_marker = log_dir / ".crash_marker"

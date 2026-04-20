@@ -1,5 +1,7 @@
 """Tests for auto-update functionality."""
 
+import os
+import subprocess
 import sys
 import pytest
 from unittest.mock import patch, MagicMock
@@ -609,6 +611,195 @@ class TestInstallUpdateMacos:
         assert clear_backup_idx < move_to_backup_idx, "must clear old backup before creating new one"
         assert move_to_backup_idx < xattr_idx, "backup happens before xattr strip"
         assert xattr_idx < open_idx, "xattr strip must precede launch"
+
+        # LaunchServices caches the old bundle inode across the mv swap, so a
+        # bare `open` silently no-ops. Re-register the bundle and force a new
+        # instance, and fall back to execing the inner binary if `open` fails
+        # — otherwise the update "installs" but never relaunches.
+        from desktop_app.updater import UPDATER_LOG_NAME
+        from desktop_app.paths import get_log_dir
+        assert "lsregister" in script_content
+        assert "open -n" in script_content
+        binary_path = str(mock_app_path / "Contents" / "MacOS" / "Jarvis")
+        assert binary_path in script_content, "fallback must exec the bundle's inner binary"
+        lsregister_idx = script_content.find("lsregister")
+        assert xattr_idx < lsregister_idx < open_idx, "lsregister must run after xattr and before open"
+
+        # Script output must be captured to a log file — otherwise detached
+        # failures leave no trace and we can't diagnose future relaunch bugs.
+        expected_log_path = str(get_log_dir() / UPDATER_LOG_NAME)
+        assert expected_log_path in script_content
+
+    @pytest.mark.unit
+    def test_binary_name_read_from_bundle_info_plist(self, tmp_path):
+        """The fallback exec must target the actual CFBundleExecutable, not a
+        hardcoded "Jarvis" — so a future bundle rename doesn't silently break
+        the fallback relaunch."""
+        import plistlib
+        import zipfile
+        from unittest.mock import patch, MagicMock
+
+        custom_binary_name = "JarvisNext"
+        zip_path = tmp_path / "update.zip"
+        app_source = tmp_path / "zip_content" / "Jarvis.app"
+        (app_source / "Contents").mkdir(parents=True)
+        plist_bytes = plistlib.dumps({"CFBundleExecutable": custom_binary_name})
+        (app_source / "Contents" / "Info.plist").write_bytes(plist_bytes)
+
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in app_source.rglob("*"):
+                if f.is_file():
+                    zf.write(f, arcname=str(f.relative_to(tmp_path / "zip_content")))
+
+        mock_app_path = tmp_path / "Applications" / "Jarvis.app"
+        mock_app_path.mkdir(parents=True)
+
+        from desktop_app.updater import install_update_macos
+
+        script_content_captured = []
+
+        def capture_popen(args, **kwargs):
+            if len(args) == 1 and args[0].endswith("update.sh"):
+                script_content_captured.append(Path(args[0]).read_text())
+            return MagicMock()
+
+        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                assert install_update_macos(zip_path) is True
+
+        script_content = script_content_captured[0]
+        expected_binary = str(mock_app_path / "Contents" / "MacOS" / custom_binary_name)
+        assert expected_binary in script_content, (
+            "fallback exec must use CFBundleExecutable from the new bundle"
+        )
+        # Shell-quoted; a bare 'Jarvis' occurrence would end with a single
+        # quote, whereas 'JarvisNext' does not.
+        hardcoded_binary = f"{mock_app_path / 'Contents' / 'MacOS' / 'Jarvis'}'"
+        assert hardcoded_binary not in script_content, (
+            "must not fall back to hardcoded 'Jarvis' when the bundle reports a different name"
+        )
+
+    @pytest.mark.unit
+    def test_shell_script_fallback_execs_binary_when_open_fails(self, tmp_path):
+        """When `open -n` fails (the real-world failure mode we're fixing),
+        the generated script must actually exec the bundle's inner binary.
+        Structural assertions that the text is present are not enough —
+        quoting bugs or `$?` semantics could break the runtime path.
+
+        This test executes the generated script in a sandbox where `open` is
+        stubbed to exit non-zero, and asserts the fallback binary runs.
+        """
+        import plistlib
+        import re
+        import time
+        import zipfile
+        from unittest.mock import patch, MagicMock
+
+        zip_path = tmp_path / "update.zip"
+        app_source = tmp_path / "zip_content" / "Jarvis.app"
+        (app_source / "Contents" / "MacOS").mkdir(parents=True)
+        (app_source / "Contents" / "Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleExecutable": "Jarvis"})
+        )
+        # The fallback execs Contents/MacOS/<binary_name>; stub it with a
+        # shell script that writes a marker file we can check for.
+        marker_path = tmp_path / "fallback_fired.marker"
+        stub_binary = app_source / "Contents" / "MacOS" / "Jarvis"
+        stub_binary.write_text(f'#!/bin/bash\necho fired > {marker_path}\n')
+        stub_binary.chmod(0o755)
+
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in app_source.rglob("*"):
+                if f.is_file():
+                    zf.write(f, arcname=str(f.relative_to(tmp_path / "zip_content")))
+
+        mock_app_path = tmp_path / "Applications" / "Jarvis.app"
+        mock_app_path.mkdir(parents=True)
+
+        # PATH-shadowed stubs: `open` always fails, `xattr` no-ops. The real
+        # /System lsregister path won't exist in tests, so the script's
+        # `if [ -x "$LSREGISTER" ]` guard skips it cleanly.
+        stub_dir = tmp_path / "path_stubs"
+        stub_dir.mkdir()
+        (stub_dir / "open").write_text("#!/bin/bash\nexit 1\n")
+        (stub_dir / "open").chmod(0o755)
+        (stub_dir / "xattr").write_text("#!/bin/bash\nexit 0\n")
+        (stub_dir / "xattr").chmod(0o755)
+
+        from desktop_app.updater import install_update_macos
+
+        captured = {}
+
+        def capture_popen(args, **kwargs):
+            if len(args) == 1 and args[0].endswith("update.sh"):
+                captured["script"] = Path(args[0])
+                captured["text"] = captured["script"].read_text()
+            return MagicMock()
+
+        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                assert install_update_macos(zip_path) is True
+
+        # Python's zipfile.extractall doesn't restore the Unix exec bit, so
+        # the stub binary inside the extracted new bundle comes out without
+        # +x — the nohup fallback would then fail with EACCES, which would
+        # hide real exec failures behind a test-infrastructure bug. Walk the
+        # new bundle (located from the `mv <new>` line in the script) and
+        # restore the exec bit before running.
+        new_app_match = re.search(r"mv '([^']+\.app)' '" + re.escape(str(mock_app_path)) + "'",
+                                  captured["text"])
+        assert new_app_match, "could not find extracted new_app path in script"
+        new_binary = Path(new_app_match.group(1)) / "Contents" / "MacOS" / "Jarvis"
+        new_binary.chmod(0o755)
+
+        # Strip the PID-wait loop so the test doesn't hang on the parent PID,
+        # and swap the log redirect for stdout so any script errors surface in
+        # the pytest output rather than being hidden.
+        script_text = captured["text"]
+        script_text = re.sub(
+            r"while kill -0 \d+ 2>/dev/null; do\s*\n\s*sleep 1\s*\ndone",
+            ":",
+            script_text,
+        )
+        script_text = re.sub(r'^exec >> .*$', 'true', script_text, count=1, flags=re.MULTILINE)
+        # Drop the log-rotation preamble — it references the same log file
+        # we've just neutered.
+        script_text = re.sub(
+            r'LOG_FILE=.*?\nif \[ -f "\$LOG_FILE".*?fi\n',
+            '',
+            script_text,
+            count=1,
+            flags=re.DOTALL,
+        )
+        # Fallback nohup also redirects to $LOG_FILE; neutralise it.
+        script_text = script_text.replace('>> "$LOG_FILE" 2>&1', '>/dev/null 2>&1')
+        runnable = tmp_path / "run.sh"
+        runnable.write_text(script_text)
+        runnable.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{stub_dir}{os.pathsep}{env.get('PATH', '')}"
+        result = subprocess.run(
+            ["bash", str(runnable)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == 0, (
+            f"script failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+        # The fallback is backgrounded via nohup, give it a moment to run.
+        for _ in range(20):
+            if marker_path.exists():
+                break
+            time.sleep(0.1)
+
+        assert marker_path.exists(), (
+            "fallback binary did not execute when `open` failed — "
+            "the user would be left without a running app after update"
+        )
 
 
 class TestInstallUpdateLinux:

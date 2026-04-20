@@ -24,7 +24,14 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from jarvis import get_version
 from jarvis.debug import debug_log
 
+from .paths import get_log_dir
+
 GITHUB_REPO = "isair/jarvis"
+UPDATER_LOG_NAME = "updater.log"
+# Truncate the updater log above this size before appending a new run. Each
+# run writes ~10 lines, so 1 MiB keeps hundreds of update histories without
+# unbounded growth.
+UPDATER_LOG_MAX_BYTES = 1024 * 1024
 
 
 def _escape_applescript_path(path: Path) -> str:
@@ -344,6 +351,7 @@ def install_update_macos(download_path: Path) -> bool:
     the Finder/AppleScript automation prompts that were failing mid-install
     and leaving users with a trashed app and no replacement.
     """
+    import plistlib
     import zipfile
 
     app_path = get_app_path()
@@ -359,18 +367,47 @@ def install_update_macos(download_path: Path) -> bool:
         if not new_app_path.exists():
             raise FileNotFoundError("Jarvis.app not found in download")
 
+        # Read the executable name from the new bundle's Info.plist rather
+        # than hardcoding "Jarvis" — if the bundle ever renames its
+        # CFBundleExecutable, the fallback relaunch still targets the right
+        # binary.
+        binary_name = "Jarvis"
+        info_plist = new_app_path / "Contents" / "Info.plist"
+        if info_plist.is_file():
+            try:
+                with info_plist.open("rb") as fp:
+                    binary_name = plistlib.load(fp).get("CFBundleExecutable", binary_name)
+            except Exception as e:
+                debug_log(f"Could not read CFBundleExecutable, defaulting to {binary_name}: {e}", "updater")
+
         escaped_app = _escape_shell_path(app_path)
         escaped_backup = _escape_shell_path(app_path.with_suffix(app_path.suffix + ".backup"))
         escaped_new_app = _escape_shell_path(new_app_path)
         escaped_temp = _escape_shell_path(temp_dir)
+        escaped_binary = _escape_shell_path(app_path / "Contents" / "MacOS" / binary_name)
+        log_path = get_log_dir() / UPDATER_LOG_NAME
+        escaped_log = _escape_shell_path(log_path)
+        log_max = UPDATER_LOG_MAX_BYTES
 
         # The quarantine strip is essential for unsigned builds: without it,
         # Gatekeeper may re-prompt with "unidentified developer" on every
         # update. Keeping the previous bundle as .backup provides a one-step
         # rollback if the new version fails to launch.
+        #
+        # After the mv swap, LaunchServices still has the old bundle's inode
+        # cached, so a bare `open` can silently no-op. `lsregister -f` forces
+        # a re-scan, `open -n` forces a fresh instance, and if that still
+        # fails we exec the bundle's inner binary directly. Script output is
+        # appended to ~/Library/Logs/Jarvis/updater.log so future failures
+        # leave a trace — the script runs detached with no terminal.
         script_path = temp_dir / "update.sh"
         script_content = f'''#!/bin/bash
-echo "Updating Jarvis..."
+LOG_FILE={escaped_log}
+if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt {log_max} ]; then
+    : > "$LOG_FILE"
+fi
+exec >> "$LOG_FILE" 2>&1
+echo "=== Jarvis update $(date) ==="
 echo "Waiting for process {current_pid} to exit..."
 while kill -0 {current_pid} 2>/dev/null; do
     sleep 1
@@ -382,7 +419,17 @@ if [ -e {escaped_app} ]; then
 fi
 mv {escaped_new_app} {escaped_app}
 xattr -dr com.apple.quarantine {escaped_app} 2>/dev/null || true
-open {escaped_app}
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+if [ -x "$LSREGISTER" ]; then
+    "$LSREGISTER" -f {escaped_app} || true
+fi
+echo "Relaunching..."
+open -n {escaped_app}
+open_rc=$?
+if [ $open_rc -ne 0 ]; then
+    echo "open failed (exit $open_rc), execing binary directly"
+    nohup {escaped_binary} >> "$LOG_FILE" 2>&1 &
+fi
 rm -rf {escaped_temp}
 '''
         script_path.write_text(script_content)
