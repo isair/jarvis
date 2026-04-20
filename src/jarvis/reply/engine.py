@@ -18,6 +18,7 @@ from .enrichment import (
     digest_memory_for_query,
     digest_tool_result_for_query,
 )
+from .evaluator import evaluate_turn
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from ..tools.selection import select_tools, ToolSelectionStrategy
@@ -60,141 +61,6 @@ def _resolve_tool_router_model(cfg) -> str:
         if candidate:
             return candidate
     return ""
-
-
-# ── Force-invocation safety net ─────────────────────────────────────────────
-#
-# Small models (e.g. gemma4:e2b, ~2B params) sometimes ignore the tool
-# router's selection. Two failure modes observed in a 2026-04-20 field session:
-#
-#   1. The model emits gemma's native Google-training tool_code syntax
-#      targeting a tool that isn't in the routed allow-list (e.g.
-#      google_search.search when only getWeather is routed). The parser
-#      can't dispatch it, so the raw syntax leaks to the user.
-#
-#   2. The model emits a short confident reply from its priors without
-#      invoking any tool — a confabulation for an unknown named entity.
-#
-# When the router confidently picked exactly ONE real tool and the reply
-# looks like either failure mode, this helper forces an invocation of the
-# router's pick. Gated to SMALL models only: on large models a short reply
-# is more likely a considered answer and shouldn't be steamrolled.
-
-_FORCE_CONFAB_MAX_LEN = 400  # chars; above this, assume a substantive reply
-# Markers that signal raw model-internal tool-calling syntax leaked into the
-# user-visible reply. `tool_calls:` covers the OpenAI-style JSON array literal
-# small models emit when they ignore native tool calling and dump the array
-# into prose instead (field capture 2026-04-20: gemma4:e2b produced
-# `tool_calls: [{"id": "call_1", ... "arguments": "{\"location\": \"London\"}}"]}`
-# on a routing-loss turn, and the malformed JSON caused the parser to skip it
-# and leak it verbatim to TTS).
-_GEMMA_LEAK_MARKERS = ("tool_code", "<unused", "google_search.search", "tool_calls:")
-
-
-def _content_has_gemma_leak(content: str) -> bool:
-    """True if the reply contains gemma's native tool_code fallback syntax."""
-    if not content:
-        return False
-    lowered = content.lower()
-    return any(marker in lowered for marker in _GEMMA_LEAK_MARKERS)
-
-
-def _scrub_gemma_leak(content: str) -> str:
-    """Strip raw tool_code / <unusedN> / google_search.search / tool_calls: JSON
-    fragments from reply text before it reaches the user. Best-effort: we just
-    delete the offending spans and collapse surrounding whitespace.
-
-    Applied on two paths: (1) before recording content in message history when
-    the force-invoke safety net fires, (2) unconditionally at the final
-    reply-assembly point, so leaks still reach the scrubber on the branch
-    where force-invoke doesn't fire (e.g. router picked only `stop`, model
-    emitted a fabricated getWeather tool_calls array).
-    """
-    if not content:
-        return content
-    cleaned = re.sub(
-        r"(?:```)?\s*tool_code\b.*?(?:```|<unused\d+>|\Z)",
-        " ",
-        content,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    cleaned = re.sub(r"<unused\d+>", " ", cleaned)
-    cleaned = re.sub(r"google_search\.search\s*\([^)]*\)", " ", cleaned)
-    # `tool_calls: [...]` literal JSON — match from the marker through the end
-    # of content. The model's JSON is often malformed (extra/missing braces),
-    # so we can't rely on balanced parsing; instead we take the conservative
-    # position that any prose after a `tool_calls:` block is almost certainly
-    # continued tool-call JSON rather than a real reply.
-    cleaned = re.sub(
-        r"tool_calls\s*:\s*\[.*",
-        " ",
-        cleaned,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-    return cleaned
-
-
-def _maybe_force_router_tool(
-    content: str,
-    allowed_tools,
-    cfg,
-    user_query: str,
-):
-    """Decide whether to force-invoke the router's single pick.
-
-    Returns (tool_name, tool_args, tool_call_id) on fire, or None to skip.
-
-    Gating (ALL must hold for a force-invoke to happen):
-      - Model is classified SMALL by detect_model_size.
-      - Router picked exactly one real tool (plus optionally "stop").
-      - Content signals either a gemma tool_code leak OR a short
-        confabulation (non-empty, under _FORCE_CONFAB_MAX_LEN chars).
-      - The tool's required args can either be left empty, or can be
-        trivially derived (currently: search_query ← user_query).
-    """
-    model = getattr(cfg, "ollama_chat_model", None)
-    if detect_model_size(model) != ModelSize.SMALL:
-        return None
-
-    real_tools = [t for t in (allowed_tools or []) if t and t != "stop"]
-    if len(real_tools) != 1:
-        return None
-
-    tool_name = real_tools[0]
-    tool = BUILTIN_TOOLS.get(tool_name)
-    if tool is None:
-        return None
-
-    has_leak = _content_has_gemma_leak(content)
-    stripped = (content or "").strip()
-    # Empty reply is the clearest possible "ignored the router" signal —
-    # the model produced no tool call and no text at all. Short non-empty
-    # replies are the confabulation case. Both are forced.
-    is_empty = not stripped
-    is_short_confab = (not is_empty) and len(stripped) <= _FORCE_CONFAB_MAX_LEN
-    if not (has_leak or is_empty or is_short_confab):
-        return None
-
-    # Derive args from the tool's schema.
-    schema = getattr(tool, "inputSchema", {}) or {}
-    required = schema.get("required", []) or []
-    args: dict = {}
-    if required:
-        # Only auto-derive the common case: a single search_query slot
-        # filled from the user's own turn. Anything more exotic is too
-        # risky to guess — bail out and let the normal flow continue.
-        if set(required) == {"search_query"} and user_query:
-            args = {"search_query": user_query.strip()}
-        else:
-            return None
-
-    debug_log(
-        f"  🛟 force-invoke safety net firing: {tool_name}(args={args}) "
-        f"[leak={has_leak}, empty={is_empty}, short_confab={is_short_confab}]",
-        "planning",
-    )
-    return tool_name, args, f"call_force_{uuid.uuid4().hex[:8]}"
 
 
 def _extract_text_tool_call(content_field: str, known_names: set):
@@ -326,95 +192,6 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                     id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
                     tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
                     return name, parsed_args, tool_call_id
-
-    # Form: gemma's native `tool_code` block. Gemma models are trained to emit
-    # tool calls as Python-style code, e.g.
-    #     tool_code
-    #     print(webSearch(search_query="Possessor movie"))
-    # or inside a markdown fence:
-    #     ```tool_code
-    #     webSearch(search_query="Possessor movie")
-    #     ```
-    # We scan for the block, then look for the first `<toolName>(<args>)` call
-    # matching a known tool name. `print(...)` wrappers are unwrapped. Unknown
-    # module-style calls (wikipedia.run, google.search) are ignored because the
-    # model will hallucinate tools it wasn't given — we only dispatch real ones.
-    if known_names:
-        tool_code_match = re.search(
-            r"(?:^|\n)(?:```)?\s*tool_code\b(.+?)(?:```|<unused\d+>|\Z)",
-            content_field,
-            re.DOTALL | re.IGNORECASE,
-        )
-        if tool_code_match:
-            block = tool_code_match.group(1)
-            # Track search-intent calls made against hallucinated tools so we
-            # can fall back to webSearch if no real tool match is found.
-            search_fallback_query: Optional[str] = None
-            # Identifiers that signal "search the web" intent even when wrapped
-            # in a hallucinated module path (e.g. google_search.search(...),
-            # wikipedia.run(...), duckduckgo(...)). Matching is substring-based
-            # on the call's leftmost identifier or the whole expression.
-            _search_intent_substrings = (
-                "search", "google", "wiki", "duckduckgo", "bing", "browse", "lookup",
-            )
-
-            # Iterate over calls in order. Match both `toolName(...)` and
-            # `module.method(...)` so we can recover search intent from the
-            # latter. The first group is the first identifier, the optional
-            # second group is `.method` (present for module-style calls), and
-            # the third group is the args.
-            call_pattern = re.compile(
-                r"(?:print\s*\(\s*)?"
-                r"([A-Za-z_][A-Za-z0-9_]*)"
-                r"(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?"
-                r"\s*\(([^)]*)\)"
-            )
-            for call_match in call_pattern.finditer(block):
-                head = call_match.group(1)
-                tail = call_match.group(2)  # None unless module.method form
-                raw_args = call_match.group(3).strip()
-                if head == "print":
-                    continue
-
-                # Parse args once; reused by both real-dispatch and fallback.
-                parsed_args: dict = {}
-                positional_query: Optional[str] = None
-                if raw_args:
-                    kwarg_pairs = re.findall(
-                        r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(".*?"|\'.*?\'|[^,]+)',
-                        raw_args,
-                    )
-                    if kwarg_pairs:
-                        for k, v in kwarg_pairs:
-                            v = v.strip().strip('"').strip("'")
-                            parsed_args[k] = v
-                    else:
-                        positional_query = raw_args.strip().strip('"').strip("'")
-                        parsed_args = {"query": positional_query}
-
-                # Case 1: bare call matches a real tool.
-                if tail is None and head in known_names:
-                    return head, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
-
-                # Case 2: search-intent hallucination — save a fallback query
-                # in case no real tool call matches later in the block.
-                if search_fallback_query is None:
-                    head_lower = head.lower()
-                    tail_lower = (tail or "").lower()
-                    if any(tok in head_lower or tok in tail_lower for tok in _search_intent_substrings):
-                        # Prefer a semantic arg (`query`, `q`, `search_query`) when
-                        # the model used kwargs; else the positional string.
-                        for key in ("search_query", "query", "q", "text", "input"):
-                            if key in parsed_args and parsed_args[key]:
-                                search_fallback_query = parsed_args[key]
-                                break
-                        if not search_fallback_query and positional_query:
-                            search_fallback_query = positional_query
-
-            # No real-tool match found in the block. If we saw search intent
-            # and webSearch is registered, route to it with the captured query.
-            if search_fallback_query and "webSearch" in known_names:
-                return "webSearch", {"search_query": search_fallback_query}, f"call_{uuid.uuid4().hex[:8]}"
 
     if not known_names:
         return None, None, None
@@ -925,6 +702,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # is None or partial and the router simply picks on content.
         context_hint=context_hint,
     )
+    # Always expose the escape-hatch tool so the chat model can widen the
+    # allow-list mid-loop when the initial routing turned out too narrow.
+    # `stop` is already guaranteed by the selector's _ALWAYS_INCLUDED set.
+    if "toolSearchTool" not in allowed_tools:
+        allowed_tools.append("toolSearchTool")
     # Surface tool selection in the user-visible console so it's debuggable
     # without voice_debug. When the list is very long the most-relevant
     # handful is already enough signal (the full list is in debug_log).
@@ -1284,6 +1066,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return None
 
     reply: Optional[str] = None
+    # When the evaluator keeps returning 'continue' until we hit the turn cap,
+    # the latest plausible natural-language candidate is delivered rather than
+    # substituting a generic fallback error. Spec: max-turn cap is the only
+    # hard backstop for termination.
+    last_candidate_reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
     turn = 0
 
@@ -1403,25 +1190,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Extract tool call if present
         t_name, t_args, t_call_id = _extract_structured_tool_call(llm_resp)
 
-        # Force-invocation safety net for small models that ignore the router.
-        # Only applies on the FIRST turn (a later turn has real tool results
-        # in-context, so a short reply is a genuine conclusion, not confab).
-        # Skip when the model emitted a thinking-only turn — that's a
-        # deliberate reasoning step before acting, not router ignorance.
-        if not t_name and turn == 1 and not thinking:
-            forced = _maybe_force_router_tool(
-                content=content,
-                allowed_tools=allowed_tools,
-                cfg=cfg,
-                user_query=text,
-            )
-            if forced is not None:
-                t_name, t_args, t_call_id = forced
-                # Scrub any leaked gemma tool_code fragments from the
-                # content we're about to record in the message history
-                # so a subsequent turn can't echo them to the user.
-                content = _scrub_gemma_leak(content)
-
         # ALWAYS append the assistant's response to messages exactly as received
         assistant_msg = {"role": "assistant", "content": content}
 
@@ -1526,6 +1294,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             # Append tool result
             if result.reply_text:
+                # toolSearchTool is an escape hatch: merge the surfaced tool
+                # names into the per-turn allow-list so the chat model can
+                # call them on subsequent turns. `stop` and `toolSearchTool`
+                # are never removed. Do this before digest — the raw result
+                # is already short and structured, no need to distil.
+                if tool_name == "toolSearchTool":
+                    for line in (result.reply_text or "").splitlines():
+                        name_part = line.split("—", 1)[0].strip()
+                        if name_part and name_part not in allowed_tools:
+                            allowed_tools.append(name_part)
+                            known_tool_names.add(name_part)
+                    debug_log(
+                        f"  🔧 allow-list widened via toolSearchTool: "
+                        f"{len(allowed_tools)} tools now available",
+                        "planning",
+                    )
                 # Tool-result digest for small models. Long tool payloads
                 # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
                 # push ~2B models into "describe the structure back" or
@@ -1578,35 +1362,73 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Loop continues to let the agent produce the next step/final reply
             continue
 
-        # Handle final response - extract text if model output JSON
+        # Natural-language content from the model. Normalise JSON-like replies
+        # first, then let the evaluator decide whether the loop can terminate.
         extracted = _extract_text_from_json_response(content)
         if extracted:
-            reply = extracted
+            candidate_reply = extracted
+            malformed_fallback = False
         elif _is_malformed_json_response(content):
             # Model output malformed JSON or API specs - provide helpful message
             debug_log(f"  ⚠️ Rejecting malformed JSON response: '{content[:100]}...'", "planning")
-
-            # Check if using a small model and suggest upgrading
             model_name = cfg.ollama_chat_model.lower() if cfg.ollama_chat_model else ""
             is_small_model = any(size in model_name for size in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
-
             if is_small_model:
-                reply = (
+                candidate_reply = (
                     "I had trouble understanding that request. "
                     "This can happen with smaller AI models. "
                     "You can switch to a more capable model through the Setup Wizard "
                     "in the menu bar."
                 )
             else:
-                reply = (
+                candidate_reply = (
                     "I had trouble understanding that request. "
                     "Could you try rephrasing it?"
                 )
+            malformed_fallback = True
         else:
-            reply = content
-        break
+            candidate_reply = content
+            malformed_fallback = False
+
+        # Evaluator-driven termination: let a lightweight LLM decide whether
+        # the reply already addresses the query, is a clarifying question to
+        # the user, or whether the loop should keep working. Malformed-JSON
+        # fallbacks are always delivered (the candidate is a canned error).
+        if malformed_fallback:
+            reply = candidate_reply
+            break
+
+        eval_result = evaluate_turn(
+            user_query=redacted,
+            assistant_response_summary=candidate_reply,
+            turns_used=turn,
+            cfg=cfg,
+        )
+        if eval_result.terminal:
+            reply = candidate_reply
+            break
+        # Non-terminal: remember the candidate for the max-turn fallback, then
+        # let the loop continue. The assistant message is already in history
+        # so the next turn sees it.
+        last_candidate_reply = candidate_reply
+        debug_log(
+            f"  🔁 evaluator returned 'continue' — staying in loop "
+            f"(turn {turn}/{max_turns})",
+            "planning",
+        )
+        continue
 
     # Step 9: Handle error case - return error message if no reply
+    if (not reply or not reply.strip()) and last_candidate_reply and last_candidate_reply.strip():
+        # Max-turn backstop: deliver the latest plausible candidate reply
+        # rather than the generic error. Spec: agentic_max_turns is the only
+        # hard backstop; the user should still get the best-so-far content.
+        debug_log(
+            "max-turn cap reached with evaluator='continue' — delivering "
+            "last candidate reply",
+            "planning",
+        )
+        reply = last_candidate_reply
     if not reply or not reply.strip():
         reply = "Sorry, I had trouble processing that. Could you try again?"
         debug_log("no reply generated, returning error message", "planning")
@@ -1629,24 +1451,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
-    # Final leak scrub: small models occasionally emit model-internal tool
-    # syntax (gemma `tool_code` blocks, OpenAI-style `tool_calls: [...]`
-    # JSON) even on turns where the force-invoke path doesn't fire — e.g.
-    # when the router chose only `stop` so there's no real tool to force.
-    # Scrubbing here guarantees those fragments never reach TTS regardless
-    # of which upstream branch let them through.
-    if _content_has_gemma_leak(reply):
-        scrubbed = _scrub_gemma_leak(reply)
-        debug_log(
-            f"  🧹 Scrubbed leak fragments from final reply "
-            f"({len(reply)}ch → {len(scrubbed)}ch)",
-            "planning",
-        )
-        reply = scrubbed
     safe_reply = reply.strip()
     if not safe_reply:
-        # Scrubbing removed everything; treat as a no-reply turn so the
-        # user gets a polite error instead of silence.
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:

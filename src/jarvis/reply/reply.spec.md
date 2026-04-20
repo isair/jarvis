@@ -70,14 +70,24 @@ Design principles enforced by the engine:
        - `content` field: Natural language response to user
    - Note: System messages are NOT added after the conversation starts, as this breaks native tool calling in models like Llama 3.2
 
-   Force-invocation safety net (small models only):
-   - After the first-turn response is parsed, if NO tool call was extracted and ALL of the following hold, the engine force-invokes the router's pick:
-     1. The chat model is classified SMALL by `detect_model_size` (e.g. gemma4:e2b, :1b/:3b/:7b tags).
-     2. The tool router selected exactly ONE real tool (plus the optional `stop` sentinel).
-     3. The assistant's content either contains gemma's native `tool_code` / `<unusedN>` / `google_search.search` fallback markers (parser couldn't dispatch them against the routed allow-list), OR is a short reply (≤ 400 chars) — both signals of a small-model confabulation that ignored the router.
-     4. The tool's required args are either empty OR derivable from the user's own turn (currently only the `{search_query}` case).
-   - On fire, raw gemma leak fragments are scrubbed from the assistant message before it enters the history so they cannot resurface in a later reply. The router-picked tool is then executed normally and its result drives the next turn.
-   - Gating exists to avoid overriding genuine reasoning on larger models and to avoid picking arbitrarily when the router's choice was ambiguous (multiple real tools).
+   Tool allow-list per turn:
+   - Initial routing (the existing `select_tools` call) still runs once, before the loop, outside the LLM's awareness. Its output determines the *default* tool allow-list for the loop.
+   - The per-turn allow-list exposed to the chat model is: `<router's picks>` + `stop` (the sentinel) + `toolSearchTool`.
+   - `toolSearchTool` wraps the same routing logic (`select_tools`) but is invokable mid-loop. It takes a refined natural-language description of what the model is trying to accomplish and returns the expanded set of candidate tools. When invoked, the returned tools are merged into the allow-list for subsequent turns (still plus `stop` and `toolSearchTool` itself). This gives the agent a single-shot escape hatch when the initial routing was too narrow without widening the allow-list to "everything" by default.
+   - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.
+
+   Evaluator-driven termination:
+   - After each turn that produces assistant content (i.e. a natural-language response, not a tool call), the engine runs a lightweight evaluator LLM pass over the user's original query and the turn's response.
+   - The evaluator returns one of two terminal states, or none:
+     1. **satisfied** — the assistant's response already addresses the user's query; exit the loop and deliver it.
+     2. **needs_user_input** — the assistant cannot proceed without a clarification from the user; exit the loop, deliver the assistant's question verbatim, and wait for the next user turn.
+     3. Otherwise — loop continues until `agentic_max_turns` is hit.
+   - Evaluator contract:
+     - Input: the original user query (redacted), a compact summary of the turn's assistant output (content or tool-call name + args), and the number of turns consumed.
+     - Output: strict JSON `{"terminal": bool, "reason": "satisfied" | "needs_user_input" | "continue", "clarification_question"?: string}`.
+     - Timeout-bounded via `llm_digest_timeout_sec`; on failure the evaluator defaults to `continue` (fail-open, rely on `agentic_max_turns`).
+   - The evaluator replaces the previous force-invocation safety net: the engine no longer second-guesses the chat model's tool-call decisions or force-fills search arguments from raw user text. Tool-argument quality is a chat-model responsibility, supported by the `SELF-CONTAINED TOOL ARGUMENTS` system-prompt rule that applies to every tool (builtin or MCP).
+   - Max-turn cap (`agentic_max_turns`) remains the only hard backstop.
 
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
