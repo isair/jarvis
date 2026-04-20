@@ -169,6 +169,12 @@ class Settings:
     # (the default), it auto-enables for SMALL models (≤7B) and stays off
     # for larger models that can handle raw dumps. Set explicitly to force.
     memory_digest_enabled: Optional[bool]
+    # Distil raw tool-result payloads (e.g. webSearch extracts) into a
+    # short, attributed fact note via a cheap LLM pass before appending
+    # them as tool-role messages. When None (the default), it auto-enables
+    # for SMALL models (≤7B) and stays off for larger models that ground
+    # on the raw payload reliably. Set explicitly to force on/off.
+    tool_result_digest_enabled: Optional[bool]
 
     # Agentic Loop
     agentic_max_turns: int
@@ -428,6 +434,10 @@ def get_default_config() -> Dict[str, Any]:
         "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
         # None = auto (on for small models, off for large). Set true/false to force.
         "memory_digest_enabled": None,
+        # Distil raw tool results (e.g. webSearch extracts) into a short
+        # attributed fact note for small models. Same auto semantics as
+        # memory_digest_enabled.
+        "tool_result_digest_enabled": None,
 
         # Agentic Loop
         "agentic_max_turns": 8,
@@ -599,6 +609,12 @@ def load_settings() -> Settings:
         memory_digest_enabled = None
     else:
         memory_digest_enabled = bool(_digest_raw)
+    _tool_digest_raw = merged.get("tool_result_digest_enabled", None)
+    tool_result_digest_enabled: Optional[bool]
+    if _tool_digest_raw is None:
+        tool_result_digest_enabled = None
+    else:
+        tool_result_digest_enabled = bool(_tool_digest_raw)
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
@@ -720,6 +736,7 @@ def load_settings() -> Settings:
         memory_search_max_results=memory_search_max_results,
         memory_enrichment_source=memory_enrichment_source,
         memory_digest_enabled=memory_digest_enabled,
+        tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
         tool_router_model=tool_router_model,

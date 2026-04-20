@@ -13,7 +13,11 @@ from ..tools.registry import run_tool_with_retries, generate_tools_description, 
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
-from .enrichment import extract_search_params_for_memory, digest_memory_for_query
+from .enrichment import (
+    extract_search_params_for_memory,
+    digest_memory_for_query,
+    digest_tool_result_for_query,
+)
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from ..tools.selection import select_tools, ToolSelectionStrategy
@@ -1386,10 +1390,69 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             # Append tool result
             if result.reply_text:
+                # Tool-result digest for small models. Long tool payloads
+                # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
+                # push ~2B models into "describe the structure back" or
+                # prior-confabulation failure modes. A cheap distil pass
+                # boils the payload down to a short attributed fact note.
+                # Gated on `tool_result_digest_enabled` (default: auto-on
+                # for SMALL); preserves the raw payload in debug logs so
+                # field captures can compare digested vs raw.
+                raw_tool_result = result.reply_text
+                tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
+                if tool_digest_cfg is None:
+                    tool_digest_enabled = (
+                        detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL
+                    )
+                else:
+                    tool_digest_enabled = bool(tool_digest_cfg)
+
+                effective_result = raw_tool_result
+                if tool_digest_enabled:
+                    try:
+                        digested = digest_tool_result_for_query(
+                            query=redacted,
+                            tool_name=tool_name,
+                            tool_result=raw_tool_result,
+                            ollama_base_url=cfg.ollama_base_url,
+                            ollama_chat_model=cfg.ollama_chat_model,
+                            timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+                            thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                        )
+                    except Exception as e:
+                        debug_log(
+                            f"tool result digest step failed (non-fatal): {e}",
+                            "tools",
+                        )
+                        digested = raw_tool_result
+                    if digested and digested != raw_tool_result:
+                        flat = digested.replace("\n", " ")
+                        preview = flat[:80] + ("…" if len(flat) > 80 else "")
+                        print(
+                            f"  🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
+                            flush=True,
+                        )
+                        debug_log(
+                            f"tool digest [{tool_name}]: raw payload "
+                            f"({len(raw_tool_result)}ch) replaced by digest "
+                            f"({len(digested)}ch)",
+                            "tools",
+                        )
+                        effective_result = digested
+                    elif not digested:
+                        # The distil judged nothing relevant. Keep the raw
+                        # payload — suppressing it entirely would be worse
+                        # than a possibly-noisy substrate.
+                        debug_log(
+                            f"tool digest [{tool_name}]: NONE returned, "
+                            f"keeping raw payload ({len(raw_tool_result)}ch)",
+                            "tools",
+                        )
+
                 if use_text_tools:
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool result: {tool_name}]\n{result.reply_text}",
+                        "content": f"[Tool result: {tool_name}]\n{effective_result}",
                         "tool_name": tool_name,  # kept for duplicate detection
                     })
                 else:
@@ -1397,9 +1460,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
-                        "content": result.reply_text,
+                        "content": effective_result,
                     })
-                debug_log(f"    ✅ tool result appended ({len(result.reply_text)} chars)", "planning")
+                debug_log(f"    ✅ tool result appended ({len(effective_result)} chars)", "planning")
 
                 # Note: We don't add a guidance system message here because adding system messages
                 # after the conversation starts breaks native tool calling in models like Llama 3.2.
