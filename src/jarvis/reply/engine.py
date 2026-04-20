@@ -33,6 +33,29 @@ def _indent_text(text: str, prefix: str = "  ") -> str:
     return f"\n{prefix}".join(text.splitlines())
 
 
+def _resolve_tool_router_model(cfg) -> str:
+    """Pick the LLM model for tool routing.
+
+    Resolution order: explicit `tool_router_model` → `intent_judge_model` →
+    `ollama_chat_model`. Routing is a small classification job (the same
+    shape as intent judging), so reusing the judge model gives a small, fast
+    default that is already warm on wake-word paths — the chat model is only
+    a last resort because its weights are expensive to page in mid-reply.
+
+    Extracted as a helper so the resolution order can be unit-tested and so
+    the listener's warmup path (listener.py) stays in sync with the reply
+    engine's selection path without the call sites drifting.
+    """
+    for candidate in (
+        getattr(cfg, "tool_router_model", ""),
+        getattr(cfg, "intent_judge_model", ""),
+        getattr(cfg, "ollama_chat_model", ""),
+    ):
+        if candidate:
+            return candidate
+    return ""
+
+
 def _extract_text_tool_call(content_field: str, known_names: set):
     """Parse a tool call out of a content-mode LLM response.
 
@@ -576,18 +599,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         mcp_tools=mcp_tools,
         strategy=strategy,
         llm_base_url=cfg.ollama_base_url,
-        # Router model falls back to the intent-judge model when not explicitly
-        # set, and then to the chat model as a last resort. Routing is a
-        # classification job (same shape as intent judging), so reusing the
-        # judge model gives us a small/fast default that's already warmed and
-        # loaded for wake-word paths — not the large chat model whose weights
-        # we don't want to touch mid-reply. Power users can still override
-        # tool_router_model explicitly.
-        llm_model=(
-            getattr(cfg, "tool_router_model", "")
-            or getattr(cfg, "intent_judge_model", "")
-            or cfg.ollama_chat_model
-        ),
+        llm_model=_resolve_tool_router_model(cfg),
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),

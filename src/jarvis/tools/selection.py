@@ -53,13 +53,6 @@ _MAX_SELECTED = 8
 # the top match.
 _RELATIVE_THRESHOLD = 0.97
 
-# Outlier-based filter: keep a tool only if its similarity is at least this
-# many standard deviations above the mean of the bottom half of the
-# distribution. This handles the case where nomic-embed-text produces a tight
-# cluster of similarities with a few genuine outliers on top — the relative
-# threshold alone can't distinguish "3 good + 26 noise" from "all 29 equal".
-_OUTLIER_STD_MULTIPLIER = 1.5
-
 # Hard cap on tools returned by the LLM router. Small routing models
 # (gemma4:e2b and similar) sometimes echo the entire catalogue; the cap
 # guarantees the downstream prompt stays compact regardless.
@@ -295,8 +288,12 @@ def _select_llm(
 
     known = set(builtin_tools.keys()) | set(mcp_tools.keys())
     selected: List[str] = []
+    # Chatty routers wrap names in backticks, bullet them, or emit bracketed
+    # JSON-ish lists. Strip every punctuation char that can't appear in a tool
+    # name before matching, so the extraction is robust to formatting drift.
+    _STRIP_CHARS = "'\"`*-_[](){}<>,.:;!?\\ "
     for token in re.split(r"[,\s]+", resp):
-        clean = token.strip().strip("'\"")
+        clean = token.strip(_STRIP_CHARS)
         if clean in known and clean not in selected:
             selected.append(clean)
 
