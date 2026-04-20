@@ -810,9 +810,20 @@ def update_diary_from_dialogue_memory(
                         thinking=thinking,
                         date_utc=today,
                     )
-                    if stored > 0:
-                        print(f"  🧠 Knowledge graph: learned {stored} new facts", flush=True)
-                    debug_log(f"graph memory: stored {stored} facts from dialogue", "memory")
+                    if stored:
+                        print(f"  🧠 Knowledge graph: learned {len(stored)} new facts", flush=True)
+                        # Show each new fact with the node it landed in so the
+                        # user can eyeball whether the extraction and placement
+                        # are working. Cap preview length per fact so a long
+                        # extracted fact doesn't blow up the console line.
+                        for fact, node_name in stored[:6]:
+                            preview = fact.replace("\n", " ").strip()
+                            if len(preview) > 90:
+                                preview = preview[:90].rstrip() + "…"
+                            print(f"     · {preview} → {node_name}", flush=True)
+                        if len(stored) > 6:
+                            print(f"     · …and {len(stored) - 6} more", flush=True)
+                    debug_log(f"graph memory: stored {len(stored)} facts from dialogue", "memory")
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
 

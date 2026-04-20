@@ -96,3 +96,224 @@ Examples:
         debug_log(f"search parameter extraction failed: {e}", "memory")
 
     return {}
+
+
+# ── Memory digest ───────────────────────────────────────────────────────────
+
+# Below this size, skip the distil round-trip entirely — the raw text is
+# already cheap to feed to the main model.
+_DIGEST_MIN_CHARS = 400
+
+# Per-batch soft cap on how much raw memory we send to the distil LLM in a
+# single call. Small models (~2B) degrade sharply past ~2 KB of system
+# prompt, and we're trying to compress FOR small models, so the distil
+# model itself is the same small model. If the raw dump exceeds this, we
+# break the snippets into batches, digest each batch separately, and
+# concatenate the per-batch notes. Roughly ~500 tokens at 4 chars/token.
+_DIGEST_BATCH_MAX_CHARS = 2000
+
+# Upper bound on EACH per-batch digest. The final combined digest is at
+# most `_DIGEST_MAX_CHARS * num_batches`, but in practice most batches
+# return NONE or a one-sentence note.
+_DIGEST_MAX_CHARS = 500
+
+_NONE_SENTINELS = {"NONE", "(NONE)", "[NONE]", "N/A", "NIL"}
+
+_DIGEST_SYSTEM_PROMPT = (
+    "You are a memory filter. You will be given:\n"
+    "  (A) the user's CURRENT query, and\n"
+    "  (B) raw snippets from past conversations and stored user facts.\n\n"
+    "Your job is to produce ONE short note (at most 2-3 sentences) that "
+    "captures only the snippets that are DIRECTLY relevant to the current "
+    "query and would help answer it. Rules:\n"
+    "- If nothing in the snippets is relevant to the current query, reply "
+    "with the single word: NONE\n"
+    "- Do NOT answer the user's query. Do NOT invent facts. Only summarise "
+    "what the snippets actually say.\n"
+    "- Prefer naming a prior topic + date over restating full details; the "
+    "main assistant will re-derive details via tools when needed.\n"
+    "- Never exceed 400 characters.\n"
+    "- Write in plain prose, no bullet points, no headings, no quotes.\n"
+)
+
+
+def _batch_snippets(snippets: list[str], max_chars: int) -> list[list[str]]:
+    """Greedy pack snippets into batches so each batch stays under ``max_chars``.
+
+    A single snippet larger than the cap becomes its own (oversized) batch —
+    we never split an individual entry mid-text, as that tends to destroy the
+    very context the distil needs to judge relevance. The caller already
+    trims long entries upstream, so oversized batches are rare.
+    """
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_len = 0
+    for s in snippets:
+        s_len = len(s) + 1  # +1 for the joining newline
+        if current and current_len + s_len > max_chars:
+            batches.append(current)
+            current = [s]
+            current_len = s_len
+        else:
+            current.append(s)
+            current_len += s_len
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _distil_batch(
+    query: str,
+    raw_block: str,
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    timeout_sec: float,
+    thinking: bool,
+) -> str:
+    """Run one distil LLM call over ``raw_block``; returns the relevance note or ""."""
+    user_content = (
+        f"CURRENT QUERY: {query}\n\n"
+        f"PAST MEMORY SNIPPETS:\n{raw_block}\n\n"
+        "Produce the short relevance note now (or NONE)."
+    )
+    try:
+        response = call_llm_direct(
+            base_url=ollama_base_url,
+            chat_model=ollama_chat_model,
+            system_prompt=_DIGEST_SYSTEM_PROMPT,
+            user_content=user_content,
+            timeout_sec=timeout_sec,
+            thinking=thinking,
+        )
+    except Exception as e:
+        debug_log(f"memory digest batch failed: {e}", "memory")
+        return ""
+
+    if not response:
+        return ""
+
+    cleaned = response.strip().strip('"').strip("'")
+    if not cleaned or cleaned.upper().rstrip(".") in _NONE_SENTINELS:
+        return ""
+
+    if len(cleaned) > _DIGEST_MAX_CHARS:
+        cleaned = cleaned[:_DIGEST_MAX_CHARS].rstrip() + "…"
+    return cleaned
+
+
+def digest_memory_for_query(
+    query: str,
+    diary_entries: list[str],
+    graph_parts: list[str],
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    timeout_sec: float = 8.0,
+    thinking: bool = False,
+) -> str:
+    """Condense raw memory dumps into a short relevance-filtered note.
+
+    Small models (~2B) degrade sharply as the system prompt grows. Dumping
+    5 diary entries plus 5 graph nodes can add 2-3 KB of marginally-relevant
+    text that pushes the model into "describe the context back at the user"
+    or "I've already discussed this, no need to search" failure modes.
+
+    This helper runs a fast LLM pass per batch and answers: "given the
+    user's CURRENT query and these past-memory snippets, what — if
+    anything — is directly relevant?" When the raw dump exceeds
+    ``_DIGEST_BATCH_MAX_CHARS``, snippets are split into batches and each
+    batch is distilled independently; the surviving notes are joined.
+    Empty is the correct answer most of the time.
+
+    The graph is currently in alpha and optional — when no graph nodes are
+    provided, only diary entries are digested.
+
+    Returns:
+      - A short string (usually ≤ _DIGEST_MAX_CHARS, up to one per batch)
+        when memory is relevant.
+      - Empty string when the distil decides nothing is relevant, when
+        inputs are empty, or when every LLM call fails.
+      - The raw block unchanged when it's already below
+        ``_DIGEST_MIN_CHARS`` — digestion wouldn't save enough context to
+        justify the round-trip.
+    """
+    diary_entries = [e for e in (diary_entries or []) if e and e.strip()]
+    graph_parts = [p for p in (graph_parts or []) if p and p.strip()]
+    if not diary_entries and not graph_parts:
+        return ""
+
+    # Compose the raw memory block exactly as it would appear in the
+    # system prompt, so the distil sees the same surface the main model
+    # would have seen without digestion.
+    def _compose(diary: list[str], graph: list[str]) -> str:
+        parts: list[str] = []
+        if diary:
+            parts.append("DIARY ENTRIES (newest first, [YYYY-MM-DD] prefixed):")
+            parts.extend(diary)
+        if graph:
+            if parts:
+                parts.append("")
+            parts.append("KNOWLEDGE GRAPH NODES:")
+            parts.extend(graph)
+        return "\n".join(parts)
+
+    raw_block = _compose(diary_entries, graph_parts)
+
+    # Cheap bail-out: below the min, digestion costs more round-trip time
+    # than it saves in prompt size.
+    if len(raw_block) < _DIGEST_MIN_CHARS:
+        return raw_block
+
+    # Single-batch fast path — most real turns fit here.
+    if len(raw_block) <= _DIGEST_BATCH_MAX_CHARS:
+        cleaned = _distil_batch(
+            query, raw_block, ollama_base_url, ollama_chat_model,
+            timeout_sec, thinking,
+        )
+        if not cleaned:
+            debug_log("memory digest: NONE — no relevant memory", "memory")
+            return ""
+        debug_log(
+            f"memory digest: raw={len(raw_block)}ch → digest={len(cleaned)}ch",
+            "memory",
+        )
+        return cleaned
+
+    # Multi-batch path. Batch diary and graph separately so the distil
+    # prompt preserves the section headers each batch sees.
+    diary_batches = _batch_snippets(diary_entries, _DIGEST_BATCH_MAX_CHARS)
+    graph_batches = _batch_snippets(graph_parts, _DIGEST_BATCH_MAX_CHARS)
+
+    notes: list[str] = []
+    for batch in diary_batches:
+        block = _compose(batch, [])
+        note = _distil_batch(
+            query, block, ollama_base_url, ollama_chat_model,
+            timeout_sec, thinking,
+        )
+        if note:
+            notes.append(note)
+    for batch in graph_batches:
+        block = _compose([], batch)
+        note = _distil_batch(
+            query, block, ollama_base_url, ollama_chat_model,
+            timeout_sec, thinking,
+        )
+        if note:
+            notes.append(note)
+
+    if not notes:
+        debug_log(
+            f"memory digest: {len(diary_batches) + len(graph_batches)} batches "
+            f"all returned NONE — no relevant memory",
+            "memory",
+        )
+        return ""
+
+    combined = " ".join(notes)
+    debug_log(
+        f"memory digest: raw={len(raw_block)}ch across "
+        f"{len(diary_batches) + len(graph_batches)} batches → "
+        f"digest={len(combined)}ch ({len(notes)} relevant)",
+        "memory",
+    )
+    return combined

@@ -244,6 +244,7 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `llm_chat_timeout_sec` (messages loop turn)
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.
+  - `memory_digest_enabled` (default `null` = auto-on for SMALL models, off for LARGE) distils the combined diary + graph dump into a short relevance-filtered note via a cheap LLM pass before injecting into the system prompt. See **Memory Digest for Small Models** below.
 - Tools and MCP:
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
 - Agentic loop:
@@ -283,6 +284,26 @@ Small models receive explicit guidance on when NOT to use tools and, symmetrical
 This prevents issues like calling `webSearch` for "ni hao" (Chinese greeting) while also preventing the opposite failure mode — denying knowledge of a specific named entity instead of looking it up.
 
 See `src/jarvis/reply/prompts/prompts.spec.md` for full prompt architecture documentation.
+
+### Memory Digest for Small Models
+
+Small models (~2B parameters) degrade sharply as the system prompt grows. The raw memory enrichment (top diary entries + graph nodes) can easily add 2-3 KB of marginally-relevant text that pushes them into two observed failure modes:
+
+1. **Describe-the-context deflection** — the model treats the injected background as a new user message and replies "the text is a collection of search results, you have not asked a specific question" rather than answering.
+2. **Stale-context steamroll** — a prior diary mention of a topic convinces the model it already "knows" an entity and it skips `webSearch`, then confabulates plot, cast, dates etc.
+
+To mitigate both, `digest_memory_for_query` (in `src/jarvis/reply/enrichment.py`) runs a cheap LLM pass over the raw diary + graph block and produces a short relevance-filtered note that replaces both `conversation_context` and `graph_context` in the reply system prompt.
+
+Behaviour:
+- **Gating**: `memory_digest_enabled` (config). `None` (default) means auto-on for SMALL models, off for LARGE. Explicit `true`/`false` forces.
+- **Short-circuit**: if the raw block is below `_DIGEST_MIN_CHARS` (400 chars), it's passed through unchanged — the LLM round-trip costs more than it saves.
+- **Batching**: if the raw block exceeds `_DIGEST_BATCH_MAX_CHARS` (2000 chars, ~500 tokens), snippets are greedy-packed into batches, each distilled independently; surviving notes are joined. Single large snippets become their own oversized batch rather than being split mid-text.
+- **Graph is alpha**: when no graph nodes are present, only diary entries are digested. When only graph nodes are present, graph nodes alone are digested. Either channel is optional.
+- **NONE sentinel**: the distil prompt instructs the model to reply `NONE` (or variants `(NONE)`, `[NONE]`, `N/A`) when nothing in the snippets is directly relevant. This maps to an empty digest — no memory block is injected at all.
+- **Length cap**: per-batch digests are truncated to `_DIGEST_MAX_CHARS` (500 chars) with an ellipsis; the combined digest across batches is at most `_DIGEST_MAX_CHARS * num_batches`, but in practice most batches return NONE.
+- **User-facing logging**: prints `🧩 Memory digest: N chars — "preview"` when relevant, or `🧩 Memory digest: no directly-relevant past memory` when the distil returned NONE. Debug logs record raw→digest size and batch counts under the `memory` category.
+
+The digested note is framed in the reply system prompt as reference background, explicitly marked non-instructional so prior narrated behaviours don't override current tool constraints.
 
 ### Logging and Privacy
 - Use `debug_log` for key steps: `memory`, `planning`, and `voice` categories.

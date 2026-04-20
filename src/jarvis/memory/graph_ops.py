@@ -392,7 +392,7 @@ def update_graph_from_dialogue(
     timeout_sec: float = 30.0,
     thinking: bool = False,
     date_utc: Optional[str] = None,
-) -> int:
+) -> "list[tuple[str, str]]":
     """End-to-end: extract memories from a summary, place each in the best
     node, and trigger auto-split if needed.
 
@@ -400,7 +400,10 @@ def update_graph_from_dialogue(
         date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
             Passed to extraction to help distinguish daily events from enduring facts.
 
-    Returns the number of facts stored.
+    Returns a list of ``(fact, node_name)`` tuples for each fact successfully
+    stored. Callers that only want the count can use ``len(result)``.
+    The return shape is a list rather than a bare int so the CLI can show
+    *what* was learned, not just how many.
     """
     # Step 1: Extract discrete facts from the conversation summary
     facts = extract_graph_memories(
@@ -414,11 +417,11 @@ def update_graph_from_dialogue(
 
     if not facts:
         debug_log("graph update: no facts extracted from summary", "memory")
-        return 0
+        return []
 
     debug_log(f"graph update: placing {len(facts)} facts into knowledge graph", "memory")
 
-    stored = 0
+    stored: "list[tuple[str, str]]" = []
     for fact in facts:
         try:
             # Step 2: Find the best node for this fact
@@ -434,10 +437,10 @@ def update_graph_from_dialogue(
             # Step 3: Append the fact to the chosen node
             threshold_exceeded = store.append_to_node(node_id, fact)
             store.touch_node(node_id)
-            stored += 1
 
             node = store.get_node(node_id)
             node_name = node.name if node else node_id[:8]
+            stored.append((fact, node_name))
             debug_log(f"graph update: stored '{fact[:50]}...' → '{node_name}'", "memory")
 
             # Step 4: Auto-split if the node has grown too large
@@ -456,5 +459,5 @@ def update_graph_from_dialogue(
             debug_log(f"graph update: failed to store fact — {e}", "memory")
             continue
 
-    debug_log(f"graph update: stored {stored}/{len(facts)} facts", "memory")
+    debug_log(f"graph update: stored {len(stored)}/{len(facts)} facts", "memory")
     return stored
