@@ -476,3 +476,202 @@ class TestWebSearchTool:
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True  # still returns guidance
         assert "wasn't able to find" in result.reply_text.lower()
+
+
+class TestBraveSearchHelper:
+    """Isolated tests for the `_brave_search` helper."""
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_returns_empty_without_key(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _brave_search
+        assert _brave_search("q", "") == []
+        mock_get.assert_not_called()
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_parses_results(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _brave_search
+        resp = Mock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "web": {"results": [
+                {"title": "A", "url": "https://example.com/a"},
+                {"title": "B", "url": "https://example.com/b"},
+            ]}
+        }
+        mock_get.return_value = resp
+        pairs = _brave_search("q", "BSA-key")
+        assert pairs == [("A", "https://example.com/a"), ("B", "https://example.com/b")]
+        # X-Subscription-Token header must carry the key.
+        call = mock_get.call_args
+        assert call.kwargs["headers"]["X-Subscription-Token"] == "BSA-key"
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_non_200_returns_empty(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _brave_search
+        resp = Mock()
+        resp.status_code = 429
+        mock_get.return_value = resp
+        assert _brave_search("q", "BSA-key") == []
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_filters_unsafe_urls(self, mock_get):
+        """Private IPs and non-http(s) schemes must be rejected via _is_public_url."""
+        from src.jarvis.tools.builtin.web_search import _brave_search
+        resp = Mock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "web": {"results": [
+                {"title": "Bad", "url": "file:///etc/passwd"},
+                {"title": "Also Bad", "url": "http://127.0.0.1/admin"},
+                {"title": "Good", "url": "https://example.com/ok"},
+            ]}
+        }
+        mock_get.return_value = resp
+        pairs = _brave_search("q", "BSA-key")
+        assert pairs == [("Good", "https://example.com/ok")]
+
+    @patch("src.jarvis.tools.builtin.web_search.debug_log")
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_scrubs_key_from_exception_log(self, mock_get, mock_debug):
+        """A stringified exception containing the API key must be scrubbed."""
+        from src.jarvis.tools.builtin.web_search import _brave_search
+        mock_get.side_effect = requests.RequestException("bad token BSA-secret in url")
+        assert _brave_search("q", "BSA-secret") == []
+        logged = " ".join(str(c.args[0]) for c in mock_debug.call_args_list)
+        assert "BSA-secret" not in logged
+        assert "***" in logged
+
+
+class TestWikipediaSummaryHelper:
+    """Isolated tests for the `_wikipedia_summary` helper."""
+
+    def _mk_search(self, titles):
+        r = Mock()
+        r.status_code = 200
+        r.json.return_value = ["q", titles, [], []]
+        return r
+
+    def _mk_summary(self, extract, title="Possessor", page_url="https://en.wikipedia.org/wiki/Possessor"):
+        r = Mock()
+        r.status_code = 200
+        r.json.return_value = {
+            "title": title,
+            "extract": extract,
+            "content_urls": {"desktop": {"page": page_url}},
+        }
+        return r
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_returns_title_url_extract(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        mock_get.side_effect = [
+            self._mk_search(["Possessor"]),
+            self._mk_summary("A 2020 film."),
+        ]
+        result = _wikipedia_summary("possessor movie", lang="en")
+        assert result == ("Possessor", "https://en.wikipedia.org/wiki/Possessor", "A 2020 film.")
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_no_titles_returns_none(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        mock_get.side_effect = [self._mk_search([])]
+        assert _wikipedia_summary("nonsense blob", lang="en") is None
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_uses_language_subdomain(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        mock_get.side_effect = [
+            self._mk_search(["Istanbul"]),
+            self._mk_summary("Şehir.", title="İstanbul", page_url="https://tr.wikipedia.org/wiki/İstanbul"),
+        ]
+        _wikipedia_summary("istanbul", lang="tr")
+        assert "tr.wikipedia.org" in mock_get.call_args_list[0].args[0]
+        assert "tr.wikipedia.org" in mock_get.call_args_list[1].args[0]
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_invalid_language_falls_back_to_english(self, mock_get):
+        """Non-alpha / wrong-length / None / empty must all resolve to en.wikipedia.org."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        for bad in ["en-US", "1", "zzzz", "", None]:
+            mock_get.reset_mock()
+            mock_get.side_effect = [self._mk_search(["Thing"]), self._mk_summary("e")]
+            _wikipedia_summary("q", lang=bad)  # type: ignore[arg-type]
+            assert "en.wikipedia.org" in mock_get.call_args_list[0].args[0], (
+                f"lang={bad!r} should have fallen back to English"
+            )
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_opensearch_failure_returns_none(self, mock_get):
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        bad = Mock()
+        bad.status_code = 503
+        mock_get.return_value = bad
+        assert _wikipedia_summary("q", lang="en") is None
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_empty_extract_returns_none(self, mock_get):
+        """An opensearch hit with an empty summary extract must not masquerade as content."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        mock_get.side_effect = [self._mk_search(["Thing"]), self._mk_summary("   ")]
+        assert _wikipedia_summary("q", lang="en") is None
+
+
+class TestLanguagePlumbingEndToEnd:
+    """Prove the Whisper language code travels from listener → reply engine →
+    registry → tool context → Wikipedia host selection. Listener itself is
+    stubbed here; this asserts the cross-module contract that matters:
+    calling `run_tool_with_retries(language=X)` causes the tool to query
+    `X.wikipedia.org` when the fallback fires."""
+
+    @patch("src.jarvis.tools.builtin.web_search._wikipedia_summary")
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_registry_threads_language_to_web_search(self, mock_get, mock_wiki):
+        from src.jarvis.tools.registry import run_tool_with_retries
+        # DDG returns bot-challenge so we fall through to the fallback chain.
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {}
+        instant.raise_for_status = Mock()
+        challenge = Mock()
+        challenge.status_code = 400
+        challenge.content = b'<div class="anomaly-modal"></div>'
+        mock_get.side_effect = [instant, challenge]
+        mock_wiki.return_value = ("Istanbul", "https://tr.wikipedia.org/wiki/Istanbul", "Şehir.")
+
+        cfg = Mock()
+        cfg.web_search_enabled = True
+        cfg.voice_debug = False
+        cfg.brave_search_api_key = ""
+        cfg.wikipedia_fallback_enabled = True
+        cfg.mcps = {}
+
+        result = run_tool_with_retries(
+            db=None,
+            cfg=cfg,
+            tool_name="webSearch",
+            tool_args={"search_query": "istanbul"},
+            system_prompt="",
+            original_prompt="",
+            redacted_text="",
+            max_retries=1,
+            language="tr",
+        )
+
+        assert result.success is True
+        mock_wiki.assert_called_once()
+        # The language kwarg must land on _wikipedia_summary — the host
+        # selection downstream reads from there.
+        assert mock_wiki.call_args.kwargs.get("lang") == "tr"
+
+    def test_listener_stores_detected_language_attribute(self):
+        """The listener exposes `_last_detected_language` so `_dispatch_query`
+        can read it — this is the single attribute the reply engine bridge
+        depends on. Guard against it being renamed or removed silently."""
+        from src.jarvis.listening import listener as listener_module
+        import inspect
+        src = inspect.getsource(listener_module)
+        # One init, at least two assignment sites (MLX + faster-whisper),
+        # and the dispatch call must read it.
+        assert "self._last_detected_language: Optional[str] = None" in src
+        assert src.count("self._last_detected_language = detected") >= 2
+        assert "language=self._last_detected_language" in src

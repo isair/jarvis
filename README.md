@@ -165,7 +165,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Unlimited Memory** - Never forgets. Searches across all your conversation history. Memory Viewer GUI included.
 - **Adaptive Tone** - Automatically surgical for code, pragmatic for business, encouraging for wellbeing — no manual mode switching
 - **Smart Tool Selection** - Embedding-based relevance filtering picks only the tools needed per query — add unlimited MCP tools without performance degradation
-- **Built-in Tools** - Screenshot OCR, web search (with auto-fetch), weather, file access, nutrition tracking, location awareness
+- **Built-in Tools** - Screenshot OCR, web search (DuckDuckGo → Brave → Wikipedia fallback chain with auto-fetch), weather, file access, nutrition tracking, location awareness
 - **Knowledge Graph Memory** - Self-organising memory that learns from conversations, auto-splits by topic, and surfaces relevant knowledge automatically
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
@@ -503,6 +503,8 @@ Running from source enables Chatterbox TTS (AI voice with emotion/cloning). Pipe
 ```json
 {
   "web_search_enabled": false,
+  "wikipedia_fallback_enabled": false,
+  "brave_search_api_key": "",
   "mcps": {},
   "location_auto_detect": false,
   "location_cgnat_resolve_public_ip": false,
@@ -511,6 +513,27 @@ Running from source enables Chatterbox TTS (AI voice with emotion/cloning). Pipe
 ```
 
 Verify: `sudo lsof -i -n -P | grep jarvis` (should only show 127.0.0.1 to Ollama)
+
+</details>
+
+<details>
+<summary><strong>Web search fallback chain</strong></summary>
+
+When DuckDuckGo is rate-limited or returns nothing fetchable, Jarvis walks
+a small fallback chain before giving up rather than confabulating:
+
+1. **Brave Search** — opt-in, requires `brave_search_api_key`. Free tier:
+   2,000 queries/month. Get a key at
+   [api.search.brave.com](https://api.search.brave.com/app/keys).
+2. **Wikipedia** — zero-config, on by default, uses the Wikipedia host
+   matching the language Whisper auto-detected on the utterance (so a
+   Turkish question gets a Turkish answer). Disable with
+   `wikipedia_fallback_enabled: false`.
+3. **Honest failure** — if every provider fails, the reply tells you the
+   search was blocked rather than making something up.
+
+The whole chain is bounded by a ~20s wall-clock deadline so a stalled
+provider can't run out the voice-assistant latency budget.
 
 </details>
 

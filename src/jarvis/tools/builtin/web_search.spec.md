@@ -101,6 +101,17 @@ and larger models confabulate specifics from prior knowledge while claiming
 they couldn't fetch. Assertive language ("you have failed") is required —
 a softer "please don't invent" lets chatty larger models wriggle past.
 
+### Wall-clock budget
+
+The whole provider chain (DDG + Brave + Wikipedia) is capped by
+`_TOTAL_WALL_CLOCK_SEC` (20s). Each cascade is further bounded by
+`_CASCADE_WALL_CLOCK_SEC` (8s) per fetch pool. Before Brave and before
+Wikipedia, the remaining budget is checked; if exhausted, the remaining
+providers are skipped and the honest-block envelope is emitted. This is
+the ceiling that turns "every provider timed out" from a ~40s hang into
+a predictable ~20s honest failure — a voice assistant's latency budget
+is not negotiable.
+
 ### Fallback chain
 
 When the DDG pipeline yields no usable content (rate-limited, empty, or
@@ -169,8 +180,9 @@ Regression tests assert:
 
 ### Non-goals
 
-- Search-engine independence — DDG is the only backend. Adding Bing /
-  Brave / Kagi is possible but out of scope.
+- Unbounded provider plurality — the fallback chain is scoped to DDG →
+  Brave (opt-in) → Wikipedia (zero-config). Adding Bing / Kagi / SearXNG
+  or a user-pluggable provider registry is possible but out of scope.
 - JS rendering — we fetch raw HTML only. SPA-heavy pages may return
   nothing useful; the cascade handles this by trying the next result.
 - User-agent rotation — a single desktop Chrome UA is used.

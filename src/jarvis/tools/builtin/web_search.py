@@ -18,6 +18,11 @@ from ..types import ToolExecutionResult
 _FETCH_TIMEOUT_SEC = 4.0
 # Wall-clock cap for the entire cascade when fetches run in parallel.
 _CASCADE_WALL_CLOCK_SEC = 8.0
+# Hard ceiling on the whole provider chain (DDG + Brave + Wikipedia). Without
+# this, a bad day where every provider stalls to timeout could run ~40s —
+# intolerable for a voice assistant. Past this deadline the tool gives up and
+# returns the honest-block envelope.
+_TOTAL_WALL_CLOCK_SEC = 20.0
 # Max redirects to follow manually (so we can re-validate each hop).
 _MAX_REDIRECTS = 3
 # Max bytes we'll pull from a single page before giving up. Caps prompt-
@@ -159,6 +164,52 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
         return None
 
 
+def _cascade_fetch(candidates: List[Tuple[str, str]],
+                   wall_clock_sec: float = _CASCADE_WALL_CLOCK_SEC
+                   ) -> Optional[str]:
+    """Fetch the top candidates in parallel under a shared wall-clock cap.
+
+    Rank preference is preserved — a successful top-1 fetch wins over a
+    faster top-2/3, and the pool short-circuits once top-1 returns. Shared
+    between the DDG and Brave search paths so the SSRF guard, redirect
+    walking, byte cap, and timing semantics stay identical.
+    """
+    if not candidates:
+        return None
+    results_by_rank: Dict[int, Optional[str]] = {}
+    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+        future_to_rank = {
+            pool.submit(_fetch_page_content, url): rank
+            for rank, (_title, url) in enumerate(candidates)
+        }
+        try:
+            for fut in as_completed(future_to_rank, timeout=wall_clock_sec):
+                rank = future_to_rank[fut]
+                try:
+                    results_by_rank[rank] = fut.result()
+                except Exception as e:
+                    debug_log(
+                        f"Fetch raised for result #{rank + 1}: {e}", "web",
+                    )
+                    results_by_rank[rank] = None
+                if 0 in results_by_rank and results_by_rank[0]:
+                    break
+        except TimeoutError:
+            debug_log(
+                f"Cascade wall-clock {wall_clock_sec}s exceeded; "
+                f"{len(results_by_rank)}/{len(candidates)} fetches returned",
+                "web",
+            )
+    for rank in range(len(candidates)):
+        content = results_by_rank.get(rank)
+        if content:
+            debug_log(
+                f"Fetched {len(content)} chars from result #{rank + 1}", "web",
+            )
+            return content
+    return None
+
+
 def _brave_search(query: str, api_key: str, count: int = 5
                   ) -> List[Tuple[str, str]]:
     """Query Brave Search's JSON API and return (title, url) pairs.
@@ -198,7 +249,13 @@ def _brave_search(query: str, api_key: str, count: int = 5
                 pairs.append((title, url))
         return pairs
     except Exception as e:
-        debug_log(f"Brave Search failed: {e}", "web")
+        # Scrub the API key from any stringified exception — `requests`
+        # generally doesn't echo headers, but a future library update or a
+        # custom adapter could change that. Cheap defence in depth.
+        msg = str(e)
+        if api_key and api_key in msg:
+            msg = msg.replace(api_key, "***")
+        debug_log(f"Brave Search failed: {msg}", "web")
         return []
 
 
@@ -223,9 +280,15 @@ def _wikipedia_summary(query: str, lang: str = "en"
     # hitting a non-existent subdomain.
     if not lang.isalpha() or not (2 <= len(lang) <= 3):
         lang = "en"
+    # Generic desktop UA — we deliberately do NOT identify as Jarvis here.
+    # Wikimedia asks for a meaningful UA for *high-volume* bots; a per-
+    # utterance voice assistant is closer to a browser in request shape,
+    # and a branded UA would reveal Jarvis installs to Wikimedia's
+    # logs for every fallback query (a minor privacy leak that privacy-
+    # first messaging in CLAUDE.md tells us to avoid).
     headers = {
         "Accept": "application/json",
-        "User-Agent": "Jarvis-VoiceAssistant/1.0 (https://github.com/isair/jarvis)",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
     # Resolve a likely title via opensearch — cheaper and handles "what
     # is possessor movie" ↔ "Possessor (film)" without us having to
@@ -321,6 +384,18 @@ class WebSearchTool(Tool):
                 return ToolExecutionResult(success=False, reply_text="Please provide a search query for the web search.")
 
             debug_log(f"    🌐 searching for '{search_query}'", "web")
+
+            # Overall wall-clock deadline across the full provider chain.
+            # Individual providers have their own per-call timeouts, but
+            # stacking DDG + Brave + Wikipedia worst-cases can otherwise
+            # reach ~40s. The deadline is checked before each provider —
+            # once exceeded, remaining providers are skipped and the honest-
+            # block envelope is emitted.
+            import time
+            chain_deadline = time.monotonic() + _TOTAL_WALL_CLOCK_SEC
+
+            def _budget_left() -> float:
+                return max(0.0, chain_deadline - time.monotonic())
 
             # Gather instant answers
             instant_results = []
@@ -435,49 +510,11 @@ class WebSearchTool(Tool):
             fetch_attempted_any = False
             if result_urls and not instant_results:
                 context.user_print("📄 Reading top result...")
-                candidates = result_urls[:3]
                 fetch_attempted_any = True
-                # Map future → (rank, url) so we can prefer the highest-ranked
-                # successful result even if a lower-ranked one returns first.
-                results_by_rank: Dict[int, Optional[str]] = {}
-                with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
-                    future_to_rank = {
-                        pool.submit(_fetch_page_content, url): rank
-                        for rank, (_title, url) in enumerate(candidates)
-                    }
-                    try:
-                        for fut in as_completed(
-                            future_to_rank, timeout=_CASCADE_WALL_CLOCK_SEC,
-                        ):
-                            rank = future_to_rank[fut]
-                            try:
-                                results_by_rank[rank] = fut.result()
-                            except Exception as e:
-                                debug_log(
-                                    f"Fetch raised for result #{rank + 1}: {e}",
-                                    "web",
-                                )
-                                results_by_rank[rank] = None
-                            # Early-exit: once the top-ranked candidate returns
-                            # content, stop waiting for stragglers.
-                            if 0 in results_by_rank and results_by_rank[0]:
-                                break
-                    except TimeoutError:
-                        debug_log(
-                            f"Cascade wall-clock {_CASCADE_WALL_CLOCK_SEC}s exceeded; "
-                            f"{len(results_by_rank)}/{len(candidates)} fetches returned",
-                            "web",
-                        )
-                # Prefer the highest-ranked successful fetch.
-                for rank in range(len(candidates)):
-                    content = results_by_rank.get(rank)
-                    if content:
-                        fetched_content = content
-                        debug_log(
-                            f"Fetched {len(content)} chars from result #{rank + 1}",
-                            "web",
-                        )
-                        break
+                fetched_content = _cascade_fetch(
+                    result_urls[:3],
+                    wall_clock_sec=min(_CASCADE_WALL_CLOCK_SEC, _budget_left()),
+                )
 
             # Fallback chain: DDG failed to give us a usable answer (either
             # rate-limited, or returned links but no fetch succeeded, or
@@ -493,7 +530,7 @@ class WebSearchTool(Tool):
                 and not fetched_content
                 and (ddg_rate_limited or not result_urls or fetch_attempted_any)
             )
-            if need_fallback:
+            if need_fallback and _budget_left() > 0:
                 brave_key = getattr(cfg, "brave_search_api_key", "") or ""
                 if brave_key:
                     context.user_print("🦁 Falling back to Brave Search…")
@@ -508,43 +545,16 @@ class WebSearchTool(Tool):
                             search_results.append(f"{i}. **{title}**")
                             search_results.append(f"   Link: {url}")
                             search_results.append("")
-                        # Run the same cascade fetcher across Brave's top 3.
-                        candidates = brave_pairs[:3]
                         fetch_attempted_any = True
-                        results_by_rank = {}
-                        with ThreadPoolExecutor(
-                            max_workers=len(candidates)
-                        ) as pool:
-                            future_to_rank = {
-                                pool.submit(_fetch_page_content, url): rank
-                                for rank, (_t, url) in enumerate(candidates)
-                            }
-                            try:
-                                for fut in as_completed(
-                                    future_to_rank,
-                                    timeout=_CASCADE_WALL_CLOCK_SEC,
-                                ):
-                                    rank = future_to_rank[fut]
-                                    try:
-                                        results_by_rank[rank] = fut.result()
-                                    except Exception:
-                                        results_by_rank[rank] = None
-                                    if 0 in results_by_rank and results_by_rank[0]:
-                                        break
-                            except TimeoutError:
-                                pass
-                        for rank in range(len(candidates)):
-                            content = results_by_rank.get(rank)
-                            if content:
-                                fetched_content = content
-                                used_source = "brave"
-                                debug_log(
-                                    f"Brave fetched {len(content)} chars from "
-                                    f"result #{rank + 1}",
-                                    "web",
-                                )
-                                break
-                        if not fetched_content:
+                        fetched_content = _cascade_fetch(
+                            brave_pairs[:3],
+                            wall_clock_sec=min(
+                                _CASCADE_WALL_CLOCK_SEC, _budget_left()
+                            ),
+                        )
+                        if fetched_content:
+                            used_source = "brave"
+                        else:
                             debug_log(
                                 "Brave returned results but no fetch succeeded",
                                 "web",
@@ -560,6 +570,7 @@ class WebSearchTool(Tool):
                 not instant_results
                 and not fetched_content
                 and getattr(cfg, "wikipedia_fallback_enabled", True)
+                and _budget_left() > 0
             ):
                 lang = (context.language or "en").strip().lower() or "en"
                 context.user_print(

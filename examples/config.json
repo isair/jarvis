@@ -94,5 +94,7 @@
   "location_ip_address": null,
   "location_auto_detect": true,
   "web_search_enabled": true,
+  "brave_search_api_key": "",
+  "wikipedia_fallback_enabled": true,
   "mcps": {}
 }
