@@ -632,8 +632,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 conversation_context = "\n".join(context_results)
                 print(f"  📖 Diary: recalled {len(context_results)} entries", flush=True)
                 for entry in context_results[:3]:
-                    # Show a short preview of each diary entry (first 80 chars)
-                    preview = entry.strip().replace("\n", " ")[:80]
+                    # Show a short preview of each diary entry (first 80 chars,
+                    # with an ellipsis when the source was longer so the log
+                    # makes it obvious the line is truncated rather than short).
+                    flat = entry.strip().replace("\n", " ")
+                    preview = flat[:80] + ("…" if len(flat) > 80 else "")
                     print(f"     · {preview}", flush=True)
                 debug_log(f"diary enrichment: {len(context_results)} results", "memory")
         except Exception as e:
@@ -736,7 +739,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # when the distil decided nothing was relevant). Downstream
             # `_build_initial_system_message` reads these two locals.
             if digest:
-                preview = digest.replace("\n", " ")[:80]
+                flat = digest.replace("\n", " ")
+                preview = flat[:80] + ("…" if len(flat) > 80 else "")
                 print(f"  🧩 Memory digest: {len(digest)} chars — \"{preview}\"", flush=True)
                 memory_digest_text = digest
             else:
