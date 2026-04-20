@@ -103,6 +103,53 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         except Exception:
             pass
 
+    # Form: gemma's native `tool_code` block. Gemma models are trained to emit
+    # tool calls as Python-style code, e.g.
+    #     tool_code
+    #     print(webSearch(search_query="Possessor movie"))
+    # or inside a markdown fence:
+    #     ```tool_code
+    #     webSearch(search_query="Possessor movie")
+    #     ```
+    # We scan for the block, then look for the first `<toolName>(<args>)` call
+    # matching a known tool name. `print(...)` wrappers are unwrapped. Unknown
+    # module-style calls (wikipedia.run, google.search) are ignored because the
+    # model will hallucinate tools it wasn't given — we only dispatch real ones.
+    if known_names:
+        tool_code_match = re.search(
+            r"(?:^|\n)(?:```)?\s*tool_code\b(.+?)(?:```|<unused\d+>|\Z)",
+            content_field,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if tool_code_match:
+            block = tool_code_match.group(1)
+            # Strip `print(...)` wrapper if present, keep the inner call.
+            for call_match in re.finditer(
+                r"(?:print\s*\(\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+                block,
+            ):
+                call_name = call_match.group(1)
+                if call_name == "print":
+                    continue
+                if call_name not in known_names:
+                    continue
+                raw_args = call_match.group(2).strip()
+                parsed_args: dict = {}
+                if raw_args:
+                    # Try Python-kwargs form: `key="value", key2=123`
+                    kwarg_pairs = re.findall(
+                        r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(".*?"|\'.*?\'|[^,]+)',
+                        raw_args,
+                    )
+                    if kwarg_pairs:
+                        for k, v in kwarg_pairs:
+                            v = v.strip().strip('"').strip("'")
+                            parsed_args[k] = v
+                    else:
+                        # Single positional string argument.
+                        parsed_args = {"query": raw_args.strip().strip('"').strip("'")}
+                return call_name, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
+
     if not known_names:
         return None, None, None
 
@@ -436,6 +483,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
     tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
+    # Flat list of tool names for anti-hallucination prompt and parser filter.
+    known_tool_names: set = set()
+    try:
+        for _schema in (tools_json_schema or []):
+            _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
+            _nm = _fn.get("name") if isinstance(_fn, dict) else None
+            if _nm:
+                known_tool_names.add(str(_nm))
+    except Exception:
+        pass
 
     # Log tool availability (helps diagnose hangs)
     mcp_count = len(mcp_tools)
@@ -507,6 +564,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # parses both the `tool_calls: [...]` literal and a markdown fence, so either
             # form the model naturally emits will succeed.
             guidance.append("\n" + tools_desc)
+            # List the exact allowed tool names so the model can't invent ones
+            # like `wikipedia.run` or `google.search` — gemma models have strong
+            # priors to emit those even when they aren't in the tool list.
+            allowed_name_list = ", ".join(sorted(known_tool_names)) if known_tool_names else ""
             guidance.append(
                 "\nExact tool-call syntax (copy this shape — emit nothing else on a "
                 "tool-calling turn):\n"
@@ -517,6 +578,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
                 "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
                 "a bare name is not a valid call and the tool will not run.\n"
+                "- Never invoke tools that are not in the list above. Do NOT call "
+                "`wikipedia.run(...)`, `google.search(...)`, `python()`, or any other "
+                "name that is not listed. The ONLY tools that exist are: "
+                f"{allowed_name_list or '(see list above)'}.\n"
+                "- Do not wrap the call in `tool_code`, `python`, or any code fence. "
+                "Emit the `tool_calls: [...]` line and nothing else.\n"
                 "- On the NEXT turn, after tool results arrive, answer the user "
                 "conversationally in plain sentences."
             )
@@ -572,15 +639,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # `toolName(...)`). Delegate to the module-level helper so the
                 # logic is unit-testable and shared across future callers.
                 content_field = msg.get("content", "") or ""
-                known_names = set()
-                try:
-                    for schema in (tools_json_schema or []):
-                        fn = schema.get("function", {}) if isinstance(schema, dict) else {}
-                        nm = fn.get("name") if isinstance(fn, dict) else None
-                        if nm:
-                            known_names.add(str(nm))
-                except Exception:
-                    pass
+                known_names = known_tool_names
                 name, args, tool_call_id = _extract_text_tool_call(content_field, known_names)
                 if name:
                     return name, args, tool_call_id

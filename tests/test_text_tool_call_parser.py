@@ -103,3 +103,66 @@ class TestNoFalsePositiveOnProse:
         content = "I can help you find information about movies."
         name, _args, _ = _extract(content)
         assert name is None
+
+
+class TestGemmaToolCodeBlockForm:
+    """Form 5: gemma's native `tool_code` block.
+
+    Gemma models (gemma4:e2b in particular) are post-trained to emit tool
+    calls as a Python-style code block. Under prompt pressure (long tools_desc
+    from many MCP servers) they revert to this format and ignore the JSON
+    tool_calls protocol we ask for. Captured from field sessions 2026-04-20.
+    """
+
+    def test_parses_tool_code_with_print_wrapper(self):
+        content = (
+            "tool_code\n"
+            'print(webSearch(search_query="Possessor movie"))\n'
+            "<unused88>"
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "Possessor movie"
+
+    def test_parses_tool_code_without_print_wrapper(self):
+        content = (
+            "tool_code\n"
+            'webSearch(search_query="Piranesi book")'
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "Piranesi book"
+
+    def test_parses_fenced_tool_code(self):
+        content = (
+            "```tool_code\n"
+            'webSearch(search_query="Blade Runner 2049")\n'
+            "```"
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "Blade Runner 2049"
+
+    def test_ignores_hallucinated_module_style_calls(self):
+        """The model often invents tools that aren't in the registry — e.g.
+        `wikipedia.run("...")`. We must not dispatch them; the caller will
+        see (None, None, None) and can surface the parse failure."""
+        content = (
+            "tool_code\n"
+            'print(wikipedia.run("Blade Runner 2049"))\n'
+            'print(google.search("Blade Runner 2049"))\n'
+        )
+        name, _args, _ = _extract(content)
+        assert name is None
+
+    def test_picks_real_tool_over_hallucinated_sibling(self):
+        """If the block contains both an invented and a real tool call,
+        dispatch the real one rather than returning nothing."""
+        content = (
+            "tool_code\n"
+            'print(wikipedia.run("Blade Runner 2049"))\n'
+            'print(webSearch(search_query="Blade Runner 2049"))\n'
+        )
+        name, args, _ = _extract(content)
+        assert name == "webSearch"
+        assert args.get("search_query") == "Blade Runner 2049"
