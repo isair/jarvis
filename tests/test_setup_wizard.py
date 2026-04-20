@@ -18,6 +18,7 @@ from desktop_app.setup_wizard import (
     should_show_setup_wizard,
     OllamaStatus,
     MCPPage,
+    SearchProvidersPage,
 )
 from desktop_app.mcp_catalogue import get_wizard_entries
 from jarvis.config import DEFAULT_CHAT_MODEL
@@ -779,6 +780,123 @@ class TestMCPPage:
 
             saved = _load_json(cfg_path)
             assert "custom-server" in saved.get("mcps", {}), "Custom MCP server was removed"
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+
+class TestSearchProvidersPage:
+    """Tests for the Search Providers wizard page (Brave + Wikipedia)."""
+
+    def _make_page(self, brave_key: str, wiki_enabled: bool) -> SearchProvidersPage:
+        page = SearchProvidersPage.__new__(SearchProvidersPage)
+        brave_input = MagicMock()
+        brave_input.text.return_value = brave_key
+        wiki_check = MagicMock()
+        wiki_check.isChecked.return_value = wiki_enabled
+        page._brave_input = brave_input
+        page._wiki_check = wiki_check
+        return page
+
+    def test_page_is_always_complete(self):
+        page = SearchProvidersPage.__new__(SearchProvidersPage)
+        assert page.isComplete() is True
+
+    def test_validate_writes_brave_key_when_provided(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({}, f)
+            cfg_path = Path(f.name)
+        try:
+            page = self._make_page(brave_key="BSA-abc123", wiki_enabled=True)
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                assert page.validatePage() is True
+            saved = _load_json(cfg_path)
+            # Default non-default-only write: Brave present, Wikipedia omitted.
+            assert saved.get("brave_search_api_key") == "BSA-abc123"
+            assert "wikipedia_fallback_enabled" not in saved
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_validate_omits_empty_brave_key(self):
+        """Empty Brave key must NOT write an empty-string entry — matches
+        the settings-window minimal-diff invariant."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({}, f)
+            cfg_path = Path(f.name)
+        try:
+            page = self._make_page(brave_key="   ", wiki_enabled=True)
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.validatePage()
+            saved = _load_json(cfg_path)
+            assert "brave_search_api_key" not in saved
+            assert "wikipedia_fallback_enabled" not in saved
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_validate_persists_wikipedia_disable_only(self):
+        """Wikipedia defaults to True, so only write it when user disables it."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({}, f)
+            cfg_path = Path(f.name)
+        try:
+            page = self._make_page(brave_key="", wiki_enabled=False)
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.validatePage()
+            saved = _load_json(cfg_path)
+            assert saved.get("wikipedia_fallback_enabled") is False
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_validate_removes_existing_brave_key_when_cleared(self):
+        """If user blanks the Brave key, the entry must be removed, not kept."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"brave_search_api_key": "old-key"}, f)
+            cfg_path = Path(f.name)
+        try:
+            page = self._make_page(brave_key="", wiki_enabled=True)
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.validatePage()
+            saved = _load_json(cfg_path)
+            assert "brave_search_api_key" not in saved
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_validate_preserves_unrelated_keys(self):
+        """validatePage must not clobber unrelated config entries."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from jarvis.config import _load_json
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"ollama_chat_model": "gpt-oss:20b", "mcps": {"x": {}}}, f)
+            cfg_path = Path(f.name)
+        try:
+            page = self._make_page(brave_key="BSA-key", wiki_enabled=False)
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.validatePage()
+            saved = _load_json(cfg_path)
+            assert saved["ollama_chat_model"] == "gpt-oss:20b"
+            assert saved["mcps"] == {"x": {}}
         finally:
             cfg_path.unlink(missing_ok=True)
 

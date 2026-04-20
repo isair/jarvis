@@ -289,6 +289,14 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("web_search_enabled", "Web Search",
       "Enable web search tool",
       "features", "bool")
+    f("brave_search_api_key", "Brave Search API Key",
+      "Optional. When set, Brave is used as the primary fallback if DuckDuckGo "
+      "is blocked. Free tier: 2,000 queries/month at api.search.brave.com.",
+      "features", "str", nullable=True)
+    f("wikipedia_fallback_enabled", "Wikipedia Fallback",
+      "Use Wikipedia as a last-resort source when other search engines fail. "
+      "No key, no account, privacy-light.",
+      "features", "bool")
     f("tune_enabled", "Startup Tune",
       "Play startup sound",
       "features", "bool")

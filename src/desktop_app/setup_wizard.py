@@ -464,6 +464,7 @@ class SetupWizard(QWizard):
         self.mlx_whisper_page = WhisperSetupPage(self)
         self.dictation_page = DictationPage(self)
         self.mcp_page = MCPPage(self)
+        self.search_providers_page = SearchProvidersPage(self)
         self.location_page = LocationPage(self)
         self.complete_page = CompletePage(self)
 
@@ -474,6 +475,7 @@ class SetupWizard(QWizard):
         self.mlx_whisper_page_id = self.addPage(self.mlx_whisper_page)
         self.dictation_page_id = self.addPage(self.dictation_page)
         self.mcp_page_id = self.addPage(self.mcp_page)
+        self.search_providers_page_id = self.addPage(self.search_providers_page)
         self.location_page_id = self.addPage(self.location_page)
         self.complete_page_id = self.addPage(self.complete_page)
 
@@ -2773,6 +2775,171 @@ class MCPPage(QWizardPage):
                 config["mcps"] = mcps
             else:
                 config.pop("mcps", None)
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def isComplete(self) -> bool:
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if isinstance(wizard, SetupWizard):
+            return wizard.search_providers_page_id
+        return super().nextId()
+
+
+class SearchProvidersPage(QWizardPage):
+    """Explain and configure web-search fallback providers.
+
+    Ordering mirrors the runtime fallback chain: DDG → Brave → Wikipedia →
+    honest "blocked" envelope. The page is always shown (even when nothing
+    needs configuring) because the explainer itself is the point — users
+    should understand what Jarvis will and won't reach over the network
+    before they start using it.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🔎 Search Providers")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Jarvis uses DuckDuckGo for web search. When DuckDuckGo blocks a "
+            "request or has nothing useful, these optional fallbacks keep "
+            "answers flowing — all off by default except Wikipedia."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        # --- Brave Search card ---
+        brave_card = QFrame()
+        brave_card.setObjectName("card")
+        brave_layout = QVBoxLayout(brave_card)
+        brave_layout.setContentsMargins(16, 14, 16, 14)
+        brave_layout.setSpacing(8)
+
+        brave_title = QLabel("🦁 Brave Search (optional)")
+        brave_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        brave_layout.addWidget(brave_title)
+
+        brave_desc = QLabel(
+            "When set, Brave becomes the first fallback the moment "
+            "DuckDuckGo is rate-limited. Free tier: 2,000 queries/month. "
+            "Get a key at "
+            "<a href='https://api.search.brave.com/app/keys' "
+            "style='color: #f59e0b;'>api.search.brave.com</a>."
+        )
+        brave_desc.setOpenExternalLinks(True)
+        brave_desc.setWordWrap(True)
+        brave_desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        brave_layout.addWidget(brave_desc)
+
+        self._brave_input = QLineEdit()
+        self._brave_input.setPlaceholderText("BSA... (leave empty to skip)")
+        self._brave_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._brave_input.setText(self._load_current_brave_key())
+        brave_layout.addWidget(self._brave_input)
+
+        layout.addWidget(brave_card)
+
+        # --- Wikipedia card ---
+        wiki_card = QFrame()
+        wiki_card.setObjectName("card")
+        wiki_layout = QVBoxLayout(wiki_card)
+        wiki_layout.setContentsMargins(16, 14, 16, 14)
+        wiki_layout.setSpacing(8)
+
+        wiki_title = QLabel("📚 Wikipedia (zero-config)")
+        wiki_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        wiki_layout.addWidget(wiki_title)
+
+        wiki_desc = QLabel(
+            "Last-resort fallback. No key, no account, privacy-light. Uses "
+            "the Wikipedia host matching the language Whisper detects in "
+            "your utterance, so a Turkish question gets a Turkish answer."
+        )
+        wiki_desc.setWordWrap(True)
+        wiki_desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        wiki_layout.addWidget(wiki_desc)
+
+        self._wiki_check = QCheckBox("  Enable Wikipedia fallback")
+        self._wiki_check.setChecked(self._load_current_wikipedia_enabled())
+        wiki_layout.addWidget(self._wiki_check)
+
+        layout.addWidget(wiki_card)
+
+        tip = QLabel(
+            "💡  When every provider fails, Jarvis tells you the search was "
+            "blocked rather than making something up."
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 rgba(245, 158, 11, 0.12), stop:1 rgba(139, 92, 246, 0.08));"
+            "border: 1px solid rgba(245, 158, 11, 0.25);"
+            "border-radius: 8px; padding: 12px 16px; color: #fbbf24; font-size: 13px;"
+        )
+        layout.addWidget(tip)
+
+        layout.addStretch()
+
+        self.setLayout(layout)
+
+    @staticmethod
+    def _load_current_brave_key() -> str:
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path())
+            return str(config.get("brave_search_api_key", "") or "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _load_current_wikipedia_enabled() -> bool:
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path())
+            # Default True to match config.py's default.
+            val = config.get("wikipedia_fallback_enabled", True)
+            return bool(val)
+        except Exception:
+            return True
+
+    def validatePage(self) -> bool:
+        """Persist Brave key + Wikipedia toggle. Only writes non-default
+        values to keep config.json minimal (consistent with the settings
+        window's "only non-default values written" invariant)."""
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            brave_key = (self._brave_input.text() or "").strip()
+            if brave_key:
+                config["brave_search_api_key"] = brave_key
+            else:
+                config.pop("brave_search_api_key", None)
+
+            wiki_on = bool(self._wiki_check.isChecked())
+            # Default is True; only persist when the user diverges from it.
+            if not wiki_on:
+                config["wikipedia_fallback_enabled"] = False
+            else:
+                config.pop("wikipedia_fallback_enabled", None)
 
             config_path.parent.mkdir(parents=True, exist_ok=True)
             _save_json(config_path, config)
