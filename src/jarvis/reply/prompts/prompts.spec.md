@@ -14,8 +14,8 @@ The module detects model size from the model name and selects appropriate prompt
 
 | Model Size | Detection Pattern | Tool Prompts |
 |------------|-------------------|--------------|
-| SMALL | `:1b`, `:3b`, `:7b` | Conservative - explicit "DO NOT use tools for greetings" |
-| LARGE | All others (8b+) | Proactive - "use tools confidently" |
+| SMALL | `:1b`, `:3b`, `:7b`, `gemma4` | Conservative — explicit "DO NOT use tools for greetings" + worked negative examples + repetition |
+| LARGE | All others (8b+) | Proactive — "use tools confidently" + short anti-confabulation + auto-derive clause |
 
 ### Architecture
 
@@ -47,8 +47,12 @@ Both model sizes share these base components:
 
 Model-size-specific components:
 - `tool_incentives`: When/how aggressively to use tools
-- `tool_guidance`: How to handle tool results
-- `tool_constraints`: (SMALL only) Explicit list of when NOT to use tools
+- `tool_guidance`: How to handle tool results (both sizes get the anti-confabulation fidelity rule and the "quote Content from top result, don't deflect to links" rule)
+- `tool_constraints`: Explicit behaviour rules. Present on BOTH sizes — the
+  large variant is a shorter restatement of the named-entity and tool-
+  auto-derive rules because gpt-oss:20b and similar also confabulate
+  specifics for unfamiliar entities and occasionally ask for arguments
+  (e.g. `location` for `getWeather`) the tool already auto-derives.
 
 ### Small Model Tool Constraints
 
@@ -64,16 +68,12 @@ This leverages research findings on prompt repetition:
 - **"The Power of Noise: Redefining Retrieval for RAG Systems"** (arXiv:2401.14887)
   Demonstrates that repeating key instructions improves instruction-following.
 
-```
-GREETING HANDLING:
-When the user says a greeting (hello, hi, hey, ni hao, bonjour, hola, merhaba, ciao, etc.) or casual phrases (thank you, goodbye, how are you), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
+Sections (both sizes — small repeats twice):
 
-USER INSTRUCTIONS:
-When the user gives you instructions about how to behave or respond (e.g., "use Celsius", "be more brief", "speak in French"), acknowledge and respond directly WITHOUT calling tools. These are behavioral instructions, not data requests.
-
-UNKNOWN NAMED ENTITIES:
-If the user asks about a specific named thing (a film, book, song, game, product, person, company, place, event) and you do not have concrete factual information about that exact entity, call webSearch to look it up. Do NOT reply that you have no information or ask the user for a link — perform the lookup yourself. Only skip the lookup if the entity is one you can state specific facts about (title, year, creator, plot, etc.) without guessing.
-```
+- **GREETING HANDLING** — greetings / social phrases in any language must not trigger tools.
+- **USER INSTRUCTIONS** — behavioural instructions (units, brevity, language, tone) are acknowledged directly.
+- **UNKNOWN NAMED ENTITIES** — any information request about a specific named entity calls webSearch in the SAME turn, silently; the enumeration of request phrasings ("tell me about X", "have you heard of X", etc. — in any language) is framed as a semantic category, not as blacklisted English tokens.
+- **ARGUMENTS THE TOOL CAN AUTO-DERIVE** — if a tool's description says it has a default for an argument (e.g. getWeather → user's location), call the tool without asking the user for that argument.
 
 **Design Rationale:**
 - Constraints are narrowly scoped to specific problematic cases
