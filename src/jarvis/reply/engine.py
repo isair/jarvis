@@ -599,11 +599,15 @@ def _live_time_location_string(cfg) -> str:
 
 
 def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
-    """Compact summary of live context for the query extractor.
+    """Compact summary of live context for the query extractor and tool router.
 
-    The extractor uses this to skip implicit questions already answerable from
-    what the assistant can see: time, location, and the last few dialogue
-    turns. Pulling those from long-term memory would be redundant.
+    Consumed by both ``extract_search_params_for_memory`` (skips implicit
+    memory questions already answerable from live context) and
+    ``select_tools`` (opts out with 'none' when the query is answerable from
+    the same block). Keep the output schema stable: both consumers treat the
+    string as opaque and the router's prompt tells the model that any fact
+    NOT literally shown here is unknown, so silent format drift would lead
+    to either missed tool calls or stale memory pulls.
     """
     parts: list[str] = []
     live = _live_time_location_string(cfg)

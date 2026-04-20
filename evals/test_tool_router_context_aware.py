@@ -111,22 +111,36 @@ class TestRouterPicksToolsWhenContextDoesNotAnswer:
         )
 
     def test_location_query_with_partial_hint_still_routes_sensibly(self):
-        """When location failed to resolve (hint lacks it), a location query
+        """KNOWN LIMITATION on small router models (gemma4:e2b).
+
+        When location failed to resolve (hint lacks it), a location query
         should not be silenced as 'none' — it must either route to a tool
         that can surface location or accept the fallback, but must not
-        confidently claim the answer is in context when it isn't."""
+        confidently claim the answer is in context when it isn't.
+
+        Observed behaviour on gemma4:e2b: the mere presence of an
+        ALREADY IN CONTEXT block primes the router to return 'none' for
+        context-shaped queries even when the specific fact is absent
+        from the block. Attempts to fix this purely at prompt level
+        (adding "the block is NOT exhaustive" wording) regress the
+        positive cases (time/date queries stop routing to 'none').
+        The practical impact is bounded: when location genuinely fails
+        to resolve, the follow-up layers (main model + memory recall)
+        still have a chance to produce a sensible answer, and this only
+        fires on the narrow path where the hint is partial.
+
+        Parked as xfail rather than deleted so that a future router
+        model (or prompt iteration) will surface the improvement as an
+        unexpected pass. If fixed, delete the xfail branch and assert
+        `selected != ["stop"]` unconditionally.
+        """
         selected = _route("where am I right now?", _TIME_ONLY_HINT)
         print(f"\n  Selected: {selected}")
-        # We don't assert a specific tool here — the catalogue may or may
-        # not have a location tool. The negative assertion is what matters:
-        # the router must not silently 'none' out when context genuinely
-        # lacks the answer. If it does, the main model will try to answer
-        # from priors (hallucinated location) and drift.
         if selected == ["stop"]:
             pytest.xfail(
                 f"Router returned 'none' for a location query whose answer "
-                f"was NOT in the partial hint. Expected it to pick a tool "
-                f"or fall back to content-based selection."
+                f"was NOT in the partial hint. Known small-model limit — "
+                f"see test docstring."
             )
 
     def test_no_hint_at_all_still_routes_sensibly(self):
