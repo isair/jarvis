@@ -286,3 +286,79 @@ class TestForceInvocationGating:
             f"Force-invoke fired on a substantive reply. "
             f"Tools called: {capture.tool_names()}"
         )
+
+
+class TestFinalReplyLeakScrub:
+    """The final-reply scrub at Step 10 is a last line of defence: if neither
+    the text-tool-call parser nor the force-invoke path caught a
+    `tool_calls: [...]` / `tool_code` leak, the user would otherwise hear raw
+    JSON over TTS. Field capture 2026-04-20: gemma4:e2b on a router-returned-
+    `stop`-only turn emitted malformed `tool_calls: [{"id":"call_1",...}]`
+    JSON, the parser rejected it as malformed, and force-invoke didn't fire
+    because there was no real tool to force. The final scrub must still catch
+    it."""
+
+    def test_tool_calls_json_leak_scrubbed_from_final_reply(self):
+        from jarvis.reply.engine import (
+            _content_has_gemma_leak,
+            _scrub_gemma_leak,
+        )
+
+        leaked = (
+            'Sure, let me check. tool_calls: [{"id": "call_1", "type": '
+            '"function", "function": {"name": "getWeather", '
+            '"arguments": "{\\"location\\": \\"London\\"}"}}]'
+        )
+        assert _content_has_gemma_leak(leaked)
+
+        cleaned = _scrub_gemma_leak(leaked)
+        lowered = cleaned.lower()
+        assert "tool_calls" not in lowered
+        assert "call_1" not in lowered
+        assert "getweather" not in lowered
+        assert "arguments" not in lowered
+
+    def test_scrub_preserves_prose_before_tool_calls_marker(self):
+        from jarvis.reply.engine import _scrub_gemma_leak
+
+        leaked = 'The weather looks fine. tool_calls: [{"name": "x"}]'
+        cleaned = _scrub_gemma_leak(leaked)
+        assert "weather looks fine" in cleaned.lower()
+        assert "tool_calls" not in cleaned.lower()
+
+    def test_scrub_case_insensitive_marker(self):
+        from jarvis.reply.engine import _scrub_gemma_leak
+
+        cleaned = _scrub_gemma_leak('Tool_Calls: [{"name": "x"}]')
+        assert "tool_calls" not in cleaned.lower()
+
+    def test_pure_leak_yields_empty_then_engine_substitutes_error(
+        self, mock_config, db, dialogue_memory,
+    ):
+        """If the entire reply is just a tool_calls JSON leak and force-invoke
+        doesn't fire (router picked only `stop`), Step 10 scrubs everything
+        and substitutes the polite fallback error so the user doesn't hear
+        silence."""
+        leaked = (
+            'tool_calls: [{"id": "call_1", "type": "function", '
+            '"function": {"name": "getWeather", '
+            '"arguments": "{\\"location\\": \\"London\\"}"}}]'
+        )
+        response, capture = _run_engine_with_fixed_router(
+            user_query="what's the weather like?",
+            model="gemma4:e2b",
+            router_pick=["stop"],  # no real tool — force-invoke cannot fire
+            chat_responses=[_msg(leaked)],
+            mock_config=mock_config, db=db, dialogue_memory=dialogue_memory,
+        )
+        lowered = (response or "").lower()
+        assert "tool_calls" not in lowered, (
+            f"Raw tool_calls JSON leaked to user-visible reply: {response!r}"
+        )
+        assert "call_1" not in lowered
+        # Either the polite fallback or some other non-leak content — the key
+        # assertion is that no JSON syntax reaches the user.
+        assert response and response.strip(), (
+            "Expected a non-empty reply (fallback error) after scrubbing, "
+            f"got: {response!r}"
+        )

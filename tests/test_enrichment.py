@@ -812,3 +812,30 @@ class TestMaybeDigestToolResult:
             )
             mock_llm.assert_not_called()
         assert out == short
+
+    def test_weather_tool_output_is_never_digested(self):
+        """getWeather output is structured (current conditions + multi-day
+        forecast). Digesting it throws away substantive data — field capture
+        2026-04-20 showed a 7-day forecast reduced to just current conditions.
+        The per-tool skip list must bypass digest even when the small-model
+        auto-on path would otherwise trigger and the payload is long enough
+        to pass _TOOL_DIGEST_MIN_CHARS."""
+        cfg = self._cfg(
+            ollama_chat_model="gemma4:e2b",
+            tool_result_digest_enabled=True,
+        )
+        # Make payload deliberately long so the min-chars gate would not
+        # short-circuit — we're proving the per-tool skip wins.
+        raw = "Forecast for London: " + ("sunny 18C; " * 500)
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct"
+        ) as mock_llm, patch(
+            "jarvis.reply.enrichment.digest_tool_result_for_query"
+        ) as mock_digest:
+            out = _maybe_digest_tool_result(
+                cfg=cfg, query="weather this week",
+                tool_name="getWeather", raw_tool_result=raw,
+            )
+            mock_llm.assert_not_called()
+            mock_digest.assert_not_called()
+        assert out == raw
