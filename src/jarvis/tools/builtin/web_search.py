@@ -368,7 +368,6 @@ class WebSearchTool(Tool):
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute web search using DuckDuckGo."""
-        context.user_print("🌐 Searching the web…")
         cfg = context.cfg
         try:
             if not getattr(cfg, "web_search_enabled", True):
@@ -383,6 +382,7 @@ class WebSearchTool(Tool):
             if not search_query:
                 return ToolExecutionResult(success=False, reply_text="Please provide a search query for the web search.")
 
+            context.user_print(f"🌐 Searching the web for '{search_query}'…")
             debug_log(f"    🌐 searching for '{search_query}'", "web")
 
             # Overall wall-clock deadline across the full provider chain.
