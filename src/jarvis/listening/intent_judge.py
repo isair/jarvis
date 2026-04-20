@@ -144,6 +144,7 @@ WAKE WORD MODE:
 - Example: "I made carbonara" + "Jarvis find recipe for that" -> "find recipe for carbonara"
 - Example: "the weather will be nice tomorrow" + "Jarvis what do you think" -> "what do you think about the weather tomorrow"
 - Example: "the new iPhone is cool" + "Jarvis how much does it cost" -> "how much does the iPhone cost"
+- Example: "the AirPods sound great" + "Jarvis how much do they cost" -> "how much do the AirPods cost". NOT "how much do they cost" — pronoun MUST be replaced with the named topic in the output query even if you resolved it correctly in your reasoning.
 - Example: "did you catch the ball game" + "the new iPhone is out" + "I want the pro model" + "Jarvis what's the price" -> "what's the price of the iPhone pro model". NOT "what's the price of the pro model" (which pro model? ambiguous) — always prepend the brand/parent from earlier segments.
 - If standalone imperative command ("answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer") NOT a question -> re-issue prior question
   Variants: "answered that", "answers that", "answering that" = same imperative (Whisper tense errors)
