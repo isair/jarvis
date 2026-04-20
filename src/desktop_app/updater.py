@@ -27,11 +27,37 @@ from jarvis.debug import debug_log
 from .paths import get_log_dir
 
 GITHUB_REPO = "isair/jarvis"
+# Absolute path to macOS's ditto tool. Exposed as a module attribute so
+# tests (which run on non-macOS CI runners without /usr/bin/ditto) can
+# substitute a path that exists.
+DITTO_PATH = "/usr/bin/ditto"
 UPDATER_LOG_NAME = "updater.log"
 # Truncate the updater log above this size before appending a new run. Each
 # run writes ~10 lines, so 1 MiB keeps hundreds of update histories without
 # unbounded growth.
 UPDATER_LOG_MAX_BYTES = 1024 * 1024
+
+
+def _extract_macos_bundle(zip_path: Path, dest_dir: Path) -> None:
+    """Extract a macOS .app zip into ``dest_dir``.
+
+    Uses ``ditto`` when available because PyInstaller's Qt/Qt WebEngine
+    bundle contains symlinks (framework ``Versions/Current`` entries) that
+    Python's ``zipfile`` silently flattens into regular files, producing a
+    bundle macOS refuses to launch with "Jarvis.app can't be opened". Falls
+    back to ``zipfile`` when ditto is absent so unit tests on non-macOS CI
+    runners still exercise the rest of the installer.
+    """
+    if Path(DITTO_PATH).is_file():
+        subprocess.run(
+            [DITTO_PATH, "-x", "-k", str(zip_path), str(dest_dir)],
+            check=True,
+        )
+        return
+    import zipfile
+    debug_log("ditto unavailable, falling back to zipfile (symlinks will not be preserved)", "updater")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest_dir)
 
 
 def _escape_applescript_path(path: Path) -> str:
@@ -352,15 +378,13 @@ def install_update_macos(download_path: Path) -> bool:
     and leaving users with a trashed app and no replacement.
     """
     import plistlib
-    import zipfile
 
     app_path = get_app_path()
     temp_dir = Path(tempfile.mkdtemp())
     current_pid = os.getpid()
 
     try:
-        with zipfile.ZipFile(download_path, "r") as zf:
-            zf.extractall(temp_dir)
+        _extract_macos_bundle(download_path, temp_dir)
 
         new_app_path = temp_dir / "Jarvis.app"
 

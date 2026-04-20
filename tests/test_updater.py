@@ -23,6 +23,19 @@ from desktop_app.updater import (
 )
 
 
+def _zipfile_extract_for_tests(zip_path: Path, dest_dir: Path) -> None:
+    """Stand-in for ``_extract_macos_bundle`` used by existing unit tests.
+
+    Production code uses ``ditto`` (a subprocess call), but tests mock
+    ``subprocess.Popen`` which also breaks ``subprocess.run``. Swapping in a
+    direct zipfile extraction lets the existing tests run their assertions
+    on the generated shell script without the ditto invocation.
+    """
+    import zipfile
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest_dir)
+
+
 class TestParseVersion:
     """Tests for version parsing."""
 
@@ -572,9 +585,10 @@ class TestInstallUpdateMacos:
                     script_content_captured.append(script_path.read_text())
             return MagicMock()
 
-        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
-            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
-                result = install_update_macos(zip_path)
+        with patch("desktop_app.updater._extract_macos_bundle", side_effect=_zipfile_extract_for_tests):
+            with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+                with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                    result = install_update_macos(zip_path)
 
         assert result is True
         assert len(script_content_captured) == 1
@@ -663,9 +677,10 @@ class TestInstallUpdateMacos:
                 script_content_captured.append(Path(args[0]).read_text())
             return MagicMock()
 
-        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
-            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
-                assert install_update_macos(zip_path) is True
+        with patch("desktop_app.updater._extract_macos_bundle", side_effect=_zipfile_extract_for_tests):
+            with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+                with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                    assert install_update_macos(zip_path) is True
 
         script_content = script_content_captured[0]
         expected_binary = str(mock_app_path / "Contents" / "MacOS" / custom_binary_name)
@@ -736,9 +751,10 @@ class TestInstallUpdateMacos:
                 captured["text"] = captured["script"].read_text()
             return MagicMock()
 
-        with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
-            with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
-                assert install_update_macos(zip_path) is True
+        with patch("desktop_app.updater._extract_macos_bundle", side_effect=_zipfile_extract_for_tests):
+            with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+                with patch("desktop_app.updater.subprocess.Popen", side_effect=capture_popen):
+                    assert install_update_macos(zip_path) is True
 
         # Python's zipfile.extractall doesn't restore the Unix exec bit, so
         # the stub binary inside the extracted new bundle comes out without
@@ -799,6 +815,66 @@ class TestInstallUpdateMacos:
         assert marker_path.exists(), (
             "fallback binary did not execute when `open` failed — "
             "the user would be left without a running app after update"
+        )
+
+
+    @pytest.mark.unit
+    def test_uses_ditto_to_preserve_bundle_symlinks(self, tmp_path):
+        """PyInstaller's Qt bundle contains symlinks (framework
+        Versions/Current, etc.) that Python's zipfile silently flattens into
+        regular files — the extracted bundle then fails to launch with
+        "Jarvis.app can't be opened". The updater must extract with
+        `/usr/bin/ditto` when it is available, not zipfile."""
+        import plistlib
+        import zipfile
+        from unittest.mock import patch, MagicMock
+
+        zip_path = tmp_path / "update.zip"
+        app_source = tmp_path / "zip_content" / "Jarvis.app"
+        (app_source / "Contents").mkdir(parents=True)
+        (app_source / "Contents" / "Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleExecutable": "Jarvis"})
+        )
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in app_source.rglob("*"):
+                if f.is_file():
+                    zf.write(f, arcname=str(f.relative_to(tmp_path / "zip_content")))
+
+        mock_app_path = tmp_path / "Applications" / "Jarvis.app"
+        mock_app_path.mkdir(parents=True)
+
+        # Stand in for /usr/bin/ditto with a real file that the updater's
+        # existence check will see; subprocess.run is mocked so we never
+        # actually execute it. The fake "runs" the command by extracting
+        # the zip so the rest of the installer sees the expected bundle.
+        fake_ditto = tmp_path / "fake_ditto"
+        fake_ditto.write_text("")
+
+        run_calls = []
+
+        def fake_run(args, **kwargs):
+            run_calls.append(args)
+            if isinstance(args, list) and len(args) >= 4 and args[0] == str(fake_ditto):
+                dest = Path(args[-1])
+                with zipfile.ZipFile(args[-2], "r") as zf:
+                    zf.extractall(dest)
+            return MagicMock(returncode=0)
+
+        from desktop_app.updater import install_update_macos
+
+        with patch("desktop_app.updater.DITTO_PATH", str(fake_ditto)):
+            with patch("desktop_app.updater.get_app_path", return_value=mock_app_path):
+                with patch("desktop_app.updater.subprocess.run", side_effect=fake_run):
+                    with patch("desktop_app.updater.subprocess.Popen", return_value=MagicMock()):
+                        assert install_update_macos(zip_path) is True
+
+        ditto_calls = [c for c in run_calls if isinstance(c, list) and c and c[0] == str(fake_ditto)]
+        assert ditto_calls, (
+            "updater must invoke ditto to extract the macOS bundle — "
+            "Python's zipfile drops symlinks and produces an unlaunchable bundle"
+        )
+        assert ditto_calls[0][1:3] == ["-x", "-k"], (
+            f"expected `ditto -x -k <src> <dest>`, got {ditto_calls[0]}"
         )
 
 

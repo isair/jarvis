@@ -209,7 +209,11 @@ jobs:
       - name: 📦 Package macOS build
         run: |
           cd dist
-          zip -r Jarvis-macOS-${{ matrix.arch }}.zip Jarvis.app
+          # `ditto -c -k --keepParent` preserves the symlinks, xattrs, and
+          # permissions that Qt/Qt WebEngine frameworks rely on. Plain
+          # `zip -r` follows symlinks, producing a zip that extracts into a
+          # bundle macOS refuses to launch ("Jarvis.app can't be opened").
+          ditto -c -k --keepParent Jarvis.app Jarvis-macOS-${{ matrix.arch }}.zip
 
       - name: 📤 Upload macOS artifact
         uses: actions/upload-artifact@v5
