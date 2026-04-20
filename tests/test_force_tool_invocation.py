@@ -189,6 +189,38 @@ class TestForceInvocationShortConfabulation:
         )
 
 
+class TestForceInvocationEmptyContent:
+    """Fix 3: model produces no content at all (no tool, no text).
+
+    Field capture (2026-04-20): user asked "can you tell me how the weather
+    is today?" after a hot-window turn. Router picked getWeather+stop.
+    Model returned empty content and no tool call. Engine fell through to
+    the "Sorry, I had trouble processing that" fallback. Same semantic as
+    the confabulation case — the model ignored the router — just with zero
+    characters instead of a few dozen, so force-invoke should fire.
+    """
+
+    def test_empty_content_triggers_force_invoke_of_router_tool(
+        self, mock_config, db, dialogue_memory,
+    ):
+        response, capture = _run_engine_with_fixed_router(
+            user_query="how's the weather today?",
+            model="gemma4:e2b",
+            router_pick=["getWeather", "stop"],
+            chat_responses=[
+                _msg(""),  # empty turn-1 reply — no tool, no text
+                _msg("It's 10°C and partly cloudy in Hackney."),
+            ],
+            mock_config=mock_config, db=db, dialogue_memory=dialogue_memory,
+            tool_reply="Weather in Hackney: 10C partly cloudy.",
+        )
+
+        assert capture.has_tool("getWeather"), (
+            f"Router picked getWeather but force-invoke didn't fire on an "
+            f"empty reply. Tools called: {capture.tool_names()}"
+        )
+
+
 class TestForceInvocationGating:
     """Negative cases: the safety net MUST NOT fire when it would be wrong."""
 

@@ -460,6 +460,11 @@ class TestPossessorFieldRepro:
         hits = [f for f in facts if f in lowered]
 
         # Must NOT defer to the link list — the exact failure mode from the field.
+        # Also must NOT treat the tool result as a meta-input to classify
+        # (2026-04-20 follow-up field run: gemma4:e2b replied "The provided
+        # text is a collection of search results... It does not contain a
+        # direct question"). That's the model confusing the tool output with
+        # a new user message instead of using it to answer the earlier one.
         deflection_phrases = (
             "here are some links",
             "links to sources",
@@ -469,6 +474,13 @@ class TestPossessorFieldRepro:
             "check the links",
             "see the links",
             "visit the following",
+            # Meta-input deflections (2026-04-20 follow-up field failure):
+            "provided text is a collection",
+            "does not contain a direct question",
+            "you have not asked",
+            "have not asked a specific question",
+            "how can i help you with this information",
+            "please provide a prompt",
         )
         deflections = [p for p in deflection_phrases if p in lowered]
 

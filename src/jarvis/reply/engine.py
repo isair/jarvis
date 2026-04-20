@@ -142,8 +142,12 @@ def _maybe_force_router_tool(
 
     has_leak = _content_has_gemma_leak(content)
     stripped = (content or "").strip()
-    is_short_confab = bool(stripped) and len(stripped) <= _FORCE_CONFAB_MAX_LEN
-    if not (has_leak or is_short_confab):
+    # Empty reply is the clearest possible "ignored the router" signal —
+    # the model produced no tool call and no text at all. Short non-empty
+    # replies are the confabulation case. Both are forced.
+    is_empty = not stripped
+    is_short_confab = (not is_empty) and len(stripped) <= _FORCE_CONFAB_MAX_LEN
+    if not (has_leak or is_empty or is_short_confab):
         return None
 
     # Derive args from the tool's schema.
@@ -161,7 +165,7 @@ def _maybe_force_router_tool(
 
     debug_log(
         f"  🛟 force-invoke safety net firing: {tool_name}(args={args}) "
-        f"[leak={has_leak}, short_confab={is_short_confab}]",
+        f"[leak={has_leak}, empty={is_empty}, short_confab={is_short_confab}]",
         "planning",
     )
     return tool_name, args, f"call_force_{uuid.uuid4().hex[:8]}"
@@ -1144,7 +1148,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Force-invocation safety net for small models that ignore the router.
         # Only applies on the FIRST turn (a later turn has real tool results
         # in-context, so a short reply is a genuine conclusion, not confab).
-        if not t_name and turn == 1:
+        # Skip when the model emitted a thinking-only turn — that's a
+        # deliberate reasoning step before acting, not router ignorance.
+        if not t_name and turn == 1 and not thinking:
             forced = _maybe_force_router_tool(
                 content=content,
                 allowed_tools=allowed_tools,
