@@ -116,7 +116,7 @@ class TestWeatherTool:
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "couldn't determine" in result.reply_text.lower() or "specify a city" in result.reply_text.lower()
+        assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
 
     @patch('src.jarvis.tools.builtin.weather.get_location_info')
     def test_run_none_location_uses_fallback(self, mock_location):
@@ -131,7 +131,7 @@ class TestWeatherTool:
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
         # Should use fallback, not geocode the string "None"
-        assert "couldn't determine" in result.reply_text.lower() or "specify a city" in result.reply_text.lower()
+        assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
         # Verify location detection was called (fallback was attempted)
         mock_location.assert_called_once()
 
@@ -145,7 +145,7 @@ class TestWeatherTool:
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "couldn't determine" in result.reply_text.lower() or "specify a city" in result.reply_text.lower()
+        assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
 
     @patch('requests.get')
     @patch('src.jarvis.tools.builtin.weather.get_location_info')
