@@ -84,6 +84,7 @@ CLASS_DESCRIPTIONS = {
     "TestDiaryRecencyOrder": "Tests that diary search returns newer entries before older ones",
     "TestGraphRecencySuperseding": "Tests that graph handles contradicting facts with date context",
     "TestRecencyJudge": "LLM judge evaluates whether newer information is preferred over older",
+    "TestMalformedResponseAfterTools": "Tests that malformed LLM output after tool results is not surfaced",
 }
 
 # Descriptions for non-parametrized tests

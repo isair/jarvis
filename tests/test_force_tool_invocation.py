@@ -286,3 +286,55 @@ class TestForceInvocationGating:
             f"Force-invoke fired on a substantive reply. "
             f"Tools called: {capture.tool_names()}"
         )
+
+
+class TestToolCallsLiteralResponse:
+    """Small models sometimes return 'tool_calls: []' as literal text after tool results.
+
+    Field capture (2026-04-21): after webSearch + Wikipedia fallback, gemma4:e2b
+    returned the string 'tool_calls: []' as its content. The engine passed it
+    through as the user-visible reply instead of treating it as a malformed response.
+    """
+
+    def test_tool_calls_empty_list_not_returned_to_user(
+        self, mock_config, db, dialogue_memory,
+    ):
+        """Engine must not surface 'tool_calls: []' as a reply."""
+        response, _ = _run_engine_with_fixed_router(
+            user_query="what is Britney Spears' most famous song?",
+            model="gemma4:e2b",
+            router_pick=["webSearch", "stop"],
+            chat_responses=[
+                # First turn: model calls webSearch
+                {"message": {"role": "assistant", "content": "", "tool_calls": [
+                    {"function": {"name": "webSearch", "arguments": '{"search_query": "Britney Spears most famous song"}'},
+                     "id": "call_1"},
+                ]}},
+                # Second turn: model returns 'tool_calls: []' instead of an answer
+                _msg("tool_calls: []"),
+                # Safety fallback if engine retries
+                _msg("Baby One More Time is Britney Spears' most famous song."),
+            ],
+            mock_config=mock_config, db=db, dialogue_memory=dialogue_memory,
+            tool_reply="Britney Spears Wikipedia: American pop star known for '...Baby One More Time' (1998).",
+        )
+        assert response is not None
+        assert "tool_calls" not in (response or "").lower(), (
+            f"Engine surfaced malformed 'tool_calls: []' to user. Got: {response!r}"
+        )
+
+    def test_tool_calls_with_brackets_is_malformed(self, mock_config, db, dialogue_memory):
+        """Variants like 'tool_calls: [...]' are also treated as malformed."""
+        response, _ = _run_engine_with_fixed_router(
+            user_query="tell me about the weather",
+            model="gemma4:e2b",
+            router_pick=["getWeather", "stop"],
+            chat_responses=[
+                _msg('tool_calls: [{"name": "getWeather"}]'),
+                _msg("It is sunny today."),
+            ],
+            mock_config=mock_config, db=db, dialogue_memory=dialogue_memory,
+        )
+        assert "tool_calls" not in (response or "").lower(), (
+            f"Engine surfaced malformed tool_calls literal to user. Got: {response!r}"
+        )

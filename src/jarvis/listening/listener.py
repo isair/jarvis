@@ -1185,9 +1185,21 @@ class VoiceListener(threading.Thread):
         """Filter out low-confidence Whisper segments."""
         min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
         marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
+        # Threshold above which a segment is considered non-speech (hallucination during silence).
+        # Checked independently of avg_logprob because Whisper can be confident about a
+        # hallucinated phrase even when no real speech is present.
+        no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
         filtered = []
 
         for seg in segments:
+            # Hard filter: high no_speech_prob means no real speech regardless of logprob.
+            if hasattr(seg, 'no_speech_prob') and seg.no_speech_prob >= no_speech_threshold:
+                debug_log(
+                    f"segment filtered (no_speech_prob={seg.no_speech_prob:.2f}): '{seg.text}'",
+                    "voice",
+                )
+                continue
+
             confidence = None
             if hasattr(seg, 'avg_logprob'):
                 confidence = min(1.0, max(0.0, (seg.avg_logprob + 1.0)))

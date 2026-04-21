@@ -574,7 +574,7 @@ class WebSearchTool(Tool):
             ):
                 lang = (context.language or "en").strip().lower() or "en"
                 context.user_print(
-                    f"📚 Falling back to Wikipedia ({lang})…"
+                    f"📚 Searching Wikipedia ({lang}) for '{search_query}'…"
                 )
                 wiki = _wikipedia_summary(search_query, lang=lang)
                 if wiki:

@@ -1153,6 +1153,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log("  ⚠️ Detected truncated JSON response", "planning")
             return True
 
+        # Detect bare tool_calls literal — model returned the tool-call syntax as
+        # plain text rather than dispatching it (e.g. "tool_calls: []" after tool results).
+        if trimmed.lower().startswith("tool_calls:"):
+            debug_log("  ⚠️ Detected bare tool_calls literal response", "planning")
+            return True
+
         # Detect obvious hallucinated JSON patterns - model outputting data structure
         # instead of natural language response
         json_hallucination_indicators = [
