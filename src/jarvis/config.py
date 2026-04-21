@@ -134,6 +134,7 @@ class Settings:
     whisper_compute_type: str
     whisper_vad: bool
     whisper_min_confidence: float
+    whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
     whisper_min_word_length: int
 
@@ -401,6 +402,7 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_compute_type": "int8",
         "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
+        "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
 
@@ -644,6 +646,7 @@ def load_settings() -> Settings:
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
+    whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
@@ -715,6 +718,7 @@ def load_settings() -> Settings:
         whisper_compute_type=whisper_compute_type,
         whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,
+        whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
 

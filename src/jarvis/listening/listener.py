@@ -1195,7 +1195,7 @@ class VoiceListener(threading.Thread):
             # Hard filter: high no_speech_prob means no real speech regardless of logprob.
             if hasattr(seg, 'no_speech_prob') and seg.no_speech_prob >= no_speech_threshold:
                 debug_log(
-                    f"segment filtered (no_speech_prob={seg.no_speech_prob:.2f}): '{seg.text}'",
+                    f"segment filtered (no_speech_prob={seg.no_speech_prob:.2f}): '{seg.text[:50]}'",
                     "voice",
                 )
                 continue
@@ -2223,6 +2223,7 @@ class VoiceListener(threading.Thread):
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
                 min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
                 marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
+                no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
                 segments = result.get("segments", [])
 
                 if segments:
@@ -2235,8 +2236,8 @@ class VoiceListener(threading.Thread):
                         confidence = min(1.0, max(0.0, avg_logprob + 1.0))
                         seg_text = seg.get("text", "").strip()
 
-                        # Also check no_speech_prob - high value means likely not speech
-                        if no_speech_prob > 0.5:
+                        # Hard filter: high no_speech_prob means no real speech regardless of logprob.
+                        if no_speech_prob >= no_speech_threshold:
                             debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg_text[:50]}'", "voice")
                             continue
 

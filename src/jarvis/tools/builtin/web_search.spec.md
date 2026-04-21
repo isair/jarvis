@@ -141,6 +141,15 @@ DDG blocks us and no instant answer was available, even if a fallback
 then rescues the query. The `✅ Answered via …` line afterwards tells
 field-triage which provider actually carried the reply.
 
+### Progress messages
+
+The tool prints a progress line to the terminal before each provider attempt:
+
+- DuckDuckGo: `🌐 Searching the web for '<query>'…`
+- Wikipedia: `📚 Searching Wikipedia (<lang>) for '<query>'…`
+
+These are ephemeral stdout prints (`context.user_print`). They are not persisted, not logged to file, and not included in the tool result returned to the LLM.
+
 ### Per-utterance language
 
 `ToolContext.language` carries the ISO-639-1 code Whisper detected at

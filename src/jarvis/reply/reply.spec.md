@@ -70,6 +70,13 @@ Design principles enforced by the engine:
        - `content` field: Natural language response to user
    - Note: System messages are NOT added after the conversation starts, as this breaks native tool calling in models like Llama 3.2
 
+   Malformed-response guard (all models):
+   - After each turn, before the content is accepted as a final reply, `_is_malformed_json_response` checks for structured-data hallucinations that should never reach the user:
+     - Truncated JSON (starts with `{` but does not end with `}`)
+     - Bare `tool_calls:` literals — small models (e.g. gemma4:e2b) occasionally emit the literal string `tool_calls: []` as their `content` field after receiving tool results, instead of synthesising an answer. The check is case-insensitive and catches all `tool_calls:` prefixed variants.
+     - Known API-spec / data-dump patterns (weather JSON, OpenAPI blobs, etc.)
+   - When detected, the engine falls back to the standard "I had trouble understanding that request" error reply (model-size-aware). The malformed content is never shown to the user.
+
    Force-invocation safety net (small models only):
    - After the first-turn response is parsed, if NO tool call was extracted and ALL of the following hold, the engine force-invokes the router's pick:
      1. The chat model is classified SMALL by `detect_model_size` (e.g. gemma4:e2b, :1b/:3b/:7b tags).
