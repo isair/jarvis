@@ -1233,7 +1233,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _tc_args = _tc.get("arguments") if isinstance(_tc, dict) else None
             if not isinstance(_tc_args, dict):
                 _tc_args = {}
-            if _tc_name and _tc_name in allowed_tools:
+            # Reject toolSearchTool here: the allow-list widening logic
+            # for that tool lives only on the model-emitted path, so a
+            # direct-exec would surface tools but never merge them into
+            # `allowed_tools`. Fall through to the textual-nudge path
+            # and let the chat model emit the call naturally.
+            _direct_exec_ok = (
+                _tc_name
+                and _tc_name in allowed_tools
+                and _tc_name != "toolSearchTool"
+            )
+            if _direct_exec_ok:
                 _synth_call_id = f"call_eval_{uuid.uuid4().hex[:8]}"
                 debug_log(
                     f"🧭 evaluator direct-executing tool: {_tc_name} "
@@ -1284,9 +1294,38 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         raw_tool_result=_direct_result.reply_text,
                     )
                 if use_text_tools:
+                    # Mirror the compound-query remainder-hint logic
+                    # from the model-emitted path so multi-part queries
+                    # don't stall when the evaluator fires a direct-exec.
+                    _tool_results_so_far = sum(
+                        1 for m in messages if m.get("tool_name")
+                    )
+                    if (
+                        _compound_sub_questions
+                        and _tool_results_so_far
+                        < len(_compound_sub_questions)
+                    ):
+                        _remaining = _compound_sub_questions[
+                            _tool_results_so_far:
+                        ]
+                        _remainder_hint = (
+                            f"\n\n⚠️ You have answered {_tool_results_so_far} of "
+                            f"{len(_compound_sub_questions)} parts of the original query. "
+                            f"Still unanswered: \"{_remaining[0]}\". "
+                            "You MUST emit another tool_calls block now to search for this. "
+                            "Do NOT reply in text yet."
+                        )
+                    else:
+                        _remainder_hint = (
+                            f"\n\n[If the original query has sub-questions not yet answered "
+                            "by this result, call another tool now. Otherwise reply.]"
+                        )
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool result: {_tc_name}]\n{_direct_text}",
+                        "content": (
+                            f"[Tool result: {_tc_name}]\n"
+                            f"{_direct_text}{_remainder_hint}"
+                        ),
                         "tool_name": _tc_name,
                     })
                 else:
@@ -1296,6 +1335,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_name": _tc_name,
                         "content": _direct_text,
                     })
+                # Record signature so the chat model doesn't re-issue
+                # the same tool_call with identical arguments on the
+                # next turn (duplicate-suppression parity with the
+                # model-emitted path).
+                try:
+                    _direct_sig = (
+                        _tc_name,
+                        json.dumps(
+                            _tc_args or {},
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        ),
+                    )
+                    recent_tool_signatures.append(_direct_sig)
+                    if len(recent_tool_signatures) > 5:
+                        recent_tool_signatures = recent_tool_signatures[-5:]
+                except Exception:
+                    pass
                 debug_log(
                     f"    ✅ evaluator-direct tool result appended "
                     f"({len(_direct_text)} chars)",
@@ -1306,8 +1363,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 pending_nudge = ""
             else:
                 debug_log(
-                    f"  ⚠️ evaluator tool_call {_tc_name!r} not in "
-                    f"allow-list; falling through to text-nudge path",
+                    f"  ⚠️ evaluator tool_call {_tc_name!r} not "
+                    f"directly executable (not in allow-list, or "
+                    f"toolSearchTool); falling through to text-nudge "
+                    f"path",
                     "planning",
                 )
 
@@ -1794,12 +1853,26 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # so the next turn executes it directly instead of relying on
         # the chat model to obey the textual nudge.
         pending_nudge = eval_result.nudge or ""
+        _will_direct_exec = False
         if (
             isinstance(eval_result.tool_call, dict)
             and isinstance(eval_result.tool_call.get("name"), str)
         ):
             pending_tool_call = eval_result.tool_call
-        nudges_used += 1
+            _tc_name_stash = eval_result.tool_call.get("name")
+            _will_direct_exec = bool(
+                _tc_name_stash
+                and _tc_name_stash in allowed_tools
+                and _tc_name_stash != "toolSearchTool"
+            )
+        # nudge_cap exists to stop textual ping-pong when the model
+        # ignores directives. Direct-executable tool_calls are a
+        # deterministic action, not a nudge the model can ignore, so
+        # they don't consume the nudge budget. A structured tool_call
+        # that fails the allow-list guard falls back to the text-nudge
+        # path and DOES count.
+        if not _will_direct_exec:
+            nudges_used += 1
         last_candidate_reply = candidate_reply
         debug_log(
             f"  🔁 evaluator returned 'continue' (nudge={pending_nudge!r}) — "

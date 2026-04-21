@@ -678,6 +678,356 @@ def test_nudge_structured_tool_call_rejected_when_not_in_allowlist(
     )
 
 
+def test_direct_exec_records_signature_for_duplicate_suppression(
+    mock_config, db, dialogue_memory
+):
+    """Regression: after direct-exec, if the chat model attempts the
+    same tool+args on the next turn, it must be deduped — the direct
+    result is already in the conversation history. Without signature
+    recording, the engine runs webSearch twice with identical arguments
+    and wastes a turn."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+
+    invoked_tools: list[tuple[str, dict]] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append((tool_name, dict(tool_args or {})))
+        return ToolExecutionResult(
+            success=True, reply_text="RESULT", error_message=None
+        )
+
+    # Turn 1: prose (triggers evaluator direct-exec of webSearch).
+    # Turn 2: model stubbornly re-emits the same webSearch call with
+    # identical args — must be deduped via recent_tool_signatures.
+    # Turn 3: final content.
+    chat_responses = iter(
+        [
+            _assistant_content("prose."),
+            _assistant_tool_call(
+                "webSearch",
+                {"search_query": "same query"},
+                call_id="dup1",
+            ),
+            _assistant_content("Final answer."),
+        ]
+    )
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    eval_results = iter(
+        [
+            '{"terminal": false, "nudge": "call webSearch", '
+            '"reason": "prose", "tool_call": {"name": "webSearch", '
+            '"arguments": {"search_query": "same query"}}}',
+            '{"terminal": true, "nudge": "", "reason": "done"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="tell me something",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # Exactly ONE webSearch invocation: the direct-exec one. The model's
+    # duplicate attempt on turn 2 must be short-circuited by the
+    # signature check, not actually run through run_tool_with_retries.
+    ws_calls = [a for n, a in invoked_tools if n == "webSearch"]
+    assert len(ws_calls) == 1, (
+        "Direct-exec must record its signature so the chat model can't "
+        "re-issue the same tool+args on the next turn. Got webSearch "
+        f"invocations: {ws_calls}"
+    )
+
+
+def test_direct_exec_does_not_consume_nudge_budget(
+    mock_config, db, dialogue_memory
+):
+    """nudge_cap exists to stop textual ping-pong. A structured
+    tool_call that the engine direct-executes is a deterministic
+    action, not a directive the model can ignore, so it must NOT
+    burn the nudge budget. With nudge_cap=1, a direct-exec on turn 1
+    followed by a true textual nudge on turn 2 must both be allowed
+    (the cap fires on turn 3)."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+    mock_config.evaluator_nudge_max = 1
+
+    nudges_observed: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        return ToolExecutionResult(
+            success=True, reply_text="RESULT", error_message=None
+        )
+
+    def fake_chat(*args, **kwargs):
+        # Capture whether the system message carries a nudge block this
+        # turn. The direct-exec turn has no textual nudge; the next
+        # turn's text-nudge DOES.
+        msgs = kwargs.get("messages") or []
+        sys0 = msgs[0].get("content", "") if msgs else ""
+        if "[Agent nudge:" in sys0:
+            nudges_observed.append("nudge-present")
+        else:
+            nudges_observed.append("no-nudge")
+        return _assistant_content("prose.")
+
+    # Three evaluator calls:
+    #   1. continue with structured tool_call → direct-exec (budget unchanged)
+    #   2. continue with textual nudge only   → consumes 1 nudge slot
+    #   3. continue with textual nudge only   → cap fires, forces terminal
+    eval_results = iter(
+        [
+            '{"terminal": false, "nudge": "call webSearch", '
+            '"reason": "prose", "tool_call": {"name": "webSearch", '
+            '"arguments": {"search_query": "q"}}}',
+            '{"terminal": false, "nudge": "please elaborate", '
+            '"reason": "prose", "tool_call": null}',
+            '{"terminal": false, "nudge": "still prose", '
+            '"reason": "r", "tool_call": null}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="q",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # Must reach turn 3 — direct-exec on turn 1 must not have consumed
+    # the single nudge slot, otherwise the cap would fire after turn 2's
+    # textual nudge and the textual-nudge turn would still be reached,
+    # but only TWO chat calls would happen total. With the fix, THREE
+    # chat calls should happen before the cap forces terminal.
+    assert len(nudges_observed) >= 3, (
+        "Expected at least 3 chat turns — direct-exec (turn 1), "
+        "first textual nudge (turn 2), and second textual nudge "
+        "before cap fires on turn 3. "
+        f"Got {len(nudges_observed)} turns: {nudges_observed}"
+    )
+    assert reply is not None
+
+
+def test_direct_exec_rejects_toolsearchtool(mock_config, db, dialogue_memory):
+    """toolSearchTool's allow-list-widening logic lives on the model
+    path only. A direct-exec for toolSearchTool would run the search
+    but drop the discovered tools on the floor. Engine must reject it
+    and fall through to the text-nudge path, letting the model emit
+    the call itself."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+    mock_config.evaluator_nudge_max = 1
+
+    invoked_tools: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append(tool_name)
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("prose.")
+
+    eval_results = iter(
+        [
+            '{"terminal": false, "nudge": "search for tools", '
+            '"reason": "r", "tool_call": {"name": "toolSearchTool", '
+            '"arguments": {"query": "anything"}}}',
+            '{"terminal": true, "nudge": "", "reason": "done"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="hi",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert "toolSearchTool" not in invoked_tools, (
+        "Engine direct-executed toolSearchTool, skipping the allow-list "
+        "widening logic. Expected it to fall through to the text-nudge "
+        "path and let the chat model emit the call so the widening "
+        "branch fires."
+    )
+
+
+def test_direct_exec_appends_compound_query_remainder_hint(
+    mock_config, db, dialogue_memory
+):
+    """When the user query is compound (multiple sub-questions) and the
+    evaluator triggers a direct-exec for one part, the engine must
+    still append the compound-query remainder hint so the chat model
+    knows to handle the remaining part on the next turn. Previously
+    only the model-emitted tool-call path did this; the direct-exec
+    path dropped the hint, leaving multi-part queries stalled."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        return ToolExecutionResult(
+            success=True, reply_text="weather: sunny", error_message=None
+        )
+
+    captured_messages: list[list] = []
+
+    def fake_chat(*args, **kwargs):
+        msgs = kwargs.get("messages") or []
+        captured_messages.append([dict(m) for m in msgs])
+        return _assistant_content("final reply")
+
+    eval_results = iter(
+        [
+            '{"terminal": false, "nudge": "call webSearch", '
+            '"reason": "r", "tool_call": {"name": "webSearch", '
+            '"arguments": {"search_query": "London weather"}}}',
+            '{"terminal": true, "nudge": "", "reason": "done"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    # Force the compound-query split path: the engine populates
+    # _compound_sub_questions only when split_compound_query yields
+    # >1 parts. Patch it to return two parts.
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(
+             engine_mod,
+             "split_compound_query",
+             return_value=["London weather", "Paris weather"],
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="what's the weather in London and Paris?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # Turn 2 is the post-direct-exec chat call. Its messages must
+    # contain a tool-result user-role message with the compound
+    # remainder hint — same shape the model-emitted path produces.
+    assert len(captured_messages) >= 2, (
+        f"Expected at least 2 chat turns; got {len(captured_messages)}"
+    )
+    turn2_msgs = captured_messages[1]
+    tool_result_msgs = [
+        m for m in turn2_msgs
+        if m.get("tool_name") == "webSearch"
+        and "[Tool result:" in (m.get("content") or "")
+    ]
+    assert tool_result_msgs, (
+        "Direct-exec tool result missing from turn-2 messages."
+    )
+    tr_content = tool_result_msgs[0]["content"]
+    assert "Still unanswered" in tr_content or "sub-questions" in tr_content, (
+        "Direct-exec tool-result message is missing the compound-query "
+        "remainder hint the model-emitted path includes. Multi-part "
+        "queries will stall.\n"
+        f"Got: {tr_content!r}"
+    )
+
+
 def test_nudge_cap_forces_terminal(mock_config, db, dialogue_memory):
     """Once evaluator_nudge_max is exhausted, a further 'continue' from the
     evaluator is overridden to terminal so the loop delivers the reply.
