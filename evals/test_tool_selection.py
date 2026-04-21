@@ -105,3 +105,50 @@ class TestToolSelectionFiltering:
         )
 
         print(f"  ✅ Selected {len(selected)}/{total_builtin} tools: {selected}")
+
+
+@pytest.mark.eval
+class TestToolSelectionFilteringLLM:
+    """Validates that LLM-router tool selection meaningfully filters tools.
+
+    Unlike the embedding strategy (pinned to nomic-embed-text), this exercises
+    the default `llm` strategy against whichever judge model is active, so the
+    same cases run once per supported chat model.
+    """
+
+    @requires_judge_llm
+    @pytest.mark.parametrize("query, must_include, max_tools", TOOL_SELECTION_CASES)
+    def test_llm_selects_relevant_tools(
+        self,
+        mock_config,
+        query,
+        must_include,
+        max_tools,
+    ):
+        from jarvis.tools.selection import select_tools, ToolSelectionStrategy
+        from jarvis.tools.registry import BUILTIN_TOOLS
+
+        selected = select_tools(
+            query=query,
+            builtin_tools=BUILTIN_TOOLS,
+            mcp_tools={},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_base_url=mock_config.ollama_base_url,
+            llm_model=JUDGE_MODEL,
+            llm_timeout_sec=15.0,
+        )
+
+        total_builtin = len(BUILTIN_TOOLS)
+
+        for tool in must_include:
+            assert tool in selected, (
+                f"Expected '{tool}' in selected tools but got: {selected}"
+            )
+
+        assert "stop" in selected, f"'stop' should always be included, got: {selected}"
+
+        assert len(selected) <= max_tools, (
+            f"Expected at most {max_tools} tools but got {len(selected)}/{total_builtin}: {selected}"
+        )
+
+        print(f"  ✅ [{JUDGE_MODEL}] Selected {len(selected)}/{total_builtin} tools: {selected}")

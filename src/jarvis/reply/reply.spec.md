@@ -85,6 +85,25 @@ Design principles enforced by the engine:
    - Compound decomposition fires on every tool result turn until coverage is complete.
    - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
 
+   Tool allow-list per turn:
+   - Initial routing (the existing `select_tools` call) still runs once, before the loop, outside the LLM's awareness. Its output determines the *default* tool allow-list for the loop.
+   - The per-turn allow-list exposed to the chat model is: `<router's picks>` + `stop` (the sentinel) + `toolSearchTool`.
+   - `toolSearchTool` wraps the same routing logic (`select_tools`) but is invokable mid-loop. It takes a refined natural-language description of what the model is trying to accomplish and returns the expanded set of candidate tools. When invoked, the returned tools are merged into the allow-list for subsequent turns (still plus `stop` and `toolSearchTool` itself). This gives the agent a single-shot escape hatch when the initial routing was too narrow without widening the allow-list to "everything" by default.
+   - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.
+
+   Evaluator-driven termination:
+   - After each turn that produces assistant content (i.e. a natural-language response, not a tool call), the engine runs a lightweight evaluator LLM pass.
+   - The axis is binary: **terminal** (stop looping, deliver the reply) vs **continue** (keep looping with a nudge). "Satisfied" and "needs_user_input" are both terminal from the loop's perspective — the loop only cares whether to stop, not why.
+   - The evaluator returns `continue` when the user expressed a clear action, a tool in the agent's allow-list could directly perform it, and the agent's turn was prose instead of a tool call. In that case it also returns a short `nudge` telling the agent which tool to use.
+   - Evaluator contract:
+     - Input: the original user query (redacted), a compact summary of the turn's assistant output, the current allow-list as `(name, one-line-description)` tuples, and the number of turns consumed.
+     - Output: strict JSON `{"terminal": bool, "nudge": string, "reason": string}`. The `reason` field is a free-text log hint, never shown to the user.
+     - Timeout-bounded via `llm_digest_timeout_sec`; on failure the evaluator defaults to `terminal=True` (fail-open is biased toward terminal because spinning a broken loop is worse than delivering a possibly-weak reply).
+   - Nudge injection: when `continue` with a nudge, the engine stashes the nudge in `pending_nudge`. The next turn's system-message rebuild appends `[Agent nudge: <text>]` at the end of the first system message and clears the slot, so each nudge applies to exactly one turn. If the model still produces prose, the evaluator fires again and generates a fresh nudge.
+   - `cfg.evaluator_nudge_max` (default 2) caps nudges per reply. Once the cap is hit, the next `continue` is overridden to terminal to stop nudge ping-pong. Max-turn cap (`agentic_max_turns`) remains the hard backstop.
+   - Max-turn digest: when the loop exhausts `agentic_max_turns` without the evaluator ever firing terminal, the engine does not ship the raw last mid-loop candidate. Instead, `digest_loop_for_max_turns` in `enrichment.py` runs a single cheap LLM pass over the loop's accumulated activity (tool calls, tool result excerpts, any prose) and produces a short reply that begins with a caveat sentence noting the request was not fully completed. The caveat and the summary are generated in the same language as the user's request, not hardcoded English. On digest failure the engine falls back to the last candidate so the reply path never breaks. The digest reuses `llm_digest_timeout_sec` and resolves its model via the same chain as the evaluator (`evaluator_model` → `intent_judge_model` → `ollama_chat_model`).
+   - The evaluator replaces the previous force-invocation safety net: the engine no longer second-guesses the chat model's tool-call decisions or force-fills search arguments from raw user text. Tool-argument quality is a chat-model responsibility, supported by the `SELF-CONTAINED TOOL ARGUMENTS` system-prompt rule that applies to every tool (builtin or MCP).
+
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
      - **Tool calls**: Use `tool_calls` field to request data or actions
@@ -154,9 +173,9 @@ sequenceDiagram
   Engine->>Engine: Redact
   Engine->>ShortMem: recent_messages()
   Engine->>Recall: extract recall params (LLM)
-  alt keywords present AND RECALL_CONVERSATION allowed
-    Engine->>Tools: recall_conversation(args)
-    Tools-->>Engine: memory_context (optional)
+  alt keywords present
+    Engine->>Store: search conversation memory (diary + graph)
+    Store-->>Engine: memory_context (optional)
   end
   
   loop Agentic Loop (max agentic_max_turns)
@@ -256,6 +275,10 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
+  - `evaluator_enabled` (default `null` = auto: ON for SMALL, OFF for LARGE) gates the per-turn evaluator LLM. When off, the first natural-language content terminates the loop.
+  - `evaluator_model` (default empty = fall back to `intent_judge_model`, then `ollama_chat_model`) pins the model used for evaluator classification. See `src/jarvis/reply/evaluator.spec.md`.
+  - `evaluator_nudge_max` (default 2) caps how many evaluator-driven nudges can be injected into the system message per reply. Once the cap is reached, a `continue` verdict is overridden to terminal to stop nudge ping-pong.
+  - `tool_search_max_calls` (default 3) caps `toolSearchTool` invocations per reply. Extra calls return a tool-error nudging the model to decide with what is already available.
 - Context injection:
   - `location_enabled` enables/disables location services
   - `location_ip_address` manual IP configuration for geolocation
@@ -329,7 +352,7 @@ Behaviour:
 - **No new facts**: the distil is forbidden from adding facts not present in the tool output — no year, cast, director etc. unless they appear verbatim in the payload.
 - **NONE sentinel**: when the distil judges nothing relevant it returns NONE; the caller keeps the raw payload (suppressing it entirely is worse than a noisy substrate). A user-facing `🧩 Tool digest: no relevant facts — using raw payload (Nch)` line prints on this branch so the fallback is visible in the field.
 - **Length cap**: each per-batch digest is truncated to `_TOOL_DIGEST_MAX_CHARS` (600 chars) with an ellipsis.
-- **Timeout**: both digests (memory and tool-result) share `llm_digest_timeout_sec` (default 8 s), kept separate from `llm_tools_timeout_sec` (which can reach minutes for long-running tool execution) so a hung distil can't stall the reply loop for five minutes per turn.
+- **Timeout**: the memory digest, tool-result digest, and max-turn loop digest all share `llm_digest_timeout_sec` (default 8 s), kept separate from `llm_tools_timeout_sec` (which can reach minutes for long-running tool execution) so a hung distil can't stall the reply loop for five minutes per turn.
 - **User-facing logging**: prints `🧩 Tool digest: N chars — "preview…"` when the digest replaces the raw payload, or the NONE fallback line above. Debug logs under the `tools` category record raw→digest size plus batch counts.
 - **Raw payload preserved in debug**: the debug logs capture the original length so field captures can compare digested vs raw behaviour.
 

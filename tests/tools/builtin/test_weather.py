@@ -4,7 +4,11 @@ import pytest
 from unittest.mock import Mock, patch
 import requests
 
-from src.jarvis.tools.builtin.weather import WeatherTool, WMO_CODES
+from src.jarvis.tools.builtin.weather import (
+    WeatherTool,
+    WMO_CODES,
+    _extract_place_from_user_text,
+)
 from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.types import ToolExecutionResult
 
@@ -18,6 +22,14 @@ class TestWeatherTool:
         self.context = Mock(spec=ToolContext)
         self.context.user_print = Mock()
         self.context.cfg = Mock()
+        # Default to empty user text + empty ollama config so the auto-detect
+        # fallback path short-circuits the LLM-backed place extractor. Tests
+        # that want to exercise the extractor override these.
+        self.context.redacted_text = ""
+        self.context.cfg.ollama_base_url = ""
+        self.context.cfg.ollama_chat_model = ""
+        self.context.cfg.tool_router_model = ""
+        self.context.cfg.intent_judge_model = ""
 
     def test_tool_properties(self):
         """Test tool metadata properties."""
@@ -189,6 +201,82 @@ class TestWeatherTool:
         assert mock_get.call_count == 1
 
     @patch('requests.get')
+    @patch('src.jarvis.tools.builtin.weather._extract_place_from_user_text')
+    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    def test_auto_detect_fail_falls_back_to_user_text(
+        self, mock_location, mock_extract, mock_get,
+    ):
+        """When auto-detect fails but the user's utterance names a city, the
+        tool must pull that city from the text and fetch weather for it — not
+        ask the user to repeat themselves. Regression for the "I need it for
+        London" → "please tell me which city" ping-pong loop.
+        """
+        mock_location.return_value = {"error": "Location not available"}
+        mock_extract.return_value = "London"
+
+        geo_response = Mock()
+        geo_response.status_code = 200
+        geo_response.json.return_value = {
+            "results": [{
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "name": "London",
+                "country": "United Kingdom",
+                "admin1": "England",
+            }]
+        }
+        geo_response.raise_for_status = Mock()
+
+        weather_response = Mock()
+        weather_response.status_code = 200
+        weather_response.json.return_value = {
+            "current": {
+                "time": "2026-04-20T14:00",
+                "temperature_2m": 12.0,
+                "apparent_temperature": 10.0,
+                "relative_humidity_2m": 70,
+                "weather_code": 2,
+                "wind_speed_10m": 8.0,
+                "wind_gusts_10m": 12.0,
+            }
+        }
+        weather_response.raise_for_status = Mock()
+
+        mock_get.side_effect = [geo_response, weather_response]
+
+        self.context.redacted_text = "I need it for London"
+
+        # No location in args, auto-detect fails, extractor recovers "London".
+        result = self.tool.run({}, self.context)
+
+        assert result.success is True
+        assert "London" in result.reply_text
+        mock_extract.assert_called_once()
+        # The extractor must have seen the user's utterance, not the args.
+        called_text = mock_extract.call_args[0][0]
+        assert "London" in called_text
+
+    @patch('src.jarvis.tools.builtin.weather._extract_place_from_user_text')
+    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    def test_auto_detect_fail_and_no_place_in_text_asks_user(
+        self, mock_location, mock_extract,
+    ):
+        """If auto-detect fails AND the user's utterance doesn't name a place,
+        the tool should still ask for one — extraction is a best-effort
+        fallback, not a silent guess."""
+        mock_location.return_value = {"error": "Location not available"}
+        mock_extract.return_value = None
+
+        self.context.redacted_text = "what's the weather"
+
+        result = self.tool.run({}, self.context)
+
+        assert result.success is False
+        assert result.reply_text and any(
+            kw in result.reply_text.lower() for kw in ("location", "city")
+        )
+
+    @patch('requests.get')
     def test_run_network_timeout(self, mock_get):
         """Test weather with network timeout."""
         mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
@@ -319,3 +407,66 @@ class TestWeatherTool:
         assert result.success is True
         assert "20" in result.reply_text  # Celsius
         assert "68" in result.reply_text  # Fahrenheit
+
+
+class TestExtractPlaceFromUserText:
+    """Unit tests for the small-model fallback place extractor."""
+
+    def _cfg(self):
+        cfg = Mock()
+        cfg.ollama_base_url = "http://localhost:11434"
+        cfg.ollama_chat_model = "gemma4:e2b"
+        cfg.tool_router_model = ""
+        cfg.intent_judge_model = ""
+        cfg.llm_tools_timeout_sec = 8.0
+        return cfg
+
+    def test_empty_text_returns_none(self):
+        assert _extract_place_from_user_text("", self._cfg()) is None
+        assert _extract_place_from_user_text("   ", self._cfg()) is None
+
+    def test_none_cfg_returns_none(self):
+        assert _extract_place_from_user_text("weather in London", None) is None
+
+    def test_unconfigured_model_returns_none(self):
+        cfg = Mock()
+        cfg.ollama_base_url = ""
+        cfg.ollama_chat_model = ""
+        cfg.tool_router_model = ""
+        cfg.intent_judge_model = ""
+        assert _extract_place_from_user_text("weather in London", cfg) is None
+
+    @patch("src.jarvis.tools.builtin.weather.call_llm_direct", create=True)
+    def test_extracts_clean_place_name(self, _mock_direct):
+        """Patch the import inside the function by intercepting call_llm_direct."""
+        from src.jarvis.llm import call_llm_direct as real_fn  # noqa: F401
+
+        with patch("src.jarvis.llm.call_llm_direct", return_value="London"):
+            got = _extract_place_from_user_text("I need it for London", self._cfg())
+        assert got == "London"
+
+    def test_strips_quotes_and_punctuation(self):
+        with patch("src.jarvis.llm.call_llm_direct", return_value="'Paris'."):
+            got = _extract_place_from_user_text("weather paris?", self._cfg())
+        assert got == "Paris"
+
+    def test_none_sentinel_returns_none(self):
+        for sentinel in ("none", "None", "NONE", "n/a", "unknown"):
+            with patch("src.jarvis.llm.call_llm_direct", return_value=sentinel):
+                assert _extract_place_from_user_text(
+                    "what's the weather", self._cfg()
+                ) is None
+
+    def test_sentence_response_rejected(self):
+        """If the model explains instead of answering, treat it as no-place."""
+        with patch(
+            "src.jarvis.llm.call_llm_direct",
+            return_value="The user did not name a place.",
+        ):
+            got = _extract_place_from_user_text("weather today", self._cfg())
+        assert got is None
+
+    def test_overlong_response_rejected(self):
+        with patch("src.jarvis.llm.call_llm_direct", return_value="x" * 200):
+            got = _extract_place_from_user_text("weather", self._cfg())
+        assert got is None

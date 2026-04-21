@@ -638,3 +638,236 @@ def digest_tool_result_for_query(
         "tools",
     )
     return combined
+
+
+# ── Max-turn loop digest ────────────────────────────────────────────────────
+
+# Soft cap on the loop activity block we feed to the digest LLM. Small
+# models degrade past ~2 KB of prompt, and the digest is meant to be a
+# cheap pass, so we clip the accumulated activity rather than ship the
+# raw message history.
+_LOOP_DIGEST_ACTIVITY_MAX_CHARS = 2000
+
+# Per-tool-result excerpt cap inside the activity block. Keeps the cheap
+# pass focussed on gist rather than content.
+_LOOP_DIGEST_TOOL_RESULT_EXCERPT_CHARS = 300
+
+# Upper bound on the returned digest text.
+_LOOP_DIGEST_MAX_CHARS = 800
+
+_LOOP_DIGEST_SYSTEM_PROMPT = (
+    "You are summarising what an AI assistant accomplished in a "
+    "multi-step reasoning loop that ran out of turns before finishing.\n\n"
+    "You will be given:\n"
+    "  (A) the user's original request, and\n"
+    "  (B) a compact log of the assistant's loop activity (tool calls, "
+    "tool result excerpts, and any prose the assistant produced).\n\n"
+    "Produce a short natural-language reply to the user that:\n"
+    "1. Starts with a brief caveat sentence noting that you could not "
+    "fully finish the request. Phrase the caveat in the SAME language "
+    "as the user's original request. Do not hardcode English; match "
+    "the language of the request.\n"
+    "2. Then summarises what you actually found or did during the "
+    "loop, grounded only in the activity log.\n"
+    "3. Is concise — 2 to 4 sentences total.\n\n"
+    "RULES:\n"
+    "- Do NOT invent information. Only use what is in the activity "
+    "log. If the log contains no usable findings, say so plainly "
+    "inside the caveat and stop.\n"
+    "- Do NOT add headings, bullet points, JSON, labels, or quotes "
+    "around the whole reply. Output the reply text only.\n"
+    "- Do NOT use em dashes (—). Prefer a comma, a full stop, a "
+    "colon, or parentheses instead.\n"
+    "- Keep the whole reply under 600 characters.\n"
+)
+
+
+def _format_loop_activity(loop_messages: list[dict]) -> str:
+    """Render loop messages into a compact activity log for the digest LLM.
+
+    Emits one line per relevant message. Assistant content is kept, tool
+    calls are summarised as ``[tool_name(args)]``, tool results are
+    clipped to ``_LOOP_DIGEST_TOOL_RESULT_EXCERPT_CHARS`` characters.
+    Total output is capped at ``_LOOP_DIGEST_ACTIVITY_MAX_CHARS``; when
+    the cap is hit we keep the most recent lines (the model's latest
+    thinking is usually the most informative).
+    """
+    import json as _json
+
+    lines: list[str] = []
+    for msg in loop_messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role") or ""
+        content = msg.get("content") or ""
+        if role == "assistant":
+            prose = content.strip() if isinstance(content, str) else ""
+            if prose:
+                lines.append(f"assistant: {prose}")
+            tool_calls = msg.get("tool_calls") or []
+            if isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    try:
+                        fn = (tc or {}).get("function") or {}
+                        name = fn.get("name") or "(unknown)"
+                        args = fn.get("arguments")
+                        if isinstance(args, (dict, list)):
+                            args_str = _json.dumps(args, ensure_ascii=False)
+                        else:
+                            args_str = str(args or "")
+                        if len(args_str) > 120:
+                            args_str = args_str[:120] + "…"
+                        lines.append(f"tool_call: {name}({args_str})")
+                    except Exception:
+                        continue
+        elif role == "tool":
+            name = msg.get("name") or msg.get("tool_name") or "tool"
+            text = content if isinstance(content, str) else str(content)
+            text = text.strip().replace("\n", " ")
+            if len(text) > _LOOP_DIGEST_TOOL_RESULT_EXCERPT_CHARS:
+                text = text[:_LOOP_DIGEST_TOOL_RESULT_EXCERPT_CHARS] + "…"
+            if text:
+                lines.append(f"tool_result[{name}]: {text}")
+        elif role == "user":
+            # Engine-injected tool-error / duplicate-guard prompts land
+            # here. Include them as context but clip aggressively.
+            text = content.strip() if isinstance(content, str) else ""
+            if text.startswith("[Tool"):
+                if len(text) > 200:
+                    text = text[:200] + "…"
+                lines.append(f"system_note: {text}")
+
+    if not lines:
+        return ""
+
+    # Budget: keep the most recent lines if we're over the cap.
+    rendered = "\n".join(lines)
+    if len(rendered) <= _LOOP_DIGEST_ACTIVITY_MAX_CHARS:
+        return rendered
+    kept: list[str] = []
+    total = 0
+    for line in reversed(lines):
+        ln = len(line) + 1
+        if total + ln > _LOOP_DIGEST_ACTIVITY_MAX_CHARS:
+            break
+        kept.append(line)
+        total += ln
+    kept.reverse()
+    return "\n".join(kept)
+
+
+def _resolve_loop_digest_model(cfg) -> str:
+    """Pick the LLM model for the max-turn digest pass.
+
+    Mirrors ``_resolve_evaluator_model``: explicit ``evaluator_model`` →
+    ``intent_judge_model`` → ``ollama_chat_model``. The digest is a
+    cheap classification-adjacent pass so reusing an already-warm small
+    model is preferred.
+    """
+    for candidate in (
+        getattr(cfg, "evaluator_model", ""),
+        getattr(cfg, "intent_judge_model", ""),
+        getattr(cfg, "ollama_chat_model", ""),
+    ):
+        if candidate:
+            return candidate
+    return ""
+
+
+def _strip_digest_artifacts(text: str) -> str:
+    """Scrub markdown fences, surrounding quotes, and em dashes.
+
+    Em-dash substitution follows the CLAUDE.md style rule for user-facing
+    output: swap for a comma so the sentence remains readable without
+    requiring the model to reliably avoid the character itself.
+    """
+    import re
+
+    cleaned = text.strip()
+    # Strip ```…``` fences entirely (rare but some small models wrap replies).
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        cleaned = cleaned[3:-3]
+        # Drop an optional language tag on the first line.
+        if "\n" in cleaned:
+            first, rest = cleaned.split("\n", 1)
+            if first.strip().isalpha() and len(first.strip()) < 20:
+                cleaned = rest
+        cleaned = cleaned.strip()
+    # Strip a pair of surrounding quotes.
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', "'"):
+        cleaned = cleaned[1:-1].strip()
+    # Em dash → comma + space (collapsing any adjacent whitespace).
+    cleaned = re.sub(r"\s*—\s*", ", ", cleaned)
+    return cleaned
+
+
+def digest_loop_for_max_turns(
+    user_query: str,
+    loop_messages: list[dict],
+    cfg,
+) -> str | None:
+    """Summarise what the agentic loop produced when it hit max turns.
+
+    The returned text includes a leading caveat (phrased in the user's
+    language by the LLM) and a compact summary of the loop's actual
+    findings. Use-case: the engine's max-turn fallback, so the user sees
+    a deliberate "I ran out of time, here is what I have" reply instead
+    of a half-finished mid-loop candidate.
+
+    Returns the reply text on success, or ``None`` on failure so the
+    caller can fall back to the raw last-candidate behaviour.
+    """
+    query = (user_query or "").strip()
+    if not query:
+        return None
+
+    activity = _format_loop_activity(loop_messages or [])
+    if not activity:
+        return None
+
+    base_url = getattr(cfg, "ollama_base_url", "")
+    chat_model = _resolve_loop_digest_model(cfg)
+    if not base_url or not chat_model:
+        return None
+
+    try:
+        timeout_sec = float(getattr(cfg, "llm_digest_timeout_sec", 8.0))
+    except (TypeError, ValueError):
+        timeout_sec = 8.0
+    thinking = bool(getattr(cfg, "llm_thinking_enabled", False))
+
+    user_content = (
+        f"USER'S ORIGINAL REQUEST:\n{query}\n\n"
+        f"ASSISTANT LOOP ACTIVITY:\n{activity}\n\n"
+        "Produce the short caveat-prefixed reply now, in the same "
+        "language as the user's original request."
+    )
+
+    try:
+        raw = call_llm_direct(
+            base_url=base_url,
+            chat_model=chat_model,
+            system_prompt=_LOOP_DIGEST_SYSTEM_PROMPT,
+            user_content=user_content,
+            timeout_sec=timeout_sec,
+            thinking=thinking,
+        )
+    except Exception as e:
+        debug_log(f"max-turn loop digest failed: {e}", "planning")
+        return None
+
+    if not raw or not raw.strip():
+        debug_log("max-turn loop digest returned empty response", "planning")
+        return None
+
+    cleaned = _strip_digest_artifacts(raw)
+    if not cleaned:
+        return None
+    if len(cleaned) > _LOOP_DIGEST_MAX_CHARS:
+        cleaned = cleaned[:_LOOP_DIGEST_MAX_CHARS].rstrip() + "…"
+    debug_log(
+        f"max-turn loop digest: activity={len(activity)}ch → "
+        f"digest={len(cleaned)}ch",
+        "planning",
+    )
+    return cleaned

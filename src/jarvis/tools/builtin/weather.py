@@ -8,6 +8,81 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
 
+# Sentinel strings an LLM extractor may emit to mean "no place mentioned".
+# Matched case-insensitively as whole-value comparisons, not substrings.
+_NO_PLACE_SENTINELS = frozenset({
+    "none", "null", "no", "no place", "no location",
+    "n/a", "na", "unknown", "unspecified",
+})
+
+
+def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
+    """Ask a small LLM to pull a place name out of the user's utterance.
+
+    Used as a last-ditch fallback when the tool-calling LLM didn't fill the
+    ``location`` argument AND GeoIP auto-detect is unavailable. Small chat
+    models (e.g. gemma4:e2b) regularly fail to propagate a city into tool
+    args even when the user literally just said one — pulling the place
+    straight from the user's text sidesteps that weakness so the user
+    doesn't have to keep repeating themselves.
+
+    Returns ``None`` when no place is named, the call fails, or the
+    extractor gives back something that doesn't look like a place.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    if cfg is None:
+        return None
+
+    model = (
+        getattr(cfg, "tool_router_model", "")
+        or getattr(cfg, "intent_judge_model", "")
+        or getattr(cfg, "ollama_chat_model", "")
+    )
+    base_url = getattr(cfg, "ollama_base_url", "")
+    if not model or not base_url:
+        return None
+
+    try:
+        from ...llm import call_llm_direct
+    except Exception:
+        return None
+
+    sys_prompt = (
+        "You extract a single place name from a user's utterance so a weather "
+        "tool can look it up. Reply with ONLY the place name (city, town, or "
+        "country), with no punctuation, quotes, or explanation. If the user "
+        "did not name any place, reply with exactly: none"
+    )
+    user_prompt = f"User utterance: {text}\n\nPlace:"
+
+    try:
+        resp = call_llm_direct(
+            base_url, model, sys_prompt, user_prompt,
+            timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+        )
+    except Exception as e:
+        debug_log(f"    ⚠️ place extraction failed: {e}", "tools")
+        return None
+
+    if not resp or not isinstance(resp, str):
+        return None
+
+    # Strip punctuation and quotes the extractor might wrap around the name.
+    place = resp.strip().strip("'\"`*.,:;!?()[]{}<>").split("\n", 1)[0].strip()
+    if not place:
+        return None
+    if place.lower() in _NO_PLACE_SENTINELS:
+        return None
+    # Reject multi-sentence or overly long replies — those are almost always
+    # the model explaining ("the user did not name a place") instead of
+    # answering. Place names are at most a handful of words (e.g. "New York",
+    # "Stratford-upon-Avon", "São Paulo"), so 5 words is a generous cap.
+    if len(place) > 60 or "." in place or len(place.split()) > 5:
+        return None
+    return place
+
+
 # WMO Weather interpretation codes
 # https://open-meteo.com/en/docs
 WMO_CODES = {
@@ -52,12 +127,11 @@ class WeatherTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Get current weather conditions and forecast (hourly for today, daily for the next week). "
-            "Use this for ANY weather question — current, later today, tomorrow, this week, etc. "
-            "This tool takes NO required arguments: call it with {} when the user "
-            "doesn't name a specific city. The user's current location is "
-            "auto-detected — do NOT ask the user where they are, and do NOT reply "
-            "with a clarifying question like 'I need a location'; just call this tool."
+            "Weather only (current + forecast). NOT for time-of-day, date, or "
+            "location questions — those are already in the assistant's context. "
+            "Use for ANY weather question: now, later today, tomorrow, this week. "
+            "Call with {} — user location is auto-detected. Do NOT ask the user "
+            "where they are or request a city; just call this tool with empty args."
         )
 
     @property
@@ -134,9 +208,57 @@ class WeatherTool(Tool):
             lon: Optional[float] = None
             location_display: str = ""
 
+            # Track whether we inferred the place name from the user's text
+            # rather than receiving it from the caller — used only for the
+            # debug log, doesn't change behaviour downstream.
+            place_from_fallback = False
+
+            if not location_str:
+                # No location provided - try auto-detected coordinates first.
+                user_loc = self._get_user_location(context)
+                if user_loc:
+                    lat = user_loc["lat"]
+                    lon = user_loc["lon"]
+                    location_display = user_loc["display_name"]
+                    debug_log(
+                        f"    📍 using detected location: {location_display} ({lat}, {lon})",
+                        "tools",
+                    )
+                else:
+                    # Auto-detect failed. Last resort: scrape a place name from
+                    # the user's current utterance. Small tool-calling models
+                    # often drop the city from tool args even when the user
+                    # just said one, so doing this on the tool side stops the
+                    # "I need it for London" → "please tell me which city"
+                    # ping-pong loop.
+                    user_text = getattr(context, "redacted_text", "") or ""
+                    cfg = getattr(context, "cfg", None)
+                    extracted = _extract_place_from_user_text(user_text, cfg)
+                    if extracted:
+                        debug_log(
+                            f"    📍 auto-detect unavailable; extracted place from user text: '{extracted}'",
+                            "tools",
+                        )
+                        location_str = extracted
+                        place_from_fallback = True
+                    else:
+                        # Auto-detect genuinely failed and the user didn't name
+                        # a place in this utterance. Asking is the right move.
+                        return ToolExecutionResult(
+                            success=False,
+                            reply_text=(
+                                "I couldn't auto-detect your location. "
+                                "Please tell me which city to check the weather for."
+                            ),
+                        )
+
             if location_str:
-                # User specified a location - need to geocode it
-                debug_log(f"    🌤️ geocoding user-specified location: '{location_str}'", "tools")
+                # User specified a location (or we pulled one from their text) — geocode it.
+                debug_log(
+                    f"    🌤️ geocoding location: '{location_str}'"
+                    + (" (from user text fallback)" if place_from_fallback else ""),
+                    "tools",
+                )
 
                 geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
                 # Intentionally English — tool results are processed by the LLM,
@@ -173,28 +295,6 @@ class WeatherTool(Tool):
                     location_display += f", {country}"
 
                 debug_log(f"    📍 resolved to {location_display} ({lat}, {lon})", "tools")
-            else:
-                # No location provided - use auto-detected coordinates directly
-                debug_log("    📍 No location provided, using user's detected coordinates", "tools")
-                user_loc = self._get_user_location(context)
-                if not user_loc:
-                    # Auto-detection genuinely failed (GeoIP disabled, network
-                    # down, or user hasn't configured it). This is the ONE case
-                    # where asking the user for a location is correct — the
-                    # tool has tried and cannot derive it. The reply_text is
-                    # what the LLM will relay to the user.
-                    return ToolExecutionResult(
-                        success=False,
-                        reply_text=(
-                            "I couldn't auto-detect your location. "
-                            "Please tell me which city to check the weather for."
-                        )
-                    )
-
-                lat = user_loc["lat"]
-                lon = user_loc["lon"]
-                location_display = user_loc["display_name"]
-                debug_log(f"    📍 using detected location: {location_display} ({lat}, {lon})", "tools")
 
             # Step 2: Get current weather + forecast
             weather_url = "https://api.open-meteo.com/v1/forecast"

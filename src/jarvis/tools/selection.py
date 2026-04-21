@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Dict, List, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from ..debug import debug_log
 
@@ -241,8 +241,20 @@ def _select_llm(
     llm_base_url: str,
     llm_model: str,
     llm_timeout_sec: float,
+    context_hint: Optional[str] = None,
 ) -> List[str]:
-    """Ask a lightweight LLM call which tools are relevant."""
+    """Ask a lightweight LLM call which tools are relevant.
+
+    ``context_hint`` is an optional compact summary of what the main assistant
+    can already see at reply time (current local time, user's resolved
+    location, recent dialogue). When provided, the router is told that any
+    fact visible in that block needs no tool — a query fully answerable from
+    the hint should return 'none'. This avoids enumerating specific cases
+    ("time is known", "location is known") in the prompt: the router sees the
+    actual data and judges for itself. Gracefully degrades when the hint is
+    missing or partial (e.g. location failed to resolve) — the router simply
+    has less context and falls back to tool-selection on content.
+    """
     from ..llm import call_llm_direct
 
     catalogue_lines: List[str] = []
@@ -259,13 +271,60 @@ def _select_llm(
         "pick AT MOST the 5 most relevant tools for the query and return ONLY a "
         "comma-separated list of their exact names. Prefer fewer (1-3) when the "
         "query is clearly about one thing; never return more than 5. "
-        "Return 'none' if no tools are needed (e.g. greetings, small talk). "
+        "Return 'none' ONLY for pure greetings/small talk OR when the exact "
+        "fact needed is already visible in the KNOWN FACTS block below. If "
+        "the query depends on data NOT in KNOWN FACTS — the user's logs, "
+        "current conditions, web info, files, screen — pick a tool, even "
+        "when the phrasing is indirect ('should I order pizza?' → needs the "
+        "meal log; 'do I need a jacket?' → needs the weather). Do NOT pick a "
+        "tool merely because its domain is loosely adjacent. "
+        "If the query asks for DETAILED information on a topic (articles, "
+        "explanations, write-ups), include BOTH a search tool AND a page-fetch "
+        "tool so the model can follow the chain. "
+        "If a RECENT DIALOGUE block is present, read the current query as a "
+        "continuation of that dialogue: a short follow-up (e.g. naming a "
+        "place, confirming an option, answering a clarifying question the "
+        "assistant just asked) should route to the tool that answers the "
+        "COMBINED intent across turns, not to 'none'. "
         "Output nothing else — no explanations, no prose, no code fences."
     )
+    hint_section = ""
+    if context_hint and context_hint.strip():
+        raw_hint = context_hint.strip()
+        # The hint builder emits two optional subsections: a time/location
+        # fact line, and a "Recent dialogue (short-term memory):" block.
+        # Surface them under router-specific labels so the prompt above can
+        # refer to them by name without the caller having to know.
+        dialogue_marker = "Recent dialogue (short-term memory):"
+        if dialogue_marker in raw_hint:
+            facts_part, _, dialogue_part = raw_hint.partition(dialogue_marker)
+            facts_part = facts_part.strip()
+            dialogue_part = dialogue_part.strip()
+            blocks: list[str] = []
+            if facts_part:
+                blocks.append(
+                    "KNOWN FACTS (the main assistant can already see these at "
+                    "reply time, so no tool is needed to surface them):\n"
+                    f"{facts_part}"
+                )
+            if dialogue_part:
+                blocks.append(
+                    "RECENT DIALOGUE (most recent last — interpret the current "
+                    "query as a continuation of this exchange):\n"
+                    f"{dialogue_part}"
+                )
+            hint_section = "\n\n".join(blocks) + "\n\n"
+        else:
+            hint_section = (
+                "KNOWN FACTS (the main assistant can already see these at "
+                "reply time, so no tool is needed to surface them):\n"
+                f"{raw_hint}\n\n"
+            )
     user_prompt = (
+        f"{hint_section}"
         f"Available tools:\n{catalogue}\n\n"
         f"User query: {query}\n\n"
-        "Top tools (comma-separated, max 5):"
+        "Top tools (comma-separated, max 5, or 'none'):"
     )
 
     try:
@@ -326,6 +385,7 @@ def select_tools(
     llm_timeout_sec: float = 8.0,
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
+    context_hint: Optional[str] = None,
 ) -> List[str]:
     """
     Return a list of tool names relevant to *query*.
@@ -355,6 +415,7 @@ def select_tools(
         return _select_llm(
             query, builtin_tools, mcp_tools,
             llm_base_url, llm_model, llm_timeout_sec,
+            context_hint=context_hint,
         )
     else:
         return _all_tool_names(builtin_tools, mcp_tools)

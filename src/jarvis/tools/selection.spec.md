@@ -58,6 +58,15 @@ Note: embedding is **not** the default strategy because nomic-embed-text produce
 6. If the router replies `"none"`, return only the always-included tools.
 7. On timeout, empty response, or parse failure, fall back to returning all tools.
 
+#### Context-aware routing
+
+When the reply engine passes a `context_hint`, it is split into two labelled semantic slots in the router system prompt:
+
+- **KNOWN FACTS** — things the assistant can already see (current time, detected location). If the query is answerable purely from these, the router should return `none`.
+- **RECENT DIALOGUE** — recent user/assistant turns. The router is instructed to read the current query as a continuation of this exchange, so short follow-ups (e.g. "I'm in London" after "which city?") route to the tool that answers the combined intent across turns rather than being treated as idle chatter.
+
+The split is the exact marker `"Recent dialogue (short-term memory):"` — any content before it is known facts, content after it is recent dialogue. If no dialogue marker is present, the whole hint is treated as known facts.
+
 ### Interface
 
 ```python
