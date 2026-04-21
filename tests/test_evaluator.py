@@ -210,6 +210,70 @@ class TestEvaluateTurn:
         assert "Open an application by name" in sent
         assert "webSearch" in sent
 
+    def test_invoked_tools_appear_in_prompt(self):
+        """Regression: without this context the evaluator cannot tell that
+        a tool has already run, and keeps re-requesting it when the chat
+        model replies in prose after a successful direct-exec."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                user_query="open youtube",
+                assistant_response_summary="I'll help with that.",
+                available_tools=[
+                    (
+                        "chrome-devtools__navigate_page",
+                        "Navigate to a URL in Chrome",
+                    ),
+                ],
+                turns_used=2,
+                cfg=self._cfg(),
+                invoked_tools=[
+                    (
+                        "chrome-devtools__navigate_page",
+                        '{"url": "youtube.com"}',
+                        '{"status": "ok", "url": "https://youtube.com"}',
+                    ),
+                ],
+            )
+        sent = captured.get("user_content", "")
+        assert "TOOLS ALREADY INVOKED THIS REPLY" in sent, (
+            f"Evaluator prompt must include an invoked-tools block. "
+            f"Got: {sent[:400]!r}"
+        )
+        assert "chrome-devtools__navigate_page" in sent
+        assert "youtube.com" in sent, (
+            "Args of invoked tools must appear in the prompt so the "
+            "evaluator can match them against the user's request and "
+            "avoid re-requesting the same call."
+        )
+
+    def test_invoked_tools_default_is_empty(self):
+        """When the caller omits invoked_tools (engine paths predating the
+        parameter, tests), the prompt still renders with a clear
+        '(none yet this reply)' marker instead of crashing."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn("q", "r", [], 1, self._cfg())
+        sent = captured.get("user_content", "")
+        assert "TOOLS ALREADY INVOKED THIS REPLY" in sent
+        assert "none yet" in sent
+
     def test_evaluator_model_override_used(self):
         captured = {}
 
@@ -365,6 +429,28 @@ class TestEvaluatorTerminalBias:
             "Evaluator prompt must tell the judge to emit a structured "
             "`tool_call` object alongside the free-form nudge so the "
             "engine can execute the call directly."
+        )
+
+    def test_prompt_biases_terminal_when_required_tool_already_invoked(self):
+        """Field regression: after a direct-exec of
+        chrome-devtools__navigate_page, the chat model replied in prose,
+        and the evaluator kept returning continue-with-the-same-tool_call
+        because it couldn't see the tool had already run. The prompt must
+        explicitly tell the judge to consult TOOLS ALREADY INVOKED and
+        return terminal when the action has been performed."""
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "already invoked" in prompt_lower or "already ran" in prompt_lower, (
+            "Prompt must tell the judge to consult the invoked-tools "
+            "history so it can distinguish 'not yet tried' from "
+            "'already ran successfully'."
+        )
+        assert "terminal" in prompt_lower and (
+            "already ran" in prompt_lower or "already been invoked" in prompt_lower
+        ), (
+            "Prompt must bias terminal when a tool covering the user's "
+            "action has already been invoked successfully."
         )
 
     def test_prompt_still_continues_on_unaddressed_multi_part(self):

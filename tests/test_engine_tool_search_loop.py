@@ -1028,6 +1028,190 @@ def test_direct_exec_appends_compound_query_remainder_hint(
     )
 
 
+def test_evaluator_receives_invoked_tools_after_direct_exec(
+    mock_config, db, dialogue_memory
+):
+    """After a direct-exec runs, the next turn's evaluator call must be
+    given the invoked-tool history so the judge can see the tool already
+    ran. Without this the evaluator keeps re-requesting the same tool
+    when the chat model replies in prose after the direct-exec."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        return ToolExecutionResult(
+            success=True, reply_text="NAV_OK", error_message=None
+        )
+
+    chat_responses = iter(
+        [
+            _assistant_content("I can help."),
+            _assistant_content("Opened."),
+        ]
+    )
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    captured_prompts: list[str] = []
+
+    eval_results = iter(
+        [
+            '{"terminal": false, "nudge": "call nav", "reason": "prose", '
+            '"tool_call": {"name": "chrome-devtools__navigate_page", '
+            '"arguments": {"url": "youtube.com"}}}',
+            '{"terminal": true, "nudge": "", "reason": "done"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        captured_prompts.append(kwargs.get("user_content") or "")
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod,
+             "select_tools",
+             return_value=["chrome-devtools__navigate_page", "stop"],
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="open youtube",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert len(captured_prompts) >= 2, (
+        f"Expected at least two evaluator calls, got {len(captured_prompts)}"
+    )
+    # Second evaluator call (after direct-exec) must see the invoked tool
+    # in its context.
+    second_prompt = captured_prompts[1]
+    assert "TOOLS ALREADY INVOKED THIS REPLY" in second_prompt, (
+        "Evaluator must be given an invoked-tools block so it can tell "
+        "a tool already ran this reply.\n"
+        f"Got: {second_prompt[:500]!r}"
+    )
+    assert "chrome-devtools__navigate_page" in second_prompt, (
+        "The direct-exec'd tool must appear in the evaluator's "
+        "invoked-tools block.\n"
+        f"Got: {second_prompt[:500]!r}"
+    )
+    assert "youtube.com" in second_prompt, (
+        "The direct-exec arguments must appear in the invoked-tools "
+        "block so the evaluator can match them against the user's "
+        "request.\n"
+        f"Got: {second_prompt[:500]!r}"
+    )
+
+
+def test_direct_exec_duplicate_terminates_instead_of_reexecuting(
+    mock_config, db, dialogue_memory
+):
+    """Regression: observed in the field with gemma4:e2b on
+    chrome-devtools__navigate_page — the chat model replied in prose
+    after direct-exec, the evaluator returned the SAME structured
+    tool_call (with only a case-flipped argument key), and the engine
+    re-ran the tool. The duplicate guard must terminate the loop with
+    the best candidate reply instead of infinitely re-executing."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+    mock_config.evaluator_nudge_max = 3
+
+    invoked_tools: list[tuple[str, dict]] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append((tool_name, dict(tool_args or {})))
+        return ToolExecutionResult(
+            success=True, reply_text="navigated.", error_message=None
+        )
+
+    # Chat model replies in prose every turn.
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("I'll help with that.")
+
+    # Evaluator keeps asking for the same tool with case-flipped arg key.
+    eval_results = iter(
+        [
+            '{"terminal": false, "nudge": "call nav", "reason": "p", '
+            '"tool_call": {"name": "chrome-devtools__navigate_page", '
+            '"arguments": {"url": "youtube.com"}}}',
+            '{"terminal": false, "nudge": "call nav", "reason": "p", '
+            '"tool_call": {"name": "chrome-devtools__navigate_page", '
+            '"arguments": {"URL": "youtube.com"}}}',
+            '{"terminal": false, "nudge": "call nav", "reason": "p", '
+            '"tool_call": {"name": "chrome-devtools__navigate_page", '
+            '"arguments": {"url": "youtube.com"}}}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod,
+             "select_tools",
+             return_value=["chrome-devtools__navigate_page", "stop"],
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="open youtube",
+            dialogue_memory=dialogue_memory,
+        )
+
+    nav_calls = [
+        a for n, a in invoked_tools if n == "chrome-devtools__navigate_page"
+    ]
+    assert len(nav_calls) == 1, (
+        "Evaluator-repeat guard must prevent re-executing the same "
+        "direct-exec tool+args (even under case-flipped arg keys). "
+        f"Got invocations: {nav_calls}"
+    )
+    assert reply and reply.strip(), (
+        "Loop must terminate with a non-empty candidate reply when the "
+        "evaluator keeps repeating the same tool_call."
+    )
+
+
 def test_nudge_cap_forces_terminal(mock_config, db, dialogue_memory):
     """Once evaluator_nudge_max is exhausted, a further 'continue' from the
     evaluator is overridden to terminal so the loop delivers the reply.

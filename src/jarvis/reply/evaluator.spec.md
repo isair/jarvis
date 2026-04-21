@@ -8,13 +8,14 @@ The axis is deliberately binary: from the agentic loop's perspective, "satisfied
 
 ### Input contract
 
-`evaluate_turn(user_query, assistant_response_summary, available_tools, turns_used, cfg)`:
+`evaluate_turn(user_query, assistant_response_summary, available_tools, turns_used, cfg, invoked_tools=None)`:
 
 - `user_query` (str): the redacted user query that opened this reply. Defensively re-redacted on entry.
 - `assistant_response_summary` (str): the natural-language content produced by the chat model on the current turn. Redacted on entry in case the model echoed sensitive user text.
 - `available_tools` (list of `(name, one_line_description)` tuples): the agent's current allow-list. Engine-supplied, not user data, so not redacted. Names and one-liners only, no schema — enough for the evaluator to judge "could this turn have been a tool call?"
 - `turns_used` (int): number of loop turns consumed so far.
 - `cfg`: config object providing the base URL, model, and timeout.
+- `invoked_tools` (optional list of `(name, args_summary, result_summary)` tuples): tools that have ALREADY executed during this reply, including direct-exec and model-emitted calls. Lets the evaluator distinguish "agent hasn't tried the tool" (→ nudge) from "tool already ran successfully, the chat model just failed to narrate the result" (→ terminal, do not re-invoke). Without this context, a small chat model that replies in prose after a successful direct-exec causes the evaluator to keep re-requesting the same tool indefinitely. Results are redacted defensively because tool output can echo user-provided text.
 
 ### Output contract
 
@@ -80,6 +81,7 @@ Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests.
 - Malformed-JSON fallback replies (canned error text) bypass the evaluator and terminate immediately.
 - On `continue` the engine stashes the nudge in `pending_nudge`; the next turn's system-message rebuild appends `[Agent nudge: <text>]` at the end of the first system message and clears the slot. So each nudge lasts exactly one turn — if the model keeps producing prose, the evaluator fires again and generates a fresh nudge.
 - On `continue` with a structured `tool_call` whose `name` is in the current allow-list AND is not `toolSearchTool`, the engine also stashes it in `pending_tool_call`. At the top of the next loop iteration — before any chat LLM call — the engine synthesises an assistant message carrying the `tool_calls` payload, runs the tool via `run_tool_with_retries`, records the tool signature in `recent_tool_signatures` for duplicate suppression, and appends the tool result with the same compound-query remainder hint the model-emitted path uses. The textual nudge is cleared for that turn (the tool has run, no need to also shout the directive at the model). This is the actual recovery path for small models: the evaluator-directed tool execution happens deterministically, the chat model only has to synthesise a reply from the tool result on the following turn. Tool calls that fail the allow-list guard, or that name `toolSearchTool` (whose allow-list-widening logic lives only on the model-emitted path), fall through to the textual-nudge path so the safety boundary is never bypassed.
+- Before stashing `pending_tool_call`, the engine checks whether `(name, arguments)` duplicates a recent signature in `recent_tool_signatures`. Argument keys are lower-cased for the comparison so evaluator case-flips (`url` vs `URL`) collide. On a hit the loop terminates with the latest plausible candidate reply instead of re-executing. This is defence-in-depth: the primary mechanism preventing duplicate execution is the `invoked_tools` context fed to the evaluator itself (so the judge declines to re-request a tool that has already run); the guard catches the residual case where a small evaluator ignores that context.
 - `cfg.evaluator_nudge_max` (default 2) caps how many **textual** nudges can be issued per reply. Direct-executable `tool_call` results do NOT consume the nudge budget — they are deterministic actions, not directives the model can ignore. A structured `tool_call` that falls back to the textual-nudge path (allow-list miss, or `toolSearchTool`) DOES count. Once the cap is reached, the next textual-nudge `continue` is overridden to terminal. This stops nudge ping-pong when the model consistently ignores the directive.
 - The loop tracks the latest plausible candidate and delivers it when `agentic_max_turns` is hit.
 

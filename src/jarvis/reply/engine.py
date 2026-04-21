@@ -983,6 +983,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     messages = []  # type: ignore[var-annotated]
     recent_tool_signatures = []  # keep last few tool calls: [(name, stable_args_json)]
+    # Tools actually invoked during this reply — (name, args_summary,
+    # result_summary). Fed to the evaluator so it can distinguish
+    # "agent hasn't tried the tool" from "tool already ran, agent just
+    # failed to narrate the result". Without this, a small chat model
+    # that replies in prose after a successful direct-exec causes the
+    # evaluator to keep re-requesting the same tool indefinitely.
+    invoked_tools_history: list[tuple[str, str, str]] = []
     # System message with guidance, tools, and enrichment
     messages.append({"role": "system", "content": _build_initial_system_message()})
     # Include recent dialogue memory as-is
@@ -1349,6 +1356,30 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         ),
                     )
                     recent_tool_signatures.append(_direct_sig)
+                    # Also record a case-normalised copy so the duplicate
+                    # guard upstream catches evaluator arg-case flips.
+                    _direct_sig_norm = (
+                        _tc_name,
+                        json.dumps(
+                            {str(k).lower(): v for k, v in (_tc_args or {}).items()},
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        ),
+                    )
+                    if _direct_sig_norm != _direct_sig:
+                        recent_tool_signatures.append(_direct_sig_norm)
+                    # Also record for the evaluator's invoked-tools view.
+                    invoked_tools_history.append(
+                        (
+                            _tc_name,
+                            json.dumps(
+                                _tc_args or {},
+                                sort_keys=True,
+                                ensure_ascii=False,
+                            ),
+                            _direct_text,
+                        )
+                    )
                     if len(recent_tool_signatures) > 5:
                         recent_tool_signatures = recent_tool_signatures[-5:]
                 except Exception:
@@ -1739,6 +1770,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         recent_tool_signatures = recent_tool_signatures[-5:]
                 except Exception:
                     pass
+                # Feed the evaluator's invoked-tools view.
+                try:
+                    invoked_tools_history.append(
+                        (
+                            tool_name,
+                            stable_args if "stable_args" in locals() else "",
+                            effective_result,
+                        )
+                    )
+                except Exception:
+                    pass
             else:
                 err = result.error_message or "(no result)"
                 if use_text_tools:
@@ -1828,6 +1870,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             available_tools=_available_tools_summary(),
             turns_used=turn,
             cfg=cfg,
+            invoked_tools=list(invoked_tools_history[-5:]),
         )
         # Nudge cap: once we've already burned through the cap, force
         # terminal to break nudge ping-pong even if the evaluator says
@@ -1858,8 +1901,56 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             isinstance(eval_result.tool_call, dict)
             and isinstance(eval_result.tool_call.get("name"), str)
         ):
-            pending_tool_call = eval_result.tool_call
             _tc_name_stash = eval_result.tool_call.get("name")
+            _tc_args_stash = eval_result.tool_call.get("arguments") or {}
+            if not isinstance(_tc_args_stash, dict):
+                _tc_args_stash = {}
+            # Duplicate guard: if the evaluator keeps asking us to re-run
+            # the same tool with substantively the same args, running it
+            # again won't help — terminate with the best candidate reply
+            # instead of looping forever. Normalise argument keys to lower
+            # case so case-flip variants (url vs URL) still collide.
+            try:
+                _norm_args = {
+                    str(k).lower(): v for k, v in _tc_args_stash.items()
+                }
+                _stash_sig = (
+                    _tc_name_stash,
+                    json.dumps(_norm_args, sort_keys=True, ensure_ascii=False),
+                )
+                _norm_recent = {
+                    (
+                        n,
+                        json.dumps(
+                            {
+                                str(k).lower(): v
+                                for k, v in (json.loads(a) or {}).items()
+                            }
+                            if a and a != "__unserializable_args__"
+                            else {},
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        ),
+                    )
+                    for (n, a) in recent_tool_signatures
+                }
+                _is_dup_direct_exec = _stash_sig in _norm_recent
+            except Exception:
+                _is_dup_direct_exec = False
+            if _is_dup_direct_exec:
+                debug_log(
+                    f"  🛑 evaluator tool_call duplicates a recent "
+                    f"signature ({_tc_name_stash}) — terminating loop "
+                    f"with best candidate instead of re-executing",
+                    "planning",
+                )
+                print(
+                    "    🛑 Evaluator repeat — delivering reply",
+                    flush=True,
+                )
+                reply = candidate_reply
+                break
+            pending_tool_call = eval_result.tool_call
             _will_direct_exec = bool(
                 _tc_name_stash
                 and _tc_name_stash in allowed_tools
