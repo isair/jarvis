@@ -540,3 +540,108 @@ def test_nudge_cap_forces_terminal(mock_config, db, dialogue_memory):
 
     # Reply is still delivered (not a generic error) thanks to the cap.
     assert reply and "could help" in reply.lower()
+
+
+def test_max_turns_produces_digest(mock_config, db, dialogue_memory):
+    """When the loop hits ``agentic_max_turns`` without ever going terminal,
+    the engine runs ``digest_loop_for_max_turns`` and ships the caveat-prefixed
+    digest instead of the raw last candidate."""
+    from jarvis.reply import engine as engine_mod
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = True
+    mock_config.evaluator_nudge_max = 999  # don't let the nudge cap fire first
+    mock_config.agentic_max_turns = 3
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("Working on it…")
+
+    def fake_eval(**kwargs):
+        # Always continue — force the loop to exhaust max_turns.
+        return (
+            '{"terminal": false, "nudge": "keep going", '
+            '"reason": "not done"}'
+        )
+
+    captured = {}
+
+    def fake_digest(user_query, loop_messages, cfg):
+        captured["user_query"] = user_query
+        captured["loop_messages"] = loop_messages
+        return "Couldn't finish: I was still working through the request."
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["openApp", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(
+             engine_mod, "digest_loop_for_max_turns", side_effect=fake_digest
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="do something complicated",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert reply == "Couldn't finish: I was still working through the request."
+    assert captured.get("user_query"), "digest should receive the user query"
+    assert isinstance(captured.get("loop_messages"), list)
+
+
+def test_max_turns_digest_failure_falls_back_to_last_candidate(
+    mock_config, db, dialogue_memory
+):
+    """If the digest returns None (e.g. timeout), the engine must fall back
+    to the raw last candidate rather than emitting a generic error."""
+    from jarvis.reply import engine as engine_mod
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = True
+    mock_config.evaluator_nudge_max = 999
+    mock_config.agentic_max_turns = 3
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("Still working through this problem.")
+
+    def fake_eval(**kwargs):
+        return (
+            '{"terminal": false, "nudge": "keep going", '
+            '"reason": "not done"}'
+        )
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["openApp", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(
+             engine_mod, "digest_loop_for_max_turns", return_value=None
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="do something complicated",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert reply and "still working" in reply.lower()

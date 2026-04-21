@@ -17,6 +17,7 @@ from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
     digest_tool_result_for_query,
+    digest_loop_for_max_turns,
 )
 from .evaluator import evaluate_turn
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
@@ -866,6 +867,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if recent_messages:
         messages.extend(recent_messages)
     # Current user message
+    user_msg_index = len(messages)
     messages.append({"role": "user", "content": redacted})
 
     def _extract_structured_tool_call(resp: dict):
@@ -1565,15 +1567,37 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 9: Handle error case - return error message if no reply
     if (not reply or not reply.strip()) and last_candidate_reply and last_candidate_reply.strip():
-        # Max-turn backstop: deliver the latest plausible candidate reply
-        # rather than the generic error. Spec: agentic_max_turns is the only
-        # hard backstop; the user should still get the best-so-far content.
-        debug_log(
-            "max-turn cap reached with evaluator='continue' — delivering "
-            "last candidate reply",
-            "planning",
-        )
-        reply = last_candidate_reply
+        # Max-turn backstop: rather than shipping the raw mid-loop
+        # candidate (which may be a half-thought with no caveat), run a
+        # cheap digest pass over the loop activity and deliver a
+        # caveat-prefixed summary in the user's language. Fail-open: on
+        # any digest failure we fall back to the last candidate so the
+        # reply path still completes.
+        try:
+            digested = digest_loop_for_max_turns(
+                user_query=redacted,
+                loop_messages=messages[user_msg_index + 1:],
+                cfg=cfg,
+            )
+        except Exception as e:
+            debug_log(
+                f"max-turn digest raised unexpectedly, falling back: {e}",
+                "planning",
+            )
+            digested = None
+        if digested and digested.strip():
+            debug_log(
+                "max-turn cap reached, delivered digest with caveat",
+                "planning",
+            )
+            reply = digested
+        else:
+            debug_log(
+                "max-turn cap reached, digest unavailable, delivering "
+                "last candidate reply",
+                "planning",
+            )
+            reply = last_candidate_reply
     if not reply or not reply.strip():
         reply = "Sorry, I had trouble processing that. Could you try again?"
         debug_log("no reply generated, returning error message", "planning")

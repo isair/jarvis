@@ -838,4 +838,133 @@ class TestMaybeDigestToolResult:
             )
             mock_llm.assert_not_called()
             mock_digest.assert_not_called()
-        assert out == raw
+
+
+class TestDigestLoopForMaxTurns:
+    """The max-turn digest turns a half-finished loop into a caveated reply."""
+
+    def _cfg(self, **over):
+        base = dict(
+            ollama_base_url="http://x",
+            ollama_chat_model="m",
+            evaluator_model="",
+            intent_judge_model="",
+            llm_digest_timeout_sec=8.0,
+            llm_thinking_enabled=False,
+        )
+        base.update(over)
+        return SimpleNamespace(**base)
+
+    def test_happy_path_returns_cleaned_reply_and_prompt_includes_query(self):
+        from jarvis.reply.enrichment import digest_loop_for_max_turns
+
+        captured = {}
+
+        def fake_call(base_url, chat_model, system_prompt, user_content,
+                      timeout_sec, thinking):
+            captured["system_prompt"] = system_prompt
+            captured["user_content"] = user_content
+            captured["timeout_sec"] = timeout_sec
+            return "I couldn't fully finish this. I found the London forecast looks cloudy today."
+
+        loop_messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "getWeather",
+                              "arguments": {"location": "London"}}}
+            ]},
+            {"role": "tool", "name": "getWeather",
+             "content": "London: 12C partly cloudy with light rain."},
+            {"role": "assistant", "content": "Let me also check tomorrow."},
+        ]
+
+        with patch("jarvis.reply.enrichment.call_llm_direct",
+                   side_effect=fake_call):
+            out = digest_loop_for_max_turns(
+                user_query="what's the weather in London this week?",
+                loop_messages=loop_messages,
+                cfg=self._cfg(),
+            )
+
+        assert out
+        assert "London" in out
+        # Prompt visibility: user query and some loop activity must be present.
+        assert "London" in captured["user_content"]
+        assert "getWeather" in captured["user_content"]
+        assert captured["timeout_sec"] == 8.0
+
+    def test_em_dash_is_scrubbed_from_output(self):
+        from jarvis.reply.enrichment import digest_loop_for_max_turns
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct",
+            return_value="I didn't finish — here's what I found so far.",
+        ):
+            out = digest_loop_for_max_turns(
+                user_query="hello",
+                loop_messages=[{"role": "assistant", "content": "working"}],
+                cfg=self._cfg(),
+            )
+
+        assert out is not None
+        assert "—" not in out
+
+    def test_llm_failure_returns_none(self):
+        from jarvis.reply.enrichment import digest_loop_for_max_turns
+
+        def boom(**_kwargs):
+            raise TimeoutError("llm timed out")
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct", side_effect=boom
+        ):
+            out = digest_loop_for_max_turns(
+                user_query="hello",
+                loop_messages=[{"role": "assistant", "content": "working"}],
+                cfg=self._cfg(),
+            )
+
+        assert out is None
+
+    def test_empty_llm_response_returns_none(self):
+        from jarvis.reply.enrichment import digest_loop_for_max_turns
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct", return_value=""
+        ):
+            out = digest_loop_for_max_turns(
+                user_query="hello",
+                loop_messages=[{"role": "assistant", "content": "working"}],
+                cfg=self._cfg(),
+            )
+
+        assert out is None
+
+    def test_no_loop_activity_returns_none_without_calling_llm(self):
+        from jarvis.reply.enrichment import digest_loop_for_max_turns
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct"
+        ) as mock_llm:
+            out = digest_loop_for_max_turns(
+                user_query="hello",
+                loop_messages=[],
+                cfg=self._cfg(),
+            )
+
+        assert out is None
+        mock_llm.assert_not_called()
+
+    def test_missing_base_url_returns_none(self):
+        from jarvis.reply.enrichment import digest_loop_for_max_turns
+
+        with patch(
+            "jarvis.reply.enrichment.call_llm_direct"
+        ) as mock_llm:
+            out = digest_loop_for_max_turns(
+                user_query="hello",
+                loop_messages=[{"role": "assistant", "content": "x"}],
+                cfg=self._cfg(ollama_base_url=""),
+            )
+
+        assert out is None
+        mock_llm.assert_not_called()
