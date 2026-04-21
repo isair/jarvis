@@ -36,10 +36,12 @@ class ToolSearchTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search the full tool registry for tools that can help with a task. "
-            "Use this if none of the currently-available tools fit what the user "
-            "actually needs. Pass a short self-contained description of what you "
-            "are trying to accomplish."
+            "Search the full tool registry to discover additional tools. "
+            "CALL THIS FIRST, before apologising or refusing, whenever the user "
+            "asks for an action and none of your currently-available tools fit. "
+            "Never reply 'I can't do that' without first calling toolSearchTool "
+            "to check if a tool exists for it. Pass a short self-contained "
+            "description of what you are trying to accomplish."
         )
 
     @property

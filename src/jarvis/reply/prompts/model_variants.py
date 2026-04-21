@@ -93,6 +93,12 @@ TOOL_GUIDANCE_LARGE = (
 # this assistant supports an arbitrary set of languages. We describe the
 # BEHAVIOUR to avoid, not English tokens that happen to express it.
 TOOL_CONSTRAINTS_LARGE = (
+    "ACTION REQUESTS — NEVER REFUSE BEFORE CHECKING:\n"
+    "When the user asks for an action, scan your available tools and call the one whose "
+    "description covers that action. Do NOT apologise or claim you cannot do it. If "
+    "nothing in your current list fits, call `toolSearchTool` with a short description "
+    "of the action before giving up. A false refusal when a matching tool exists is the "
+    "worst possible reply.\n\n"
     "UNKNOWN NAMED ENTITIES:\n"
     "When the user asks about a specific named thing (a film, book, song, game, "
     "product, person, company, place, event), call webSearch before answering unless "
@@ -178,7 +184,10 @@ TOOL_GUIDANCE_SMALL = (
 # the BEHAVIOURS to avoid, not English tokens that happen to express them.
 # Small models still get enough structure to follow because each rule is
 # stated in imperative form with a concrete trigger + action.
-_TOOL_CONSTRAINTS_BASE = """GREETING HANDLING:
+_TOOL_CONSTRAINTS_BASE = """ACTION REQUESTS — NEVER REFUSE BEFORE CHECKING:
+When the user asks for an action (open something, navigate somewhere, send a message, look something up, play something, fetch data), scan your available tools FIRST and call the one whose description covers that action. Do NOT apologise, do NOT say "I cannot do that", do NOT describe your limitations — just call the tool. If nothing in your current tool list obviously fits, call `toolSearchTool` with a short description of the action before giving up. A false refusal when a tool exists is the worst possible reply; calling a tool that turns out not to help is recoverable. Treat "I cannot" as a last resort reserved for when both your tool list AND `toolSearchTool` have been exhausted.
+
+GREETING HANDLING:
 When the user's message is a greeting or casual social phrase (whatever language), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
 
 USER INSTRUCTIONS:
