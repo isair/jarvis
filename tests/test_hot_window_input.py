@@ -162,20 +162,43 @@ class TestUserSpeaksDuringHotWindow:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_full_user_text_is_used_not_judge_extraction(self, _print):
-        """In hot window, raw user text is the query — not the judge's shortened extraction."""
+    def test_judge_query_is_used_in_hot_window(self, _print):
+        """In hot window, the intent judge's extracted query is authoritative.
+
+        The judge is the canonical echo-stripper and noise-pruner; its output
+        always wins over the raw transcript. This prevents partial-salvage
+        leakage where echo fragments ride through on the raw text. If the
+        judge returns an empty query, the listener falls back to raw text.
+        """
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Do you want to know more?")
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        # Judge extracts just "good" but user said more
-        _install_intent_judge(listener, _make_judgment(directed=True, query="good"))
+        _install_intent_judge(listener, _make_judgment(
+            directed=True, query="what is the weather tomorrow"))
 
-        listener._process_transcript("No, I'm good.", utterance_energy=0.01)
+        listener._process_transcript(
+            "uh okay what is the weather tomorrow", utterance_energy=0.01)
 
-        assert _accepted_query(listener) == "no, i'm good."
+        assert _accepted_query(listener) == "what is the weather tomorrow"
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_empty_judge_query_falls_back_to_raw_text(self, _print):
+        """If the judge is directed but returns no query, fall back to raw text."""
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+
+        listener.echo_detector.track_tts_start("Do you want to know more?")
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        _install_intent_judge(listener, _make_judgment(directed=True, query=""))
+
+        listener._process_transcript("tell me a joke please", utterance_energy=0.01)
+
+        assert _accepted_query(listener) == "tell me a joke please"
         listener.state_manager.stop()
 
 

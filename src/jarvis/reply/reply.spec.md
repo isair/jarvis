@@ -77,20 +77,12 @@ Design principles enforced by the engine:
      - Known API-spec / data-dump patterns (weather JSON, OpenAPI blobs, etc.)
    - When detected, the engine falls back to the standard "I had trouble understanding that request" error reply (model-size-aware). The malformed content is never shown to the user.
 
-   Force-invocation safety net (small models only):
-   - After the first-turn response is parsed, if NO tool call was extracted and ALL of the following hold, the engine force-invokes the router's pick:
-     1. The chat model is classified SMALL by `detect_model_size` (e.g. gemma4:e2b, :1b/:3b/:7b tags).
-     2. The tool router selected exactly ONE real tool (plus the optional `stop` sentinel).
-     3. The assistant's content either contains gemma's native `tool_code` / `<unusedN>` / `google_search.search` fallback markers (parser couldn't dispatch them against the routed allow-list), OR is a short reply (≤ 400 chars) — both signals of a small-model confabulation that ignored the router.
-     4. The tool's required args are either empty OR derivable from the user's own turn (currently only the `{search_query}` case).
-   - On fire, raw gemma leak fragments are scrubbed from the assistant message before it enters the history so they cannot resurface in a later reply. The router-picked tool is then executed normally and its result drives the next turn.
-   - Gating exists to avoid overriding genuine reasoning on larger models and to avoid picking arbitrarily when the router's choice was ambiguous (multiple real tools).
-
    Compound-query decomposition (small / text-based models only):
-   - When `use_text_tools` is True (i.e. the model is SMALL), the engine checks whether the user query contains " and " joining two distinct question-clauses (both sides ≥ 9 characters). If so, it splits the query into `_compound_sub_questions = [part_1, part_2]` at most one split.
+   - When `use_text_tools` is True (i.e. the model is SMALL), the engine delegates to `split_compound_query(text, language=language)` in `src/jarvis/reply/compound_query.py`. The helper splits on a single conjunction boundary when each clause is at least `MIN_CLAUSE_CHARS` (= 9) characters long, returning an empty list otherwise. The 9-char minimum was tuned against `evals/test_complex_flows.py::TestMultiStepEntityQuery` — it excludes short idiomatic phrases (`"rock and roll"`, `"pros and cons"`, French `"va et vient"`) while retaining typical multi-part entity queries whose clauses usually exceed 15 characters each.
+   - Language awareness: the conjunction is per-language, not hardcoded English. Supported languages and their conjunctions live in `_CONJUNCTIONS` in `compound_query.py` (currently `en`, `es`, `fr`, `de`, `pt`, `it`, `nl`, `tr`). For any language outside this table — including languages Whisper can detect but which we haven't surveyed for false positives — the splitter returns `[]` and the query is processed as a single unit. This is graceful degradation: we prefer "no decomposition" over mis-applying English rules to Japanese, Korean, etc. Non-voice entrypoints (evals, text chat) pass `language=None` and default to English.
    - After each tool result is appended in text-based mode, the engine counts how many tool results have already been received. If that count is less than `len(_compound_sub_questions)`, a targeted nudge is appended to the tool result message identifying the specific unanswered sub-question: `"⚠️ You have answered N of M parts. Still unanswered: '<sub_question>'. You MUST emit another tool_calls block now."` — this fires before the model's next turn so it has a concrete reminder of exactly what to search for next.
    - When all sub-questions are covered (or the query is not compound), a generic completeness prompt is appended instead: `"[If the original query has sub-questions not yet answered by this result, call another tool now. Otherwise reply.]"`
-   - This mechanism is distinct from the force-invocation safety net (which fires on turn 1 only). Compound decomposition fires on every tool result turn until coverage is complete.
+   - Compound decomposition fires on every tool result turn until coverage is complete.
    - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
 
 7. Tool and Planning Protocol

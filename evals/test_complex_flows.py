@@ -179,9 +179,17 @@ class TestCelebrityIdentityThenFollowUp:
         eval_dialogue_memory.add_message("user", turn1_query)
         eval_dialogue_memory.add_message("assistant", turn1_response or "")
 
-        # ── Turn 2 — pronoun follow-up ────────────────────────────────────────
+        # ── Turn 2 — pronoun follow-up, with a realistic echo-polluted input.
+        # In the field (voice path) Whisper sometimes merges the tail of the
+        # assistant's TTS reply with the user's next utterance into a single
+        # transcript. Salvage can strip most of the echo yet leave a short
+        # trailing fragment ("…one of the best-selling. okay, what is her…").
+        # The model must still route this to webSearch for the user's actual
+        # question — the echo fragment is noise, not a new topic.
         capture.clear()
-        turn2_query = "What is her most famous song?"
+        turn2_query = (
+            "one of the best-selling. okay, what is her most famous song?"
+        )
         turn2_response = _run_engine(
             turn2_query, mock_config, eval_db, eval_dialogue_memory, mock
         )
@@ -219,6 +227,19 @@ class TestCelebrityIdentityThenFollowUp:
         assert "tool_calls:" not in turn2_lowered, (
             f"Turn 2: bare 'tool_calls:' literal surfaced in response: "
             f"{(turn2_response or '')[:300]}"
+        )
+
+        # The echo fragment ("best-selling") must not bleed into the search
+        # query. If the model copies the raw transcript verbatim instead of
+        # extracting the user's actual question, the webSearch call carries
+        # noise that poisons retrieval (observed in the field on voice path).
+        web_search_args = [
+            c["args"] for c in capture.calls if c["name"] == "webSearch"
+        ]
+        assert web_search_args, "Turn 2: no webSearch args captured"
+        search_query = (web_search_args[0].get("query") or "").lower()
+        assert "best-selling" not in search_query and "best selling" not in search_query, (
+            f"Turn 2: echo fragment leaked into webSearch query: '{search_query}'"
         )
 
 

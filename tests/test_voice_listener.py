@@ -1713,3 +1713,41 @@ class TestFilterNoisySegmentsNoSpeechProb:
         seg = self._make_segment("hello", avg_logprob=-0.5)  # confidence 0.5 > 0.3 threshold
         result = listener._filter_noisy_segments([seg])
         assert len(result) == 1
+
+
+class TestIsWhisperHallucination:
+    """Parity gate for the no_speech filter — both backends must agree."""
+
+    @pytest.mark.parametrize("no_speech_prob,threshold,expected", [
+        (0.8, 0.5, True),   # clear hallucination
+        (0.5, 0.5, True),   # at threshold is filtered (>=)
+        (0.49, 0.5, False), # just below threshold passes
+        (0.0, 0.5, False),  # clean speech
+        (0.3, 0.5, False),
+        (1.0, 0.5, True),
+        # Threshold at 0 rejects everything non-negative
+        (0.0, 0.0, True),
+        # Threshold at 1.0 rejects only the extreme
+        (1.0, 1.0, True),
+        (0.99, 1.0, False),
+    ])
+    def test_gate_policy(self, no_speech_prob, threshold, expected):
+        from jarvis.listening.listener import is_whisper_hallucination
+        assert is_whisper_hallucination(no_speech_prob, threshold) is expected
+
+    def test_mlx_and_faster_whisper_use_same_helper(self):
+        """Both code paths must reach the same gate — guaranteed by sharing
+        `is_whisper_hallucination`. This test pins that the helper is
+        referenced from both `_filter_noisy_segments` (faster-whisper) and
+        `_finalize_utterance` (MLX) so a future refactor can't silently
+        diverge the two.
+        """
+        import inspect
+        from jarvis.listening import listener as listener_mod
+        src = inspect.getsource(listener_mod)
+        # Both sites must call the shared helper.
+        assert src.count("is_whisper_hallucination(") >= 3, (
+            "Expected at least 3 references to is_whisper_hallucination "
+            "(definition + faster-whisper site + MLX site). Found: "
+            f"{src.count('is_whisper_hallucination(')}"
+        )

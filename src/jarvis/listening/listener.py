@@ -27,6 +27,18 @@ if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
 
+
+def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
+    """Shared Whisper no-speech gate.
+
+    Whisper can report high `avg_logprob` confidence on hallucinated phrases
+    when the audio is silent or noise. `no_speech_prob` is an independent
+    signal and must be checked first. Used by both the faster-whisper path
+    (`_filter_noisy_segments`) and the MLX path (`_finalize_utterance`) so
+    both backends apply identical policy.
+    """
+    return no_speech_prob >= threshold
+
 # Audio processing imports (optional)
 try:
     import sounddevice as sd
@@ -776,20 +788,21 @@ class VoiceListener(threading.Thread):
                                         f"non-echo query: \"{intent_judgment.query}\"", "voice"
                                     )
 
-                        # Use actual user text as query: in hot window there's no wake word
-                        # to strip, and the intent judge's extraction can lose words
-                        # (e.g. extracting "I" from "No, I'm good.")
-                        # Exception: if text is mixed echo+speech (longer than TTS),
-                        # use the judge's extraction which separates echo from speech.
-                        if last_tts_text:
-                            tts_words = len(last_tts_text.split())
-                            text_words = len(text_lower.split())
-                            if text_words > max(tts_words * 1.3, tts_words + 3):
-                                hot_query = intent_judgment.query
-                            else:
-                                hot_query = text_lower
-                        else:
-                            hot_query = text_lower
+                        # The intent judge is explicitly designed to prune echo
+                        # and extract the actual user query — always prefer its
+                        # output when present. Falling back to raw heard text
+                        # leaks partially-salvaged echo fragments into tool
+                        # calls (e.g. "…amount now? okay, what is his best
+                        # song?" reaching webSearch verbatim). If the judge
+                        # returns an empty query (rare), fall back to raw text.
+                        judge_query = (intent_judgment.query or "").strip()
+                        hot_query = judge_query or text_lower
+                        if judge_query and judge_query.lower() != text_lower:
+                            debug_log(
+                                f"using judge query over heard text: "
+                                f"\"{judge_query}\" (heard: \"{text_lower[:80]}\")",
+                                "voice",
+                            )
                         debug_log(f"✅ Intent judge accepted ({intent_judgment.confidence}): \"{hot_query}\"", "voice")
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
@@ -1193,7 +1206,7 @@ class VoiceListener(threading.Thread):
 
         for seg in segments:
             # Hard filter: high no_speech_prob means no real speech regardless of logprob.
-            if hasattr(seg, 'no_speech_prob') and seg.no_speech_prob >= no_speech_threshold:
+            if hasattr(seg, 'no_speech_prob') and is_whisper_hallucination(seg.no_speech_prob, no_speech_threshold):
                 debug_log(
                     f"segment filtered (no_speech_prob={seg.no_speech_prob:.2f}): '{seg.text[:50]}'",
                     "voice",
@@ -2237,7 +2250,7 @@ class VoiceListener(threading.Thread):
                         seg_text = seg.get("text", "").strip()
 
                         # Hard filter: high no_speech_prob means no real speech regardless of logprob.
-                        if no_speech_prob >= no_speech_threshold:
+                        if is_whisper_hallucination(no_speech_prob, no_speech_threshold):
                             debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg_text[:50]}'", "voice")
                             continue
 

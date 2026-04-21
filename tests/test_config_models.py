@@ -94,6 +94,42 @@ class TestDefaultConfigUsesModelConstant:
         assert model in SUPPORTED_CHAT_MODELS
 
 
+class TestWhisperHallucinationFilterDefaults:
+    """Pin defaults for the Whisper hallucination-filter thresholds.
+
+    Both the faster-whisper `_filter_noisy_segments` path and the MLX
+    `_finalize_utterance` path read these via `getattr(cfg, ..., fallback)`;
+    the defaults must stay in sync with the `Settings` dataclass field and
+    the values documented in README and `listening.spec.md`.
+    """
+
+    def test_no_speech_threshold_default(self):
+        config = get_default_config()
+        assert "whisper_no_speech_threshold" in config
+        assert config["whisper_no_speech_threshold"] == 0.5
+        assert 0.0 <= config["whisper_no_speech_threshold"] <= 1.0
+
+    def test_min_confidence_default(self):
+        config = get_default_config()
+        assert "whisper_min_confidence" in config
+        assert config["whisper_min_confidence"] == 0.3
+        assert 0.0 <= config["whisper_min_confidence"] <= 1.0
+
+    def test_settings_dataclass_round_trips_no_speech_threshold(self, tmp_path, monkeypatch):
+        """A config file with an overridden threshold must parse through
+        `load_settings` into the `Settings.whisper_no_speech_threshold` field.
+        """
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"whisper_no_speech_threshold": 0.72}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.whisper_no_speech_threshold == pytest.approx(0.72)
+
+
 class TestModelConsistency:
     """Tests for overall model configuration consistency."""
 
