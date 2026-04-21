@@ -1581,8 +1581,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             candidate_reply = extracted
             malformed_fallback = False
         elif _is_malformed_json_response(content):
-            # Model output malformed JSON or API specs - provide helpful message
-            debug_log(f"  ⚠️ Rejecting malformed JSON response: '{content[:100]}...'", "planning")
+            # Model output malformed JSON or API specs — gemma-native
+            # ``tool_code`` / ``tool_output`` fenced blocks, ``<unusedNN>``
+            # sentinels, bare ``tool_calls:`` literals, etc. Historically
+            # the engine substituted a canned "I had trouble understanding"
+            # fallback and broke out immediately — which meant the
+            # evaluator never saw the garbled turn and couldn't salvage
+            # the intent. Field logs show this path firing constantly on
+            # gemma for simple queries like "how's the weather".
+            #
+            # New flow: the fallback stays as the *candidate reply* (so
+            # the user still gets a message if salvage fails), but the
+            # evaluator is given the RAW garbled content as the turn
+            # summary. Its salvage clause can then extract the intended
+            # tool call and nudge the next turn. The fallback is only
+            # actually delivered when the evaluator terminates or the
+            # nudge cap is exhausted.
+            debug_log(f"  ⚠️ Malformed content, handing to evaluator for salvage: '{content[:100]}...'", "planning")
             model_name = cfg.ollama_chat_model.lower() if cfg.ollama_chat_model else ""
             is_small_model = any(size in model_name for size in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
             if is_small_model:
@@ -1602,14 +1617,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             candidate_reply = content
             malformed_fallback = False
 
-        # Evaluator-driven termination: let a lightweight LLM decide whether
-        # the reply already addresses the query, is a clarifying question to
-        # the user, or whether the loop should keep working. Malformed-JSON
-        # fallbacks are always delivered (the candidate is a canned error).
-        if malformed_fallback:
-            reply = candidate_reply
-            break
-
         # Evaluator gating. None = auto (on for SMALL, off for LARGE).
         # Mirrors the memory_digest_enabled pattern.
         _eval_cfg = getattr(cfg, "evaluator_enabled", None)
@@ -1618,6 +1625,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         else:
             eval_enabled = bool(_eval_cfg)
 
+        # Malformed-fallback short-circuit only when the evaluator is off
+        # — otherwise give the evaluator a chance to salvage first.
+        if malformed_fallback and not eval_enabled:
+            reply = candidate_reply
+            break
+
         if not eval_enabled:
             # Gated off: treat as terminal so the first natural-language
             # content becomes the reply. The max-turn backstop still applies
@@ -1625,9 +1638,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             reply = candidate_reply
             break
 
+        # Hand the evaluator the RAW garbled content on malformed turns so
+        # the salvage clause has something to extract from. On clean turns
+        # the evaluator sees the same candidate reply the user would get.
+        evaluator_turn_summary = content if malformed_fallback else candidate_reply
+
         eval_result = evaluate_turn(
             user_query=redacted,
-            assistant_response_summary=candidate_reply,
+            assistant_response_summary=evaluator_turn_summary,
             available_tools=_available_tools_summary(),
             turns_used=turn,
             cfg=cfg,

@@ -542,6 +542,220 @@ def test_nudge_cap_forces_terminal(mock_config, db, dialogue_memory):
     assert reply and "could help" in reply.lower()
 
 
+def test_malformed_turn_hands_raw_content_to_evaluator_for_salvage(
+    mock_config, db, dialogue_memory
+):
+    """When the model emits gemma-native scaffolding (e.g. ``tool_code``
+    block wrapping a google_search.search call), the engine MUST NOT
+    short-circuit to the canned fallback. Instead it passes the RAW
+    garbled content to the evaluator so the evaluator can salvage the
+    intent (e.g. "call getWeather") and the next turn becomes a real
+    tool call.
+
+    Previously the engine saw malformed content, substituted the canned
+    "I had trouble understanding that request" fallback, and broke out
+    of the loop immediately — the evaluator never saw the garbage, so
+    the salvage clause was dead code. The field failure on 2026-04-21
+    ("How's the weather, Jarvis?" → fallback) is exactly this path.
+
+    Expected flow:
+      1. Turn 1: model emits ``tool_code\\nprint(google_search.search(
+         query="current weather"))<unused88>``.
+      2. Engine detects malformed content.
+      3. Engine calls evaluator with the RAW garbled content — NOT the
+         canned fallback. Evaluator sees the shape, returns continue
+         with a salvage nudge "call getWeather".
+      4. Turn 2: model (with the nudge) emits a proper getWeather call.
+      5. Engine dispatches the tool, gets the payload.
+      6. Turn 3: model emits a grounded reply.
+      7. Evaluator returns terminal, reply is delivered.
+
+    Assertions:
+      - evaluator received the raw garbled content on the first call
+        (not the canned fallback string);
+      - getWeather was actually invoked;
+      - the final reply is NOT the canned fallback.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    # Force text-based tool calling (the path gemma hits in production).
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+
+    invoked_tools: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append(tool_name)
+        if tool_name == "getWeather":
+            return ToolExecutionResult(
+                success=True,
+                reply_text="Hackney: 14C partly cloudy.",
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    garbled_content = (
+        'tool_code\nprint(google_search.search(query="current weather"))'
+        "<unused88>\n"
+    )
+    proper_tool_call = (
+        'tool_calls: [{"id": "call_1", "type": "function", '
+        '"function": {"name": "getWeather", "arguments": "{}"}}]'
+    )
+
+    chat_responses = iter(
+        [
+            # Turn 1: garbled gemma-native protocol leak.
+            _assistant_content(garbled_content),
+            # Turn 2: with the salvage nudge in the system prompt, the
+            # model emits a proper tool_calls literal.
+            _assistant_content(proper_tool_call),
+            # Turn 3: grounded natural-language reply.
+            _assistant_content("It's 14C and partly cloudy in Hackney."),
+        ]
+    )
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    # Capture what the evaluator sees on each call so we can assert the
+    # engine handed over the raw garbled content, not the canned fallback.
+    evaluator_inputs: list[str] = []
+
+    eval_results = iter(
+        [
+            # Call 1: invoked with the raw garbled turn. Returns salvage.
+            '{"terminal": false, "nudge": "call getWeather with no '
+            'arguments", "reason": "salvage failed tool_code"}',
+            # Call 2: invoked after the grounded reply. Terminal.
+            '{"terminal": true, "nudge": "", "reason": "grounded reply"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        evaluator_inputs.append(kwargs.get("user_content", ""))
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(
+        engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner
+    ), patch.object(
+        engine_mod, "chat_with_messages", side_effect=fake_chat
+    ), patch.object(
+        engine_mod, "select_tools", return_value=["getWeather", "stop"]
+    ), patch.object(
+        engine_mod,
+        "extract_search_params_for_memory",
+        return_value={"keywords": []},
+    ), patch(
+        "jarvis.reply.evaluator.call_llm_direct", side_effect=fake_eval
+    ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="how's the weather",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # The evaluator's first invocation must have received the raw garbled
+    # content, not the canned fallback — otherwise it has nothing to
+    # salvage from.
+    assert evaluator_inputs, (
+        "Evaluator was never called — the engine must NOT short-circuit "
+        "a malformed turn to the canned fallback before giving the "
+        "evaluator a chance to salvage the intent."
+    )
+    first_input = evaluator_inputs[0]
+    assert "tool_code" in first_input or "google_search" in first_input, (
+        "Evaluator's first input should contain the raw garbled content "
+        "(e.g. the tool_code block or google_search token) so the salvage "
+        "clause has something to work with. "
+        f"Got (truncated): {first_input[:400]!r}"
+    )
+    assert "i had trouble understanding" not in first_input.lower(), (
+        "Evaluator must NOT be handed the canned fallback string — the "
+        "engine should only substitute the fallback after the evaluator "
+        "has been given a chance to salvage. "
+        f"Got (truncated): {first_input[:400]!r}"
+    )
+
+    # The salvage path should have produced a real tool invocation.
+    assert "getWeather" in invoked_tools, (
+        f"Expected getWeather to be invoked after salvage; got "
+        f"{invoked_tools}"
+    )
+
+    # And the user must see a grounded reply, not the canned fallback.
+    assert reply, "Engine returned no reply"
+    assert "i had trouble understanding" not in reply.lower(), (
+        f"Reply is the canned malformed-guard fallback — salvage failed "
+        f"to recover. Reply: {reply!r}"
+    )
+    assert "hackney" in reply.lower() or "14" in reply, (
+        f"Reply should be grounded in the tool result (Hackney / 14C); "
+        f"got: {reply!r}"
+    )
+
+
+def test_malformed_turn_fallback_when_evaluator_terminates(
+    mock_config, db, dialogue_memory
+):
+    """If the evaluator decides the malformed turn is unrecoverable
+    (returns terminal), the engine still ships the canned fallback so
+    the user gets a message rather than silence. Confirms the fallback
+    path is preserved, just moved behind the evaluator."""
+    from jarvis.reply import engine as engine_mod
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+
+    garbled_content = "<unused88>\n<unused91>\n<unused42>\n"
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content(garbled_content)
+
+    def fake_eval(**kwargs):
+        # Unrecoverable garbled turn: evaluator terminates.
+        return '{"terminal": true, "nudge": "", "reason": "unrecoverable"}'
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="hi",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # Evaluator said terminate on unrecoverable content → fallback reply.
+    assert reply, "Expected the canned fallback rather than None"
+    assert "i had trouble" in reply.lower(), (
+        "When the evaluator decides a malformed turn is unrecoverable, "
+        "the engine must still ship a canned fallback rather than "
+        "the raw garbled content. "
+        f"Got: {reply!r}"
+    )
+
+
 def test_max_turns_produces_digest(mock_config, db, dialogue_memory):
     """When the loop hits ``agentic_max_turns`` without ever going terminal,
     the engine runs ``digest_loop_for_max_turns`` and ships the caveat-prefixed
