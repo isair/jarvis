@@ -49,6 +49,44 @@ class TestParseResult:
         res = _parse_result('{"terminal": "yes", "nudge": "", "reason": ""}')
         assert res.terminal is True
 
+    def test_parses_tool_call_field(self):
+        """Evaluator can return a structured `tool_call` with name + args
+        alongside the free-form nudge. This lets the engine execute the
+        tool directly instead of relying on the chat model to obey a
+        textual nudge — critical for small models that ignore nudges."""
+        res = _parse_result(
+            '{"terminal": false, "nudge": "call webSearch", '
+            '"reason": "prose", "tool_call": {"name": "webSearch", '
+            '"arguments": {"search_query": "overview of China"}}}'
+        )
+        assert res.terminal is False
+        assert res.tool_call is not None
+        assert res.tool_call["name"] == "webSearch"
+        assert res.tool_call["arguments"] == {"search_query": "overview of China"}
+
+    def test_tool_call_absent_is_none(self):
+        res = _parse_result(
+            '{"terminal": false, "nudge": "do the thing", "reason": "prose"}'
+        )
+        assert res.tool_call is None
+
+    def test_tool_call_missing_name_is_rejected(self):
+        """Malformed tool_call (no string name) must be dropped, not crash."""
+        res = _parse_result(
+            '{"terminal": false, "nudge": "x", "reason": "y", '
+            '"tool_call": {"arguments": {}}}'
+        )
+        assert res.tool_call is None
+
+    def test_tool_call_non_dict_arguments_normalised_to_empty(self):
+        res = _parse_result(
+            '{"terminal": false, "nudge": "x", "reason": "y", '
+            '"tool_call": {"name": "stop", "arguments": "junk"}}'
+        )
+        assert res.tool_call is not None
+        assert res.tool_call["name"] == "stop"
+        assert res.tool_call["arguments"] == {}
+
 
 class TestEvaluateTurn:
     def _cfg(self, **overrides):
@@ -313,6 +351,20 @@ class TestEvaluatorTerminalBias:
             "Evaluator prompt should tell the judge that a reply "
             "containing concrete facts that address the user's ask is "
             "terminal, even when the judge can't prove a tool ran."
+        )
+
+    def test_prompt_instructs_structured_tool_call_field(self):
+        """When the judge has named a specific tool + arguments in the
+        nudge, the prompt must also tell it to emit them as a structured
+        `tool_call: {"name": "...", "arguments": {...}}` JSON field. The
+        engine uses that structured form to execute the tool directly,
+        bypassing small models that ignore free-form nudges."""
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        assert "tool_call" in _EVALUATOR_SYSTEM_PROMPT, (
+            "Evaluator prompt must tell the judge to emit a structured "
+            "`tool_call` object alongside the free-form nudge so the "
+            "engine can execute the call directly."
         )
 
     def test_prompt_still_continues_on_unaddressed_multi_part(self):

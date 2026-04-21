@@ -1167,6 +1167,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # appends it as `[Agent nudge: ...]`, then clears the slot so each
     # nudge lasts exactly one turn.
     pending_nudge: str = ""
+    # Structured tool-call intent from the evaluator. When set and the
+    # named tool is in the allow-list, the engine executes it directly
+    # at the start of the next turn — bypassing small models that
+    # ignore textual nudges. Shape: {"name": str, "arguments": dict}.
+    pending_tool_call: Optional[dict] = None
     nudges_used: int = 0
     try:
         nudge_cap = int(getattr(cfg, "evaluator_nudge_max", 2))
@@ -1214,6 +1219,156 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
+
+        # Structured tool-call from the evaluator: execute directly
+        # before asking the model for another turn. This bypasses small
+        # models that see an `[Agent nudge: call webSearch ...]` block
+        # and still reply in prose. Allow-list and schema guards stay
+        # intact because we go through the same run_tool_with_retries
+        # path the model would have triggered.
+        if pending_tool_call is not None:
+            _tc = pending_tool_call
+            pending_tool_call = None
+            _tc_name = _tc.get("name") if isinstance(_tc, dict) else None
+            _tc_args = _tc.get("arguments") if isinstance(_tc, dict) else None
+            if not isinstance(_tc_args, dict):
+                _tc_args = {}
+            # Reject toolSearchTool here: the allow-list widening logic
+            # for that tool lives only on the model-emitted path, so a
+            # direct-exec would surface tools but never merge them into
+            # `allowed_tools`. Fall through to the textual-nudge path
+            # and let the chat model emit the call naturally.
+            _direct_exec_ok = (
+                _tc_name
+                and _tc_name in allowed_tools
+                and _tc_name != "toolSearchTool"
+            )
+            if _direct_exec_ok:
+                _synth_call_id = f"call_eval_{uuid.uuid4().hex[:8]}"
+                debug_log(
+                    f"🧭 evaluator direct-executing tool: {_tc_name} "
+                    f"args={_tc_args!r}",
+                    "planning",
+                )
+                print(
+                    f"    🧭 Evaluator → {_tc_name} (direct-exec)",
+                    flush=True,
+                )
+                # Synthesise an assistant message with tool_calls so the
+                # tool-result role/tool_call_id pairing stays valid in
+                # native-tools mode, and so the conversation history
+                # reflects the invocation.
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": _synth_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": _tc_name,
+                                "arguments": _tc_args,
+                            },
+                        }
+                    ],
+                })
+                _direct_result = run_tool_with_retries(
+                    db=db,
+                    cfg=cfg,
+                    tool_name=_tc_name,
+                    tool_args=_tc_args,
+                    system_prompt=SYSTEM_PROMPT,
+                    original_prompt="",
+                    redacted_text=redacted,
+                    max_retries=1,
+                    language=language,
+                )
+                _direct_text = _direct_result.reply_text or (
+                    f"Error: {_direct_result.error_message or '(no result)'}"
+                )
+                if _direct_result.reply_text:
+                    _direct_text = _maybe_digest_tool_result(
+                        cfg=cfg,
+                        query=redacted,
+                        tool_name=_tc_name,
+                        raw_tool_result=_direct_result.reply_text,
+                    )
+                if use_text_tools:
+                    # Mirror the compound-query remainder-hint logic
+                    # from the model-emitted path so multi-part queries
+                    # don't stall when the evaluator fires a direct-exec.
+                    _tool_results_so_far = sum(
+                        1 for m in messages if m.get("tool_name")
+                    )
+                    if (
+                        _compound_sub_questions
+                        and _tool_results_so_far
+                        < len(_compound_sub_questions)
+                    ):
+                        _remaining = _compound_sub_questions[
+                            _tool_results_so_far:
+                        ]
+                        _remainder_hint = (
+                            f"\n\n⚠️ You have answered {_tool_results_so_far} of "
+                            f"{len(_compound_sub_questions)} parts of the original query. "
+                            f"Still unanswered: \"{_remaining[0]}\". "
+                            "You MUST emit another tool_calls block now to search for this. "
+                            "Do NOT reply in text yet."
+                        )
+                    else:
+                        _remainder_hint = (
+                            f"\n\n[If the original query has sub-questions not yet answered "
+                            "by this result, call another tool now. Otherwise reply.]"
+                        )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[Tool result: {_tc_name}]\n"
+                            f"{_direct_text}{_remainder_hint}"
+                        ),
+                        "tool_name": _tc_name,
+                    })
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": _synth_call_id,
+                        "tool_name": _tc_name,
+                        "content": _direct_text,
+                    })
+                # Record signature so the chat model doesn't re-issue
+                # the same tool_call with identical arguments on the
+                # next turn (duplicate-suppression parity with the
+                # model-emitted path).
+                try:
+                    _direct_sig = (
+                        _tc_name,
+                        json.dumps(
+                            _tc_args or {},
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        ),
+                    )
+                    recent_tool_signatures.append(_direct_sig)
+                    if len(recent_tool_signatures) > 5:
+                        recent_tool_signatures = recent_tool_signatures[-5:]
+                except Exception:
+                    pass
+                debug_log(
+                    f"    ✅ evaluator-direct tool result appended "
+                    f"({len(_direct_text)} chars)",
+                    "planning",
+                )
+                # Clear any residual nudge — the tool has been run, no
+                # point also shouting the textual version at the model.
+                pending_nudge = ""
+            else:
+                debug_log(
+                    f"  ⚠️ evaluator tool_call {_tc_name!r} not "
+                    f"directly executable (not in allow-list, or "
+                    f"toolSearchTool); falling through to text-nudge "
+                    f"path",
+                    "planning",
+                )
 
         # Update the system message with fresh context (time/location) before each LLM call
         # Note: We update the first system message rather than appending a new one because
@@ -1693,9 +1848,31 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             reply = candidate_reply
             break
         # Non-terminal: stash the nudge for the next turn, remember the
-        # candidate for the max-turn fallback, and keep looping.
+        # candidate for the max-turn fallback, and keep looping. When
+        # the evaluator also returned a structured tool_call, stash it
+        # so the next turn executes it directly instead of relying on
+        # the chat model to obey the textual nudge.
         pending_nudge = eval_result.nudge or ""
-        nudges_used += 1
+        _will_direct_exec = False
+        if (
+            isinstance(eval_result.tool_call, dict)
+            and isinstance(eval_result.tool_call.get("name"), str)
+        ):
+            pending_tool_call = eval_result.tool_call
+            _tc_name_stash = eval_result.tool_call.get("name")
+            _will_direct_exec = bool(
+                _tc_name_stash
+                and _tc_name_stash in allowed_tools
+                and _tc_name_stash != "toolSearchTool"
+            )
+        # nudge_cap exists to stop textual ping-pong when the model
+        # ignores directives. Direct-executable tool_calls are a
+        # deterministic action, not a nudge the model can ignore, so
+        # they don't consume the nudge budget. A structured tool_call
+        # that fails the allow-list guard falls back to the text-nudge
+        # path and DOES count.
+        if not _will_direct_exec:
+            nudges_used += 1
         last_candidate_reply = candidate_reply
         debug_log(
             f"  🔁 evaluator returned 'continue' (nudge={pending_nudge!r}) — "

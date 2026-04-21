@@ -898,3 +898,81 @@ class TestComplexMultiTurnMultiTool:
             f"Turn 2 tool arg must contain the self-contained keyword "
             f"'lo-fi' (or a reasonable paraphrase). Calls: {turn2}"
         )
+
+
+# =============================================================================
+# 8. Structured tool_call emission — the evaluator must not only nudge
+#    textually, it must emit a structured {name, arguments} that the engine can
+#    execute directly. This is the recovery path for small chat models that
+#    routinely ignore textual nudges.
+# =============================================================================
+
+
+class TestStructuredToolCallEmission:
+    """The evaluator prompt now asks for a structured ``tool_call`` field
+    alongside the textual nudge. Verify that a live small-model evaluator
+    actually populates it when the intent is unambiguous."""
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    @pytest.mark.xfail(
+        reason=(
+            "Prompt compliance depends on the live small evaluator model. "
+            "Deterministic coverage lives in tests/test_evaluator.py "
+            "(parse) and tests/test_engine_tool_search_loop.py (direct-exec). "
+            "Tracked for iterative prompt tuning; architecture ships as-is."
+        ),
+        strict=False,
+    )
+    def test_evaluator_emits_structured_tool_call_for_obvious_search(
+        self, mock_config
+    ):
+        from jarvis.reply.evaluator import evaluate_turn
+
+        _configure(mock_config)
+
+        result = evaluate_turn(
+            user_query="Give me an overview of China.",
+            assistant_response_summary=(
+                "I can look that up for you. Would you like me to search the "
+                "web for an overview of China?"
+            ),
+            available_tools=[
+                ("webSearch", "Search the web and return ranked results."),
+                ("stop", "Explicit end-of-turn sentinel."),
+            ],
+            turns_used=1,
+            cfg=mock_config,
+        )
+
+        print(f"\n📊 Structured tool_call emission:")
+        print(f"   terminal: {result.terminal}")
+        print(f"   nudge: {result.nudge!r}")
+        print(f"   tool_call: {result.tool_call!r}")
+
+        assert result.terminal is False, (
+            "Evaluator should continue: the agent offered prose instead of "
+            "calling webSearch. "
+            f"Got terminal={result.terminal}, reason={result.reason!r}."
+        )
+        assert isinstance(result.tool_call, dict), (
+            "Evaluator should emit a structured tool_call so the engine can "
+            "run the search directly without relying on the chat model to "
+            f"parse the textual nudge. Got tool_call={result.tool_call!r}."
+        )
+        assert result.tool_call.get("name") == "webSearch", (
+            f"Structured tool_call.name should be 'webSearch'. "
+            f"Got {result.tool_call!r}."
+        )
+        args = result.tool_call.get("arguments") or {}
+        assert isinstance(args, dict) and args, (
+            "Structured tool_call.arguments should be a non-empty dict with "
+            f"the intended query. Got {result.tool_call!r}."
+        )
+        arg_blob = " ".join(
+            str(v).lower() for v in args.values() if isinstance(v, str)
+        )
+        assert "china" in arg_blob, (
+            f"Structured tool_call.arguments should mention 'china'. "
+            f"Got {result.tool_call!r}."
+        )
