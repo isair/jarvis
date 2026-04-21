@@ -34,6 +34,8 @@ Return `continue` (non-terminal) when ALL of the following hold:
 
 Return `terminal` when the agent genuinely finished: delivered a real answer, successfully completed the action, or truthfully said it cannot do this because no tool fits.
 
+Return `continue` with a "produce a natural-language reply" nudge when the agent's turn is **garbled** — raw tool-protocol markers (`tool_code` / `tool_output` blocks), special sentinel tokens (`<unused88>` and other `<unused…>` variants), bare `tool_calls:` text, truncated JSON, or code/data dumps where a prose answer should be. The deterministic `_is_malformed_model_output` guard in the engine catches the known shapes before the evaluator even runs; the evaluator's garbled-turn clause is defence-in-depth for novel leaks the guard has not learned yet.
+
 ### Prompt contract
 
 Strict JSON `{"terminal": bool, "nudge": "...", "reason": "..."}`, no prose, no code fences. The parser is lenient (strips markdown fences, extracts embedded JSON objects).

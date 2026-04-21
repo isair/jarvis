@@ -15,14 +15,14 @@ from dotenv import load_dotenv
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "gemma4:e2b": {
-        "name": "Gemma 4 E2B (Recommended)",
-        "description": "Fast, multimodal, effective 2B — ~7.2GB download",
+        "name": "Gemma 4 E2B (Default)",
+        "description": "Fast, multimodal, effective 2B — a little dumb, occasionally fumbles tool calls; ~7.2GB download",
         "size": "~7.2GB",
         "vram": "8GB+",
     },
     "gemma4:e4b": {
-        "name": "Gemma 4 E4B (Better Quality)",
-        "description": "Smarter, multimodal, effective 4B — ~9.6GB download",
+        "name": "Gemma 4 E4B (Recommended)",
+        "description": "Smarter tool use and reasoning, multimodal, effective 4B — ~9.6GB download",
         "size": "~9.6GB",
         "vram": "16GB+",
     },
@@ -406,7 +406,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Wake Word Detection
         "wake_word": "jarvis",
-        "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
+        "wake_aliases": ["joris", "charis", "chavis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
         "wake_fuzzy_ratio": 0.78,
 
         # Whisper Speech Recognition

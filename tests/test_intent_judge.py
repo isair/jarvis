@@ -458,6 +458,50 @@ class TestResponseParserRobustness:
         assert result.directed is True
         assert result.query == "hi"
 
+    def test_parse_response_normalises_aliases_in_query(self):
+        """Misheard wake-word aliases are rewritten to the primary name in
+        the directed query, not just in the transcript segments. Field
+        capture (2026-04-21): Whisper heard 'Chavis'; the judge echoed it
+        back in its ``query`` and the reply engine saw 'random pop artist,
+        Chavis' as the user's intent — polluting memory search and
+        prompts. The rewrite is case-insensitive and only applies on word
+        boundaries.
+        """
+        config = IntentJudgeConfig(
+            assistant_name="Jarvis",
+            aliases=["chavis", "jervis"],
+        )
+        judge = IntentJudge(config)
+        response = (
+            '{"directed": true, '
+            '"query": "tell me a random pop artist, Chavis", '
+            '"stop": false, "confidence": "high", "reasoning": "ok"}'
+        )
+        result = judge._parse_response(response)
+
+        assert result is not None
+        assert result.directed is True
+        # Alias must be replaced with the canonical assistant name.
+        assert "chavis" not in result.query.lower(), (
+            f"Alias leaked into query: {result.query!r}"
+        )
+        assert "Jarvis" in result.query, (
+            f"Expected canonical name in query, got: {result.query!r}"
+        )
+
+    def test_parse_response_no_aliases_leaves_query_untouched(self):
+        """With an empty alias list, the query passes through verbatim."""
+        config = IntentJudgeConfig(assistant_name="Jarvis", aliases=[])
+        judge = IntentJudge(config)
+        response = (
+            '{"directed": true, "query": "what is the weather like", '
+            '"stop": false, "confidence": "high", "reasoning": "ok"}'
+        )
+        result = judge._parse_response(response)
+
+        assert result is not None
+        assert result.query == "what is the weather like"
+
 
 class TestCreateIntentJudge:
     """Tests for create_intent_judge factory function."""

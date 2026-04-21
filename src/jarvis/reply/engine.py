@@ -65,6 +65,80 @@ def _resolve_tool_router_model(cfg) -> str:
     return ""
 
 
+def _is_malformed_model_output(content: str) -> bool:
+    """Detect malformed / non-conversational LLM content that must not reach
+    the user.
+
+    Covers three families:
+      1. Truncated or data-dump JSON (e.g. OpenAPI/weather payloads echoed
+         as prose; JSON missing its closing brace).
+      2. Raw tool-protocol literals — bare ``tool_calls:`` that the model
+         emitted as text instead of dispatching a call, and Gemma's native
+         ``tool_code`` / ``tool_output`` scaffolding markers that leaked
+         through the text-tool-call parser.
+      3. Gemma internal sentinels like ``<unusedNN>`` — never part of a
+         user-facing reply.
+
+    Catching all three at engine level (before the evaluator runs) keeps
+    the deterministic guard as the primary defence, with the evaluator's
+    garbled-turn clause acting as defence-in-depth for novel shapes.
+    """
+    if not content or not content.strip():
+        return False
+
+    trimmed = content.strip()
+
+    # Truncated JSON (starts with { but no closing brace).
+    if trimmed.startswith("{") and not trimmed.endswith("}"):
+        debug_log("  ⚠️ Detected truncated JSON response", "planning")
+        return True
+
+    lowered = trimmed.lower()
+
+    # Bare tool_calls literal — tool-call syntax emitted as plain text.
+    if lowered.startswith("tool_calls:"):
+        debug_log("  ⚠️ Detected bare tool_calls literal response", "planning")
+        return True
+
+    # Gemma-style tool scaffolding leaks: the model sometimes emits its
+    # internal tool protocol markers (``tool_code`` / ``tool_output``) as
+    # visible content when the text-tool-call parser misses the shape.
+    # These never belong in a user-facing reply.
+    if lowered.startswith("tool_code") or lowered.startswith("tool_output"):
+        debug_log("  ⚠️ Detected leaked tool_code/tool_output scaffolding", "planning")
+        return True
+
+    # Gemma special-token sentinels (``<unused88>`` and siblings) — these
+    # are internal vocabulary tokens that should never render to the user.
+    if re.search(r"<unused\d+>", trimmed):
+        debug_log("  ⚠️ Detected leaked Gemma <unusedNN> sentinel", "planning")
+        return True
+
+    # Hallucinated API specs / data-dump payloads — the model replied with
+    # raw JSON that has no conversational fields.
+    json_hallucination_indicators = [
+        '"specVersion":', '"openapi":', '"swagger":',
+        '"apis":', '"endpoints":', '"paths":',
+        '"api.github.com"', '"host":', '"basePath":',
+        '"site":', '"location":', '"forecast":',
+        '"current_date":', '"high":', '"low":',
+        '"lang": "json"', '"section":',
+    ]
+    for indicator in json_hallucination_indicators:
+        if indicator in trimmed:
+            debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
+            return True
+
+    if trimmed.startswith("{"):
+        conversational_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
+        has_conversational_field = any(f'"{f}"' in lowered for f in conversational_fields)
+        if not has_conversational_field:
+            debug_log("  ⚠️ JSON response lacks conversational fields", "planning")
+            return True
+
+    return False
+
+
 def _extract_text_tool_call(content_field: str, known_names: set):
     """Parse a tool call out of a content-mode LLM response.
 
@@ -1008,59 +1082,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 break
 
     def _is_malformed_json_response(content: str) -> bool:
-        """
-        Detect malformed or inappropriate JSON-like responses.
-
-        Catches cases where the model outputs truncated JSON, API specs,
-        or other non-conversational structured data (hallucinated JSON).
-
-        Returns:
-            True if the content looks like malformed/inappropriate JSON
-        """
-        if not content or not content.strip():
-            return False
-
-        trimmed = content.strip()
-
-        # Detect JSON that starts with { but doesn't end with }
-        if trimmed.startswith("{") and not trimmed.endswith("}"):
-            debug_log("  ⚠️ Detected truncated JSON response", "planning")
-            return True
-
-        # Detect bare tool_calls literal — model returned the tool-call syntax as
-        # plain text rather than dispatching it (e.g. "tool_calls: []" after tool results).
-        if trimmed.lower().startswith("tool_calls:"):
-            debug_log("  ⚠️ Detected bare tool_calls literal response", "planning")
-            return True
-
-        # Detect obvious hallucinated JSON patterns - model outputting data structure
-        # instead of natural language response
-        json_hallucination_indicators = [
-            # API specs
-            '"specVersion":', '"openapi":', '"swagger":',
-            '"apis":', '"endpoints":', '"paths":',
-            '"api.github.com"', '"host":', '"basePath":',
-            # Data structures that aren't conversational
-            '"site":', '"location":', '"forecast":',
-            '"current_date":', '"high":', '"low":',
-            '"lang": "json"', '"section":',
-        ]
-        for indicator in json_hallucination_indicators:
-            if indicator in trimmed:
-                debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
-                return True
-
-        # If it looks like JSON (starts with {) but extraction failed,
-        # check if it's just a data dump without conversational fields
-        if trimmed.startswith("{"):
-            # Count how many common conversational JSON fields are present
-            conversational_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
-            has_conversational_field = any(f'"{f}"' in trimmed.lower() for f in conversational_fields)
-            if not has_conversational_field:
-                debug_log("  ⚠️ JSON response lacks conversational fields", "planning")
-                return True
-
-        return False
+        return _is_malformed_model_output(content)
 
     def _extract_text_from_json_response(content: str) -> Optional[str]:
         """

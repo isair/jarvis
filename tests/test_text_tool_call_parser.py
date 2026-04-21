@@ -105,3 +105,47 @@ class TestNoFalsePositiveOnProse:
         content = "I can help you find information about movies."
         name, _args, _ = _extract(content)
         assert name is None
+
+
+def _is_malformed(content: str) -> bool:
+    import jarvis.reply.engine as engine_mod
+    assert hasattr(engine_mod, "_is_malformed_model_output"), (
+        "Expose _is_malformed_model_output at module level for test coverage."
+    )
+    return engine_mod._is_malformed_model_output(content)
+
+
+class TestMalformedModelOutputGuard:
+    """``_is_malformed_model_output`` gates content before it can reach the
+    user. Covers the field-captured leak shapes we have observed from
+    small models (gemma4:e2b/e4b) after tool results."""
+
+    @pytest.mark.parametrize(
+        "content,label",
+        [
+            ("tool_calls: []", "bare tool_calls literal"),
+            ("tool_calls: [{}]", "tool_calls with stub entry"),
+            ("tool_code\n  print(google_search.search(query='x'))\n  ", "gemma tool_code block"),
+            ("tool_output\n[{'snippet': 'x'}]", "gemma tool_output block"),
+            ("Okay, here is your answer <unused88>", "unused sentinel inline"),
+            ("Reply ends with <unused10>.", "different unused sentinel"),
+            ("{\"forecast\": 14, \"high\": 15", "truncated JSON (no closing brace)"),
+            ('{"openapi": "3.0.0", "paths": {}}', "OpenAPI spec dump"),
+            ('{"location": "Hackney", "forecast": "cloudy"}', "weather JSON dump"),
+        ],
+    )
+    def test_detects_malformed_shape(self, content, label):
+        assert _is_malformed(content), f"Should flag: {label!r} -> {content!r}"
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "Sure, the capital of France is Paris.",
+            "I found three results: Blinding Lights, Anti-Hero, and Levitating.",
+            "I couldn't read the page contents this time. Want me to retry?",
+            # Starts with { but closes properly AND has a conversational field.
+            '{"response": "Here you go."}',
+        ],
+    )
+    def test_allows_normal_prose(self, content):
+        assert not _is_malformed(content), f"Should not flag prose: {content!r}"

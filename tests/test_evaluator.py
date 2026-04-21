@@ -209,3 +209,33 @@ class TestEvaluateTurn:
         ):
             evaluate_turn("q", "r", [], 1, cfg)
         assert captured.get("chat_model") == "judge-model"
+
+
+class TestEvaluatorGarbledTurnGuidance:
+    """The evaluator prompt must tell the judge model to reject garbled
+    agent turns (raw tool protocol markers, special tokens, truncated
+    JSON) with a continue so a retry can produce a real reply.
+
+    Without this clause, the judge sees ``tool_code\\nprint(...)<unused88>``
+    as "prose", returns terminal, and the engine ships the garbage
+    straight to the user. The deterministic malformed guard in the engine
+    handles the known shapes; this clause is defence-in-depth for novel
+    leaks the guard has not learned yet.
+    """
+
+    def test_prompt_mentions_garbled_marker_recognition(self):
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "garbled" in prompt_lower or "malformed" in prompt_lower, (
+            "Evaluator prompt must explicitly instruct the judge to "
+            "recognise garbled / malformed agent turns and return continue "
+            "so the engine can recover instead of shipping the junk."
+        )
+        # The explicit shapes we want the judge on the lookout for.
+        for marker in ("tool_code", "tool_output", "<unused"):
+            assert marker in _EVALUATOR_SYSTEM_PROMPT, (
+                f"Evaluator prompt should name {marker!r} as an example of "
+                f"a garbled agent turn — naming shapes helps small judge "
+                f"models spot them."
+            )
