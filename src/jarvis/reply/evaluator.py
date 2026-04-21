@@ -50,11 +50,18 @@ _EVALUATOR_SYSTEM_PROMPT = (
     "refusal — return continue with a nudge that names the tool.\n\n"
     "Step-by-step:\n"
     "  1. What did the user ask for? Extract the core action or request.\n"
-    "  2. Scan the toolbox. Does any tool's description cover that action?\n"
-    "     The special tool `toolSearchTool` is a fallback: if no other tool "
-    "fits, the agent is expected to call `toolSearchTool` to discover more "
-    "tools, NOT to give up in prose.\n"
-    "  3. Did the agent's turn actually invoke a fitting tool, or was it "
+    "  2. Check `TOOLS ALREADY INVOKED THIS REPLY`. If a tool covering the "
+    "user's action has ALREADY been invoked with sensible args and returned "
+    "a non-error result, the action is done — return terminal. Do NOT "
+    "ask the agent to re-run a tool that already ran successfully, even if "
+    "the current prose turn reads weakly. The engine executed the tool; "
+    "the chat model's failure to narrate it is not grounds for another "
+    "invocation.\n"
+    "  3. Otherwise scan the toolbox. Does any tool's description cover "
+    "that action? The special tool `toolSearchTool` is a fallback: if no "
+    "other tool fits, the agent is expected to call `toolSearchTool` to "
+    "discover more tools, NOT to give up in prose.\n"
+    "  4. Did the agent's turn actually invoke a fitting tool, or was it "
     "prose (an offer, a description, an apology, a refusal)?\n\n"
     "Return \"continue\" when a tool in the toolbox covers the user's "
     "action (including `toolSearchTool` as a discovery fallback) and the "
@@ -228,18 +235,49 @@ def _format_available_tools(tools: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _format_invoked_tools(invoked: list[tuple[str, str, str]]) -> str:
+    """Render the ``(name, args_summary, result_summary)`` history for the prompt.
+
+    Args and results are truncated — the evaluator only needs enough to tell
+    that the tool ran and produced output, not the full payload.
+    """
+    if not invoked:
+        return "(none yet this reply)"
+    lines = []
+    for name, args_s, result_s in invoked:
+        args_clean = (args_s or "").strip().replace("\n", " ")
+        result_clean = (result_s or "").strip().replace("\n", " ")
+        if len(args_clean) > 160:
+            args_clean = args_clean[:157] + "…"
+        if len(result_clean) > 240:
+            result_clean = result_clean[:237] + "…"
+        lines.append(
+            f"- {name} args={args_clean or '{}'} → result={result_clean or '(empty)'}"
+        )
+    return "\n".join(lines)
+
+
 def evaluate_turn(
     user_query: str,
     assistant_response_summary: str,
     available_tools: list[tuple[str, str]],
     turns_used: int,
     cfg,
+    invoked_tools: Optional[list[tuple[str, str, str]]] = None,
 ) -> EvaluatorResult:
     """Classify whether the agentic loop should terminate after this turn.
 
     ``available_tools`` is a list of ``(name, one_line_description)`` tuples
     supplied by the engine — not redacted; it is engine-controlled, not
     user data.
+
+    ``invoked_tools`` is an optional list of ``(name, args_summary,
+    result_summary)`` tuples for tools already executed during this reply.
+    This lets the evaluator tell the difference between "agent hasn't tried
+    the tool" (nudge it) and "tool already ran successfully but agent
+    replied in prose instead of summarising" (terminal — don't re-run). The
+    result_summary is redacted defensively because tool output can echo
+    user-provided text.
 
     Fail-open returns ``terminal=True`` with ``reason="evaluator_failed_open"``.
     """
@@ -251,6 +289,19 @@ def evaluate_turn(
     )
     if not isinstance(available_tools, list):
         available_tools = []
+    if invoked_tools is None or not isinstance(invoked_tools, list):
+        invoked_tools = []
+    else:
+        invoked_tools = [
+            (
+                str(n),
+                str(a) if a is not None else "",
+                redact(str(r)) if r is not None else "",
+            )
+            for entry in invoked_tools
+            if isinstance(entry, tuple) and len(entry) == 3
+            for n, a, r in [entry]
+        ]
 
     base_url = getattr(cfg, "ollama_base_url", "")
     chat_model = _resolve_evaluator_model(cfg)
@@ -264,10 +315,12 @@ def evaluate_turn(
     thinking = bool(getattr(cfg, "llm_thinking_enabled", False))
 
     tools_block = _format_available_tools(available_tools)
+    invoked_block = _format_invoked_tools(invoked_tools)
     user_content = (
         f"USER QUERY: {user_query}\n\n"
         f"ASSISTANT TURN (summary): {assistant_response_summary}\n\n"
         f"AGENT TOOLBOX:\n{tools_block}\n\n"
+        f"TOOLS ALREADY INVOKED THIS REPLY (with args and results):\n{invoked_block}\n\n"
         f"TURNS USED SO FAR: {turns_used}\n\n"
         "Classify now. Reply with strict JSON only."
     )
