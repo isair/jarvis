@@ -90,6 +90,43 @@ INTENT_JUDGE_TEST_CASES = [
         expected_directed=True,
         expected_query_contains="mum",
     ),
+    # Wake word + casual share-of-information statement (no explicit command
+    # or question). Regression guard: the judge previously rejected these as
+    # "not directed" because the sentence was a statement about the user's
+    # own action rather than a command or question, even though the wake
+    # word was clearly addressed to the assistant.
+    IntentJudgeTestCase(
+        name="wake_word_share_statement_burger",
+        transcript="Jarvis, I just ate a burger from McDonald's.",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.5,
+        expected_directed=True,
+        expected_query_contains="burger",
+        expected_query_not_contains="jarvis",
+    ),
+    IntentJudgeTestCase(
+        name="wake_word_share_statement_feeling",
+        transcript="Jarvis I'm feeling a bit tired today",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1000.5,
+        expected_directed=True,
+        expected_query_contains="tired",
+        expected_query_not_contains="jarvis",
+    ),
+    # Wake word at the END of a declarative statement. Position of the wake
+    # word must not affect directedness — this pattern must also be directed.
+    IntentJudgeTestCase(
+        name="wake_word_share_statement_trailing",
+        transcript="My flight just got cancelled, Jarvis",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1001.5,
+        expected_directed=True,
+        expected_query_contains="flight",
+        expected_query_not_contains="jarvis",
+    ),
     # Self-contained imperative with an intentionally open subject ("something",
     # "anything", "a joke") — these are valid queries and must not be treated
     # as vague references or standalone "re-issue prior question" imperatives.
