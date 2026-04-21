@@ -495,6 +495,189 @@ def test_nudge_appears_in_next_turn_system_message(
         )
 
 
+def test_nudge_with_structured_tool_call_executes_directly(
+    mock_config, db, dialogue_memory
+):
+    """Field bug (2026-04-21, gemma4:e2b, 'give me an overview'):
+    evaluator returned 'continue' with nudge 'call webSearch with
+    query=overview of China' on turns 1 and 2, but the chat model
+    produced more prose instead of emitting a tool call. Nudge cap fired
+    and the user got a vague prose reply instead of a web-search-grounded
+    one.
+
+    Fix: when the evaluator returns a STRUCTURED ``tool_call`` alongside
+    the free-form nudge, the engine executes the tool directly on behalf
+    of the agent — bypassing small models that ignore nudges. The tool
+    result is appended to the conversation like any other tool call, and
+    the next turn asks the model to synthesise a reply from the result.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+
+    invoked_tools: list[tuple[str, dict]] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append((tool_name, tool_args or {}))
+        if tool_name == "webSearch":
+            return ToolExecutionResult(
+                success=True,
+                reply_text=(
+                    "UNTRUSTED WEB EXTRACT:\nChina is an East Asian "
+                    "country with ~1.4B people."
+                ),
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    chat_responses = iter(
+        [
+            # Turn 1: small model produces prose instead of calling webSearch.
+            _assistant_content(
+                "China has a long history spanning thousands of years."
+            ),
+            # Turn 2: after engine has already injected the tool result
+            # (from the direct execution triggered by the evaluator's
+            # structured tool_call), model synthesises a grounded reply.
+            _assistant_content(
+                "China is an East Asian country with about 1.4 billion people."
+            ),
+        ]
+    )
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    eval_results = iter(
+        [
+            # Turn 1 prose → continue, with STRUCTURED tool_call.
+            '{"terminal": false, '
+            '"nudge": "call webSearch with search_query=overview of China", '
+            '"reason": "prose instead of action", '
+            '"tool_call": {"name": "webSearch", '
+            '"arguments": {"search_query": "overview of China"}}}',
+            # Turn 2 grounded reply → terminal.
+            '{"terminal": true, "nudge": "", "reason": "grounded"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="give me an overview of china",
+            dialogue_memory=dialogue_memory,
+        )
+
+    tool_names = [n for n, _ in invoked_tools]
+    assert "webSearch" in tool_names, (
+        "Evaluator returned a structured tool_call for webSearch but the "
+        "engine never invoked it. Got: " + repr(tool_names)
+    )
+    # Arguments must come from the evaluator's structured tool_call,
+    # not fabricated by the engine.
+    ws_args = next(a for n, a in invoked_tools if n == "webSearch")
+    assert ws_args.get("search_query") == "overview of China", (
+        f"webSearch invoked with wrong arguments: {ws_args!r}"
+    )
+    assert reply and "1.4" in reply
+
+
+def test_nudge_structured_tool_call_rejected_when_not_in_allowlist(
+    mock_config, db, dialogue_memory
+):
+    """If the evaluator's structured tool_call names a tool that isn't
+    in the current allow-list, the engine must NOT execute it. Falls
+    back to the text-nudge path so the guardrails stay intact."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+    mock_config.evaluator_nudge_max = 1
+
+    invoked_tools: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append(tool_name)
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("just prose.")
+
+    eval_results = iter(
+        [
+            # Tool 'secretForbidden' is NOT in the allow-list.
+            '{"terminal": false, "nudge": "do something", '
+            '"reason": "r", "tool_call": {"name": "secretForbidden", '
+            '"arguments": {}}}',
+            '{"terminal": true, "nudge": "", "reason": "done"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="do something",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert "secretForbidden" not in invoked_tools, (
+        "Engine executed a tool that wasn't in the allow-list just "
+        "because the evaluator named it. Allow-list guard is broken."
+    )
+
+
 def test_nudge_cap_forces_terminal(mock_config, db, dialogue_memory):
     """Once evaluator_nudge_max is exhausted, a further 'continue' from the
     evaluator is overridden to terminal so the loop delivers the reply.

@@ -31,6 +31,13 @@ class EvaluatorResult:
     terminal: bool
     nudge: str = ""
     reason: str = ""
+    # Structured tool-call intent. When the judge has identified a
+    # specific tool + arguments in the nudge (salvage path or an
+    # obvious missed invocation), it also emits this dict so the
+    # engine can execute the call directly instead of relying on the
+    # chat model to obey a free-form nudge. Shape: {"name": str,
+    # "arguments": dict}. None when the judge is not confident.
+    tool_call: Optional[dict] = None
 
 
 _EVALUATOR_SYSTEM_PROMPT = (
@@ -110,10 +117,26 @@ _EVALUATOR_SYSTEM_PROMPT = (
     "max-turns digest summariser and prepends a \"could not fully "
     "finish\" caveat onto an otherwise correct reply. That caveat is a "
     "worse UX than terminating on the grounded reply.\n\n"
+    "STRUCTURED TOOL CALL: whenever you name a specific tool AND "
+    "arguments in the nudge (salvage path, or an obvious missed "
+    "invocation), ALSO emit a structured `tool_call` field with the "
+    "exact same intent. The engine uses it to execute the call directly "
+    "on behalf of the agent — this is the only reliable path when the "
+    "chat model is a small one that tends to ignore textual nudges. "
+    "Shape: `\"tool_call\": {\"name\": \"<toolName>\", \"arguments\": "
+    "{<k>: <v>, ...}}`. The `name` MUST appear in the toolbox above. "
+    "`arguments` must be a JSON object — use `{}` when the tool takes "
+    "none. OMIT the field (or set it to null) when you are nudging for "
+    "prose (\"produce a natural-language reply\") or when you cannot "
+    "identify the exact arguments — never fabricate arguments you did "
+    "not extract from the garbled turn or derive from the user query.\n\n"
     "Only two outcomes. Output strict JSON only, no prose, no code fences:\n"
-    "  {\"terminal\": <bool>, \"nudge\": \"...\", \"reason\": \"...\"}\n\n"
+    "  {\"terminal\": <bool>, \"nudge\": \"...\", \"reason\": \"...\", "
+    "\"tool_call\": {\"name\": \"...\", \"arguments\": {...}} | null}\n\n"
     "The \"nudge\" field is empty when terminal is true. The \"reason\" "
-    "field is a short log hint, never shown to the user.\n"
+    "field is a short log hint, never shown to the user. The "
+    "\"tool_call\" field is null when terminal is true or when no "
+    "specific tool invocation was identified.\n"
     "Do NOT answer the user's query yourself. Do NOT add commentary."
 )
 
@@ -160,10 +183,21 @@ def _parse_result(raw: str) -> EvaluatorResult:
     reason = candidate.get("reason", "")
     if not isinstance(reason, str):
         reason = ""
+    tool_call: Optional[dict] = None
+    tc_raw = candidate.get("tool_call")
+    if isinstance(tc_raw, dict):
+        name = tc_raw.get("name")
+        if isinstance(name, str) and name.strip():
+            args_raw = tc_raw.get("arguments")
+            if not isinstance(args_raw, dict):
+                args_raw = {}
+            tool_call = {"name": name.strip(), "arguments": args_raw}
+
     return EvaluatorResult(
         terminal=bool(terminal_raw),
         nudge=nudge.strip(),
         reason=reason.strip(),
+        tool_call=tool_call,
     )
 
 

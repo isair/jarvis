@@ -18,11 +18,12 @@ The axis is deliberately binary: from the agentic loop's perspective, "satisfied
 
 ### Output contract
 
-`EvaluatorResult(terminal: bool, nudge: str = "", reason: str = "")`.
+`EvaluatorResult(terminal: bool, nudge: str = "", reason: str = "", tool_call: Optional[dict] = None)`.
 
 - `terminal`: `True` means exit the loop and deliver the reply; `False` means keep looping.
 - `nudge`: when `terminal=False`, a short directive to the agent telling it which tool to use and what to do with it. Injected into the next turn's system message as `[Agent nudge: ...]`, lasts exactly one turn. Empty when `terminal=True`.
 - `reason`: free-text log hint only. Never shown to the user.
+- `tool_call`: optional structured `{"name": str, "arguments": dict}` intent. When the judge has identified both a specific tool (that appears in the toolbox) and its arguments — either by salvaging a garbled tool-call attempt or by spotting an obvious missed invocation — it populates this field in addition to the free-form `nudge`. The engine uses the structured form to execute the tool directly on behalf of the agent, bypassing small chat models that ignore textual nudges. `None` when the judge is nudging for prose, is uncertain about arguments, or is returning terminal. The engine rejects the call if `name` is not in the current allow-list, falling back to the text-nudge path.
 
 ### Rubric
 
@@ -36,11 +37,11 @@ Return `terminal` when the agent genuinely finished: delivered a real answer, su
 
 Return `continue` when the agent's turn is **garbled** — raw tool-protocol markers (`tool_code` / `tool_output` blocks), special sentinel tokens (`<unused88>` and other `<unused…>` variants), bare `tool_calls:` text, truncated JSON, or code/data dumps where a prose answer should be. The deterministic `_is_malformed_model_output` guard in the engine catches the known shapes before the evaluator even runs; the evaluator's garbled-turn clause is defence-in-depth for novel leaks the guard has not learned yet.
 
-When the garbled turn encodes a **failed tool-call attempt** (e.g. a `tool_code` block wrapping `google_search.search(query="…")`, a bare `tool_calls: [{"name": "webSearch", "arguments": {…}}]` JSON blob, or a `<unused…>` block wrapping a tool invocation), the evaluator salvages the intent: extract the intended tool and arguments from the garbled text, validate that the tool name appears in the turn's allow-list, and name the tool + args in the nudge, e.g. *"call webSearch with query='sam smith biography'"*. This saves a turn versus a generic "produce prose" nudge — rather than hoping the model re-attempts the call from scratch, we point directly at the intended invocation so the next turn goes through the normal tool-call path (allow-list check, schema validation, redaction). The evaluator never executes the extracted call itself; it only nudges, so the allow-list and redaction guards stay intact. Unrecoverable shapes (truncated JSON with no name, bare `<unused88>` sentinels, random data dumps) fall back to a "produce a natural-language reply" nudge. Arguments absent from the garbled turn must not be fabricated — salvage is strictly extraction.
+When the garbled turn encodes a **failed tool-call attempt** (e.g. a `tool_code` block wrapping `google_search.search(query="…")`, a bare `tool_calls: [{"name": "webSearch", "arguments": {…}}]` JSON blob, or a `<unused…>` block wrapping a tool invocation), the evaluator salvages the intent: extract the intended tool and arguments from the garbled text, validate that the tool name appears in the turn's allow-list, and name the tool + args both in the free-form `nudge` and in the structured `tool_call` field, e.g. *nudge="call webSearch with query='sam smith biography'"*, *tool_call={"name": "webSearch", "arguments": {"search_query": "sam smith biography"}}*. The engine prefers the structured form: when `tool_call` is present and the name is in the allow-list, the engine runs the tool directly on behalf of the agent via the normal `run_tool_with_retries` path (same allow-list check, schema validation, and redaction guards as a model-emitted call). The structured path exists because small chat models routinely see the textual nudge and reply with more prose instead of actually emitting the tool-call protocol — one or two nudges burned, nudge cap fires, user gets an ungrounded reply. Unrecoverable shapes (truncated JSON with no name, bare `<unused88>` sentinels, random data dumps) fall back to a "produce a natural-language reply" nudge with `tool_call=None`. Arguments absent from the garbled turn must not be fabricated — salvage is strictly extraction.
 
 ### Prompt contract
 
-Strict JSON `{"terminal": bool, "nudge": "...", "reason": "..."}`, no prose, no code fences. The parser is lenient (strips markdown fences, extracts embedded JSON objects).
+Strict JSON `{"terminal": bool, "nudge": "...", "reason": "...", "tool_call": {"name": "...", "arguments": {...}} | null}`, no prose, no code fences. The parser is lenient (strips markdown fences, extracts embedded JSON objects). `tool_call` is optional and defaults to `null`; malformed shapes (missing `name`, non-string `name`, non-dict `arguments`) are normalised to `null` or an empty arguments dict rather than causing a parse failure.
 
 ### Fail-open behaviour
 
@@ -78,6 +79,7 @@ Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests.
 - Only invoked after a turn produces natural-language content. Tool-call turns bypass the evaluator and keep looping.
 - Malformed-JSON fallback replies (canned error text) bypass the evaluator and terminate immediately.
 - On `continue` the engine stashes the nudge in `pending_nudge`; the next turn's system-message rebuild appends `[Agent nudge: <text>]` at the end of the first system message and clears the slot. So each nudge lasts exactly one turn — if the model keeps producing prose, the evaluator fires again and generates a fresh nudge.
+- On `continue` with a structured `tool_call` whose `name` is in the current allow-list, the engine also stashes it in `pending_tool_call`. At the top of the next loop iteration — before any chat LLM call — the engine synthesises an assistant message carrying the `tool_calls` payload, runs the tool via `run_tool_with_retries`, and appends the tool result like any model-emitted call. The textual nudge is cleared for that turn (the tool has run, no need to also shout the directive at the model). This is the actual recovery path for small models: the evaluator-directed tool execution happens deterministically, the chat model only has to synthesise a reply from the tool result on the following turn. Tool calls that fail the allow-list guard fall through to the textual-nudge path so the safety boundary is never bypassed.
 - `cfg.evaluator_nudge_max` (default 2) caps how many nudges can be issued per reply. Once the cap is reached, the next `continue` is overridden to terminal. This stops nudge ping-pong when the model consistently ignores the directive.
 - The loop tracks the latest plausible candidate and delivers it when `agentic_max_turns` is hit.
 
