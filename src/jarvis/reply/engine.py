@@ -1349,6 +1349,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         ),
                     )
                     recent_tool_signatures.append(_direct_sig)
+                    # Also record a case-normalised copy so the duplicate
+                    # guard upstream catches evaluator arg-case flips.
+                    _direct_sig_norm = (
+                        _tc_name,
+                        json.dumps(
+                            {str(k).lower(): v for k, v in (_tc_args or {}).items()},
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        ),
+                    )
+                    if _direct_sig_norm != _direct_sig:
+                        recent_tool_signatures.append(_direct_sig_norm)
                     if len(recent_tool_signatures) > 5:
                         recent_tool_signatures = recent_tool_signatures[-5:]
                 except Exception:
@@ -1858,8 +1870,56 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             isinstance(eval_result.tool_call, dict)
             and isinstance(eval_result.tool_call.get("name"), str)
         ):
-            pending_tool_call = eval_result.tool_call
             _tc_name_stash = eval_result.tool_call.get("name")
+            _tc_args_stash = eval_result.tool_call.get("arguments") or {}
+            if not isinstance(_tc_args_stash, dict):
+                _tc_args_stash = {}
+            # Duplicate guard: if the evaluator keeps asking us to re-run
+            # the same tool with substantively the same args, running it
+            # again won't help — terminate with the best candidate reply
+            # instead of looping forever. Normalise argument keys to lower
+            # case so case-flip variants (url vs URL) still collide.
+            try:
+                _norm_args = {
+                    str(k).lower(): v for k, v in _tc_args_stash.items()
+                }
+                _stash_sig = (
+                    _tc_name_stash,
+                    json.dumps(_norm_args, sort_keys=True, ensure_ascii=False),
+                )
+                _norm_recent = {
+                    (
+                        n,
+                        json.dumps(
+                            {
+                                str(k).lower(): v
+                                for k, v in (json.loads(a) or {}).items()
+                            }
+                            if a and a != "__unserializable_args__"
+                            else {},
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        ),
+                    )
+                    for (n, a) in recent_tool_signatures
+                }
+                _is_dup_direct_exec = _stash_sig in _norm_recent
+            except Exception:
+                _is_dup_direct_exec = False
+            if _is_dup_direct_exec:
+                debug_log(
+                    f"  🛑 evaluator tool_call duplicates a recent "
+                    f"signature ({_tc_name_stash}) — terminating loop "
+                    f"with best candidate instead of re-executing",
+                    "planning",
+                )
+                print(
+                    "    🛑 Evaluator repeat — delivering reply",
+                    flush=True,
+                )
+                reply = candidate_reply
+                break
+            pending_tool_call = eval_result.tool_call
             _will_direct_exec = bool(
                 _tc_name_stash
                 and _tc_name_stash in allowed_tools
