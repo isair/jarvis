@@ -86,6 +86,13 @@ Design principles enforced by the engine:
    - On fire, raw gemma leak fragments are scrubbed from the assistant message before it enters the history so they cannot resurface in a later reply. The router-picked tool is then executed normally and its result drives the next turn.
    - Gating exists to avoid overriding genuine reasoning on larger models and to avoid picking arbitrarily when the router's choice was ambiguous (multiple real tools).
 
+   Compound-query decomposition (small / text-based models only):
+   - When `use_text_tools` is True (i.e. the model is SMALL), the engine checks whether the user query contains " and " joining two distinct question-clauses (both sides ≥ 9 characters). If so, it splits the query into `_compound_sub_questions = [part_1, part_2]` at most one split.
+   - After each tool result is appended in text-based mode, the engine counts how many tool results have already been received. If that count is less than `len(_compound_sub_questions)`, a targeted nudge is appended to the tool result message identifying the specific unanswered sub-question: `"⚠️ You have answered N of M parts. Still unanswered: '<sub_question>'. You MUST emit another tool_calls block now."` — this fires before the model's next turn so it has a concrete reminder of exactly what to search for next.
+   - When all sub-questions are covered (or the query is not compound), a generic completeness prompt is appended instead: `"[If the original query has sub-questions not yet answered by this result, call another tool now. Otherwise reply.]"`
+   - This mechanism is distinct from the force-invocation safety net (which fires on turn 1 only). Compound decomposition fires on every tool result turn until coverage is complete.
+   - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
+
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
      - **Tool calls**: Use `tool_calls` field to request data or actions

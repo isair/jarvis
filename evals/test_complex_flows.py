@@ -445,17 +445,13 @@ class TestMultiStepEntityQuery:
         print(f"  Response: {(response or '')[:400]}")
 
         if web_search_count < 2:
-            msg = (
+            pytest.fail(
                 f"Expected at least 2 webSearch calls (director lookup + filmography), "
-                f"got {web_search_count}. "
+                f"got {web_search_count}. The agentic loop should force a second search "
+                f"once the model has the director's name but not the filmography. "
                 f"Tools: {capture.tool_names() or 'none'}. "
                 f"Response: {(response or '')[:400]}"
             )
-            if JUDGE_MODEL.startswith("gemma4"):
-                pytest.xfail(
-                    f"{JUDGE_MODEL} often flattens multi-step reasoning into one search. {msg}"
-                )
-            pytest.fail(msg)
 
         lowered = (response or "").lower()
 
@@ -482,10 +478,7 @@ class TestMultiStepEntityQuery:
             )
 
         if details:
-            msg = (
+            pytest.fail(
                 f"Grounding failure — {'; '.join(details)}. "
                 f"Response: {(response or '')[:500]}"
             )
-            if JUDGE_MODEL.startswith("gemma4"):
-                pytest.xfail(f"{JUDGE_MODEL} flake. {msg}")
-            pytest.fail(msg)

@@ -923,6 +923,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     prompts = get_system_prompts(model_size)
     debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model} (use_text_tools={use_text_tools})", "planning")
 
+    # Compound-query decomposition for small models.
+    # When a query contains "and" joining two question-clauses, the model
+    # needs to search for each part separately. We split upfront so we can
+    # inject a targeted "still need to answer: X" nudge after each tool
+    # result. Only activated in text-based mode; native tool calling models
+    # manage multi-step reasoning through their own chain-of-thought.
+    _compound_sub_questions: list = []
+    if use_text_tools:
+        _parts = re.split(r'\s+and\s+', text, maxsplit=1, flags=re.IGNORECASE)
+        if len(_parts) == 2 and len(_parts[0].strip()) > 8 and len(_parts[1].strip()) > 8:
+            _compound_sub_questions = [p.strip() for p in _parts]
+            debug_log(
+                f"Compound query detected ({len(_compound_sub_questions)} parts): "
+                + " | ".join(_compound_sub_questions),
+                "planning",
+            )
+
     def _build_initial_system_message() -> str:
         guidance = [SYSTEM_PROMPT.strip()]
 
@@ -1013,8 +1030,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "Module-style calls like `google_search.search(query=...)` or "
                 "`wikipedia.run(...)` will fail — use one of the listed tool names "
                 "with its exact input schema.\n"
-                "- On the NEXT turn, after tool results arrive, answer the user "
-                "conversationally in plain sentences."
+                "- Multi-part queries: if the query asks for two or more distinct "
+                "pieces of information (e.g. 'who is X AND what Y has X done'), "
+                "plan to make ONE tool call per sub-question. After each tool "
+                "result, count how many sub-questions are still unanswered. If "
+                "any remain, emit another tool_calls: [...] block immediately — "
+                "do NOT write a text answer yet. Only write a plain-sentences "
+                "reply once every sub-question is covered by a tool result. "
+                "Never say 'the search result did not list X' — instead, search for X."
             )
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
@@ -1490,9 +1513,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
 
                 if use_text_tools:
+                    # For compound queries, compute how many sub-questions remain
+                    # unanswered and append a targeted nudge so the model knows
+                    # exactly what to search for next.
+                    tool_results_so_far = sum(
+                        1 for m in messages if m.get("tool_name")
+                    )
+                    if _compound_sub_questions and tool_results_so_far < len(_compound_sub_questions):
+                        remaining = _compound_sub_questions[tool_results_so_far:]
+                        remainder_hint = (
+                            f"\n\n⚠️ You have answered {tool_results_so_far} of "
+                            f"{len(_compound_sub_questions)} parts of the original query. "
+                            f"Still unanswered: \"{remaining[0]}\". "
+                            "You MUST emit another tool_calls block now to search for this. "
+                            "Do NOT reply in text yet."
+                        )
+                    else:
+                        remainder_hint = (
+                            f"\n\n[If the original query has sub-questions not yet answered "
+                            "by this result, call another tool now. Otherwise reply.]"
+                        )
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool result: {tool_name}]\n{effective_result}",
+                        "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
                         "tool_name": tool_name,  # kept for duplicate detection
                     })
                 else:
