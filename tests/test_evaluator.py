@@ -239,3 +239,33 @@ class TestEvaluatorGarbledTurnGuidance:
                 f"a garbled agent turn — naming shapes helps small judge "
                 f"models spot them."
             )
+
+    def test_prompt_instructs_salvaging_failed_tool_calls(self):
+        """When the garbled turn encodes a failed tool-call attempt
+        (e.g. ``tool_code\\nprint(google_search.search(query="..."))`` or
+        bare ``tool_calls: [{"name": "webSearch", ...}]`` JSON), the
+        evaluator should extract the intended tool + arguments and name
+        them in the nudge so the next turn goes through the normal
+        tool-call path. Saves a turn vs. a generic "produce prose"
+        nudge, and keeps allow-list/schema/redaction guards intact
+        because the retry is a real tool call, not a direct execution
+        of parsed text.
+        """
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "salvage" in prompt_lower or "extract" in prompt_lower, (
+            "Evaluator prompt should instruct the judge to extract / "
+            "salvage the intended tool call from a garbled turn when "
+            "possible, rather than only nudging 'produce prose'."
+        )
+        # The nudge should name the intended tool + args, not just say
+        # "try again". Pin a keyword that signals this shape.
+        assert (
+            "name the tool" in prompt_lower
+            or "name the intended tool" in prompt_lower
+        ), (
+            "Evaluator prompt should tell the judge to name the "
+            "intended tool (and arguments) in the nudge when the "
+            "garbled turn encodes a failed tool-call attempt."
+        )
