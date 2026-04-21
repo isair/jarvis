@@ -65,6 +65,55 @@ def _resolve_tool_router_model(cfg) -> str:
     return ""
 
 
+def _text_tool_call_guidance(allowed_names: list[str]) -> str:
+    """Build the text-based tool-call guidance block for gemma-class models.
+
+    Gemma isn't a natively tool-calling model — we teach the `tool_calls:
+    [...]` literal shape via prompt. Gemma's pre-training carries a
+    *different* protocol (Google's code-interpreter `tool_code` /
+    `tool_output` fenced blocks and `<unusedNN>` sentinel tokens), and a
+    confused model falls back to those. The guidance both teaches the
+    target shape and explicitly names the gemma-native shapes as
+    forbidden so the model is steered away from emitting them. Naming
+    specific tokens beats vague "do not emit raw protocol" instructions
+    for small models.
+    """
+    allowed_name_list = ", ".join(sorted(allowed_names)) if allowed_names else ""
+    return (
+        "\nExact tool-call syntax (copy this shape — emit nothing else on a "
+        "tool-calling turn):\n"
+        'tool_calls: [{"id": "call_1", "type": "function", "function": '
+        '{"name": "webSearch", "arguments": "{\\"search_query\\": '
+        '\\"example query\\"}"}}]\n'
+        "Notes:\n"
+        "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
+        "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
+        "a bare name is not a valid call and the tool will not run.\n"
+        "- Never invoke tools that are not in the list above. The ONLY tools "
+        f"that exist are: {allowed_name_list or '(see list above)'}. "
+        "Module-style calls like `google_search.search(query=...)` or "
+        "`wikipedia.run(...)` will fail — use one of the listed tool names "
+        "with its exact input schema.\n"
+        "- FORBIDDEN output shapes (your training may incline you toward "
+        "these from a different protocol — they will NOT work here and "
+        "the user will see garbage): do NOT emit ```tool_code ...``` or "
+        "```tool_output ...``` fenced blocks, do NOT emit `<unused88>` or "
+        "any `<unused…>` sentinel token, do NOT emit Python-style "
+        "`print(google_search.search(query=...))` scaffolding. The ONLY "
+        "accepted tool-call format is the `tool_calls: [...]` JSON "
+        "literal shown above. On a prose turn, write natural-language "
+        "sentences — never the scaffolding tokens.\n"
+        "- Multi-part queries: if the query asks for two or more distinct "
+        "pieces of information (e.g. 'who is X AND what Y has X done'), "
+        "plan to make ONE tool call per sub-question. After each tool "
+        "result, count how many sub-questions are still unanswered. If "
+        "any remain, emit another tool_calls: [...] block immediately — "
+        "do NOT write a text answer yet. Only write a plain-sentences "
+        "reply once every sub-question is covered by a tool result. "
+        "Never say 'the search result did not list X' — instead, search for X."
+    )
+
+
 def _is_malformed_model_output(content: str) -> bool:
     """Detect malformed / non-conversational LLM content that must not reach
     the user.
@@ -926,31 +975,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # List the exact allowed tool names so the model can't invent ones
             # like `wikipedia.run` or `google.search` — gemma models have strong
             # priors to emit those even when they aren't in the tool list.
-            allowed_name_list = ", ".join(sorted(known_tool_names)) if known_tool_names else ""
-            guidance.append(
-                "\nExact tool-call syntax (copy this shape — emit nothing else on a "
-                "tool-calling turn):\n"
-                'tool_calls: [{"id": "call_1", "type": "function", "function": '
-                '{"name": "webSearch", "arguments": "{\\"search_query\\": '
-                '\\"example query\\"}"}}]\n'
-                "Notes:\n"
-                "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
-                "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
-                "a bare name is not a valid call and the tool will not run.\n"
-                "- Never invoke tools that are not in the list above. The ONLY tools "
-                f"that exist are: {allowed_name_list or '(see list above)'}. "
-                "Module-style calls like `google_search.search(query=...)` or "
-                "`wikipedia.run(...)` will fail — use one of the listed tool names "
-                "with its exact input schema.\n"
-                "- Multi-part queries: if the query asks for two or more distinct "
-                "pieces of information (e.g. 'who is X AND what Y has X done'), "
-                "plan to make ONE tool call per sub-question. After each tool "
-                "result, count how many sub-questions are still unanswered. If "
-                "any remain, emit another tool_calls: [...] block immediately — "
-                "do NOT write a text answer yet. Only write a plain-sentences "
-                "reply once every sub-question is covered by a tool result. "
-                "Never say 'the search result did not list X' — instead, search for X."
-            )
+            guidance.append(_text_tool_call_guidance(list(known_tool_names)))
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
 

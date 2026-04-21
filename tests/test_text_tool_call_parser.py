@@ -149,3 +149,82 @@ class TestMalformedModelOutputGuard:
     )
     def test_allows_normal_prose(self, content):
         assert not _is_malformed(content), f"Should not flag prose: {content!r}"
+
+
+class TestTextToolCallGuidancePrompt:
+    """The text-based tool-call guidance injected for gemma-class models must
+    explicitly name and forbid the shapes we know gemma leaks when confused.
+
+    Gemma is not a natively tool-calling model — we bolt tool calling on via
+    a prompt that teaches the `tool_calls: [...]` literal shape. Gemma's
+    pre-training includes a different protocol (Google's code-interpreter
+    `tool_code` / `tool_output` fenced blocks and `<unusedNN>` sentinel
+    tokens), and when confused the model falls back to emitting those
+    instead. The engine's deterministic guard catches them downstream, but
+    the prompt itself should name them as forbidden so the model is steered
+    away from emitting them in the first place — cheaper than catching and
+    retrying.
+
+    This test pins the prompt against drift: if someone reshuffles the
+    guidance and drops the forbidden-shape clause, this test fails.
+    """
+
+    def _guidance(self, allowed_names=("webSearch", "stop", "toolSearchTool")):
+        import jarvis.reply.engine as engine_mod
+        assert hasattr(engine_mod, "_text_tool_call_guidance"), (
+            "Expose _text_tool_call_guidance(allowed_names) at module "
+            "level so the tool-call prompt block is unit-testable."
+        )
+        return engine_mod._text_tool_call_guidance(list(allowed_names))
+
+    def test_guidance_teaches_tool_calls_array_shape(self):
+        text = self._guidance()
+        assert "tool_calls:" in text, (
+            "Guidance must teach the `tool_calls: [...]` literal shape "
+            "the parser expects."
+        )
+
+    def test_guidance_lists_allowed_tool_names(self):
+        text = self._guidance(["webSearch", "stop", "openApp"])
+        for name in ("webSearch", "stop", "openApp"):
+            assert name in text, f"{name} should appear in the allow-list"
+
+    @pytest.mark.parametrize(
+        "forbidden,label",
+        [
+            ("tool_code", "gemma code-interpreter block"),
+            ("tool_output", "gemma tool-output block"),
+            ("<unused", "gemma unused-sentinel token"),
+        ],
+    )
+    def test_guidance_names_and_forbids_gemma_native_shapes(
+        self, forbidden, label
+    ):
+        text = self._guidance()
+        assert forbidden in text, (
+            f"Guidance should explicitly name {forbidden!r} ({label}) as "
+            f"a forbidden shape so the model is steered away from "
+            f"emitting it. Naming specific tokens beats vague 'do not "
+            f"emit raw protocol' instructions for small models."
+        )
+
+    def test_guidance_marks_gemma_shapes_as_forbidden_not_examples(self):
+        """The forbidden shapes should appear in a forbidding context
+        ('do not', 'never', 'will fail', 'forbidden'), not as positive
+        examples the model should copy.
+        """
+        text = self._guidance()
+        # Find the paragraph mentioning tool_code and check it sits near
+        # a negation.
+        idx = text.find("tool_code")
+        assert idx >= 0
+        window = text[max(0, idx - 200) : idx + 200].lower()
+        assert any(
+            neg in window
+            for neg in ("do not", "don't", "never", "will fail", "forbidden", "not accepted")
+        ), (
+            "The `tool_code` mention must be in a forbidding context, "
+            "not a positive example. Showing gemma's native protocol as "
+            "an example would reinforce the exact behaviour we want to "
+            "stop."
+        )
