@@ -91,7 +91,7 @@ class TestReplyEngineDialogueMemory:
         """Test that reply engine stores conversation in correct order."""
         # Mock dependencies
         from jarvis.reply.evaluator import EvaluatorResult
-        mock_eval.return_value = EvaluatorResult(terminal=True, reason="satisfied")
+        mock_eval.return_value = EvaluatorResult(terminal=True)
         mock_extract.return_value = "Final response"
         mock_chat.return_value = {"message": {"content": "Final response"}}
 
@@ -137,7 +137,7 @@ class TestReplyEngineDialogueMemory:
         """Test that JSON tool calls are filtered from dialogue memory."""
         # Mock dependencies
         from jarvis.reply.evaluator import EvaluatorResult
-        mock_eval.return_value = EvaluatorResult(terminal=True, reason="satisfied")
+        mock_eval.return_value = EvaluatorResult(terminal=True)
         mock_tool.return_value = Mock(reply_text="Weather data", error_message=None)
         
         # Mock multi-turn conversation: structured tool call then final response

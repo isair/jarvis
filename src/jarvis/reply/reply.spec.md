@@ -77,17 +77,16 @@ Design principles enforced by the engine:
    - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.
 
    Evaluator-driven termination:
-   - After each turn that produces assistant content (i.e. a natural-language response, not a tool call), the engine runs a lightweight evaluator LLM pass over the user's original query and the turn's response.
-   - The evaluator returns one of two terminal states, or none:
-     1. **satisfied** — the assistant's response already addresses the user's query; exit the loop and deliver it.
-     2. **needs_user_input** — the assistant cannot proceed without a clarification from the user; exit the loop, deliver the assistant's question verbatim, and wait for the next user turn.
-     3. Otherwise — loop continues until `agentic_max_turns` is hit.
+   - After each turn that produces assistant content (i.e. a natural-language response, not a tool call), the engine runs a lightweight evaluator LLM pass.
+   - The axis is binary: **terminal** (stop looping, deliver the reply) vs **continue** (keep looping with a nudge). "Satisfied" and "needs_user_input" are both terminal from the loop's perspective — the loop only cares whether to stop, not why.
+   - The evaluator returns `continue` when the user expressed a clear action, a tool in the agent's allow-list could directly perform it, and the agent's turn was prose instead of a tool call. In that case it also returns a short `nudge` telling the agent which tool to use.
    - Evaluator contract:
-     - Input: the original user query (redacted), a compact summary of the turn's assistant output (content or tool-call name + args), and the number of turns consumed.
-     - Output: strict JSON `{"terminal": bool, "reason": "satisfied" | "needs_user_input" | "continue", "clarification_question"?: string}`.
-     - Timeout-bounded via `llm_digest_timeout_sec`; on failure the evaluator defaults to `continue` (fail-open, rely on `agentic_max_turns`).
+     - Input: the original user query (redacted), a compact summary of the turn's assistant output, the current allow-list as `(name, one-line-description)` tuples, and the number of turns consumed.
+     - Output: strict JSON `{"terminal": bool, "nudge": string, "reason": string}`. The `reason` field is a free-text log hint, never shown to the user.
+     - Timeout-bounded via `llm_digest_timeout_sec`; on failure the evaluator defaults to `terminal=True` (fail-open is biased toward terminal because spinning a broken loop is worse than delivering a possibly-weak reply).
+   - Nudge injection: when `continue` with a nudge, the engine stashes the nudge in `pending_nudge`. The next turn's system-message rebuild appends `[Agent nudge: <text>]` at the end of the first system message and clears the slot, so each nudge applies to exactly one turn. If the model still produces prose, the evaluator fires again and generates a fresh nudge.
+   - `cfg.evaluator_nudge_max` (default 2) caps nudges per reply. Once the cap is hit, the next `continue` is overridden to terminal to stop nudge ping-pong. Max-turn cap (`agentic_max_turns`) remains the hard backstop.
    - The evaluator replaces the previous force-invocation safety net: the engine no longer second-guesses the chat model's tool-call decisions or force-fills search arguments from raw user text. Tool-argument quality is a chat-model responsibility, supported by the `SELF-CONTAINED TOOL ARGUMENTS` system-prompt rule that applies to every tool (builtin or MCP).
-   - Max-turn cap (`agentic_max_turns`) remains the only hard backstop.
 
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
@@ -262,6 +261,7 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
   - `evaluator_enabled` (default `null` = auto: ON for SMALL, OFF for LARGE) gates the per-turn evaluator LLM. When off, the first natural-language content terminates the loop.
   - `evaluator_model` (default empty = fall back to `intent_judge_model`, then `ollama_chat_model`) pins the model used for evaluator classification. See `src/jarvis/reply/evaluator.spec.md`.
+  - `evaluator_nudge_max` (default 2) caps how many evaluator-driven nudges can be injected into the system message per reply. Once the cap is reached, a `continue` verdict is overridden to terminal to stop nudge ping-pong.
   - `tool_search_max_calls` (default 3) caps `toolSearchTool` invocations per reply. Extra calls return a tool-error nudging the model to decide with what is already available.
 - Context injection:
   - `location_enabled` enables/disables location services

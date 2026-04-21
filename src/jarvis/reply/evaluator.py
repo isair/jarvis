@@ -1,11 +1,17 @@
 """Agentic-loop turn evaluator.
 
 After each reply turn that produces natural-language content, a small LLM
-decides whether the loop should terminate (query satisfied, or the
-assistant is asking a clarifying question) or keep going.
+decides whether the loop should terminate (the agent has done what it can
+with its current allow-list) or keep working (a tool in the allow-list
+could directly perform the user's expressed action but the agent replied
+in prose instead).
 
-Parses strict JSON; on timeout or parse failure returns ``continue`` so
-the max-turn cap stays the only hard backstop.
+Contract is binary: terminal vs continue. "Satisfied" and
+"needs_user_input" are both terminal from the loop's perspective — both
+mean stop looping and hand back to the user.
+
+Fail-open on parse or transport failure collapses to ``terminal=True``.
+Spinning a broken loop is worse than delivering a possibly-weak reply.
 """
 
 from __future__ import annotations
@@ -13,43 +19,42 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Optional
 
 from ..debug import debug_log
 from ..llm import call_llm_direct
 from ..utils.redact import redact
 
 
-EvaluatorReason = Literal["satisfied", "needs_user_input", "continue"]
-
-
 @dataclass
 class EvaluatorResult:
     terminal: bool
-    reason: EvaluatorReason
-    clarification_question: Optional[str] = None
+    nudge: str = ""
+    reason: str = ""
 
 
 _EVALUATOR_SYSTEM_PROMPT = (
-    "You are an agentic-loop evaluator for an AI assistant. You receive the "
-    "user's original query and a short summary of the assistant's latest "
-    "turn. Classify the turn as ONE of:\n"
-    "  - \"satisfied\": the assistant's reply already addresses the user's "
-    "query; the user has received the answer.\n"
-    "  - \"needs_user_input\": the assistant literally cannot proceed "
-    "without asking the user a clarifying question, and the reply is that "
-    "question.\n"
-    "  - \"continue\": anything else; the assistant should keep working "
-    "(e.g. the reply is partial, acknowledges needing more steps, or is "
-    "clearly not a final answer).\n\n"
-    "Reply with STRICT JSON only, no prose, no code fences:\n"
-    "  {\"terminal\": <bool>, \"reason\": \"satisfied\" | "
-    "\"needs_user_input\" | \"continue\"}\n\n"
-    "Rules:\n"
-    "- \"satisfied\" and \"needs_user_input\" imply terminal=true; "
-    "\"continue\" implies terminal=false.\n"
-    "- When in doubt, choose \"continue\".\n"
-    "- Do NOT answer the user's query yourself. Do NOT add commentary."
+    "You are judging whether an AI agent should keep working or stop. "
+    "The agent has a set of tools and has just produced a turn. You see "
+    "the user's query, a summary of the agent's turn, and the agent's "
+    "available tools with one-line descriptions.\n\n"
+    "Return \"continue\" when ALL of the following hold:\n"
+    "  - the user expressed a clear action or request,\n"
+    "  - a tool in the agent's toolbox could directly perform it,\n"
+    "  - the agent's turn was prose (an offer, a suggestion, a "
+    "description of what it could do) instead of invoking that tool.\n"
+    "In that case include a short \"nudge\" telling the agent which tool "
+    "to use and what to do with it.\n\n"
+    "Return \"terminal\" when the agent genuinely finished: it delivered "
+    "a real answer, successfully completed the action, or truthfully "
+    "said it cannot do this because no tool fits.\n\n"
+    "Only two outcomes. Do not distinguish \"satisfied\" from \"needs "
+    "clarification\" — both are terminal from the loop's perspective.\n\n"
+    "Output strict JSON only, no prose, no code fences:\n"
+    "  {\"terminal\": <bool>, \"nudge\": \"...\", \"reason\": \"...\"}\n\n"
+    "The \"nudge\" field is empty when terminal is true. The \"reason\" "
+    "field is a short log hint — it is never shown to the user.\n"
+    "Do NOT answer the user's query yourself. Do NOT add commentary."
 )
 
 
@@ -57,11 +62,14 @@ _JSON_OBJECT_RE = re.compile(r"\{[^{}]*\}", re.DOTALL)
 
 
 def _parse_result(raw: str) -> EvaluatorResult:
-    """Lenient JSON parse → EvaluatorResult. Failures collapse to 'continue'."""
+    """Lenient JSON parse. Failures collapse to terminal=True (fail-open).
+
+    Biased toward terminal: a stuck loop is worse than a possibly-weak
+    reply, so any parse ambiguity ends the loop rather than continuing it.
+    """
     if not raw:
-        return EvaluatorResult(terminal=False, reason="continue")
+        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
     text = raw.strip()
-    # Strip common wrappers (markdown fences, quotes).
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*", "", text).strip()
         if text.endswith("```"):
@@ -81,19 +89,21 @@ def _parse_result(raw: str) -> EvaluatorResult:
             except Exception:
                 candidate = None
     if not candidate:
-        return EvaluatorResult(terminal=False, reason="continue")
+        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
-    reason_raw = str(candidate.get("reason", "")).strip().lower()
-    if reason_raw not in ("satisfied", "needs_user_input", "continue"):
-        return EvaluatorResult(terminal=False, reason="continue")
-    terminal = reason_raw != "continue"
-    clarification = candidate.get("clarification_question")
-    if not isinstance(clarification, str):
-        clarification = None
+    terminal_raw = candidate.get("terminal")
+    if not isinstance(terminal_raw, bool):
+        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
+    nudge = candidate.get("nudge", "")
+    if not isinstance(nudge, str):
+        nudge = ""
+    reason = candidate.get("reason", "")
+    if not isinstance(reason, str):
+        reason = ""
     return EvaluatorResult(
-        terminal=terminal,
-        reason=reason_raw,  # type: ignore[arg-type]
-        clarification_question=clarification,
+        terminal=bool(terminal_raw),
+        nudge=nudge.strip(),
+        reason=reason.strip(),
     )
 
 
@@ -101,9 +111,8 @@ def _resolve_evaluator_model(cfg) -> str:
     """Pick the LLM model for the evaluator pass.
 
     Resolution order: explicit ``evaluator_model`` → ``intent_judge_model`` →
-    ``ollama_chat_model``. Mirrors ``_resolve_tool_router_model`` in
-    ``engine.py``; the evaluator is a small classification job and reusing
-    the judge model keeps it on a small, already-warm model by default.
+    ``ollama_chat_model``. The evaluator is a small classification job;
+    reusing the judge model keeps it on a small, already-warm model.
     """
     for candidate in (
         getattr(cfg, "evaluator_model", ""),
@@ -115,30 +124,44 @@ def _resolve_evaluator_model(cfg) -> str:
     return ""
 
 
+def _format_available_tools(tools: list[tuple[str, str]]) -> str:
+    if not tools:
+        return "(none)"
+    lines = []
+    for name, desc in tools:
+        desc_clean = (desc or "").strip().splitlines()[0] if desc else ""
+        lines.append(f"- {name}: {desc_clean}" if desc_clean else f"- {name}")
+    return "\n".join(lines)
+
+
 def evaluate_turn(
     user_query: str,
     assistant_response_summary: str,
+    available_tools: list[tuple[str, str]],
     turns_used: int,
     cfg,
 ) -> EvaluatorResult:
     """Classify whether the agentic loop should terminate after this turn.
 
-    Fail-open on any error. Returning ``continue`` keeps ``agentic_max_turns``
-    as the single hard backstop.
+    ``available_tools`` is a list of ``(name, one_line_description)`` tuples
+    supplied by the engine — not redacted; it is engine-controlled, not
+    user data.
+
+    Fail-open returns ``terminal=True`` with ``reason="evaluator_failed_open"``.
     """
-    # Defensive redaction: the caller already passes redacted user text, but
-    # the assistant summary is the model's own reply which may echo sensitive
-    # fragments the user just provided. Scrub both before they hit the LLM.
     user_query = redact(user_query) if isinstance(user_query, str) else ""
     assistant_response_summary = (
         redact(assistant_response_summary)
         if isinstance(assistant_response_summary, str)
         else ""
     )
+    if not isinstance(available_tools, list):
+        available_tools = []
+
     base_url = getattr(cfg, "ollama_base_url", "")
     chat_model = _resolve_evaluator_model(cfg)
     if not base_url or not chat_model:
-        return EvaluatorResult(terminal=False, reason="continue")
+        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
     try:
         timeout_sec = float(getattr(cfg, "llm_digest_timeout_sec", 8.0))
@@ -146,9 +169,11 @@ def evaluate_turn(
         timeout_sec = 8.0
     thinking = bool(getattr(cfg, "llm_thinking_enabled", False))
 
+    tools_block = _format_available_tools(available_tools)
     user_content = (
         f"USER QUERY: {user_query}\n\n"
         f"ASSISTANT TURN (summary): {assistant_response_summary}\n\n"
+        f"AGENT TOOLBOX:\n{tools_block}\n\n"
         f"TURNS USED SO FAR: {turns_used}\n\n"
         "Classify now. Reply with strict JSON only."
     )
@@ -163,17 +188,17 @@ def evaluate_turn(
             thinking=thinking,
         )
     except Exception as e:
-        debug_log(f"evaluator failed (non-fatal, continuing loop): {e}", "planning")
-        return EvaluatorResult(terminal=False, reason="continue")
+        debug_log(f"evaluator failed (non-fatal, terminal): {e}", "planning")
+        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
     if not raw:
-        debug_log("evaluator returned empty response — continuing loop", "planning")
-        return EvaluatorResult(terminal=False, reason="continue")
+        debug_log("evaluator returned empty response — terminal", "planning")
+        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
     result = _parse_result(raw)
     debug_log(
-        f"evaluator: reason={result.reason} terminal={result.terminal} "
-        f"(turn {turns_used})",
+        f"evaluator: terminal={result.terminal} nudge={result.nudge!r} "
+        f"reason={result.reason!r} (turn {turns_used})",
         "planning",
     )
     return result

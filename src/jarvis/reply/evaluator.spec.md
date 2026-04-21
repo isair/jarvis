@@ -2,48 +2,57 @@
 
 ### Purpose
 
-After each agentic-loop turn that produces natural-language content (as opposed to a tool call), a lightweight LLM decides whether the loop should terminate or keep working. This replaces the previous brittle heuristic of "first content wins" and the force-tool-invocation backstop.
+After each agentic-loop turn that produces natural-language content (as opposed to a tool call), a lightweight LLM decides whether the loop should **terminate** (the agent has done what it can) or **continue** (a tool in the agent's allow-list could directly perform the user's expressed action but the agent replied in prose instead).
+
+The axis is deliberately binary: from the agentic loop's perspective, "satisfied" and "needs_user_input" are the same terminal state — both mean stop looping and hand back to the user. Collapsing them removes the accidental third class that the previous contract had, where a coherent-but-wrong prose reply (agent describes what it *could* do, but doesn't do it) was being marked `satisfied` and shipped.
 
 ### Input contract
 
-`evaluate_turn(user_query, assistant_response_summary, turns_used, cfg)`:
+`evaluate_turn(user_query, assistant_response_summary, available_tools, turns_used, cfg)`:
 
 - `user_query` (str): the redacted user query that opened this reply. Defensively re-redacted on entry.
 - `assistant_response_summary` (str): the natural-language content produced by the chat model on the current turn. Redacted on entry in case the model echoed sensitive user text.
-- `turns_used` (int): number of loop turns consumed so far, surfaced to the evaluator so it can factor urgency into its choice.
+- `available_tools` (list of `(name, one_line_description)` tuples): the agent's current allow-list. Engine-supplied, not user data, so not redacted. Names and one-liners only, no schema — enough for the evaluator to judge "could this turn have been a tool call?"
+- `turns_used` (int): number of loop turns consumed so far.
 - `cfg`: config object providing the base URL, model, and timeout.
 
 ### Output contract
 
-`EvaluatorResult(terminal: bool, reason: str, clarification_question: Optional[str])`.
+`EvaluatorResult(terminal: bool, nudge: str = "", reason: str = "")`.
 
-`reason` is one of:
+- `terminal`: `True` means exit the loop and deliver the reply; `False` means keep looping.
+- `nudge`: when `terminal=False`, a short directive to the agent telling it which tool to use and what to do with it. Injected into the next turn's system message as `[Agent nudge: ...]`, lasts exactly one turn. Empty when `terminal=True`.
+- `reason`: free-text log hint only. Never shown to the user.
 
-- `"satisfied"` - the reply addresses the user's query; terminate and deliver.
-- `"needs_user_input"` - the reply is a clarifying question to the user; terminate. When `clarification_question` is a non-empty string, the engine overrides the raw candidate reply with this refined phrasing.
-- `"continue"` - anything else; keep looping.
+### Rubric
 
-`terminal` is true iff `reason != "continue"`.
+Return `continue` (non-terminal) when ALL of the following hold:
+
+- the user expressed a clear action or request, AND
+- a tool in the agent's toolbox could directly perform it, AND
+- the agent's turn was prose (an offer, a suggestion, a description of what it could do) instead of invoking that tool.
+
+Return `terminal` when the agent genuinely finished: delivered a real answer, successfully completed the action, or truthfully said it cannot do this because no tool fits.
 
 ### Prompt contract
 
-The evaluator is instructed to reply with strict JSON `{"terminal": bool, "reason": "...", "clarification_question"?: "..."}`, no prose, no code fences. The parser is lenient and strips markdown fences / extracts embedded JSON objects where needed.
+Strict JSON `{"terminal": bool, "nudge": "...", "reason": "..."}`, no prose, no code fences. The parser is lenient (strips markdown fences, extracts embedded JSON objects).
 
 ### Fail-open behaviour
 
-Any of the following collapse to `reason="continue"`:
+Any of the following collapse to `EvaluatorResult(terminal=True, reason="evaluator_failed_open")`:
 
 - Missing base URL or resolvable model.
 - Timeout, connection error, or any other exception from the LLM call.
 - Empty response from the LLM.
 - JSON parse failure.
-- Unknown `reason` value.
+- Missing or non-boolean `terminal` field.
 
-This keeps `agentic_max_turns` as the single hard backstop and prevents a flaky evaluator from breaking replies.
+The fail-open choice was flipped from the previous contract (which defaulted to `continue`). Biasing toward terminal is safer: spinning in a broken evaluator loop is worse than shipping a possibly-weak reply. `agentic_max_turns` remains as a hard backstop, and the nudge cap (`evaluator_nudge_max`) prevents infinite ping-pong even if the evaluator is live but consistently returns `continue`.
 
 ### Timeout
 
-Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests. These are all short classification-shaped calls and should fail fast; the longer `llm_tools_timeout_sec` would stall the reply loop.
+Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests.
 
 ### Model resolution
 
@@ -53,24 +62,22 @@ Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests. These ar
 2. `cfg.intent_judge_model` (small, already warm from wake-word path)
 3. `cfg.ollama_chat_model` (last resort)
 
-Mirrors `_resolve_tool_router_model` in the engine.
-
 ### Gating
 
 `cfg.evaluator_enabled`:
 
-- `None` (default) - auto: ON for SMALL models, OFF for LARGE. Large models terminate on the first natural-language content, matching prior behaviour.
-- `True` / `False` - force on/off regardless of model size.
-
-When gated off, the engine treats the first natural-language candidate as terminal.
+- `None` (default) — auto: ON for SMALL models, OFF for LARGE. Large models terminate on the first natural-language content.
+- `True` / `False` — force on/off regardless of model size.
 
 ### Relationship to the agentic loop
 
 - Only invoked after a turn produces natural-language content. Tool-call turns bypass the evaluator and keep looping.
 - Malformed-JSON fallback replies (canned error text) bypass the evaluator and terminate immediately.
-- The loop tracks the latest plausible `continue` candidate and delivers it when `agentic_max_turns` is hit, rather than falling back to a generic error message.
+- On `continue` the engine stashes the nudge in `pending_nudge`; the next turn's system-message rebuild appends `[Agent nudge: <text>]` at the end of the first system message and clears the slot. So each nudge lasts exactly one turn — if the model keeps producing prose, the evaluator fires again and generates a fresh nudge.
+- `cfg.evaluator_nudge_max` (default 2) caps how many nudges can be issued per reply. Once the cap is reached, the next `continue` is overridden to terminal. This stops nudge ping-pong when the model consistently ignores the directive.
+- The loop tracks the latest plausible candidate and delivers it when `agentic_max_turns` is hit.
 
 ### Tests
 
-- `tests/test_evaluator.py` covers parse edge cases, each reason path, timeout / ConnectionError fail-open, missing-config fail-open, and the clarification_question override.
-- `tests/test_engine_tool_search_loop.py` covers the integration with the agentic loop including the continue-then-toolSearchTool sequence.
+- `tests/test_evaluator.py` covers parse edge cases, terminal and continue-with-nudge paths, timeout / connection-error fail-open (now terminal), missing-config fail-open, redaction, and the available-tools payload shape.
+- `tests/test_engine_tool_search_loop.py` covers the integration with the agentic loop including the continue-then-nudge-then-tool-call sequence.

@@ -942,31 +942,43 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         """Get current time and location context as a string."""
         return _live_time_location_string(cfg)
 
-    def _update_system_message_with_context(messages_list):
-        """Update the first system message with fresh context.
+    def _update_system_message_with_context(messages_list, nudge: str = ""):
+        """Update the first system message with fresh context and optional nudge.
 
-        Note: Adding a separate system message AFTER the user message breaks
-        native tool calling in models like Llama 3.2. Instead, we prepend
-        context to the first system message.
+        Prepends a fresh time/location context line. When ``nudge`` is
+        non-empty, also appends an ``[Agent nudge: ...]`` block at the END
+        of the first system message. The nudge is one-shot — the caller
+        clears it after this call, so it applies to exactly one turn.
+
+        Note: Adding a separate system message AFTER the user message
+        breaks native tool calling in models like Llama 3.2. Instead, we
+        mutate the first system message.
         """
         context_str = _get_context_string()
-        if not context_str:
-            return
 
         # Find and update the first system message (skip tool guidance messages)
         for msg in messages_list:
             if (msg.get("role") == "system" and
-                not msg.get("_is_context_injected") and
                 not msg.get("_is_tool_guidance")):
-                # Remove old context if present (marked by prefix)
                 content = msg.get("content", "")
+                # Strip any previous context line.
                 if content.startswith("[Context:"):
-                    # Remove the old context line
                     lines = content.split("\n", 1)
                     content = lines[1] if len(lines) > 1 else ""
+                    if content.startswith("\n"):
+                        content = content.lstrip("\n")
+                # Strip any previous nudge block (exactly one trailing line).
+                _nudge_marker = "\n\n[Agent nudge:"
+                idx = content.rfind(_nudge_marker)
+                if idx != -1 and content.rstrip().endswith("]"):
+                    content = content[:idx]
 
-                # Prepend fresh context
-                msg["content"] = f"[Context: {context_str}]\n\n{content}"
+                new_content = content
+                if context_str:
+                    new_content = f"[Context: {context_str}]\n\n{new_content}"
+                if nudge:
+                    new_content = f"{new_content.rstrip()}\n\n[Agent nudge: {nudge}]"
+                msg["content"] = new_content
                 msg["_is_context_injected"] = True
                 break
 
@@ -1072,6 +1084,34 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except (TypeError, ValueError):
         tool_search_cap = 3
 
+    # Evaluator nudge state. When the evaluator says "continue" with a
+    # short directive, store it here; the next system-message rebuild
+    # appends it as `[Agent nudge: ...]`, then clears the slot so each
+    # nudge lasts exactly one turn.
+    pending_nudge: str = ""
+    nudges_used: int = 0
+    try:
+        nudge_cap = int(getattr(cfg, "evaluator_nudge_max", 2))
+    except (TypeError, ValueError):
+        nudge_cap = 2
+    if nudge_cap < 0:
+        nudge_cap = 0
+
+    def _available_tools_summary() -> list[tuple[str, str]]:
+        """Build (name, one_line_desc) pairs for the current allow-list."""
+        pairs: list[tuple[str, str]] = []
+        for name in allowed_tools:
+            desc = ""
+            spec = BUILTIN_TOOLS.get(name)
+            if spec is not None and getattr(spec, "description", ""):
+                desc = str(spec.description).strip().splitlines()[0]
+            elif mcp_tools and name in mcp_tools:
+                mcp_spec = mcp_tools.get(name)
+                if mcp_spec is not None and getattr(mcp_spec, "description", ""):
+                    desc = str(mcp_spec.description).strip().splitlines()[0]
+            pairs.append((name, desc))
+        return pairs
+
     reply: Optional[str] = None
     # When the evaluator keeps returning 'continue' until we hit the turn cap,
     # the latest plausible natural-language candidate is delivered rather than
@@ -1099,7 +1139,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Update the system message with fresh context (time/location) before each LLM call
         # Note: We update the first system message rather than appending a new one because
         # adding a system message AFTER the user message breaks native tool calling
-        _update_system_message_with_context(messages)
+        _nudge_for_this_turn = pending_nudge
+        pending_nudge = ""
+        _update_system_message_with_context(messages, nudge=_nudge_for_this_turn)
 
         # Debug: log current messages array structure (original)
         if getattr(cfg, 'voice_debug', False):
@@ -1488,34 +1530,35 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         eval_result = evaluate_turn(
             user_query=redacted,
             assistant_response_summary=candidate_reply,
+            available_tools=_available_tools_summary(),
             turns_used=turn,
             cfg=cfg,
         )
-        if eval_result.terminal:
-            # When the evaluator signals the assistant needs user input and
-            # supplies a refined clarification question, override the raw
-            # candidate with the crisper phrasing. Lets the evaluator upgrade
-            # a vague user-facing question into a pointed one.
-            if (
-                eval_result.reason == "needs_user_input"
-                and isinstance(eval_result.clarification_question, str)
-                and eval_result.clarification_question.strip()
-            ):
-                candidate_reply = eval_result.clarification_question.strip()
-                debug_log(
-                    "evaluator provided refined clarification_question; "
-                    "overriding candidate reply",
-                    "planning",
-                )
+        # Nudge cap: once we've already burned through the cap, force
+        # terminal to break nudge ping-pong even if the evaluator says
+        # continue. Spinning on a model that won't respond to nudges is
+        # worse than delivering the latest prose candidate.
+        if not eval_result.terminal and nudges_used >= nudge_cap:
+            debug_log(
+                f"  🛑 evaluator wanted to continue but nudge cap "
+                f"({nudge_cap}) reached — forcing terminal",
+                "planning",
+            )
             reply = candidate_reply
             break
-        # Non-terminal: remember the candidate for the max-turn fallback, then
-        # let the loop continue. The assistant message is already in history
-        # so the next turn sees it.
+
+        if eval_result.terminal:
+            reply = candidate_reply
+            break
+        # Non-terminal: stash the nudge for the next turn, remember the
+        # candidate for the max-turn fallback, and keep looping.
+        pending_nudge = eval_result.nudge or ""
+        nudges_used += 1
         last_candidate_reply = candidate_reply
         debug_log(
-            f"  🔁 evaluator returned 'continue' — staying in loop "
-            f"(turn {turn}/{max_turns})",
+            f"  🔁 evaluator returned 'continue' (nudge={pending_nudge!r}) — "
+            f"staying in loop (turn {turn}/{max_turns}, nudges "
+            f"{nudges_used}/{nudge_cap})",
             "planning",
         )
         continue
