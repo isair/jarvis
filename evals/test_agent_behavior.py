@@ -1301,3 +1301,83 @@ class TestHelpfulness:
         )
         print(f"   ✅ Grounded in stored facts: {matched_facts}")
 
+
+# =============================================================================
+# Malformed LLM Response After Tool Results
+# =============================================================================
+
+class TestMalformedResponseAfterTools:
+    """Tests that the engine handles malformed LLM outputs after tool results.
+
+    Field capture (2026-04-21): after webSearch + Wikipedia fallback, gemma4:e2b
+    returned 'tool_calls: []' as its content. The engine should treat this as
+    a malformed response and not surface it as the reply.
+    """
+
+    @pytest.mark.eval
+    def test_tool_calls_literal_not_surfaced_after_web_search(
+        self, mock_config, eval_db, eval_dialogue_memory,
+    ):
+        """Engine must not return 'tool_calls: []' after a web search result.
+
+        Scenario: user asks a factual question, webSearch is called and returns
+        a result, but the LLM then emits 'tool_calls: []' instead of synthesising
+        an answer. The engine should catch this as malformed and produce an error
+        message rather than surfacing the raw literal.
+        """
+        from jarvis.reply.engine import run_reply_engine
+
+        query = "what is Britney Spears' most famous song?"
+        capture = ToolCallCapture()
+
+        MOCK_SEARCH_RESULT = (
+            "Britney Spears Wikipedia: American pop star. "
+            "Her debut single '...Baby One More Time' (1998) was a global hit."
+        )
+
+        mock_tool_run = create_mock_tool_run(capture, {"webSearch": MOCK_SEARCH_RESULT})
+
+        call_count = 0
+
+        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First turn: model calls webSearch
+                return create_mock_llm_response("", [
+                    create_tool_call("webSearch", {"search_query": "Britney Spears most famous song"}),
+                ])
+            # Second turn: model produces the field-captured malformed output
+            return create_mock_llm_response("tool_calls: []")
+
+        with patch("jarvis.reply.engine.run_tool_with_retries", side_effect=mock_tool_run), \
+             patch("jarvis.reply.engine.chat_with_messages", side_effect=mock_chat), \
+             patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={"keywords": []}):
+
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory,
+            )
+
+        print(f"\n📊 Malformed Response After Tools:")
+        print(f"   Query: {query}")
+        print(f"   Tools called: {[c['name'] for c in capture.calls]}")
+        print(f"   Response: {response!r}")
+
+        # The malformed literal must not reach the user
+        assert "tool_calls" not in (response or "").lower(), (
+            f"Engine surfaced 'tool_calls: []' to user. Got: {response!r}"
+        )
+
+        # Should have called webSearch
+        assert capture.has_tool("webSearch"), "Expected webSearch to be called"
+
+        # Response should be non-empty (either the error fallback or a proper answer)
+        assert response and response.strip(), "Engine returned empty response"
+
+        verdict = judge_response_answers_query(query, response or "")
+        print(f"   Judge score: {verdict.score:.2f} — {verdict.reasoning[:80]}")
+        # The judge should not give a high score to a malformed or empty-sounding reply
+        # (if the engine correctly falls back to an error message, the score will be low
+        # but the key assertion is that the literal wasn't surfaced)
+

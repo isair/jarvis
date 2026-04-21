@@ -30,6 +30,156 @@ JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
 # Tool Call Capture
 # =============================================================================
 
+# =============================================================================
+# Fallback-reply detection
+# =============================================================================
+#
+# When the malformed-output guard fires in the reply engine (engine.py), the
+# user gets one of these canned strings. From the user's perspective that is
+# a FAILURE — they asked a question and got a shrug — but historically several
+# evals treated it as neutral because "no malformed text reached the user" is
+# technically true. Treating these strings as test failures turns a silent
+# shield into a loud alarm: if gemma keeps tripping the guard under a given
+# context shape (warm memory, large digest, odd phrasing), the evals will
+# finally flag it.
+#
+# The helper asserts at the call site of an eval rather than globally,
+# because a handful of evals (e.g. `TestMalformedResponseAfterTools` itself)
+# are specifically asserting the fallback fires and must NOT use this helper.
+
+FALLBACK_REPLY_PHRASES = (
+    "i had trouble understanding that request",
+    "i had trouble processing that",
+    "sorry, i had trouble",
+)
+
+
+def is_fallback_reply(response: Optional[str]) -> bool:
+    """Return True when ``response`` is the engine's canned malformed-guard
+    fallback reply — i.e. the user got a shrug instead of an answer."""
+    if not response:
+        return False
+    lowered = response.lower()
+    return any(phrase in lowered for phrase in FALLBACK_REPLY_PHRASES)
+
+
+def assert_not_fallback_reply(response: Optional[str], context: str = "") -> None:
+    """Fail the test when the response is the engine's canned fallback.
+
+    A fallback reply means the malformed-output guard fired — which is a
+    safety net masking an underlying model failure. In most evals, seeing
+    this string means the test SHOULD fail even if the rest of the
+    assertions happen to pass, because the user experience is "the
+    assistant gave up".
+    """
+    import pytest
+
+    if is_fallback_reply(response):
+        prefix = f"[{context}] " if context else ""
+        pytest.fail(
+            f"{prefix}Response is the engine's canned malformed-guard "
+            f"fallback reply — the model produced garbled output and the "
+            f"guard shielded the user. From the user's perspective the "
+            f"assistant gave up. Treat this as a real failure. "
+            f"Response: {(response or '')[:400]}"
+        )
+
+
+# =============================================================================
+# Max-turns digest caveat detection
+# =============================================================================
+#
+# When the agentic loop exhausts ``agentic_max_turns`` without the evaluator
+# ever firing terminal, ``digest_loop_for_max_turns`` in ``enrichment.py``
+# produces a reply whose first sentence is a caveat noting the request was
+# not fully finished (e.g. "I could not fully finish your request…").
+#
+# From the user's perspective that caveat is a FAILURE for simple,
+# single-tool queries — the tool ran, the answer was in hand, and yet the
+# evaluator kept saying "continue" until the turn cap fired the digest
+# summariser. The answer that follows the caveat is typically correct, so
+# naive grounding assertions pass and the regression hides. Treating the
+# caveat as a failure turns that silent shield into a loud alarm for the
+# evaluator's terminal-detection quality.
+#
+# The digest prompt (``_LOOP_DIGEST_SYSTEM_PROMPT`` in
+# ``src/jarvis/reply/enrichment.py``) instructs the LLM to open with a
+# caveat about not finishing. The phrases below are the canonical English
+# shapes that prompt produces; a drift pin test keeps them aligned with
+# the source prompt.
+
+MAX_TURNS_DIGEST_PHRASES = (
+    "could not fully finish",
+    "couldn't fully finish",
+    "was unable to fully finish",
+    "wasn't able to fully finish",
+)
+
+
+def is_max_turns_digest(response: Optional[str]) -> bool:
+    """Return True when ``response`` looks like the max-turns digest
+    caveat — i.e. the agentic loop ran out of turns without the evaluator
+    ever firing terminal."""
+    if not response:
+        return False
+    lowered = response.lower()
+    return any(phrase in lowered for phrase in MAX_TURNS_DIGEST_PHRASES)
+
+
+def assert_not_max_turns_digest(response: Optional[str], context: str = "") -> None:
+    """Fail the test when the response opens with the max-turns digest
+    caveat. For simple single-tool queries, hitting the digest path means
+    the evaluator failed to recognise a grounded, terminal reply — even if
+    the content that follows the caveat happens to be correct."""
+    import pytest
+
+    if is_max_turns_digest(response):
+        prefix = f"[{context}] " if context else ""
+        pytest.fail(
+            f"{prefix}Response begins with the max-turns digest caveat — "
+            f"the agentic loop exhausted ``agentic_max_turns`` without the "
+            f"evaluator returning terminal on a grounded reply. For simple "
+            f"queries this is an evaluator quality failure, not a success. "
+            f"Response: {(response or '')[:400]}"
+        )
+
+
+# =============================================================================
+# Warm-memory seeding
+# =============================================================================
+#
+# The default eval fixtures (`eval_db`, `eval_dialogue_memory`) start empty,
+# which does NOT reproduce the real-world state where the user's memory
+# already carries weeks of diary summaries. Field failures consistently
+# correlate with loaded context: gemma produces clean tool calls on empty
+# memory and slides into scaffolding leaks when a multi-hundred-char memory
+# digest is prepended to the system message.
+#
+# This helper seeds the diary table with dated summaries on a given topic
+# so the memory-search path hits real entries and produces a digest that
+# matches the production shape.
+
+def seed_diary_summaries(
+    db,
+    topic_summaries: List[Tuple[str, str]],
+) -> None:
+    """Seed ``conversation_summaries`` with the given (date_utc, summary) pairs.
+
+    ``date_utc`` must be ``YYYY-MM-DD``. The helper is a thin wrapper around
+    ``db.upsert_conversation_summary`` intended for evals that need a warm
+    memory state — e.g. "user has asked about the weather ten times in the
+    last fortnight" — to reproduce the loaded-context failure mode that the
+    reply engine hits in production.
+    """
+    for date_utc, summary in topic_summaries:
+        db.upsert_conversation_summary(
+            date_utc=date_utc,
+            summary=summary,
+            topics=None,
+            source_app="jarvis",
+        )
+
+
 @dataclass
 class ToolCallCapture:
     """Captures tool calls during evaluation."""

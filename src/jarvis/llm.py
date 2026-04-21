@@ -171,11 +171,15 @@ def chat_with_messages(
 
     Returns the parsed JSON response dict on success, or None on error/timeout.
     """
+    # Main agentic chat uses 8192 so the system prompt (tool list + protocol
+    # guidance + memory context) doesn't overflow and force ollama to truncate
+    # — which previously dropped the tool schema on smaller models like
+    # gemma4:e2b, tipping them into their pre-trained tool_code scaffolding.
     payload: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
         "stream": False,
-        "options": {"num_ctx": 4096},
+        "options": {"num_ctx": 8192},
         "think": thinking,
     }
     if extra_options and isinstance(extra_options, dict):

@@ -70,6 +70,21 @@ Design principles enforced by the engine:
        - `content` field: Natural language response to user
    - Note: System messages are NOT added after the conversation starts, as this breaks native tool calling in models like Llama 3.2
 
+   Malformed-response guard (all models):
+   - After each turn, before the content is accepted as a final reply, `_is_malformed_json_response` checks for structured-data hallucinations that should never reach the user:
+     - Truncated JSON (starts with `{` but does not end with `}`)
+     - Bare `tool_calls:` literals — small models (e.g. gemma4:e2b) occasionally emit the literal string `tool_calls: []` as their `content` field after receiving tool results, instead of synthesising an answer. The check is case-insensitive and catches all `tool_calls:` prefixed variants.
+     - Known API-spec / data-dump patterns (weather JSON, OpenAPI blobs, etc.)
+   - When detected, the engine falls back to the standard "I had trouble understanding that request" error reply (model-size-aware). The malformed content is never shown to the user.
+
+   Compound-query decomposition (small / text-based models only):
+   - When `use_text_tools` is True (i.e. the model is SMALL), the engine delegates to `split_compound_query(text, language=language)` in `src/jarvis/reply/compound_query.py`. The helper splits on a single conjunction boundary when each clause is at least `MIN_CLAUSE_CHARS` (= 9) characters long, returning an empty list otherwise. The 9-char minimum was tuned against `evals/test_complex_flows.py::TestMultiStepEntityQuery` — it excludes short idiomatic phrases (`"rock and roll"`, `"pros and cons"`, French `"va et vient"`) while retaining typical multi-part entity queries whose clauses usually exceed 15 characters each.
+   - Language awareness: the conjunction is per-language, not hardcoded English. Supported languages and their conjunctions live in `_CONJUNCTIONS` in `compound_query.py` (currently `en`, `es`, `fr`, `de`, `pt`, `it`, `nl`, `tr`). For any language outside this table — including languages Whisper can detect but which we haven't surveyed for false positives — the splitter returns `[]` and the query is processed as a single unit. This is graceful degradation: we prefer "no decomposition" over mis-applying English rules to Japanese, Korean, etc. Non-voice entrypoints (evals, text chat) pass `language=None` and default to English.
+   - After each tool result is appended in text-based mode, the engine counts how many tool results have already been received. If that count is less than `len(_compound_sub_questions)`, a targeted nudge is appended to the tool result message identifying the specific unanswered sub-question: `"⚠️ You have answered N of M parts. Still unanswered: '<sub_question>'. You MUST emit another tool_calls block now."` — this fires before the model's next turn so it has a concrete reminder of exactly what to search for next.
+   - When all sub-questions are covered (or the query is not compound), a generic completeness prompt is appended instead: `"[If the original query has sub-questions not yet answered by this result, call another tool now. Otherwise reply.]"`
+   - Compound decomposition fires on every tool result turn until coverage is complete.
+   - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
+
    Tool allow-list per turn:
    - Initial routing (the existing `select_tools` call) still runs once, before the loop, outside the LLM's awareness. Its output determines the *default* tool allow-list for the loop.
    - The per-turn allow-list exposed to the chat model is: `<router's picks>` + `stop` (the sentinel) + `toolSearchTool`.

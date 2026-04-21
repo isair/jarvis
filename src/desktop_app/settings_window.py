@@ -213,6 +213,9 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("whisper_min_confidence", "Min Confidence",
       "Filter low-confidence segments (hallucination guard)",
       "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
+    f("whisper_no_speech_threshold", "No-Speech Threshold",
+      "Reject segments where no_speech_prob is at or above this value (filters hallucinations during silence)",
+      "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
 
     # --- VAD ---
     f("vad_enabled", "Enable VAD",

@@ -128,9 +128,19 @@ answer, the tool walks a fallback chain before giving up:
    `wikipedia_fallback_enabled` is True. Uses the host matching the
    ISO-639-1 language Whisper auto-detected for the current utterance
    (`context.language`) — falls back to English when the code is missing
-   or syntactically invalid. Fetches an opensearch title and then the
-   REST summary endpoint; the curated `extract` field goes into the
-   fence directly (no HTML scraping, cleaner payload).
+   or syntactically invalid. Two additional guards catch Whisper
+   language-misdetection on short/noisy utterances:
+   - **Script-vs-language check**: when the detected language expects a
+     non-Latin script (ja/ko/zh/ru/el/ar/he/hi/th/…) but the search
+     query is ≥80% ASCII letters, the lookup is forced to English
+     before hitting the non-existent locale page.
+   - **Localised-miss retry**: if the locale-specific Wikipedia returns
+     no match, retry once against `en.wikipedia.org` before giving up
+     — many topics only have English pages and a grounded answer beats
+     an honest "nothing found" for those.
+   Fetches an opensearch title and then the REST summary endpoint; the
+   curated `extract` field goes into the fence directly (no HTML
+   scraping, cleaner payload).
 3. **Honest block envelope** — if every provider fails, the envelope
    admits it and forbids unverified facts (same framing as the
    links-only envelope).
@@ -140,6 +150,15 @@ Rate-limit detection fires regardless of fallback availability: the
 DDG blocks us and no instant answer was available, even if a fallback
 then rescues the query. The `✅ Answered via …` line afterwards tells
 field-triage which provider actually carried the reply.
+
+### Progress messages
+
+The tool prints a progress line to the terminal before each provider attempt:
+
+- DuckDuckGo: `🌐 Searching the web for '<query>'…`
+- Wikipedia: `📚 Searching Wikipedia (<lang>) for '<query>'…`
+
+These are ephemeral stdout prints (`context.user_print`). They are not persisted, not logged to file, and not included in the tool result returned to the LLM.
 
 ### Per-utterance language
 

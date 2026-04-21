@@ -15,14 +15,14 @@ from dotenv import load_dotenv
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "gemma4:e2b": {
-        "name": "Gemma 4 E2B (Recommended)",
-        "description": "Fast, multimodal, effective 2B — ~7.2GB download",
+        "name": "Gemma 4 E2B (Default)",
+        "description": "Fast, multimodal, effective 2B — a little dumb, occasionally fumbles tool calls; ~7.2GB download",
         "size": "~7.2GB",
         "vram": "8GB+",
     },
     "gemma4:e4b": {
-        "name": "Gemma 4 E4B (Better Quality)",
-        "description": "Smarter, multimodal, effective 4B — ~9.6GB download",
+        "name": "Gemma 4 E4B (Recommended)",
+        "description": "Smarter tool use and reasoning, multimodal, effective 4B — ~9.6GB download",
         "size": "~9.6GB",
         "vram": "16GB+",
     },
@@ -134,6 +134,7 @@ class Settings:
     whisper_compute_type: str
     whisper_vad: bool
     whisper_min_confidence: float
+    whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
     whisper_min_word_length: int
 
@@ -405,7 +406,7 @@ def get_default_config() -> Dict[str, Any]:
 
         # Wake Word Detection
         "wake_word": "jarvis",
-        "wake_aliases": ["joris", "charis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
+        "wake_aliases": ["joris", "charis", "chavis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
         "wake_fuzzy_ratio": 0.78,
 
         # Whisper Speech Recognition
@@ -415,6 +416,7 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_compute_type": "int8",
         "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
+        "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
 
@@ -687,6 +689,7 @@ def load_settings() -> Settings:
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
+    whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
@@ -758,6 +761,7 @@ def load_settings() -> Settings:
         whisper_compute_type=whisper_compute_type,
         whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,
+        whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
 

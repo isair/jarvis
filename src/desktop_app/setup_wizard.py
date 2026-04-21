@@ -1129,10 +1129,15 @@ class ModelsPage(QWizardPage):
     # Use the centralized model configuration from config.py
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
 
-    # Wizard heights: base matches SetupWizard.setMinimumSize; installing adds
-    # space for the progress bar (~22px) and log output (max 150px) with padding.
+    # Wizard heights: base matches SetupWizard.setMinimumSize (all models
+    # installed, install/skip row hidden); with-buttons adds space for the
+    # install/skip row + three-line missing-models label; installing further
+    # adds the progress bar (~22px) + log output (max 150px) + two 20px
+    # layout gaps on top of with-buttons so the install/skip row stays at
+    # its natural size instead of getting squished.
     _WIZARD_HEIGHT_BASE = 875
-    _WIZARD_HEIGHT_INSTALLING = 1060
+    _WIZARD_HEIGHT_WITH_BUTTONS = 955
+    _WIZARD_HEIGHT_INSTALLING = 1170
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1327,11 +1332,18 @@ class ModelsPage(QWizardPage):
             m for m in required
             if normalize_model(m) not in installed_normalized and m not in installed
         ]
+        required_installed = [
+            m for m in required
+            if normalize_model(m) in installed_normalized or m in installed
+        ]
 
         # Update display
         if self._missing_models:
             missing_text = ", ".join(f"❌ {m}" for m in self._missing_models)
-            installed_text = ", ".join(f"✅ {m}" for m in installed) if installed else "None"
+            installed_text = (
+                ", ".join(f"✅ {m}" for m in required_installed)
+                if required_installed else "None"
+            )
             model_info = self.MODEL_OPTIONS.get(self._selected_model, {})
             size_info = model_info.get("size", "unknown size")
             self.models_label.setText(
@@ -1343,11 +1355,17 @@ class ModelsPage(QWizardPage):
             self.install_btn.setVisible(True)
             self.install_btn.setEnabled(True)
             self.skip_btn.setVisible(True)
+            # Grow to fit the install/skip row + three-line missing label when
+            # the user swaps to a model that still needs downloading.
+            if not self.progress.isVisible():
+                self._set_wizard_height(self._WIZARD_HEIGHT_WITH_BUTTONS)
         else:
-            self.models_label.setText(f"✅ All required models are installed: {', '.join(installed)}")
+            self.models_label.setText(f"✅ All required models are installed: {', '.join(required_installed)}")
             self._is_complete = True
             self.install_btn.setVisible(False)
             self.skip_btn.setVisible(False)
+            if not self.progress.isVisible():
+                self._set_wizard_height(self._WIZARD_HEIGHT_BASE)
 
         self.completeChanged.emit()
 
@@ -1413,17 +1431,16 @@ class ModelsPage(QWizardPage):
     def _install_next_model(self):
         """Install the next model in the queue."""
         if self._current_model_index >= len(self._missing_models):
-            # All models installed — collapse back to base height
-            self._is_complete = True
+            # All models installed — tear down the install UI and recompute
+            # the display from the refreshed installed-models list so the
+            # label, install/skip visibility, completeness flag, and wizard
+            # height all snap to the "all installed" state in one place.
             self.progress.setVisible(False)
             self.log_output.setVisible(False)
             self.log_output.clear()
-            self._set_wizard_height(self._WIZARD_HEIGHT_BASE)
+            self._update_models_display()
             self.status_label.setText("✅ All models installed successfully!")
             self.status_label.setStyleSheet("color: #4ade80;")
-            self.install_btn.setEnabled(False)
-            self.skip_btn.setVisible(False)
-            self.completeChanged.emit()
             return
 
         model = self._missing_models[self._current_model_index]
@@ -1459,6 +1476,13 @@ class ModelsPage(QWizardPage):
     def _on_install_finished(self, success: bool, message: str):
         """Handle installation completion."""
         if success:
+            # Track the just-installed model in the wizard's cached status
+            # so _update_models_display sees it on the next recompute.
+            model = self._missing_models[self._current_model_index]
+            wizard = self.wizard()
+            if isinstance(wizard, SetupWizard) and wizard.ollama_status:
+                if model not in wizard.ollama_status.installed_models:
+                    wizard.ollama_status.installed_models.append(model)
             self._current_model_index += 1
             self._install_next_model()
         else:

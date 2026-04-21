@@ -24,6 +24,8 @@ from conftest import requires_judge_llm
 from helpers import (
     JUDGE_MODEL,
     ToolCallCapture,
+    assert_not_fallback_reply,
+    assert_not_max_turns_digest,
 )
 
 
@@ -247,6 +249,14 @@ class TestTerminalOnSuccessfulToolUse:
         print(f"   getWeather calls: {len(weather_calls)}")
         print(f"   all tool calls: {capture.tool_names()}")
         print(f"   reply: {(reply or '')[:200]}...")
+
+        # Guard against the two shields that used to mask evaluator failures
+        # here: the malformed-output fallback and the max-turns digest
+        # caveat. Either means the loop did not terminate cleanly on the
+        # first grounded tool summary, even when the surrounding content
+        # reads correctly.
+        assert_not_fallback_reply(reply, context="single-weather-terminal")
+        assert_not_max_turns_digest(reply, context="single-weather-terminal")
 
         assert len(weather_calls) == 1, (
             f"Expected exactly one getWeather call (evaluator should terminate "

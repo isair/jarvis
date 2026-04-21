@@ -197,6 +197,7 @@ JARVIS_THEME_STYLESHEET = """
     QCheckBox {
         color: #f4f4f5;
         spacing: 8px;
+        background: transparent;
     }
     
     QCheckBox::indicator {
@@ -204,7 +205,7 @@ JARVIS_THEME_STYLESHEET = """
         height: 18px;
         border: 1px solid #27272a;
         border-radius: 4px;
-        background-color: #12141a;
+        background-color: transparent;
     }
     
     QCheckBox::indicator:hover {
@@ -219,6 +220,7 @@ JARVIS_THEME_STYLESHEET = """
     QRadioButton {
         color: #f4f4f5;
         spacing: 8px;
+        background: transparent;
     }
     
     QRadioButton::indicator {

@@ -22,6 +22,7 @@ from .enrichment import (
 from .evaluator import evaluate_turn
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
+from .compound_query import split_compound_query
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
@@ -62,6 +63,129 @@ def _resolve_tool_router_model(cfg) -> str:
         if candidate:
             return candidate
     return ""
+
+
+def _text_tool_call_guidance(allowed_names: list[str]) -> str:
+    """Build the text-based tool-call guidance block for gemma-class models.
+
+    Gemma isn't a natively tool-calling model — we teach the `tool_calls:
+    [...]` literal shape via prompt. Gemma's pre-training carries a
+    *different* protocol (Google's code-interpreter `tool_code` /
+    `tool_output` fenced blocks and `<unusedNN>` sentinel tokens), and a
+    confused model falls back to those. The guidance both teaches the
+    target shape and explicitly names the gemma-native shapes as
+    forbidden so the model is steered away from emitting them. Naming
+    specific tokens beats vague "do not emit raw protocol" instructions
+    for small models.
+    """
+    allowed_name_list = ", ".join(sorted(allowed_names)) if allowed_names else ""
+    return (
+        "\nExact tool-call syntax (copy this shape — emit nothing else on a "
+        "tool-calling turn):\n"
+        'tool_calls: [{"id": "call_1", "type": "function", "function": '
+        '{"name": "webSearch", "arguments": "{\\"search_query\\": '
+        '\\"example query\\"}"}}]\n'
+        "Notes:\n"
+        "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
+        "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
+        "a bare name is not a valid call and the tool will not run.\n"
+        "- Never invoke tools that are not in the list above. The ONLY tools "
+        f"that exist are: {allowed_name_list or '(see list above)'}. "
+        "Module-style calls like `google_search.search(query=...)` or "
+        "`wikipedia.run(...)` will fail — use one of the listed tool names "
+        "with its exact input schema.\n"
+        "- FORBIDDEN output shapes (your training may incline you toward "
+        "these from a different protocol — they will NOT work here and "
+        "the user will see garbage): do NOT emit ```tool_code ...``` or "
+        "```tool_output ...``` fenced blocks, do NOT emit `<unused88>` or "
+        "any `<unused…>` sentinel token, do NOT emit Python-style "
+        "`print(google_search.search(query=...))` scaffolding. The ONLY "
+        "accepted tool-call format is the `tool_calls: [...]` JSON "
+        "literal shown above. On a prose turn, write natural-language "
+        "sentences — never the scaffolding tokens.\n"
+        "- Multi-part queries: if the query asks for two or more distinct "
+        "pieces of information (e.g. 'who is X AND what Y has X done'), "
+        "plan to make ONE tool call per sub-question. After each tool "
+        "result, count how many sub-questions are still unanswered. If "
+        "any remain, emit another tool_calls: [...] block immediately — "
+        "do NOT write a text answer yet. Only write a plain-sentences "
+        "reply once every sub-question is covered by a tool result. "
+        "Never say 'the search result did not list X' — instead, search for X."
+    )
+
+
+def _is_malformed_model_output(content: str) -> bool:
+    """Detect malformed / non-conversational LLM content that must not reach
+    the user.
+
+    Covers three families:
+      1. Truncated or data-dump JSON (e.g. OpenAPI/weather payloads echoed
+         as prose; JSON missing its closing brace).
+      2. Raw tool-protocol literals — bare ``tool_calls:`` that the model
+         emitted as text instead of dispatching a call, and Gemma's native
+         ``tool_code`` / ``tool_output`` scaffolding markers that leaked
+         through the text-tool-call parser.
+      3. Gemma internal sentinels like ``<unusedNN>`` — never part of a
+         user-facing reply.
+
+    Catching all three at engine level (before the evaluator runs) keeps
+    the deterministic guard as the primary defence, with the evaluator's
+    garbled-turn clause acting as defence-in-depth for novel shapes.
+    """
+    if not content or not content.strip():
+        return False
+
+    trimmed = content.strip()
+
+    # Truncated JSON (starts with { but no closing brace).
+    if trimmed.startswith("{") and not trimmed.endswith("}"):
+        debug_log("  ⚠️ Detected truncated JSON response", "planning")
+        return True
+
+    lowered = trimmed.lower()
+
+    # Bare tool_calls literal — tool-call syntax emitted as plain text.
+    if lowered.startswith("tool_calls:"):
+        debug_log("  ⚠️ Detected bare tool_calls literal response", "planning")
+        return True
+
+    # Gemma-style tool scaffolding leaks: the model sometimes emits its
+    # internal tool protocol markers (``tool_code`` / ``tool_output``) as
+    # visible content when the text-tool-call parser misses the shape.
+    # These never belong in a user-facing reply.
+    if lowered.startswith("tool_code") or lowered.startswith("tool_output"):
+        debug_log("  ⚠️ Detected leaked tool_code/tool_output scaffolding", "planning")
+        return True
+
+    # Gemma special-token sentinels (``<unused88>`` and siblings) — these
+    # are internal vocabulary tokens that should never render to the user.
+    if re.search(r"<unused\d+>", trimmed):
+        debug_log("  ⚠️ Detected leaked Gemma <unusedNN> sentinel", "planning")
+        return True
+
+    # Hallucinated API specs / data-dump payloads — the model replied with
+    # raw JSON that has no conversational fields.
+    json_hallucination_indicators = [
+        '"specVersion":', '"openapi":', '"swagger":',
+        '"apis":', '"endpoints":', '"paths":',
+        '"api.github.com"', '"host":', '"basePath":',
+        '"site":', '"location":', '"forecast":',
+        '"current_date":', '"high":', '"low":',
+        '"lang": "json"', '"section":',
+    ]
+    for indicator in json_hallucination_indicators:
+        if indicator in trimmed:
+            debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
+            return True
+
+    if trimmed.startswith("{"):
+        conversational_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
+        has_conversational_field = any(f'"{f}"' in lowered for f in conversational_fields)
+        if not has_conversational_field:
+            debug_log("  ⚠️ JSON response lacks conversational fields", "planning")
+            return True
+
+    return False
 
 
 def _extract_text_tool_call(content_field: str, known_names: set):
@@ -369,7 +493,7 @@ def _maybe_digest_tool_result(
         flat = digested.replace("\n", " ")
         preview = flat[:80] + ("…" if len(flat) > 80 else "")
         print(
-            f"  🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
+            f"    🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
             flush=True,
         )
         debug_log(
@@ -386,7 +510,7 @@ def _maybe_digest_tool_result(
         # substrate. Mirror the memory-digest visibility so the user can
         # see the pass ran and fell back explicitly.
         print(
-            f"  🧩 Tool digest: no relevant facts — using raw payload "
+            f"    🧩 Tool digest: no relevant facts — using raw payload "
             f"({len(raw_tool_result)} chars)",
             flush=True,
         )
@@ -761,6 +885,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     prompts = get_system_prompts(model_size)
     debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model} (use_text_tools={use_text_tools})", "planning")
 
+    # Compound-query decomposition for small models.
+    # When a query contains a conjunction joining two question-clauses, the
+    # model needs to search for each part separately. We split upfront so we
+    # can inject a targeted "still need to answer: X" nudge after each tool
+    # result. Only activated in text-based mode; native tool calling models
+    # manage multi-step reasoning through their own chain-of-thought.
+    _compound_sub_questions: list = []
+    if use_text_tools:
+        _compound_sub_questions = split_compound_query(text, language=language)
+        if _compound_sub_questions:
+            debug_log(
+                f"Compound query detected ({len(_compound_sub_questions)} parts): "
+                + " | ".join(_compound_sub_questions),
+                "planning",
+            )
+
     def _build_initial_system_message() -> str:
         guidance = [SYSTEM_PROMPT.strip()]
 
@@ -835,25 +975,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # List the exact allowed tool names so the model can't invent ones
             # like `wikipedia.run` or `google.search` — gemma models have strong
             # priors to emit those even when they aren't in the tool list.
-            allowed_name_list = ", ".join(sorted(known_tool_names)) if known_tool_names else ""
-            guidance.append(
-                "\nExact tool-call syntax (copy this shape — emit nothing else on a "
-                "tool-calling turn):\n"
-                'tool_calls: [{"id": "call_1", "type": "function", "function": '
-                '{"name": "webSearch", "arguments": "{\\"search_query\\": '
-                '\\"example query\\"}"}}]\n'
-                "Notes:\n"
-                "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
-                "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
-                "a bare name is not a valid call and the tool will not run.\n"
-                "- Never invoke tools that are not in the list above. The ONLY tools "
-                f"that exist are: {allowed_name_list or '(see list above)'}. "
-                "Module-style calls like `google_search.search(query=...)` or "
-                "`wikipedia.run(...)` will fail — use one of the listed tool names "
-                "with its exact input schema.\n"
-                "- On the NEXT turn, after tool results arrive, answer the user "
-                "conversationally in plain sentences."
-            )
+            guidance.append(_text_tool_call_guidance(list(known_tool_names)))
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
 
@@ -985,53 +1107,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 break
 
     def _is_malformed_json_response(content: str) -> bool:
-        """
-        Detect malformed or inappropriate JSON-like responses.
-
-        Catches cases where the model outputs truncated JSON, API specs,
-        or other non-conversational structured data (hallucinated JSON).
-
-        Returns:
-            True if the content looks like malformed/inappropriate JSON
-        """
-        if not content or not content.strip():
-            return False
-
-        trimmed = content.strip()
-
-        # Detect JSON that starts with { but doesn't end with }
-        if trimmed.startswith("{") and not trimmed.endswith("}"):
-            debug_log("  ⚠️ Detected truncated JSON response", "planning")
-            return True
-
-        # Detect obvious hallucinated JSON patterns - model outputting data structure
-        # instead of natural language response
-        json_hallucination_indicators = [
-            # API specs
-            '"specVersion":', '"openapi":', '"swagger":',
-            '"apis":', '"endpoints":', '"paths":',
-            '"api.github.com"', '"host":', '"basePath":',
-            # Data structures that aren't conversational
-            '"site":', '"location":', '"forecast":',
-            '"current_date":', '"high":', '"low":',
-            '"lang": "json"', '"section":',
-        ]
-        for indicator in json_hallucination_indicators:
-            if indicator in trimmed:
-                debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
-                return True
-
-        # If it looks like JSON (starts with {) but extraction failed,
-        # check if it's just a data dump without conversational fields
-        if trimmed.startswith("{"):
-            # Count how many common conversational JSON fields are present
-            conversational_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
-            has_conversational_field = any(f'"{f}"' in trimmed.lower() for f in conversational_fields)
-            if not has_conversational_field:
-                debug_log("  ⚠️ JSON response lacks conversational fields", "planning")
-                return True
-
-        return False
+        return _is_malformed_model_output(content)
 
     def _extract_text_from_json_response(content: str) -> Optional[str]:
         """
@@ -1137,6 +1213,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
+        print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
 
         # Update the system message with fresh context (time/location) before each LLM call
         # Note: We update the first system message rather than appending a new one because
@@ -1270,10 +1347,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
+            print(f"    🛠️ Agent → {tool_name}", flush=True)
 
             # Check if tool is not allowed - respond with tool error
             if tool_name not in allowed_tools:
                 debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
+                print(f"    ⚠️ Tool '{tool_name}' not in allow-list", flush=True)
                 # Use tool response instead of system message to maintain native tool calling compatibility
                 messages.append({
                     "role": "tool",
@@ -1381,6 +1460,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # is already short and structured, no need to distil.
                 if tool_name == "toolSearchTool":
                     newly_added: list[str] = []
+                    # Only accept names that actually resolve to a known
+                    # tool in the registry; otherwise stray prose lines
+                    # like "No additional tools found for that description."
+                    # get treated as tool names and pollute the allow-list.
+                    _valid_names = set(BUILTIN_TOOLS.keys())
+                    if mcp_tools:
+                        _valid_names.update(mcp_tools.keys())
                     for line in (result.reply_text or "").splitlines():
                         # Lines look like "toolName: one-line description"; fall
                         # back to splitting on em dash for backwards compat.
@@ -1392,10 +1478,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 raw = raw.split(sep, 1)[0]
                                 break
                         name_part = raw.strip()
-                        if name_part and name_part not in allowed_tools:
-                            allowed_tools.append(name_part)
-                            known_tool_names.add(name_part)
-                            newly_added.append(name_part)
+                        if not name_part or name_part in allowed_tools:
+                            continue
+                        if name_part not in _valid_names:
+                            debug_log(
+                                f"  🔧 toolSearchTool: ignoring non-tool "
+                                f"line {name_part!r} (not in registry)",
+                                "planning",
+                            )
+                            continue
+                        allowed_tools.append(name_part)
+                        known_tool_names.add(name_part)
+                        newly_added.append(name_part)
                     # Regenerate the tools schema and description so the NEXT
                     # LLM turn sees the widened allow-list. Without this, the
                     # native-mode tools param and the text-mode tools_desc
@@ -1420,12 +1514,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             f"tools schema/desc regenerated",
                             "planning",
                         )
+                        print(
+                            f"    🔧 Discovered {len(newly_added)} tool(s): "
+                            f"{', '.join(newly_added)}",
+                            flush=True,
+                        )
                     else:
                         debug_log(
                             f"  🔧 toolSearchTool returned no new tool names; "
                             f"allow-list unchanged ({len(allowed_tools)} tools)",
                             "planning",
                         )
+                        print("    🔍 No new tools found", flush=True)
                 # Tool-result digest for small models. Long tool payloads
                 # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
                 # push ~2B models into "describe the structure back" or
@@ -1439,9 +1539,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
 
                 if use_text_tools:
+                    # For compound queries, compute how many sub-questions remain
+                    # unanswered and append a targeted nudge so the model knows
+                    # exactly what to search for next.
+                    tool_results_so_far = sum(
+                        1 for m in messages if m.get("tool_name")
+                    )
+                    if _compound_sub_questions and tool_results_so_far < len(_compound_sub_questions):
+                        remaining = _compound_sub_questions[tool_results_so_far:]
+                        remainder_hint = (
+                            f"\n\n⚠️ You have answered {tool_results_so_far} of "
+                            f"{len(_compound_sub_questions)} parts of the original query. "
+                            f"Still unanswered: \"{remaining[0]}\". "
+                            "You MUST emit another tool_calls block now to search for this. "
+                            "Do NOT reply in text yet."
+                        )
+                    else:
+                        remainder_hint = (
+                            f"\n\n[If the original query has sub-questions not yet answered "
+                            "by this result, call another tool now. Otherwise reply.]"
+                        )
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool result: {tool_name}]\n{effective_result}",
+                        "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
                         "tool_name": tool_name,  # kept for duplicate detection
                     })
                 else:
@@ -1485,8 +1605,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             candidate_reply = extracted
             malformed_fallback = False
         elif _is_malformed_json_response(content):
-            # Model output malformed JSON or API specs - provide helpful message
-            debug_log(f"  ⚠️ Rejecting malformed JSON response: '{content[:100]}...'", "planning")
+            # Model output malformed JSON or API specs — gemma-native
+            # ``tool_code`` / ``tool_output`` fenced blocks, ``<unusedNN>``
+            # sentinels, bare ``tool_calls:`` literals, etc. Historically
+            # the engine substituted a canned "I had trouble understanding"
+            # fallback and broke out immediately — which meant the
+            # evaluator never saw the garbled turn and couldn't salvage
+            # the intent. Field logs show this path firing constantly on
+            # gemma for simple queries like "how's the weather".
+            #
+            # New flow: the fallback stays as the *candidate reply* (so
+            # the user still gets a message if salvage fails), but the
+            # evaluator is given the RAW garbled content as the turn
+            # summary. Its salvage clause can then extract the intended
+            # tool call and nudge the next turn. The fallback is only
+            # actually delivered when the evaluator terminates or the
+            # nudge cap is exhausted.
+            debug_log(f"  ⚠️ Malformed content, handing to evaluator for salvage: '{content[:100]}...'", "planning")
             model_name = cfg.ollama_chat_model.lower() if cfg.ollama_chat_model else ""
             is_small_model = any(size in model_name for size in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
             if is_small_model:
@@ -1506,14 +1641,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             candidate_reply = content
             malformed_fallback = False
 
-        # Evaluator-driven termination: let a lightweight LLM decide whether
-        # the reply already addresses the query, is a clarifying question to
-        # the user, or whether the loop should keep working. Malformed-JSON
-        # fallbacks are always delivered (the candidate is a canned error).
-        if malformed_fallback:
-            reply = candidate_reply
-            break
-
         # Evaluator gating. None = auto (on for SMALL, off for LARGE).
         # Mirrors the memory_digest_enabled pattern.
         _eval_cfg = getattr(cfg, "evaluator_enabled", None)
@@ -1522,6 +1649,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         else:
             eval_enabled = bool(_eval_cfg)
 
+        # Malformed-fallback short-circuit only when the evaluator is off
+        # — otherwise give the evaluator a chance to salvage first.
+        if malformed_fallback and not eval_enabled:
+            reply = candidate_reply
+            break
+
         if not eval_enabled:
             # Gated off: treat as terminal so the first natural-language
             # content becomes the reply. The max-turn backstop still applies
@@ -1529,9 +1662,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             reply = candidate_reply
             break
 
+        # Hand the evaluator the RAW garbled content on malformed turns so
+        # the salvage clause has something to extract from. On clean turns
+        # the evaluator sees the same candidate reply the user would get.
+        evaluator_turn_summary = content if malformed_fallback else candidate_reply
+
         eval_result = evaluate_turn(
             user_query=redacted,
-            assistant_response_summary=candidate_reply,
+            assistant_response_summary=evaluator_turn_summary,
             available_tools=_available_tools_summary(),
             turns_used=turn,
             cfg=cfg,
@@ -1546,10 +1684,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 f"({nudge_cap}) reached — forcing terminal",
                 "planning",
             )
+            print("    🛑 Nudge cap reached — delivering reply", flush=True)
             reply = candidate_reply
             break
 
         if eval_result.terminal:
+            print("    🧭 Evaluator: terminal — reply ready", flush=True)
             reply = candidate_reply
             break
         # Non-terminal: stash the nudge for the next turn, remember the
@@ -1562,6 +1702,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             f"staying in loop (turn {turn}/{max_turns}, nudges "
             f"{nudges_used}/{nudge_cap})",
             "planning",
+        )
+        _nudge_preview = (pending_nudge[:80] + "…") if len(pending_nudge) > 80 else pending_nudge
+        print(
+            f"    🧭 Evaluator: continue"
+            + (f" — {_nudge_preview}" if _nudge_preview else ""),
+            flush=True,
         )
         continue
 

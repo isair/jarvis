@@ -209,3 +209,130 @@ class TestEvaluateTurn:
         ):
             evaluate_turn("q", "r", [], 1, cfg)
         assert captured.get("chat_model") == "judge-model"
+
+
+class TestEvaluatorGarbledTurnGuidance:
+    """The evaluator prompt must tell the judge model to reject garbled
+    agent turns (raw tool protocol markers, special tokens, truncated
+    JSON) with a continue so a retry can produce a real reply.
+
+    Without this clause, the judge sees ``tool_code\\nprint(...)<unused88>``
+    as "prose", returns terminal, and the engine ships the garbage
+    straight to the user. The deterministic malformed guard in the engine
+    handles the known shapes; this clause is defence-in-depth for novel
+    leaks the guard has not learned yet.
+    """
+
+    def test_prompt_mentions_garbled_marker_recognition(self):
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "garbled" in prompt_lower or "malformed" in prompt_lower, (
+            "Evaluator prompt must explicitly instruct the judge to "
+            "recognise garbled / malformed agent turns and return continue "
+            "so the engine can recover instead of shipping the junk."
+        )
+        # The explicit shapes we want the judge on the lookout for.
+        for marker in ("tool_code", "tool_output", "<unused"):
+            assert marker in _EVALUATOR_SYSTEM_PROMPT, (
+                f"Evaluator prompt should name {marker!r} as an example of "
+                f"a garbled agent turn — naming shapes helps small judge "
+                f"models spot them."
+            )
+
+    def test_prompt_instructs_salvaging_failed_tool_calls(self):
+        """When the garbled turn encodes a failed tool-call attempt
+        (e.g. ``tool_code\\nprint(google_search.search(query="..."))`` or
+        bare ``tool_calls: [{"name": "webSearch", ...}]`` JSON), the
+        evaluator should extract the intended tool + arguments and name
+        them in the nudge so the next turn goes through the normal
+        tool-call path. Saves a turn vs. a generic "produce prose"
+        nudge, and keeps allow-list/schema/redaction guards intact
+        because the retry is a real tool call, not a direct execution
+        of parsed text.
+        """
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "salvage" in prompt_lower or "extract" in prompt_lower, (
+            "Evaluator prompt should instruct the judge to extract / "
+            "salvage the intended tool call from a garbled turn when "
+            "possible, rather than only nudging 'produce prose'."
+        )
+        # The nudge should name the intended tool + args, not just say
+        # "try again". Pin a keyword that signals this shape.
+        assert (
+            "name the tool" in prompt_lower
+            or "name the intended tool" in prompt_lower
+        ), (
+            "Evaluator prompt should tell the judge to name the "
+            "intended tool (and arguments) in the nudge when the "
+            "garbled turn encodes a failed tool-call attempt."
+        )
+
+
+class TestEvaluatorTerminalBias:
+    """For simple single-part queries whose grounded answer is already in
+    the turn, the evaluator must return terminal on the FIRST grounded
+    reply. Without explicit guidance, a small judge model defaults to
+    'continue' on every ambiguous turn and the agentic loop burns through
+    ``agentic_max_turns``, which fires the digest summariser and leaks
+    the 'I could not fully finish your request' caveat onto an otherwise
+    correct answer.
+
+    Field evidence: "how's the weather today" → getWeather called →
+    grounded reply produced → evaluator keeps saying continue → 8 turns
+    burned → digest caveat prepended. Correctness-wise the answer is
+    there; UX-wise the assistant sounds confused.
+
+    The prompt must carry BOTH signals:
+      1. A single-part query with a grounded answer is terminal — even
+         if the judge can't prove a tool ran, facts that address the ask
+         are sufficient.
+      2. Multi-part queries still need every part addressed before
+         going terminal, so chained-research flows (two webSearch calls,
+         parallel comparisons) do not regress.
+    """
+
+    def test_prompt_biases_terminal_on_single_part_grounded_reply(self):
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "single-part" in prompt_lower or "single part" in prompt_lower, (
+            "Evaluator prompt should distinguish single-part queries "
+            "(one ask) from multi-part queries — small judge models "
+            "need the category named explicitly to apply the right bias."
+        )
+        # The reply-shaped anchor: when the turn contains facts that
+        # answer the ask, terminal.
+        assert (
+            "concrete facts" in prompt_lower
+            or "concrete data" in prompt_lower
+            or "facts that address" in prompt_lower
+        ), (
+            "Evaluator prompt should tell the judge that a reply "
+            "containing concrete facts that address the user's ask is "
+            "terminal, even when the judge can't prove a tool ran."
+        )
+
+    def test_prompt_still_continues_on_unaddressed_multi_part(self):
+        """The terminal bias for single-part queries must not cannibalise
+        multi-part flows. Prompt must explicitly tell the judge that
+        when the query has multiple parts and at least one is
+        unaddressed, return continue."""
+        from jarvis.reply.evaluator import _EVALUATOR_SYSTEM_PROMPT
+
+        prompt_lower = _EVALUATOR_SYSTEM_PROMPT.lower()
+        assert "multi-part" in prompt_lower or "multi part" in prompt_lower, (
+            "Evaluator prompt should name the multi-part case so the "
+            "terminal bias does not swallow chained-research flows."
+        )
+        assert (
+            "unaddressed" in prompt_lower
+            or "not addressed" in prompt_lower
+            or "not yet addressed" in prompt_lower
+            or "still unanswered" in prompt_lower
+        ), (
+            "Evaluator prompt should tell the judge to return continue "
+            "when a multi-part query has at least one unaddressed part."
+        )

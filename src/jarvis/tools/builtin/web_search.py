@@ -259,6 +259,34 @@ def _brave_search(query: str, api_key: str, count: int = 5
         return []
 
 
+# Language codes whose primary script is NOT Latin. When Whisper returns
+# one of these for a query whose letters are overwhelmingly ASCII/Latin,
+# we treat it as a misdetection and fall back to English rather than
+# hitting a locale-specific service that will come back empty.
+_NON_LATIN_SCRIPT_LANGS: frozenset[str] = frozenset({
+    # CJK
+    "ja", "ko", "zh",
+    # Cyrillic
+    "ru", "uk", "be", "bg", "mk", "sr",
+    # Other non-Latin alphabets
+    "el", "ar", "he", "fa", "ur", "hi", "bn", "ta", "te", "th", "km", "lo",
+    "my", "ka", "hy", "am",
+})
+
+
+def _language_script_mismatches_query(lang: str, query: str) -> bool:
+    """Return True when `lang` expects a non-Latin script but `query` is
+    overwhelmingly Latin letters. Used to catch Whisper language
+    misdetection before it poisons locale-scoped lookups."""
+    if lang not in _NON_LATIN_SCRIPT_LANGS:
+        return False
+    letters = [c for c in query if c.isalpha()]
+    if not letters:
+        return False
+    ascii_letters = sum(1 for c in letters if c.isascii())
+    return ascii_letters / len(letters) >= 0.8
+
+
 def _wikipedia_summary(query: str, lang: str = "en"
                       ) -> Optional[Tuple[str, str, str]]:
     """Last-resort Wikipedia lookup.
@@ -573,10 +601,38 @@ class WebSearchTool(Tool):
                 and _budget_left() > 0
             ):
                 lang = (context.language or "en").strip().lower() or "en"
+                # Script-vs-language sanity check. Whisper sometimes
+                # misdetects the language of short or noisy utterances,
+                # returning e.g. "ko"/"ja"/"zh"/"ru" for clearly Latin-
+                # script speech. Searching the wrong-language Wikipedia
+                # virtually guarantees zero hits for English-content
+                # queries and produces the "I'm sorry, no results"
+                # outcome even for trivial topics. If the query script
+                # disagrees with the detected language, override to
+                # English — it's the safest universal fallback.
+                if _language_script_mismatches_query(lang, search_query):
+                    debug_log(
+                        f"Wikipedia lang override: detected '{lang}' but "
+                        f"query script is Latin — falling back to 'en'",
+                        "web",
+                    )
+                    lang = "en"
                 context.user_print(
-                    f"📚 Falling back to Wikipedia ({lang})…"
+                    f"📚 Searching Wikipedia ({lang}) for '{search_query}'…"
                 )
                 wiki = _wikipedia_summary(search_query, lang=lang)
+                # If the localised Wikipedia had no page, retry in
+                # English before giving up. Many topics only exist on
+                # en.wikipedia.org and the user usually prefers a
+                # grounded answer over an honest "nothing found".
+                if not wiki and lang != "en":
+                    debug_log(
+                        f"Wikipedia ({lang}) returned no match; retrying 'en'",
+                        "web",
+                    )
+                    wiki = _wikipedia_summary(search_query, lang="en")
+                    if wiki:
+                        lang = "en"
                 if wiki:
                     title, url, extract = wiki
                     fetched_content = extract

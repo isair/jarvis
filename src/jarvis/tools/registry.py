@@ -338,9 +338,12 @@ def run_tool_with_retries(
 
     # Friendly user print helper (non-debug only)
     def _user_print(message: str) -> None:
+        # 4-space indent: tool messages happen INSIDE an agentic-loop
+        # turn. The turn header (`  🔁 Turn N/M`) sits at 2 spaces, so
+        # per-tool activity nests one level deeper for visual hierarchy.
         if not getattr(cfg, "voice_debug", False):
             try:
-                print(f"  {message}")
+                print(f"    {message}")
             except Exception:
                 pass
 

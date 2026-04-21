@@ -34,6 +34,10 @@ Return `continue` (non-terminal) when ALL of the following hold:
 
 Return `terminal` when the agent genuinely finished: delivered a real answer, successfully completed the action, or truthfully said it cannot do this because no tool fits.
 
+Return `continue` when the agent's turn is **garbled** — raw tool-protocol markers (`tool_code` / `tool_output` blocks), special sentinel tokens (`<unused88>` and other `<unused…>` variants), bare `tool_calls:` text, truncated JSON, or code/data dumps where a prose answer should be. The deterministic `_is_malformed_model_output` guard in the engine catches the known shapes before the evaluator even runs; the evaluator's garbled-turn clause is defence-in-depth for novel leaks the guard has not learned yet.
+
+When the garbled turn encodes a **failed tool-call attempt** (e.g. a `tool_code` block wrapping `google_search.search(query="…")`, a bare `tool_calls: [{"name": "webSearch", "arguments": {…}}]` JSON blob, or a `<unused…>` block wrapping a tool invocation), the evaluator salvages the intent: extract the intended tool and arguments from the garbled text, validate that the tool name appears in the turn's allow-list, and name the tool + args in the nudge, e.g. *"call webSearch with query='sam smith biography'"*. This saves a turn versus a generic "produce prose" nudge — rather than hoping the model re-attempts the call from scratch, we point directly at the intended invocation so the next turn goes through the normal tool-call path (allow-list check, schema validation, redaction). The evaluator never executes the extracted call itself; it only nudges, so the allow-list and redaction guards stay intact. Unrecoverable shapes (truncated JSON with no name, bare `<unused88>` sentinels, random data dumps) fall back to a "produce a natural-language reply" nudge. Arguments absent from the garbled turn must not be fabricated — salvage is strictly extraction.
+
 ### Prompt contract
 
 Strict JSON `{"terminal": bool, "nudge": "...", "reason": "..."}`, no prose, no code fences. The parser is lenient (strips markdown fences, extracts embedded JSON objects).

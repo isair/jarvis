@@ -616,6 +616,144 @@ class TestWikipediaSummaryHelper:
         assert _wikipedia_summary("q", lang="en") is None
 
 
+class TestWikipediaLanguageScriptMismatch:
+    """Whisper sometimes misdetects the language of short/noisy utterances
+    (e.g. returns "ko" for clearly English speech). Searching the wrong-
+    language Wikipedia then virtually guarantees zero hits. The tool must
+    (a) override to English when the detected language expects a non-Latin
+    script but the query is Latin-only, and (b) retry in English when the
+    localised Wikipedia returns no match.
+    """
+
+    def test_latin_query_with_korean_language_is_mismatch(self):
+        from src.jarvis.tools.builtin.web_search import (
+            _language_script_mismatches_query,
+        )
+        assert _language_script_mismatches_query(
+            "ko", "one of the known artists from our day"
+        )
+
+    @pytest.mark.parametrize("lang", ["ja", "zh", "ru", "el", "ar", "he", "hi", "th"])
+    def test_non_latin_languages_with_latin_query_all_flagged(self, lang):
+        from src.jarvis.tools.builtin.web_search import (
+            _language_script_mismatches_query,
+        )
+        assert _language_script_mismatches_query(lang, "some plain english text")
+
+    def test_latin_query_with_latin_language_is_not_mismatch(self):
+        from src.jarvis.tools.builtin.web_search import (
+            _language_script_mismatches_query,
+        )
+        # Turkish query misdetected as Turkish is fine — Turkish uses Latin.
+        assert not _language_script_mismatches_query(
+            "tr", "possessor filmi kim yönetti"
+        )
+        assert not _language_script_mismatches_query("en", "hello there")
+
+    def test_native_script_query_with_matching_language_is_not_mismatch(self):
+        from src.jarvis.tools.builtin.web_search import (
+            _language_script_mismatches_query,
+        )
+        # Korean query in Korean is correct.
+        assert not _language_script_mismatches_query("ko", "개와 고양이")
+        # Russian query in Russian is correct.
+        assert not _language_script_mismatches_query("ru", "Москва")
+
+    def test_empty_query_is_not_mismatch(self):
+        from src.jarvis.tools.builtin.web_search import (
+            _language_script_mismatches_query,
+        )
+        assert not _language_script_mismatches_query("ko", "")
+        assert not _language_script_mismatches_query("ko", "   ")
+
+    @patch("src.jarvis.tools.builtin.web_search._wikipedia_summary")
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_mismatch_overrides_lang_to_english(self, mock_get, mock_wiki):
+        """Field case: Whisper returned "ko" for an English utterance.
+        The Wikipedia call must be made against en.wikipedia.org, not ko."""
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {}
+        instant.raise_for_status = Mock()
+        challenge = Mock()
+        challenge.status_code = 400
+        challenge.content = b'<div class="anomaly-modal"></div>'
+        mock_get.side_effect = [instant, challenge]
+        mock_wiki.return_value = (
+            "Justin Bieber",
+            "https://en.wikipedia.org/wiki/Justin_Bieber",
+            "Canadian singer.",
+        )
+
+        from src.jarvis.tools.registry import run_tool_with_retries
+        cfg = Mock()
+        cfg.web_search_enabled = True
+        cfg.voice_debug = False
+        cfg.brave_search_api_key = ""
+        cfg.wikipedia_fallback_enabled = True
+        cfg.mcps = {}
+
+        result = run_tool_with_retries(
+            db=None,
+            cfg=cfg,
+            tool_name="webSearch",
+            tool_args={"search_query": "known artists from our day"},
+            system_prompt="",
+            original_prompt="",
+            redacted_text="",
+            max_retries=1,
+            language="ko",
+        )
+        assert result.success is True
+        mock_wiki.assert_called_once()
+        assert mock_wiki.call_args.kwargs.get("lang") == "en", (
+            "Korean detection on Latin-script query must be overridden to 'en'"
+        )
+
+    @patch("src.jarvis.tools.builtin.web_search._wikipedia_summary")
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_localised_miss_retries_in_english(self, mock_get, mock_wiki):
+        """Turkish Wikipedia has no page → retry in English before giving up."""
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {}
+        instant.raise_for_status = Mock()
+        challenge = Mock()
+        challenge.status_code = 400
+        challenge.content = b'<div class="anomaly-modal"></div>'
+        mock_get.side_effect = [instant, challenge]
+        # First call (tr) returns None, second call (en) returns a hit.
+        mock_wiki.side_effect = [
+            None,
+            ("Possessor", "https://en.wikipedia.org/wiki/Possessor", "A film."),
+        ]
+
+        from src.jarvis.tools.registry import run_tool_with_retries
+        cfg = Mock()
+        cfg.web_search_enabled = True
+        cfg.voice_debug = False
+        cfg.brave_search_api_key = ""
+        cfg.wikipedia_fallback_enabled = True
+        cfg.mcps = {}
+
+        result = run_tool_with_retries(
+            db=None,
+            cfg=cfg,
+            tool_name="webSearch",
+            tool_args={"search_query": "possessor"},
+            system_prompt="",
+            original_prompt="",
+            redacted_text="",
+            max_retries=1,
+            language="tr",
+        )
+        assert result.success is True
+        assert mock_wiki.call_count == 2
+        langs = [c.kwargs.get("lang") for c in mock_wiki.call_args_list]
+        assert langs == ["tr", "en"]
+        assert "A film" in result.reply_text
+
+
 class TestLanguagePlumbingEndToEnd:
     """Prove the Whisper language code travels from listener → reply engine →
     registry → tool context → Wikipedia host selection. Listener itself is

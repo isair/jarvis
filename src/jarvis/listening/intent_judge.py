@@ -332,9 +332,16 @@ Examples:
         try:
             data = json.loads(json_text)
 
+            # Alias normalisation also applies to the output query: the judge
+            # occasionally echoes a misheard wake word back verbatim ("Chavis"
+            # stayed in the transcript, judge emitted it in the query), which
+            # then leaks into the reply engine's memory search and prompts.
+            raw_query = str(data.get("query", "")).strip()
+            normalized_query = self._normalize_aliases(raw_query)
+
             return IntentJudgment(
                 directed=bool(data.get("directed", False)),
-                query=str(data.get("query", "")).strip(),
+                query=normalized_query,
                 stop=bool(data.get("stop", False)),
                 confidence=str(data.get("confidence", "low")).lower(),
                 reasoning=str(data.get("reasoning", "")),

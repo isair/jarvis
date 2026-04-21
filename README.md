@@ -217,6 +217,14 @@ pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 CUDA is detected automatically — no configuration needed.
 
+#### Hallucination Filters
+Whisper sometimes produces confident but false transcriptions during silence or background noise (e.g. news-show intros, music). Two thresholds filter these out before they reach the intent judge:
+
+- `"whisper_min_confidence": 0.3` — drops segments whose `avg_logprob`-derived confidence falls below this value. Raise if you see low-confidence noise leaking through; lower if real speech is being dropped.
+- `"whisper_no_speech_threshold": 0.5` — drops any segment whose `no_speech_prob` is at or above this value, regardless of `avg_logprob`. Catches the case where Whisper is confident about a hallucinated phrase but its own no-speech signal says the audio was silent. Applies to both the faster-whisper and MLX backends.
+
+Both thresholds are exposed in the Settings window under *Whisper*.
+
 </details>
 
 <details>
