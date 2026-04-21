@@ -493,7 +493,7 @@ def _maybe_digest_tool_result(
         flat = digested.replace("\n", " ")
         preview = flat[:80] + ("…" if len(flat) > 80 else "")
         print(
-            f"  🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
+            f"    🧩 Tool digest: {len(digested)} chars — \"{preview}\"",
             flush=True,
         )
         debug_log(
@@ -510,7 +510,7 @@ def _maybe_digest_tool_result(
         # substrate. Mirror the memory-digest visibility so the user can
         # see the pass ran and fell back explicitly.
         print(
-            f"  🧩 Tool digest: no relevant facts — using raw payload "
+            f"    🧩 Tool digest: no relevant facts — using raw payload "
             f"({len(raw_tool_result)} chars)",
             flush=True,
         )
@@ -1213,6 +1213,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
+        print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
 
         # Update the system message with fresh context (time/location) before each LLM call
         # Note: We update the first system message rather than appending a new one because
@@ -1346,10 +1347,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
+            print(f"    🛠️ Agent → {tool_name}", flush=True)
 
             # Check if tool is not allowed - respond with tool error
             if tool_name not in allowed_tools:
                 debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
+                print(f"    ⚠️ Tool '{tool_name}' not in allow-list", flush=True)
                 # Use tool response instead of system message to maintain native tool calling compatibility
                 messages.append({
                     "role": "tool",
@@ -1457,6 +1460,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # is already short and structured, no need to distil.
                 if tool_name == "toolSearchTool":
                     newly_added: list[str] = []
+                    # Only accept names that actually resolve to a known
+                    # tool in the registry; otherwise stray prose lines
+                    # like "No additional tools found for that description."
+                    # get treated as tool names and pollute the allow-list.
+                    _valid_names = set(BUILTIN_TOOLS.keys())
+                    if mcp_tools:
+                        _valid_names.update(mcp_tools.keys())
                     for line in (result.reply_text or "").splitlines():
                         # Lines look like "toolName: one-line description"; fall
                         # back to splitting on em dash for backwards compat.
@@ -1468,10 +1478,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 raw = raw.split(sep, 1)[0]
                                 break
                         name_part = raw.strip()
-                        if name_part and name_part not in allowed_tools:
-                            allowed_tools.append(name_part)
-                            known_tool_names.add(name_part)
-                            newly_added.append(name_part)
+                        if not name_part or name_part in allowed_tools:
+                            continue
+                        if name_part not in _valid_names:
+                            debug_log(
+                                f"  🔧 toolSearchTool: ignoring non-tool "
+                                f"line {name_part!r} (not in registry)",
+                                "planning",
+                            )
+                            continue
+                        allowed_tools.append(name_part)
+                        known_tool_names.add(name_part)
+                        newly_added.append(name_part)
                     # Regenerate the tools schema and description so the NEXT
                     # LLM turn sees the widened allow-list. Without this, the
                     # native-mode tools param and the text-mode tools_desc
@@ -1496,12 +1514,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             f"tools schema/desc regenerated",
                             "planning",
                         )
+                        print(
+                            f"    🔧 Discovered {len(newly_added)} tool(s): "
+                            f"{', '.join(newly_added)}",
+                            flush=True,
+                        )
                     else:
                         debug_log(
                             f"  🔧 toolSearchTool returned no new tool names; "
                             f"allow-list unchanged ({len(allowed_tools)} tools)",
                             "planning",
                         )
+                        print("    🔍 No new tools found", flush=True)
                 # Tool-result digest for small models. Long tool payloads
                 # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
                 # push ~2B models into "describe the structure back" or
@@ -1660,10 +1684,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 f"({nudge_cap}) reached — forcing terminal",
                 "planning",
             )
+            print("    🛑 Nudge cap reached — delivering reply", flush=True)
             reply = candidate_reply
             break
 
         if eval_result.terminal:
+            print("    🧭 Evaluator: terminal — reply ready", flush=True)
             reply = candidate_reply
             break
         # Non-terminal: stash the nudge for the next turn, remember the
@@ -1676,6 +1702,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             f"staying in loop (turn {turn}/{max_turns}, nudges "
             f"{nudges_used}/{nudge_cap})",
             "planning",
+        )
+        _nudge_preview = (pending_nudge[:80] + "…") if len(pending_nudge) > 80 else pending_nudge
+        print(
+            f"    🧭 Evaluator: continue"
+            + (f" — {_nudge_preview}" if _nudge_preview else ""),
+            flush=True,
         )
         continue
 

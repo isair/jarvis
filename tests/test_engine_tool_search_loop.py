@@ -859,3 +859,150 @@ def test_max_turns_digest_failure_falls_back_to_last_candidate(
         )
 
     assert reply and "still working" in reply.lower()
+
+
+def test_loop_prints_turn_1_header_and_terminal_evaluator(
+    mock_config, db, dialogue_memory, capsys
+):
+    """User-facing turn log must cover EVERY turn — including turn 1 —
+    and must show the evaluator's terminal decision so the reader can
+    see where the loop actually stopped. Without this, logs like
+
+        💬 Generating response...
+          🛠️ Agent → getWeather
+        🔁 Turn 2/8
+
+    hide turn 1 entirely (the first tool call looks orphaned) and never
+    surface the final evaluator verdict.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = True  # force-on so terminal line fires
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    chat_responses = iter([_assistant_content("Hello!")])
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             return_value='{"terminal": true, "reason": "satisfied"}',
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="hi",
+            dialogue_memory=dialogue_memory,
+        )
+
+    stdout = capsys.readouterr().out
+    assert "🔁 Turn 1/" in stdout, (
+        "Turn 1 header missing from user-facing log. Full stdout:\n" + stdout
+    )
+    assert "🧭 Evaluator: terminal" in stdout, (
+        "Terminal evaluator decision not surfaced in user-facing log. "
+        "Full stdout:\n" + stdout
+    )
+
+
+def test_toolsearchtool_empty_result_does_not_register_sentence_as_tool(
+    mock_config, db, dialogue_memory, capsys
+):
+    """Regression: when toolSearchTool surfaces nothing, it returns the
+    plain sentence ``"No additional tools found for that description."``
+    as ``reply_text``. The engine's line-splitting merger used to treat
+    that whole sentence as a tool name and append it to ``allowed_tools``,
+    producing the field-log line ``🔧 Discovered 1 tool(s): No additional
+    tools found for that description.`` and polluting the allow-list
+    with a bogus entry. The parser must reject anything that is not an
+    actual tool name from the registry.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        if tool_name == "toolSearchTool":
+            return ToolExecutionResult(
+                success=True,
+                reply_text="No additional tools found for that description.",
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    chat_responses = iter(
+        [
+            _assistant_tool_call(
+                "toolSearchTool", {"query": "open youtube"}, call_id="c1"
+            ),
+            _assistant_content("I could not find a tool for that."),
+        ]
+    )
+    captured_tools_params: list = []
+
+    def fake_chat(*args, **kwargs):
+        captured_tools_params.append(kwargs.get("tools"))
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             return_value='{"terminal": true, "reason": "done"}',
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="open youtube",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # The user-facing `🔧 Discovered N tool(s):` line is the first
+    # symptom of the bug — if the parser accepts the empty-result
+    # sentence as a tool name, the log prints it verbatim.
+    stdout = capsys.readouterr().out
+    assert "No additional tools found for that description" not in stdout or (
+        "🔍 No new tools found" in stdout
+    ), (
+        "Engine's toolSearchTool merger printed the empty-result sentence "
+        "as a discovered tool name. Expected `🔍 No new tools found` "
+        "instead. Full stdout:\n" + stdout
+    )
+    assert "🔧 Discovered" not in stdout or (
+        "No additional tools found" not in stdout
+    ), (
+        "Engine logged `🔧 Discovered ... No additional tools found ...` "
+        "— the sentence was misclassified as a tool name. Stdout:\n" + stdout
+    )
