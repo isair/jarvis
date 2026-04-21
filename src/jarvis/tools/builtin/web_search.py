@@ -361,7 +361,7 @@ class WebSearchTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "search_query": {"type": "string", "description": "The search query to look up"}
+                "search_query": {"type": "string", "description": "A self-contained search query with entity names resolved from conversation history (not a literal echo of the user's utterance). Prefer a compact keyword phrase over a conversational sentence — e.g. 'Harry Styles most famous songs', not 'what are his most famous songs'."}
             },
             "required": ["search_query"]
         }

@@ -93,6 +93,12 @@ TOOL_GUIDANCE_LARGE = (
 # this assistant supports an arbitrary set of languages. We describe the
 # BEHAVIOUR to avoid, not English tokens that happen to express it.
 TOOL_CONSTRAINTS_LARGE = (
+    "ACTION REQUESTS — NEVER REFUSE BEFORE CHECKING:\n"
+    "When the user asks for an action, scan your available tools and call the one whose "
+    "description covers that action. Do NOT apologise or claim you cannot do it. If "
+    "nothing in your current list fits, call `toolSearchTool` with a short description "
+    "of the action before giving up. A false refusal when a matching tool exists is the "
+    "worst possible reply.\n\n"
     "UNKNOWN NAMED ENTITIES:\n"
     "When the user asks about a specific named thing (a film, book, song, game, "
     "product, person, company, place, event), call webSearch before answering unless "
@@ -112,7 +118,18 @@ TOOL_CONSTRAINTS_LARGE = (
     "and let it fill the rest. Do NOT reply with a clarifying question like \"which "
     "location?\" for an argument the tool auto-derives. Concretely: \"how's the "
     "weather today\" must trigger getWeather immediately with no arguments, not a "
-    "question back to the user."
+    "question back to the user.\n\n"
+    "SELF-CONTAINED TOOL ARGUMENTS:\n"
+    "When you call any tool with a free-form text argument (search queries, lookup "
+    "strings, question fields — whatever the tool calls them), the string you pass "
+    "must be a self-contained version of the user's intent. Resolve pronouns, "
+    "ellipsis, and implicit references from the conversation so far — the tool does "
+    "NOT see prior turns. If turn 1 was about Harry Styles and turn 2 asks \"what "
+    "are his most famous songs?\", the argument must name Harry Styles explicitly, "
+    "not echo the literal utterance. Prefer a compact keyword phrasing over a "
+    "conversational sentence: \"Harry Styles most famous songs\" beats \"what are "
+    "his most famous songs\". This applies to every tool you call, not just "
+    "webSearch."
 )
 
 
@@ -167,7 +184,10 @@ TOOL_GUIDANCE_SMALL = (
 # the BEHAVIOURS to avoid, not English tokens that happen to express them.
 # Small models still get enough structure to follow because each rule is
 # stated in imperative form with a concrete trigger + action.
-_TOOL_CONSTRAINTS_BASE = """GREETING HANDLING:
+_TOOL_CONSTRAINTS_BASE = """ACTION REQUESTS — NEVER REFUSE BEFORE CHECKING:
+When the user asks for an action (open something, navigate somewhere, send a message, look something up, play something, fetch data), scan your available tools FIRST and call the one whose description covers that action. Do NOT apologise, do NOT say "I cannot do that", do NOT describe your limitations — just call the tool. If nothing in your current tool list obviously fits, call `toolSearchTool` with a short description of the action before giving up. A false refusal when a tool exists is the worst possible reply; calling a tool that turns out not to help is recoverable. Treat "I cannot" as a last resort reserved for when both your tool list AND `toolSearchTool` have been exhausted.
+
+GREETING HANDLING:
 When the user's message is a greeting or casual social phrase (whatever language), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
 
 USER INSTRUCTIONS:
@@ -181,7 +201,10 @@ Any phrasing that requests information about a named entity is a search trigger 
 Only skip the lookup if you can state concrete facts about the exact entity (title, year, creator, plot) without guessing. A diary or memory mention of the entity's name only confirms the topic came up — it does NOT give you facts you can state. Never invent plot, cast, release year, themes, or other specifics from prior knowledge. If you do not have facts from a tool result in this turn, you must call webSearch.
 
 ARGUMENTS THE TOOL CAN AUTO-DERIVE:
-If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool in the SAME turn with whatever arguments you do have — even zero — and let the tool fill the rest. Do NOT ask the user to supply that argument. Do NOT reply with a clarifying question like "which location?" or "where are you?" when the tool's description already states it auto-derives that argument. Concretely: a message like "how's the weather today" must trigger getWeather immediately with no arguments, NOT a question back to the user. Asking for an argument the tool auto-derives wastes a turn and frustrates the user."""
+If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool in the SAME turn with whatever arguments you do have — even zero — and let the tool fill the rest. Do NOT ask the user to supply that argument. Do NOT reply with a clarifying question like "which location?" or "where are you?" when the tool's description already states it auto-derives that argument. Concretely: a message like "how's the weather today" must trigger getWeather immediately with no arguments, NOT a question back to the user. Asking for an argument the tool auto-derives wastes a turn and frustrates the user.
+
+SELF-CONTAINED TOOL ARGUMENTS:
+Whenever you call any tool with a free-form text argument (a search query, lookup string, question field — whatever the tool names it), the string you pass MUST be a self-contained restatement of the user's intent. Resolve pronouns, ellipsis, and implicit references from earlier turns yourself — the tool does NOT see the conversation history, it only sees the argument you pass. If the previous turn was about "Harry Styles" and the user now asks "what are his most famous songs?", the argument must be something like "Harry Styles most famous songs", NOT "what are his most famous songs". Prefer a compact keyword phrase over a conversational sentence. Never pass the user's literal utterance through when it contains unresolved pronouns, "that", "those", "it", "his", "her", "their", or similar references. This applies to every tool — webSearch, Wikipedia, MCP tools, all of them."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE
