@@ -34,6 +34,10 @@ The reply engine:
 3. On a `toolSearchTool` call, dispatches it (running `select_tools(query)` with the same strategy config), appends the tool result as normal, and merges the returned tool names into the allow-list for the next turn. Duplicates collapse; the list only grows.
 4. Neither `stop` nor `toolSearchTool` is ever removed.
 
+Tools surfaced by `toolSearchTool` take effect from the NEXT turn onwards; the current turn's result is already committed. This is inherent to the agentic-loop rhythm and is not a bug.
+
+The engine caps invocations per reply via `tool_search_max_calls` (default 3). Beyond the cap, further calls get a tool-error result telling the model to decide with the tools already available.
+
 ### What toolSearchTool is NOT
 
 - Not a free-form tool discovery surface: it uses the same routing pipeline as the pre-loop call, not a raw "list every tool" dump. The router already applies allow/deny logic and MCP-awareness; reusing it keeps semantics consistent.

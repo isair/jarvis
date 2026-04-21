@@ -49,7 +49,7 @@ def test_loop_merges_toolsearchtool_results_into_allowlist(
             # Returns a newly-routed tool that was NOT in the initial pick.
             return ToolExecutionResult(
                 success=True,
-                reply_text="getWeather — Report current weather.",
+                reply_text="getWeather: Report current weather.",
                 error_message=None,
             )
         if tool_name == "getWeather":
@@ -168,3 +168,230 @@ def test_initial_allowlist_always_includes_toolsearchtool(
     assert "toolSearchTool" in captured_allow_lists[0], (
         f"toolSearchTool missing from initial allow-list: {captured_allow_lists[0]}"
     )
+
+
+def test_schema_regenerated_after_toolsearchtool_merge(
+    mock_config, db, dialogue_memory
+):
+    """F1: after toolSearchTool widens the allow-list, the next native-mode
+    LLM call must receive a tools schema that includes the newly surfaced
+    tool name."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        if tool_name == "toolSearchTool":
+            return ToolExecutionResult(
+                success=True,
+                reply_text="getWeather: Report current weather.",
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="done", error_message=None
+        )
+
+    chat_responses = iter(
+        [
+            _assistant_tool_call(
+                "toolSearchTool", {"query": "weather"}, call_id="c1"
+            ),
+            _assistant_content("All good."),
+        ]
+    )
+    captured_tools_params: list = []
+
+    def fake_chat(*args, **kwargs):
+        captured_tools_params.append(kwargs.get("tools"))
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["webSearch", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="weather?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # Two LLM calls: pre-merge and post-merge. The post-merge call must
+    # include getWeather in its tools schema.
+    assert len(captured_tools_params) >= 2
+    post_merge_schema = captured_tools_params[1] or []
+    names = []
+    for s in post_merge_schema:
+        if isinstance(s, dict):
+            fn = s.get("function", {}) if isinstance(s.get("function"), dict) else {}
+            nm = fn.get("name")
+            if nm:
+                names.append(nm)
+    assert "getWeather" in names, (
+        f"Expected getWeather in post-merge tools schema; got {names}"
+    )
+
+
+def test_tool_search_max_calls_cap(mock_config, db, dialogue_memory):
+    """F5: toolSearchTool invocations are capped per reply."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.tool_search_max_calls = 2
+
+    dispatch_count = {"toolSearchTool": 0}
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        if tool_name == "toolSearchTool":
+            dispatch_count["toolSearchTool"] += 1
+            return ToolExecutionResult(
+                success=True,
+                reply_text="No additional tools found for that description.",
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    # Model keeps trying toolSearchTool; last turn emits final content.
+    responses = [
+        _assistant_tool_call("toolSearchTool", {"query": "a"}, call_id="c1"),
+        _assistant_tool_call("toolSearchTool", {"query": "b"}, call_id="c2"),
+        _assistant_tool_call("toolSearchTool", {"query": "c"}, call_id="c3"),
+        _assistant_tool_call("toolSearchTool", {"query": "d"}, call_id="c4"),
+        _assistant_content("All right, giving up."),
+    ]
+    it = iter(responses)
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(it)
+        except StopIteration:
+            return _assistant_content("done")
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["webSearch", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="hello",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert dispatch_count["toolSearchTool"] == 2, (
+        f"Expected cap to limit dispatch to 2; got "
+        f"{dispatch_count['toolSearchTool']}"
+    )
+
+
+def test_continue_then_toolsearchtool_flow(mock_config, db, dialogue_memory):
+    """F12: evaluator returns 'continue' on a narrow reply, the model then
+    invokes toolSearchTool, a newly surfaced tool is called, and the
+    evaluator signals 'satisfied'. Verifies the full dispatch sequence.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    # Force evaluator ON regardless of model size.
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = True
+
+    invoked_tools: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append(tool_name)
+        if tool_name == "toolSearchTool":
+            return ToolExecutionResult(
+                success=True,
+                reply_text="getWeather: Report current weather.",
+                error_message=None,
+            )
+        if tool_name == "getWeather":
+            return ToolExecutionResult(
+                success=True,
+                reply_text="London: 12C partly cloudy.",
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="result", error_message=None
+        )
+
+    chat_responses = iter(
+        [
+            # Turn 1: narrow answer (no tool call, just text).
+            _assistant_content("I don't have current data."),
+            # Turn 2: model realises it needs a tool.
+            _assistant_tool_call(
+                "toolSearchTool", {"query": "weather london"}, call_id="c1"
+            ),
+            # Turn 3: uses newly surfaced tool.
+            _assistant_tool_call(
+                "getWeather", {"location": "London"}, call_id="c2"
+            ),
+            # Turn 4: final natural-language reply.
+            _assistant_content("It is 12C and partly cloudy in London."),
+        ]
+    )
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    # Evaluator returns continue for the first content, satisfied for the
+    # second (final) content.
+    eval_results = iter(
+        [
+            '{"terminal": false, "reason": "continue"}',
+            '{"terminal": true, "reason": "satisfied"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "reason": "satisfied"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["webSearch", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="weather in london?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert invoked_tools == ["toolSearchTool", "getWeather"], (
+        f"Unexpected tool dispatch sequence: {invoked_tools}"
+    )
+    assert reply and "London" in reply

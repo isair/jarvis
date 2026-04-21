@@ -132,7 +132,7 @@ class ToolSearchTool(Tool):
                 if spec is not None:
                     desc = (getattr(spec, "description", "") or "").strip()
             one_line = desc.splitlines()[0].strip() if desc else ""
-            lines.append(f"{tname} — {one_line}" if one_line else tname)
+            lines.append(f"{tname}: {one_line}" if one_line else tname)
 
         debug_log(
             f"toolSearchTool: surfaced {len(real)} tool(s) for query={query!r}",

@@ -187,6 +187,15 @@ class Settings:
     # When `tool_selection_strategy == "llm"`, this model does the routing.
     # Empty string means "reuse `ollama_chat_model`" (the default).
     tool_router_model: str
+    # Optional override for the post-turn evaluator LLM. Empty string means
+    # "fall back to intent_judge_model, then ollama_chat_model" (the default).
+    evaluator_model: str
+    # None = auto (on for SMALL models, off for LARGE). Explicit true/false forces.
+    evaluator_enabled: Optional[bool]
+    # Upper bound on toolSearchTool invocations per reply turn. The cap
+    # prevents a small model from churning through the escape hatch forever
+    # when no tool really fits.
+    tool_search_max_calls: int
 
     # Location Services
     location_enabled: bool
@@ -455,6 +464,14 @@ def get_default_config() -> Dict[str, Any]:
         # judge model isn't set. Override to decouple routing from both —
         # useful when you want routing on a dedicated smaller model.
         "tool_router_model": "",
+        # Empty string = reuse intent_judge_model, falling through to
+        # ollama_chat_model only if the judge isn't set. Override to pin the
+        # evaluator to a dedicated small/fast model.
+        "evaluator_model": "",
+        # None = auto (on for small models, off for large). Set true/false to force.
+        "evaluator_enabled": None,
+        # Cap the number of toolSearchTool invocations per reply.
+        "tool_search_max_calls": 3,
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -628,6 +645,19 @@ def load_settings() -> Settings:
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
         tool_selection_strategy = "llm"
     tool_router_model = str(merged.get("tool_router_model", "") or "").strip()
+    evaluator_model = str(merged.get("evaluator_model", "") or "").strip()
+    _eval_raw = merged.get("evaluator_enabled", None)
+    evaluator_enabled: Optional[bool]
+    if _eval_raw is None:
+        evaluator_enabled = None
+    else:
+        evaluator_enabled = bool(_eval_raw)
+    try:
+        tool_search_max_calls = int(merged.get("tool_search_max_calls", 3))
+    except (TypeError, ValueError):
+        tool_search_max_calls = 3
+    if tool_search_max_calls < 0:
+        tool_search_max_calls = 0
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -750,6 +780,9 @@ def load_settings() -> Settings:
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
         tool_router_model=tool_router_model,
+        evaluator_model=evaluator_model,
+        evaluator_enabled=evaluator_enabled,
+        tool_search_max_calls=tool_search_max_calls,
 
         # Location Services
         location_enabled=location_enabled,

@@ -17,6 +17,7 @@ from typing import Literal, Optional
 
 from ..debug import debug_log
 from ..llm import call_llm_direct
+from ..utils.redact import redact
 
 
 EvaluatorReason = Literal["satisfied", "needs_user_input", "continue"]
@@ -96,6 +97,24 @@ def _parse_result(raw: str) -> EvaluatorResult:
     )
 
 
+def _resolve_evaluator_model(cfg) -> str:
+    """Pick the LLM model for the evaluator pass.
+
+    Resolution order: explicit ``evaluator_model`` → ``intent_judge_model`` →
+    ``ollama_chat_model``. Mirrors ``_resolve_tool_router_model`` in
+    ``engine.py``; the evaluator is a small classification job and reusing
+    the judge model keeps it on a small, already-warm model by default.
+    """
+    for candidate in (
+        getattr(cfg, "evaluator_model", ""),
+        getattr(cfg, "intent_judge_model", ""),
+        getattr(cfg, "ollama_chat_model", ""),
+    ):
+        if candidate:
+            return candidate
+    return ""
+
+
 def evaluate_turn(
     user_query: str,
     assistant_response_summary: str,
@@ -104,11 +123,20 @@ def evaluate_turn(
 ) -> EvaluatorResult:
     """Classify whether the agentic loop should terminate after this turn.
 
-    Fail-open on any error — returning ``continue`` keeps ``agentic_max_turns``
+    Fail-open on any error. Returning ``continue`` keeps ``agentic_max_turns``
     as the single hard backstop.
     """
+    # Defensive redaction: the caller already passes redacted user text, but
+    # the assistant summary is the model's own reply which may echo sensitive
+    # fragments the user just provided. Scrub both before they hit the LLM.
+    user_query = redact(user_query) if isinstance(user_query, str) else ""
+    assistant_response_summary = (
+        redact(assistant_response_summary)
+        if isinstance(assistant_response_summary, str)
+        else ""
+    )
     base_url = getattr(cfg, "ollama_base_url", "")
-    chat_model = getattr(cfg, "ollama_chat_model", "")
+    chat_model = _resolve_evaluator_model(cfg)
     if not base_url or not chat_model:
         return EvaluatorResult(terminal=False, reason="continue")
 

@@ -260,6 +260,9 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
+  - `evaluator_enabled` (default `null` = auto: ON for SMALL, OFF for LARGE) gates the per-turn evaluator LLM. When off, the first natural-language content terminates the loop.
+  - `evaluator_model` (default empty = fall back to `intent_judge_model`, then `ollama_chat_model`) pins the model used for evaluator classification. See `src/jarvis/reply/evaluator.spec.md`.
+  - `tool_search_max_calls` (default 3) caps `toolSearchTool` invocations per reply. Extra calls return a tool-error nudging the model to decide with what is already available.
 - Context injection:
   - `location_enabled` enables/disables location services
   - `location_ip_address` manual IP configuration for geolocation

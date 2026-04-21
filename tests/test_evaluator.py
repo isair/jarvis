@@ -108,3 +108,86 @@ class TestEvaluateTurn:
         res = evaluate_turn("q", "r", 1, cfg)
         assert res.reason == "continue"
         assert res.terminal is False
+
+    def test_connection_error_fails_open(self):
+        """F11: transport-level failure must collapse to 'continue'."""
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=ConnectionError("ollama down"),
+        ):
+            res = evaluate_turn("q", "r", 1, self._cfg())
+        assert res.reason == "continue"
+        assert res.terminal is False
+
+    def test_redacts_email_in_prompt(self):
+        """Assistant response echoing an email is scrubbed before the LLM call."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "reason": "satisfied"}'
+
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "who is alice?",
+                "Her email is alice@example.com and she lives in London.",
+                1,
+                self._cfg(),
+            )
+        sent = captured.get("user_content", "")
+        assert "alice@example.com" not in sent
+        assert "[REDACTED_EMAIL]" in sent
+
+    def test_clarification_question_carried_through(self):
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            return_value=(
+                '{"terminal": true, "reason": "needs_user_input", '
+                '"clarification_question": "Which city did you mean?"}'
+            ),
+        ):
+            res = evaluate_turn("weather?", "Where?", 1, self._cfg())
+        assert res.reason == "needs_user_input"
+        assert res.clarification_question == "Which city did you mean?"
+
+    def test_evaluator_model_override_used(self):
+        """evaluator_model wins over intent_judge_model and ollama_chat_model."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "reason": "satisfied"}'
+
+        cfg = self._cfg(
+            evaluator_model="dedicated-evaluator",
+            intent_judge_model="judge-model",
+            ollama_chat_model="chat-model",
+        )
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn("q", "r", 1, cfg)
+        assert captured.get("chat_model") == "dedicated-evaluator"
+
+    def test_evaluator_model_falls_back_to_intent_judge(self):
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "reason": "satisfied"}'
+
+        cfg = self._cfg(
+            evaluator_model="",
+            intent_judge_model="judge-model",
+            ollama_chat_model="chat-model",
+        )
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn("q", "r", 1, cfg)
+        assert captured.get("chat_model") == "judge-model"

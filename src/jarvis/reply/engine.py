@@ -1065,6 +1065,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         return None
 
+    # Per-reply counter for toolSearchTool invocations (F5 cap).
+    tool_search_calls = 0
+    try:
+        tool_search_cap = int(getattr(cfg, "tool_search_max_calls", 3))
+    except (TypeError, ValueError):
+        tool_search_cap = 3
+
     reply: Optional[str] = None
     # When the evaluator keeps returning 'continue' until we hit the turn cap,
     # the latest plausible natural-language candidate is delivered rather than
@@ -1231,6 +1238,35 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 })
                 continue
 
+            # Cap toolSearchTool usage per reply so a confused model can't
+            # spin on the escape hatch indefinitely. When capped, return a
+            # tool-error result telling the model to decide with what it has.
+            if tool_name == "toolSearchTool" and tool_search_calls >= tool_search_cap:
+                debug_log(
+                    f"  ⚠️ toolSearchTool call cap reached ({tool_search_calls}/"
+                    f"{tool_search_cap}); refusing further invocations",
+                    "planning",
+                )
+                cap_msg = (
+                    "toolSearchTool has been used the maximum number of times "
+                    "this turn; make a decision with the tools already available."
+                )
+                if use_text_tools:
+                    messages.append({
+                        "role": "user",
+                        "content": f"[Tool error: {tool_name}] {cap_msg}",
+                    })
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Error: {cap_msg}",
+                    })
+                continue
+
+            if tool_name == "toolSearchTool":
+                tool_search_calls += 1
+
             # Check exact signature for duplicate suppression
             try:
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
@@ -1300,16 +1336,52 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # are never removed. Do this before digest — the raw result
                 # is already short and structured, no need to distil.
                 if tool_name == "toolSearchTool":
+                    newly_added: list[str] = []
                     for line in (result.reply_text or "").splitlines():
-                        name_part = line.split("—", 1)[0].strip()
+                        # Lines look like "toolName: one-line description"; fall
+                        # back to splitting on em dash for backwards compat.
+                        raw = line.strip()
+                        if not raw:
+                            continue
+                        for sep in (":", "—"):
+                            if sep in raw:
+                                raw = raw.split(sep, 1)[0]
+                                break
+                        name_part = raw.strip()
                         if name_part and name_part not in allowed_tools:
                             allowed_tools.append(name_part)
                             known_tool_names.add(name_part)
-                    debug_log(
-                        f"  🔧 allow-list widened via toolSearchTool: "
-                        f"{len(allowed_tools)} tools now available",
-                        "planning",
-                    )
+                            newly_added.append(name_part)
+                    # Regenerate the tools schema and description so the NEXT
+                    # LLM turn sees the widened allow-list. Without this, the
+                    # native-mode tools param and the text-mode tools_desc
+                    # block stay stale and the surfaced tools can't actually
+                    # be invoked until the next reply.
+                    if newly_added:
+                        tools_desc = generate_tools_description(allowed_tools, mcp_tools)
+                        tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
+                        if use_text_tools:
+                            # Rebuild the first system message so the fresh
+                            # tools_desc replaces the stale one. _update_system_
+                            # message_with_context re-prepends the time/location
+                            # line on the next turn.
+                            messages[0] = {
+                                "role": "system",
+                                "content": _build_initial_system_message(),
+                            }
+                        debug_log(
+                            f"  🔧 allow-list widened via toolSearchTool: "
+                            f"{len(allowed_tools)} tools now available "
+                            f"(added: {', '.join(newly_added)}); "
+                            f"tools schema/desc regenerated",
+                            "planning",
+                        )
+                    else:
+                        debug_log(
+                            f"  🔧 toolSearchTool returned no new tool names; "
+                            f"allow-list unchanged ({len(allowed_tools)} tools)",
+                            "planning",
+                        )
                 # Tool-result digest for small models. Long tool payloads
                 # (webSearch UNTRUSTED WEB EXTRACT blocks in particular)
                 # push ~2B models into "describe the structure back" or
@@ -1398,6 +1470,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             reply = candidate_reply
             break
 
+        # Evaluator gating. None = auto (on for SMALL, off for LARGE).
+        # Mirrors the memory_digest_enabled pattern.
+        _eval_cfg = getattr(cfg, "evaluator_enabled", None)
+        if _eval_cfg is None:
+            eval_enabled = (detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL)
+        else:
+            eval_enabled = bool(_eval_cfg)
+
+        if not eval_enabled:
+            # Gated off: treat as terminal so the first natural-language
+            # content becomes the reply. The max-turn backstop still applies
+            # via the surrounding loop.
+            reply = candidate_reply
+            break
+
         eval_result = evaluate_turn(
             user_query=redacted,
             assistant_response_summary=candidate_reply,
@@ -1405,6 +1492,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             cfg=cfg,
         )
         if eval_result.terminal:
+            # When the evaluator signals the assistant needs user input and
+            # supplies a refined clarification question, override the raw
+            # candidate with the crisper phrasing. Lets the evaluator upgrade
+            # a vague user-facing question into a pointed one.
+            if (
+                eval_result.reason == "needs_user_input"
+                and isinstance(eval_result.clarification_question, str)
+                and eval_result.clarification_question.strip()
+            ):
+                candidate_reply = eval_result.clarification_question.strip()
+                debug_log(
+                    "evaluator provided refined clarification_question; "
+                    "overriding candidate reply",
+                    "planning",
+                )
             reply = candidate_reply
             break
         # Non-terminal: remember the candidate for the max-turn fallback, then

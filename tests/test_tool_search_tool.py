@@ -39,14 +39,14 @@ class TestToolSearchTool:
         assert result.success is True
         text = result.reply_text or ""
         # Sentinel and self are filtered out; real tools appear as
-        # `name — description`.
+        # `name: description`.
         assert "webSearch" in text
         assert "getWeather" in text
         assert "stop" not in text.split("\n")[0]
         assert "toolSearchTool" not in text.splitlines()[0]
-        # Each line has the em-dash-joined description format.
+        # Each line has the colon-joined description format.
         for line in text.splitlines():
-            assert "—" in line or line.strip() in ("webSearch", "getWeather")
+            assert ":" in line or line.strip() in ("webSearch", "getWeather")
 
     def test_empty_result_returns_honest_note(self, mock_config):
         tool = ToolSearchTool()
