@@ -130,7 +130,27 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: inline (~lines 156-161) — answer with number or `NONE`.
 - **Output**: child node id or `None` (fact still inserted, just not under an optimal parent).
 
-## 13. Tool-specific LLM calls
+## 13. Task-list Planner (pre-loop decomposition)
+
+- **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
+- **Trigger**: once per reply, after tool selection and before the agentic loop. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (12), or when no model / base URL is available.
+- **Model / gating**: resolution chain `planner_model → tool_router_model → intent_judge_model → ollama_chat_model`. Classification-shaped, rides the warm small model.
+- **Inputs**: user query, dialogue context, memory context, selected tool names + one-line descriptions.
+- **System prompt**: `_PROMPT_TEMPLATE` at [planner.py:73](src/jarvis/reply/planner.py:73). Teaches short imperative steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
+- **Output**: list of plan steps (max `MAX_STEPS` = 5). Consumed by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop for small models.
+- **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`. Trivial single-reply plans are dropped.
+
+## 14. Plan Step Resolver (per direct-exec turn, small models)
+
+- **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `resolve_next_tool_call()`.
+- **Trigger**: top of each agentic-loop iteration when `use_text_tools` is True AND the plan from #13 still has unexecuted tool steps. Runs instead of the chat model for that turn.
+- **Model**: same chain as #13.
+- **Inputs**: next planned step text, prior tool calls (name + args + result excerpt), per-turn tool schema.
+- **System prompt**: `_STEP_RESOLVER_SYSTEM` at [planner.py:300](src/jarvis/reply/planner.py:300). Teaches one-JSON-object output, placeholder substitution from prior results, `null` for synthesis steps.
+- **Output**: `(tool_name, arguments)` tuple or `None`. Unknown tool names are rejected via the allow-list guard.
+- **Limits**: `planner_timeout_sec`. Fail-open → `None` (engine falls back to the chat-model turn).
+
+## 15. Tool-specific LLM calls
 
 - **Weather** ([src/jarvis/tools/builtin/weather.py](src/jarvis/tools/builtin/weather.py), ~line 60) — `ollama_chat_model`, parses location/time/unit from the query.
 - **Nutrition log_meal** ([src/jarvis/tools/builtin/nutrition/log_meal.py](src/jarvis/tools/builtin/nutrition/log_meal.py), lines 48 & 136) — `ollama_chat_model`, extracts nutrients, confirms logging.
@@ -153,7 +173,9 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 10 | Summariser | ~1/session | No (background) | LARGE |
 | 11 | Graph extraction | ~1/session | No (background) | LARGE |
 | 12 | Graph best-child | 0-N | No (background) | SMALL (via router chain) |
-| 13 | Tool-specific | per-tool | n/a | LARGE |
+| 13 | Planner (plan_query) | 1 | yes (planner_enabled) | SMALL (via router chain) |
+| 14 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
+| 15 | Tool-specific | per-tool | n/a | LARGE |
 
 ## Size-aware auto switches
 

@@ -23,6 +23,7 @@ from .evaluator import evaluate_turn
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query
+from .planner import plan_query, format_plan_block, progress_nudge
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
@@ -996,6 +997,67 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "planning",
             )
 
+    # Pre-loop task-list planner (issue #231). One short LLM pass over the
+    # query + dialogue + memory + allowed tools that emits an ordered list
+    # of concrete sub-tasks. We inject the plan into the initial system
+    # message as an ``ACTION PLAN:`` block and, in the tool-result loop,
+    # use the plan to drive a progress-aware remainder nudge. The plan is
+    # advisory, not executed directly — the chat model still emits tool
+    # calls itself, but now with a pre-committed structure it can follow
+    # instead of having to re-derive the multi-step shape every turn.
+    #
+    # Fails open: empty plan means "fall through to prior behaviour"
+    # (compound_query split + generic completeness prompt).
+    action_plan: list[str] = []
+    try:
+        _plan_tools: list[tuple[str, str]] = []
+        for _schema in (tools_json_schema or []):
+            _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
+            if isinstance(_fn, dict):
+                _nm = _fn.get("name")
+                _desc = (_fn.get("description") or "").strip().splitlines()
+                _first = _desc[0] if _desc else ""
+                if _nm:
+                    _plan_tools.append((str(_nm), _first[:120]))
+        # Compose a compact dialogue snippet (last ~3 turns) for the planner.
+        _dialogue_lines: list[str] = []
+        for _m in (recent_messages or [])[-6:]:
+            _role = _m.get("role", "")
+            _content = (_m.get("content") or "").strip().replace("\n", " ")
+            if _role in ("user", "assistant") and _content:
+                _dialogue_lines.append(f"{_role}: {_content[:200]}")
+        _dialogue_ctx = "\n".join(_dialogue_lines)
+        # Concatenate the memory context sources the system message already
+        # uses, so the planner sees exactly what the chat model will see.
+        _memory_ctx_parts: list[str] = []
+        if memory_digest_text:
+            _memory_ctx_parts.append(memory_digest_text)
+        if conversation_context:
+            _memory_ctx_parts.append(conversation_context)
+        if graph_context:
+            _memory_ctx_parts.append(graph_context)
+        _memory_ctx = "\n".join(_memory_ctx_parts)[:2000]
+
+        action_plan = plan_query(
+            cfg=cfg,
+            query=redacted,
+            dialogue_context=_dialogue_ctx,
+            memory_context=_memory_ctx,
+            tools=_plan_tools,
+        )
+        if action_plan:
+            _plan_preview = " | ".join(s[:50] for s in action_plan)
+            print(
+                f"  🗺️ Plan: {len(action_plan)} step(s) — {_plan_preview}",
+                flush=True,
+            )
+            debug_log(
+                f"planner produced {len(action_plan)} step(s)", "planning"
+            )
+    except Exception as _plan_exc:  # pragma: no cover — defensive
+        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
+        action_plan = []
+
     def _build_initial_system_message() -> str:
         guidance = [SYSTEM_PROMPT.strip()]
 
@@ -1057,6 +1119,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "current tools and constraints above still apply:\n"
                 + memory_digest_text
             )
+
+        if action_plan:
+            guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
             # Text-based tool calling: inject tool descriptions as plain text. The tools_desc
@@ -1339,6 +1404,154 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
 
+        # Plan-driven direct-exec. When a pre-loop action plan exists and
+        # has more tool steps than tool results seen so far, resolve the
+        # next step into a concrete tool call and execute it IN THIS TURN
+        # without asking the chat model. Small models (gemma4:e2b) don't
+        # reliably substitute discovered entities into subsequent tool
+        # calls; driving plan steps via a short resolver LLM call against
+        # prior tool results lifts that responsibility off the chat model
+        # entirely. After each step we ``continue`` so the next iteration
+        # resolves the step after — the chat model is only invoked once
+        # all plan tool steps are exhausted, at which point it synthesises
+        # a final reply from the accumulated results.
+        # See planner.spec.md.
+        if (
+            use_text_tools
+            and action_plan
+            and pending_tool_call is None
+        ):
+            _plan_tool_steps = (
+                list(action_plan[:-1]) if len(action_plan) > 1 else list(action_plan)
+            )
+            _tool_results_so_far = sum(
+                1 for m in messages if m.get("tool_name")
+            )
+            if 0 <= _tool_results_so_far < len(_plan_tool_steps):
+                _plan_exec_handled = False
+                try:
+                    from .planner import resolve_next_tool_call as _resolve_next
+                    _prior = list(invoked_tools_history)
+                    _resolved = _resolve_next(
+                        cfg=cfg,
+                        next_step_text=_plan_tool_steps[_tool_results_so_far],
+                        prior_results=_prior,
+                        tools_schema=tools_json_schema or [],
+                    )
+                    if _resolved is not None:
+                        _name, _args = _resolved
+                        try:
+                            _cand_sig = (
+                                _name,
+                                json.dumps(
+                                    _args or {},
+                                    sort_keys=True,
+                                    ensure_ascii=False,
+                                ),
+                            )
+                        except Exception:
+                            _cand_sig = (_name, "__unserializable__")
+                        # Reject toolSearchTool here — its allow-list
+                        # widening logic lives on the model-emitted path;
+                        # direct-exec bypasses it. Reject duplicate sigs
+                        # too: re-issuing identical args is a waste.
+                        _plan_exec_ok = (
+                            _name in allowed_tools
+                            and _name != "toolSearchTool"
+                            and _cand_sig not in recent_tool_signatures
+                        )
+                        if _plan_exec_ok:
+                            debug_log(
+                                f"planner: direct-executing plan step "
+                                f"{_tool_results_so_far + 1} — "
+                                f"{_name}({_args!r})",
+                                "planning",
+                            )
+                            print(
+                                f"    🗺️ Plan step {_tool_results_so_far + 1} "
+                                f"→ direct-exec {_name}",
+                                flush=True,
+                            )
+                            _plan_call_id = (
+                                f"call_plan_{uuid.uuid4().hex[:8]}"
+                            )
+                            messages.append({
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": _plan_call_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": _name,
+                                            "arguments": _args,
+                                        },
+                                    }
+                                ],
+                            })
+                            _plan_result = run_tool_with_retries(
+                                db=db,
+                                cfg=cfg,
+                                tool_name=_name,
+                                tool_args=_args,
+                                system_prompt=SYSTEM_PROMPT,
+                                original_prompt="",
+                                redacted_text=redacted,
+                                max_retries=1,
+                                language=language,
+                            )
+                            if _plan_result.reply_text:
+                                _plan_text = _maybe_digest_tool_result(
+                                    cfg=cfg,
+                                    query=redacted,
+                                    tool_name=_name,
+                                    raw_tool_result=_plan_result.reply_text,
+                                )
+                            else:
+                                _plan_text = (
+                                    f"Error: "
+                                    f"{_plan_result.error_message or '(no result)'}"
+                                )
+                            _plan_tool_results_after = _tool_results_so_far + 1
+                            if action_plan:
+                                _plan_hint = progress_nudge(
+                                    action_plan,
+                                    _plan_tool_results_after,
+                                )
+                            else:
+                                _plan_hint = ""
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"[Tool result: {_name}]\n"
+                                    f"{_plan_text}{_plan_hint}"
+                                ),
+                                "tool_name": _name,
+                            })
+                            recent_tool_signatures.append(_cand_sig)
+                            if len(recent_tool_signatures) > 5:
+                                recent_tool_signatures = (
+                                    recent_tool_signatures[-5:]
+                                )
+                            invoked_tools_history.append(
+                                (_name, _cand_sig[1], _plan_text)
+                            )
+                            _plan_exec_handled = True
+                        else:
+                            debug_log(
+                                f"planner: rejected plan step exec "
+                                f"({_name!r}: allow_list={_name in allowed_tools}, "
+                                f"dup={_cand_sig in recent_tool_signatures})",
+                                "planning",
+                            )
+                except Exception as _pe:  # pragma: no cover — defensive
+                    debug_log(
+                        f"planner direct-exec resolver failed: {_pe}",
+                        "planning",
+                    )
+                if _plan_exec_handled:
+                    continue
+
         # Structured tool-call from the evaluator: execute directly
         # before asking the model for another turn. This bypasses small
         # models that see an `[Agent nudge: call webSearch ...]` block
@@ -1454,13 +1667,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         raw_tool_result=_direct_result.reply_text,
                     )
                 if use_text_tools:
-                    # Mirror the compound-query remainder-hint logic
-                    # from the model-emitted path so multi-part queries
+                    # Mirror the plan-aware / compound-query remainder-hint
+                    # logic from the model-emitted path so multi-part queries
                     # don't stall when the evaluator fires a direct-exec.
                     _tool_results_so_far = sum(
                         1 for m in messages if m.get("tool_name")
                     )
-                    if (
+                    if action_plan:
+                        _remainder_hint = progress_nudge(
+                            action_plan, _tool_results_so_far
+                        )
+                    elif (
                         _compound_sub_questions
                         and _tool_results_so_far
                         < len(_compound_sub_questions)
@@ -1878,13 +2095,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
 
                 if use_text_tools:
-                    # For compound queries, compute how many sub-questions remain
-                    # unanswered and append a targeted nudge so the model knows
-                    # exactly what to search for next.
+                    # Plan-aware remainder nudge (issue #231). When a
+                    # pre-loop plan exists, prefer it over the legacy
+                    # compound_query split: the plan was computed from the
+                    # actual query + tools + memory, not from a
+                    # hand-rolled conjunction table, so it generalises to
+                    # multi-part queries the split heuristic misses.
                     tool_results_so_far = sum(
                         1 for m in messages if m.get("tool_name")
                     )
-                    if _compound_sub_questions and tool_results_so_far < len(_compound_sub_questions):
+                    if action_plan:
+                        remainder_hint = progress_nudge(
+                            action_plan, tool_results_so_far
+                        )
+                    elif (
+                        _compound_sub_questions
+                        and tool_results_so_far < len(_compound_sub_questions)
+                    ):
                         remaining = _compound_sub_questions[tool_results_so_far:]
                         remainder_hint = (
                             f"\n\n⚠️ You have answered {tool_results_so_far} of "

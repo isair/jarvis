@@ -202,6 +202,22 @@ class Settings:
     # the next turn's system message. This cap stops nudge ping-pong when
     # the model keeps producing prose despite the nudge.
     evaluator_nudge_max: int
+    # Optional override for the pre-loop task-list planner model. Empty
+    # string means "fall back to tool_router_model → intent_judge_model →
+    # ollama_chat_model" (the default). The planner is a small
+    # classification-shaped pass so it rides the same small-model chain
+    # as the router and the evaluator.
+    planner_model: str
+    # Whether the pre-loop planner is enabled. True = planner always runs;
+    # False = planner never runs (legacy behaviour, with the
+    # compound_query fallback still active). Default True — the planner
+    # fails open to an empty plan so the cost of a miss is one cheap LLM
+    # round-trip, and the upside is multi-step queries actually complete.
+    planner_enabled: bool
+    # Timeout for the planner LLM call. Short because the planner is on
+    # the critical path — a long timeout would dominate first-token
+    # latency for every query. Planner fails open on timeout.
+    planner_timeout_sec: float
 
     # Location Services
     location_enabled: bool
@@ -484,6 +500,12 @@ def get_default_config() -> Dict[str, Any]:
         "tool_search_max_calls": 3,
         # Cap the number of evaluator-driven nudges per reply.
         "evaluator_nudge_max": 2,
+        # Task-list planner (see src/jarvis/reply/planner.spec.md). Empty
+        # model string = reuse tool_router_model → intent_judge_model →
+        # ollama_chat_model.
+        "planner_model": "",
+        "planner_enabled": True,
+        "planner_timeout_sec": 6.0,
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -664,6 +686,12 @@ def load_settings() -> Settings:
         evaluator_enabled = None
     else:
         evaluator_enabled = bool(_eval_raw)
+    planner_model = str(merged.get("planner_model", "") or "").strip()
+    planner_enabled = bool(merged.get("planner_enabled", True))
+    try:
+        planner_timeout_sec = float(merged.get("planner_timeout_sec", 6.0))
+    except (TypeError, ValueError):
+        planner_timeout_sec = 6.0
     try:
         tool_search_max_calls = int(merged.get("tool_search_max_calls", 3))
     except (TypeError, ValueError):
@@ -804,6 +832,9 @@ def load_settings() -> Settings:
         evaluator_enabled=evaluator_enabled,
         tool_search_max_calls=tool_search_max_calls,
         evaluator_nudge_max=evaluator_nudge_max,
+        planner_model=planner_model,
+        planner_enabled=planner_enabled,
+        planner_timeout_sec=planner_timeout_sec,
 
         # Location Services
         location_enabled=location_enabled,

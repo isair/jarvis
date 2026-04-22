@@ -13,6 +13,15 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _disable_planner():
+    """Tests in this module exercise evaluator / toolSearchTool / compound-query
+    behaviours specifically. The planner has its own coverage; disable it here
+    so its step-resolver hints don't mask the assertions we care about."""
+    with patch("jarvis.reply.engine.plan_query", return_value=[]):
+        yield
+
+
 def _assistant_tool_call(name: str, args: dict, call_id: str = "call_1"):
     return {
         "message": {

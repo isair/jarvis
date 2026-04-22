@@ -15,6 +15,15 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _disable_planner():
+    """These tests verify greeting/instruction routing against a mocked
+    chat LLM. The planner uses its own LLM call (`call_llm_direct`) which
+    is not mocked here, so disable it to keep the test hermetic."""
+    with patch("jarvis.reply.engine.plan_query", return_value=[]):
+        yield
+
+
 # =============================================================================
 # Test Data
 # =============================================================================
