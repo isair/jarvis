@@ -460,11 +460,10 @@ def get_default_config() -> Dict[str, Any]:
         "memory_digest_enabled": None,
         # Distil raw tool results (e.g. webSearch extracts) into a short
         # attributed fact note for small models. Defaults to off: the extra
-        # digest LLM pass adds latency per tool call and, on small models,
-        # often drops salient numbers/names the main model would have
-        # grounded on. Set to ``true`` to force on, or ``null`` to opt back
-        # into the old auto-on-for-small behaviour.
-        "tool_result_digest_enabled": False,
+        # None = auto (on for small models ≤7B, off for large). Set true/false to force.
+        # Auto-on for small models mitigates fetch_web_page's 50k-char payloads
+        # blowing the 8192 num_ctx window before the main model sees them.
+        "tool_result_digest_enabled": None,
 
         # Agentic Loop
         "agentic_max_turns": 8,
