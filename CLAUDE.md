@@ -24,6 +24,8 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
 | `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract and hygiene rules (deflection, attribution, topic separation) | Summariser is the source; corrupted summaries poison every downstream consumer |
 
+The LLM contexts graph at `docs/llm_contexts.md` maps every LLM call in the app (model, gating, inputs, outputs, limits, flow). Keep it up-to-date at all times: any change that adds, removes, or alters an LLM context (model resolution, timeout, cap, prompt source, gating flag, data-flow edge) must update `docs/llm_contexts.md` in the same PR.
+
 Avoid hardcoded language patterns as this assistant needs to support an arbitrary amount of different languages.
 
 Tools define when/how to be used and return raw data without LLM processing. The unified system prompt in `src/jarvis/system_prompt.py` handles response formatting and personality through the daemon's LLM loop.

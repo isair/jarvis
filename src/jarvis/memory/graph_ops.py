@@ -140,6 +140,7 @@ def _llm_pick_best_child(
     ollama_chat_model: str,
     timeout_sec: float = 15.0,
     thinking: bool = False,
+    picker_model: Optional[str] = None,
 ) -> Optional[str]:
     """Ask the LLM which child node best fits a memory fragment.
 
@@ -164,9 +165,13 @@ def _llm_pick_best_child(
         f"Categories:\n{options_text}"
     )
 
+    # Picker is a one-digit classification — reuse the small picker_model
+    # when the caller provides one (resolved from intent_judge_model → chat_model).
+    # Falls back to the chat model when no small model is configured.
+    effective_model = picker_model or ollama_chat_model
     response = call_llm_direct(
         base_url=ollama_base_url,
-        chat_model=ollama_chat_model,
+        chat_model=effective_model,
         system_prompt=system_prompt,
         user_content=user_content,
         timeout_sec=timeout_sec,
@@ -197,6 +202,7 @@ def find_best_node(
     ollama_chat_model: str,
     timeout_sec: float = 15.0,
     thinking: bool = False,
+    picker_model: Optional[str] = None,
 ) -> str:
     """Find the best node to store a memory fragment using three entry points.
 
@@ -215,7 +221,7 @@ def find_best_node(
         debug_log(f"graph traversal: trying {len(recent)} recent nodes: {[n.name for n in recent]}", "memory")
         best = _llm_pick_best_child(
             fragment, recent, ollama_base_url, ollama_chat_model,
-            timeout_sec=timeout_sec, thinking=thinking,
+            timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
         )
         if best is not None:
             matched = store.get_node(best)
@@ -230,7 +236,7 @@ def find_best_node(
         debug_log(f"graph traversal: trying {len(top)} top nodes: {[n.name for n in top]}", "memory")
         best = _llm_pick_best_child(
             fragment, top, ollama_base_url, ollama_chat_model,
-            timeout_sec=timeout_sec, thinking=thinking,
+            timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
         )
         if best is not None:
             matched = store.get_node(best)
@@ -251,7 +257,7 @@ def find_best_node(
         debug_log(f"graph traversal: depth {depth}, choosing from {[c.name for c in children]}", "memory")
         best = _llm_pick_best_child(
             fragment, children, ollama_base_url, ollama_chat_model,
-            timeout_sec=timeout_sec, thinking=thinking,
+            timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
         )
         if best is None:
             debug_log(f"graph traversal: no children fit at depth {depth}, stopping", "memory")
@@ -392,6 +398,7 @@ def update_graph_from_dialogue(
     timeout_sec: float = 30.0,
     thinking: bool = False,
     date_utc: Optional[str] = None,
+    picker_model: Optional[str] = None,
 ) -> "list[tuple[str, str]]":
     """End-to-end: extract memories from a summary, place each in the best
     node, and trigger auto-split if needed.
@@ -432,6 +439,7 @@ def update_graph_from_dialogue(
                 ollama_chat_model=ollama_chat_model,
                 timeout_sec=15.0,
                 thinking=thinking,
+                picker_model=picker_model,
             )
 
             # Step 3: Append the fact to the chosen node
