@@ -1429,8 +1429,8 @@ class VoiceListener(threading.Thread):
         # Use the same resolution helper the reply engine uses so warmup
         # targets the model the engine will actually call. Keeping a single
         # source of truth prevents drift between warmup and runtime.
-        from ..reply.engine import _resolve_tool_router_model
-        router_model_effective = _resolve_tool_router_model(self.cfg)
+        from ..reply.engine import resolve_tool_router_model
+        router_model_effective = resolve_tool_router_model(self.cfg)
         router_model = router_model_effective if strategy == "llm" else ""
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 

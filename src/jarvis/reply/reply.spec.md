@@ -32,7 +32,8 @@ Design principles enforced by the engine:
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
 
 4. Conversation Memory Enrichment (optional)
-   - Extract search parameters via `extract_search_params_for_memory(query, base_url, chat_model, ..., context_hint=...)`.
+   - Extract search parameters via `extract_search_params_for_memory(query, base_url, router_model, ..., context_hint=...)`.
+     - Runs on the tool-router model chain (`resolve_tool_router_model(cfg)` → `tool_router_model → intent_judge_model → ollama_chat_model`), not the big chat model. The extractor is a small classification-shaped task and rides the already-warm router/judge model instead of paging in the chat weights.
      - Output fields: `keywords: List[str]`, optional `from`, optional `to`, optional `questions: List[str]`.
      - `context_hint` carries a compact summary of what is already live in the assistant's context (current time, location, short-term dialogue). The extractor uses it to skip implicit personal questions whose answers are already visible — those facts do not need to be pulled from long-term memory.
    - If `keywords` present, call `search_conversation_memory_by_keywords(db, keywords, from_time, to_time, ...)` to retrieve relevant snippets (bounded by configured max results).

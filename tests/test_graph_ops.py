@@ -173,6 +173,22 @@ class TestLLMPickBestChild:
         result = _llm_pick_best_child("fact", children, "http://localhost", "model")
         assert result is None
 
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_uses_picker_model_when_provided(self, mock_llm, populated_store):
+        # Behaviour: picker_model overrides the chat model for this classification-
+        # shaped call, so placement runs on the small model without paging in the
+        # big chat model. When absent, the chat model is used (backwards-compatible).
+        children = populated_store.get_children("root")
+        mock_llm.return_value = "1"
+
+        _llm_pick_best_child(
+            "fact", children, "http://localhost", "big-chat", picker_model="small-judge"
+        )
+        assert mock_llm.call_args.kwargs["chat_model"] == "small-judge"
+
+        _llm_pick_best_child("fact", children, "http://localhost", "big-chat")
+        assert mock_llm.call_args.kwargs["chat_model"] == "big-chat"
+
 
 # ── find_best_node ─────────────────────────────────────────────────────
 

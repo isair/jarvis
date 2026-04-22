@@ -242,6 +242,12 @@ def _check_and_update_diary(
             # Only use token handler if we have callbacks or IPC enabled
             on_token = on_token_handler if (use_callbacks or use_ipc) else None
 
+            # Graph best-child picker is a one-digit classification — reuse the
+            # tool-router model chain so placement runs on a small model instead
+            # of paging in the big chat model for every fact.
+            from .reply.engine import resolve_tool_router_model
+            graph_picker_model = resolve_tool_router_model(cfg)
+
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
                 dialogue_memory=_global_dialogue_memory,
@@ -254,6 +260,7 @@ def _check_and_update_diary(
                 force=force,
                 on_token=on_token,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                graph_picker_model=graph_picker_model,
             )
 
             # Flush any remaining tokens in IPC mode
