@@ -355,8 +355,14 @@ def _build_evaluator_directive(
         f"AGENT TOOLBOX (for this turn):\n{tools_block}\n\n"
         f"TOOLS ALREADY INVOKED THIS REPLY (with args and results):\n{invoked_block}\n\n"
         f"TURNS USED SO FAR: {turns_used}\n\n"
-        "Classify your previous assistant reply now. Reply with strict JSON only. "
-        "Do NOT answer the user's query again, do NOT call a tool, do NOT emit prose."
+        "Classify the LAST assistant message in the conversation above (the most "
+        "recent one, after any tool calls and tool results). If a tool in "
+        "TOOLS ALREADY INVOKED already covers the user's request and the "
+        "last assistant message summarised its result, return terminal=true. "
+        "Only return terminal=false if a tool in AGENT TOOLBOX could directly "
+        "perform the user's request and NO entry in TOOLS ALREADY INVOKED "
+        "has already done it. Reply with strict JSON only. Do NOT answer the "
+        "user's query again, do NOT call a tool, do NOT emit prose."
     )
 
 

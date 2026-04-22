@@ -678,6 +678,41 @@ class TestEvaluatorCacheFriendlyPath:
         # Dynamic turns-used signal for the terminal-bias rubric
         assert "3" in tail
 
+    def test_cache_friendly_tail_anchors_on_last_assistant_message(self):
+        """The directive must explicitly tell the small evaluator model to
+        classify the LAST assistant message, not an earlier one. When a
+        turn contains a tool-call envelope plus a tool result plus a final
+        prose reply, "your previous assistant reply" is ambiguous — small
+        models drift onto the earlier tool-call message and re-request the
+        tool that already ran, producing a direct-exec ping-pong loop.
+        """
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return {"message": {"content": '{"terminal": true, "nudge": "", "reason": ""}'}}
+
+        with patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "q", "a", [], 1, self._cfg(),
+                chat_messages=[
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": "a"},
+                ],
+            )
+        tail = captured["messages"][-1]["content"].lower()
+        assert "last assistant message" in tail, (
+            "tail directive must anchor on the LAST assistant message so "
+            "small models do not drift onto an earlier tool-call message"
+        )
+        assert "tools already invoked" in tail, (
+            "tail directive must remind the judge to consult the invoked "
+            "tools block before re-requesting a tool"
+        )
+
     def test_cache_friendly_strips_non_standard_fields(self):
         """Engine annotates messages with internal fields (`tool_name` for
         duplicate detection). Those must be stripped before being sent to
