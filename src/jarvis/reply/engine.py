@@ -19,7 +19,6 @@ from .enrichment import (
     digest_tool_result_for_query,
     digest_loop_for_max_turns,
 )
-from .evaluator import evaluate_turn
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query
@@ -1143,12 +1142,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     messages = []  # type: ignore[var-annotated]
     recent_tool_signatures = []  # keep last few tool calls: [(name, stable_args_json)]
-    # Tools actually invoked during this reply — (name, args_summary,
-    # result_summary). Fed to the evaluator so it can distinguish
-    # "agent hasn't tried the tool" from "tool already ran, agent just
-    # failed to narrate the result". Without this, a small chat model
-    # that replies in prose after a successful direct-exec causes the
-    # evaluator to keep re-requesting the same tool indefinitely.
+    # Tools actually invoked during this reply — (name, args_summary, result_summary).
     invoked_tools_history: list[tuple[str, str, str]] = []
     # System message with guidance, tools, and enrichment
     messages.append({"role": "system", "content": _build_initial_system_message()})
@@ -1233,13 +1227,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         """Get current time and location context as a string."""
         return _live_time_location_string(cfg)
 
-    def _update_system_message_with_context(messages_list, nudge: str = ""):
-        """Update the first system message with fresh context and optional nudge.
-
-        Prepends a fresh time/location context line. When ``nudge`` is
-        non-empty, also appends an ``[Agent nudge: ...]`` block at the END
-        of the first system message. The nudge is one-shot — the caller
-        clears it after this call, so it applies to exactly one turn.
+    def _update_system_message_with_context(messages_list):
+        """Update the first system message with fresh time/location context.
 
         Note: Adding a separate system message AFTER the user message
         breaks native tool calling in models like Llama 3.2. Instead, we
@@ -1258,17 +1247,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     content = lines[1] if len(lines) > 1 else ""
                     if content.startswith("\n"):
                         content = content.lstrip("\n")
-                # Strip any previous nudge block (exactly one trailing line).
-                _nudge_marker = "\n\n[Agent nudge:"
-                idx = content.rfind(_nudge_marker)
-                if idx != -1 and content.rstrip().endswith("]"):
-                    content = content[:idx]
 
                 new_content = content
                 if context_str:
                     new_content = f"[Context: {context_str}]\n\n{new_content}"
-                if nudge:
-                    new_content = f"{new_content.rstrip()}\n\n[Agent nudge: {nudge}]"
                 msg["content"] = new_content
                 msg["_is_context_injected"] = True
                 break
@@ -1329,61 +1311,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except (TypeError, ValueError):
         tool_search_cap = 3
 
-    # Evaluator nudge state. When the evaluator says "continue" with a
-    # short directive, store it here; the next system-message rebuild
-    # appends it as `[Agent nudge: ...]`, then clears the slot so each
-    # nudge lasts exactly one turn.
-    pending_nudge: str = ""
-    # Structured tool-call intent from the evaluator. When set and the
-    # named tool is in the allow-list, the engine executes it directly
-    # at the start of the next turn — bypassing small models that
-    # ignore textual nudges. Shape: {"name": str, "arguments": dict}.
-    pending_tool_call: Optional[dict] = None
-    nudges_used: int = 0
-    try:
-        nudge_cap = int(getattr(cfg, "evaluator_nudge_max", 2))
-    except (TypeError, ValueError):
-        nudge_cap = 2
-    if nudge_cap < 0:
-        nudge_cap = 0
-
-    def _available_tools_summary() -> list[tuple[str, str, Optional[dict]]]:
-        """Build (name, one_line_desc, input_schema) triples for the current allow-list.
-
-        The schema is threaded through so the evaluator can render exact
-        parameter names/types in its prompt. Without it, small evaluator
-        models hallucinate plausible argument keys (e.g. ``query`` instead
-        of ``search_query``), and the engine's direct-exec path invokes the
-        tool with invalid args, producing a loop of validation-error tool
-        results.
-        """
-        triples: list[tuple[str, str, Optional[dict]]] = []
-        for name in allowed_tools:
-            desc = ""
-            schema: Optional[dict] = None
-            spec = BUILTIN_TOOLS.get(name)
-            if spec is not None:
-                if getattr(spec, "description", ""):
-                    desc = str(spec.description).strip().splitlines()[0]
-                raw_schema = getattr(spec, "inputSchema", None)
-                if isinstance(raw_schema, dict):
-                    schema = raw_schema
-            elif mcp_tools and name in mcp_tools:
-                mcp_spec = mcp_tools.get(name)
-                if mcp_spec is not None:
-                    if getattr(mcp_spec, "description", ""):
-                        desc = str(mcp_spec.description).strip().splitlines()[0]
-                    raw_schema = getattr(mcp_spec, "inputSchema", None)
-                    if isinstance(raw_schema, dict):
-                        schema = raw_schema
-            triples.append((name, desc, schema))
-        return triples
-
     reply: Optional[str] = None
-    # When the evaluator keeps returning 'continue' until we hit the turn cap,
-    # the latest plausible natural-language candidate is delivered rather than
-    # substituting a generic fallback error. Spec: max-turn cap is the only
-    # hard backstop for termination.
+    # The latest plausible natural-language candidate. Used by the max-turns
+    # digest backstop when the loop exhausts without producing a reply.
     last_candidate_reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
     turn = 0
@@ -1419,7 +1349,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if (
             use_text_tools
             and action_plan
-            and pending_tool_call is None
         ):
             _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = sum(
@@ -1550,235 +1479,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if _plan_exec_handled:
                     continue
 
-        # Structured tool-call from the evaluator: execute directly
-        # before asking the model for another turn. This bypasses small
-        # models that see an `[Agent nudge: call webSearch ...]` block
-        # and still reply in prose. Allow-list and schema guards stay
-        # intact because we go through the same run_tool_with_retries
-        # path the model would have triggered.
-        if pending_tool_call is not None:
-            _tc = pending_tool_call
-            pending_tool_call = None
-            _tc_name = _tc.get("name") if isinstance(_tc, dict) else None
-            _tc_args = _tc.get("arguments") if isinstance(_tc, dict) else None
-            if not isinstance(_tc_args, dict):
-                _tc_args = {}
-            # Validate arguments against the tool's input schema before
-            # executing. Small evaluator models sometimes invent plausible
-            # but wrong argument keys (e.g. `query` when the schema says
-            # `search_query`); running the tool with those keys produces
-            # a canned "please provide X" error and wastes a turn. On a
-            # validation miss we fall back to the textual-nudge path with
-            # the schema hint injected, without consuming the nudge budget
-            # — the evaluator's hallucination is not a directive the chat
-            # model ignored.
-            _schema_error = _validate_tool_args_against_schema(
-                _tc_name, _tc_args, mcp_tools
-            )
-            if _schema_error:
-                debug_log(
-                    f"  ⚠️ evaluator tool_call {_tc_name!r} args failed "
-                    f"schema validation ({_schema_error}); falling back "
-                    f"to text-nudge without consuming budget",
-                    "planning",
-                )
-                print(
-                    f"    ⚠️  Evaluator args invalid ({_schema_error}) — "
-                    f"handing back to model",
-                    flush=True,
-                )
-                # Enrich the pending nudge with the concrete schema hint
-                # so the chat model can emit the tool call with correct
-                # argument keys. Preserve any existing textual nudge the
-                # evaluator produced alongside the tool_call.
-                _schema_hint = _format_tool_schema_hint(_tc_name, mcp_tools)
-                _base_nudge = (pending_nudge or "").strip()
-                _fix_nudge = (
-                    f"The previous tool_call failed schema validation: "
-                    f"{_schema_error}. Emit a proper tool_calls block "
-                    f"for {_tc_name} using the exact signature: "
-                    f"{_schema_hint}."
-                )
-                pending_nudge = (
-                    f"{_base_nudge} {_fix_nudge}" if _base_nudge else _fix_nudge
-                )
-                _tc_name = None
-                _tc_args = {}
-            # Reject toolSearchTool here: the allow-list widening logic
-            # for that tool lives only on the model-emitted path, so a
-            # direct-exec would surface tools but never merge them into
-            # `allowed_tools`. Fall through to the textual-nudge path
-            # and let the chat model emit the call naturally.
-            _direct_exec_ok = (
-                _tc_name
-                and _tc_name in allowed_tools
-                and _tc_name != "toolSearchTool"
-            )
-            if _direct_exec_ok:
-                _synth_call_id = f"call_eval_{uuid.uuid4().hex[:8]}"
-                debug_log(
-                    f"🧭 evaluator direct-executing tool: {_tc_name} "
-                    f"args={_tc_args!r}",
-                    "planning",
-                )
-                print(
-                    f"    🧭 Evaluator → {_tc_name} (direct-exec)",
-                    flush=True,
-                )
-                # Synthesise an assistant message with tool_calls so the
-                # tool-result role/tool_call_id pairing stays valid in
-                # native-tools mode, and so the conversation history
-                # reflects the invocation.
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": _synth_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": _tc_name,
-                                "arguments": _tc_args,
-                            },
-                        }
-                    ],
-                })
-                _direct_result = run_tool_with_retries(
-                    db=db,
-                    cfg=cfg,
-                    tool_name=_tc_name,
-                    tool_args=_tc_args,
-                    system_prompt=SYSTEM_PROMPT,
-                    original_prompt="",
-                    redacted_text=redacted,
-                    max_retries=1,
-                    language=language,
-                )
-                _direct_text = _direct_result.reply_text or (
-                    f"Error: {_direct_result.error_message or '(no result)'}"
-                )
-                if _direct_result.reply_text:
-                    _direct_text = _maybe_digest_tool_result(
-                        cfg=cfg,
-                        query=redacted,
-                        tool_name=_tc_name,
-                        raw_tool_result=_direct_result.reply_text,
-                    )
-                if use_text_tools:
-                    # Mirror the plan-aware / compound-query remainder-hint
-                    # logic from the model-emitted path so multi-part queries
-                    # don't stall when the evaluator fires a direct-exec.
-                    # `sum(...)` counts tool results already in `messages`;
-                    # the result for the tool we just executed is NOT yet
-                    # appended (that happens a few lines below). Add 1 so
-                    # the progress count reflects the completed step.
-                    _tool_results_so_far = sum(
-                        1 for m in messages if m.get("tool_name")
-                    ) + 1
-                    if action_plan:
-                        _remainder_hint = progress_nudge(
-                            action_plan, _tool_results_so_far
-                        )
-                    elif (
-                        _compound_sub_questions
-                        and _tool_results_so_far
-                        < len(_compound_sub_questions)
-                    ):
-                        _remaining = _compound_sub_questions[
-                            _tool_results_so_far:
-                        ]
-                        _remainder_hint = (
-                            f"\n\n⚠️ You have answered {_tool_results_so_far} of "
-                            f"{len(_compound_sub_questions)} parts of the original query. "
-                            f"Still unanswered: \"{_remaining[0]}\". "
-                            "You MUST emit another tool_calls block now to search for this. "
-                            "Do NOT reply in text yet."
-                        )
-                    else:
-                        _remainder_hint = (
-                            f"\n\n[If the original query has sub-questions not yet answered "
-                            "by this result, call another tool now. Otherwise reply.]"
-                        )
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"[Tool result: {_tc_name}]\n"
-                            f"{_direct_text}{_remainder_hint}"
-                        ),
-                        "tool_name": _tc_name,
-                    })
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": _synth_call_id,
-                        "tool_name": _tc_name,
-                        "content": _direct_text,
-                    })
-                # Record signature so the chat model doesn't re-issue
-                # the same tool_call with identical arguments on the
-                # next turn (duplicate-suppression parity with the
-                # model-emitted path).
-                try:
-                    _direct_sig = (
-                        _tc_name,
-                        json.dumps(
-                            _tc_args or {},
-                            sort_keys=True,
-                            ensure_ascii=False,
-                        ),
-                    )
-                    recent_tool_signatures.append(_direct_sig)
-                    # Also record a case-normalised copy so the duplicate
-                    # guard upstream catches evaluator arg-case flips.
-                    _direct_sig_norm = (
-                        _tc_name,
-                        json.dumps(
-                            {str(k).lower(): v for k, v in (_tc_args or {}).items()},
-                            sort_keys=True,
-                            ensure_ascii=False,
-                        ),
-                    )
-                    if _direct_sig_norm != _direct_sig:
-                        recent_tool_signatures.append(_direct_sig_norm)
-                    # Also record for the evaluator's invoked-tools view.
-                    invoked_tools_history.append(
-                        (
-                            _tc_name,
-                            json.dumps(
-                                _tc_args or {},
-                                sort_keys=True,
-                                ensure_ascii=False,
-                            ),
-                            _direct_text,
-                        )
-                    )
-                    if len(recent_tool_signatures) > 5:
-                        recent_tool_signatures = recent_tool_signatures[-5:]
-                except Exception:
-                    pass
-                debug_log(
-                    f"    ✅ evaluator-direct tool result appended "
-                    f"({len(_direct_text)} chars)",
-                    "planning",
-                )
-                # Clear any residual nudge — the tool has been run, no
-                # point also shouting the textual version at the model.
-                pending_nudge = ""
-            else:
-                debug_log(
-                    f"  ⚠️ evaluator tool_call {_tc_name!r} not "
-                    f"directly executable (not in allow-list, or "
-                    f"toolSearchTool); falling through to text-nudge "
-                    f"path",
-                    "planning",
-                )
-
         # Update the system message with fresh context (time/location) before each LLM call
         # Note: We update the first system message rather than appending a new one because
         # adding a system message AFTER the user message breaks native tool calling
-        _nudge_for_this_turn = pending_nudge
-        pending_nudge = ""
-        _update_system_message_with_context(messages, nudge=_nudge_for_this_turn)
+        _update_system_message_with_context(messages)
 
         # Debug: log current messages array structure (original)
         if getattr(cfg, 'voice_debug', False):
@@ -2155,7 +1859,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         recent_tool_signatures = recent_tool_signatures[-5:]
                 except Exception:
                     pass
-                # Feed the evaluator's invoked-tools view.
+                # Record invoked tool history.
                 try:
                     invoked_tools_history.append(
                         (
@@ -2180,198 +1884,37 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Loop continues to let the agent produce the next step/final reply
             continue
 
-        # Natural-language content from the model. Normalise JSON-like replies
-        # first, then let the evaluator decide whether the loop can terminate.
+        # Natural-language content from the model. Normalise and deliver.
         extracted = _extract_text_from_json_response(content)
         if extracted:
             candidate_reply = extracted
             malformed_fallback = False
         elif _is_malformed_json_response(content):
-            # Model output malformed JSON or API specs — gemma-native
-            # ``tool_code`` / ``tool_output`` fenced blocks, ``<unusedNN>``
-            # sentinels, bare ``tool_calls:`` literals, etc. Historically
-            # the engine substituted a canned "I had trouble understanding"
-            # fallback and broke out immediately — which meant the
-            # evaluator never saw the garbled turn and couldn't salvage
-            # the intent. Field logs show this path firing constantly on
-            # gemma for simple queries like "how's the weather".
-            #
-            # New flow: the fallback stays as the *candidate reply* (so
-            # the user still gets a message if salvage fails), but the
-            # evaluator is given the RAW garbled content as the turn
-            # summary. Its salvage clause can then extract the intended
-            # tool call and nudge the next turn. The fallback is only
-            # actually delivered when the evaluator terminates or the
-            # nudge cap is exhausted.
-            debug_log(f"  ⚠️ Malformed content, handing to evaluator for salvage: '{content[:100]}...'", "planning")
-            model_name = cfg.ollama_chat_model.lower() if cfg.ollama_chat_model else ""
-            is_small_model = any(size in model_name for size in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
-            if is_small_model:
-                candidate_reply = (
-                    "I had trouble understanding that request. "
-                    "This can happen with smaller AI models. "
-                    "You can switch to a more capable model through the Setup Wizard "
-                    "in the menu bar."
-                )
-            else:
-                candidate_reply = (
-                    "I had trouble understanding that request. "
-                    "Could you try rephrasing it?"
-                )
+            debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
+            model_name = (cfg.ollama_chat_model or "").lower()
+            is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+            candidate_reply = (
+                "I had trouble understanding that request. "
+                "This can happen with smaller AI models. "
+                "You can switch to a more capable model through the Setup Wizard in the menu bar."
+                if is_small else
+                "I had trouble understanding that request. Could you try rephrasing it?"
+            )
             malformed_fallback = True
         else:
             candidate_reply = content
             malformed_fallback = False
 
-        # Evaluator gating. None = auto (on for SMALL, off for LARGE).
-        # Mirrors the memory_digest_enabled pattern.
-        _eval_cfg = getattr(cfg, "evaluator_enabled", None)
-        if _eval_cfg is None:
-            eval_enabled = (detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL)
-        else:
-            eval_enabled = bool(_eval_cfg)
-
-        # Malformed-fallback short-circuit only when the evaluator is off
-        # — otherwise give the evaluator a chance to salvage first.
-        if malformed_fallback and not eval_enabled:
-            reply = candidate_reply
-            break
-
-        if not eval_enabled:
-            # Gated off: treat as terminal so the first natural-language
-            # content becomes the reply. The max-turn backstop still applies
-            # via the surrounding loop.
-            reply = candidate_reply
-            break
-
-        # Hand the evaluator the RAW garbled content on malformed turns so
-        # the salvage clause has something to extract from. On clean turns
-        # the evaluator sees the same candidate reply the user would get.
-        evaluator_turn_summary = content if malformed_fallback else candidate_reply
-
-        eval_result = evaluate_turn(
-            user_query=redacted,
-            assistant_response_summary=evaluator_turn_summary,
-            available_tools=_available_tools_summary(),
-            turns_used=turn,
-            cfg=cfg,
-            invoked_tools=list(invoked_tools_history[-5:]),
-        )
-        # Nudge cap: once we've already burned through the cap, force
-        # terminal to break nudge ping-pong even if the evaluator says
-        # continue. Spinning on a model that won't respond to nudges is
-        # worse than delivering the latest prose candidate.
-        if not eval_result.terminal and nudges_used >= nudge_cap:
-            debug_log(
-                f"  🛑 evaluator wanted to continue but nudge cap "
-                f"({nudge_cap}) reached — forcing terminal",
-                "planning",
-            )
-            print("    🛑 Nudge cap reached — delivering reply", flush=True)
-            reply = candidate_reply
-            break
-
-        if eval_result.terminal:
-            print("    🧭 Evaluator: terminal — reply ready", flush=True)
-            reply = candidate_reply
-            break
-        # Non-terminal: stash the nudge for the next turn, remember the
-        # candidate for the max-turn fallback, and keep looping. When
-        # the evaluator also returned a structured tool_call, stash it
-        # so the next turn executes it directly instead of relying on
-        # the chat model to obey the textual nudge.
-        pending_nudge = eval_result.nudge or ""
-        _will_direct_exec = False
-        if (
-            isinstance(eval_result.tool_call, dict)
-            and isinstance(eval_result.tool_call.get("name"), str)
-        ):
-            _tc_name_stash = eval_result.tool_call.get("name")
-            _tc_args_stash = eval_result.tool_call.get("arguments") or {}
-            if not isinstance(_tc_args_stash, dict):
-                _tc_args_stash = {}
-            # Duplicate guard: if the evaluator keeps asking us to re-run
-            # the same tool with substantively the same args, running it
-            # again won't help — terminate with the best candidate reply
-            # instead of looping forever. Normalise argument keys to lower
-            # case so case-flip variants (url vs URL) still collide.
-            try:
-                _norm_args = {
-                    str(k).lower(): v for k, v in _tc_args_stash.items()
-                }
-                _stash_sig = (
-                    _tc_name_stash,
-                    json.dumps(_norm_args, sort_keys=True, ensure_ascii=False),
-                )
-                _norm_recent = {
-                    (
-                        n,
-                        json.dumps(
-                            {
-                                str(k).lower(): v
-                                for k, v in (json.loads(a) or {}).items()
-                            }
-                            if a and a != "__unserializable_args__"
-                            else {},
-                            sort_keys=True,
-                            ensure_ascii=False,
-                        ),
-                    )
-                    for (n, a) in recent_tool_signatures
-                }
-                _is_dup_direct_exec = _stash_sig in _norm_recent
-            except Exception:
-                _is_dup_direct_exec = False
-            if _is_dup_direct_exec:
-                debug_log(
-                    f"  🛑 evaluator tool_call duplicates a recent "
-                    f"signature ({_tc_name_stash}) — terminating loop "
-                    f"with best candidate instead of re-executing",
-                    "planning",
-                )
-                print(
-                    "    🛑 Evaluator repeat — delivering reply",
-                    flush=True,
-                )
-                reply = candidate_reply
-                break
-            pending_tool_call = eval_result.tool_call
-            _will_direct_exec = bool(
-                _tc_name_stash
-                and _tc_name_stash in allowed_tools
-                and _tc_name_stash != "toolSearchTool"
-            )
-        # nudge_cap exists to stop textual ping-pong when the model
-        # ignores directives. Direct-executable tool_calls are a
-        # deterministic action, not a nudge the model can ignore, so
-        # they don't consume the nudge budget. A structured tool_call
-        # that fails the allow-list guard falls back to the text-nudge
-        # path and DOES count.
-        if not _will_direct_exec:
-            nudges_used += 1
+        reply = candidate_reply
         last_candidate_reply = candidate_reply
-        debug_log(
-            f"  🔁 evaluator returned 'continue' (nudge={pending_nudge!r}) — "
-            f"staying in loop (turn {turn}/{max_turns}, nudges "
-            f"{nudges_used}/{nudge_cap})",
-            "planning",
-        )
-        _nudge_preview = (pending_nudge[:80] + "…") if len(pending_nudge) > 80 else pending_nudge
-        print(
-            f"    🧭 Evaluator: continue"
-            + (f" — {_nudge_preview}" if _nudge_preview else ""),
-            flush=True,
-        )
-        continue
+        break
 
     # Step 9: Handle error case - return error message if no reply
-    if (not reply or not reply.strip()) and last_candidate_reply and last_candidate_reply.strip():
-        # Max-turn backstop: rather than shipping the raw mid-loop
-        # candidate (which may be a half-thought with no caveat), run a
-        # cheap digest pass over the loop activity and deliver a
-        # caveat-prefixed summary in the user's language. Fail-open: on
-        # any digest failure we fall back to the last candidate so the
-        # reply path still completes.
+    if not reply or not reply.strip():
+        # Max-turn backstop: the loop exhausted its turns without producing
+        # a natural-language reply (e.g. pure tool-call loop). Run a cheap
+        # digest pass over the loop activity. Fail-open: on digest failure
+        # fall back to the last candidate (if any) or the generic error.
         try:
             digested = digest_loop_for_max_turns(
                 user_query=redacted,
@@ -2390,7 +1933,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "planning",
             )
             reply = digested
-        else:
+        elif last_candidate_reply and last_candidate_reply.strip():
             debug_log(
                 "max-turn cap reached, digest unavailable, delivering "
                 "last candidate reply",

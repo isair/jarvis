@@ -184,15 +184,11 @@ class TestGreetingNoTools:
                     return _mock_llm_response("", [_tool_call("fetchMeals", {})])
             return _mock_llm_response("Here's the information you requested.")
 
-        from jarvis.reply.evaluator import EvaluatorResult
-
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
              patch('jarvis.reply.engine.select_tools',
-                   return_value=["webSearch", "getWeather", "fetchMeals", "stop"]), \
-             patch('jarvis.reply.engine.evaluate_turn',
-                   return_value=EvaluatorResult(terminal=True)):
+                   return_value=["webSearch", "getWeather", "fetchMeals", "stop"]):
 
             response = run_reply_engine(
                 db=db, cfg=mock_config, tts=None,
@@ -224,12 +220,8 @@ class TestGreetingNoTools:
             # Second turn: actual response
             return _mock_llm_response("The answer is 42.")
 
-        from jarvis.reply.evaluator import EvaluatorResult
-
         with patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
-             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}), \
-             patch('jarvis.reply.engine.evaluate_turn',
-                   return_value=EvaluatorResult(terminal=True)):
+             patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": []}):
 
             response = run_reply_engine(
                 db=db, cfg=mock_config, tts=None,
