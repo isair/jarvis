@@ -244,12 +244,12 @@ Small chat models (~2B, e.g. `gemma4:e2b`) degrade sharply as their prompt grows
 - **Memory digest** — boils diary + graph recall into a short relevance-filtered note before injecting it as background context.
 - **Tool-result digest** — boils a raw tool payload (especially webSearch UNTRUSTED WEB EXTRACT blocks) into a short attributed fact note before it reaches the main reply model.
 
-Memory digest auto-enables for small models and stays off for large models that ground on raw payloads reliably. Tool-result digest defaults to off, since the extra LLM pass adds latency per tool call and small models often drop salient numbers or names the main model would have grounded on; set it to `true` to force on or `null` to opt back into auto-on-for-small. Override in `~/.config/jarvis/config.json`:
+Both digest passes auto-enable for small models (≤7B) and stay off for large models. For small models, tool-result digest also prevents large fetch_web_page payloads from blowing the context window. Override in `~/.config/jarvis/config.json`:
 
 ```json
 {
   "memory_digest_enabled": null,          // null = auto-on for SMALL, false to force off, true to force on
-  "tool_result_digest_enabled": false,    // default off; null = auto-on for SMALL, true to force on
+  "tool_result_digest_enabled": null,     // null = auto-on for SMALL, false to force off, true to force on
   "llm_digest_timeout_sec": 8.0           // tight ceiling shared by both passes
 }
 ```

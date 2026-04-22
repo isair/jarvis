@@ -422,6 +422,7 @@ Examples:
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 200,
+                        "num_ctx": 4096,
                     },
                 },
                 timeout=self.config.timeout_sec,
