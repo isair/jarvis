@@ -453,15 +453,18 @@ def get_default_config() -> Dict[str, Any]:
         # dialogue_memory_timeout drives the short-term memory window AND the forced
         # diary update interval. After a diary update, enrichment retrieves older context.
         "dialogue_memory_timeout": 300.0,
-        "memory_enrichment_max_results": 10,
+        "memory_enrichment_max_results": 5,
         "memory_search_max_results": 15,
         "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
         # None = auto (on for small models, off for large). Set true/false to force.
         "memory_digest_enabled": None,
         # Distil raw tool results (e.g. webSearch extracts) into a short
-        # attributed fact note for small models. Same auto semantics as
-        # memory_digest_enabled.
-        "tool_result_digest_enabled": None,
+        # attributed fact note for small models. Defaults to off: the extra
+        # digest LLM pass adds latency per tool call and, on small models,
+        # often drops salient numbers/names the main model would have
+        # grounded on. Set to ``true`` to force on, or ``null`` to opt back
+        # into the old auto-on-for-small behaviour.
+        "tool_result_digest_enabled": False,
 
         # Agentic Loop
         "agentic_max_turns": 8,
@@ -632,7 +635,7 @@ def load_settings() -> Settings:
 
     # Dialogue memory window and forced diary update share this duration
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
-    memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 10))
+    memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 5))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
     memory_enrichment_source = str(merged.get("memory_enrichment_source", "diary")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
