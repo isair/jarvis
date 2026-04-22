@@ -42,6 +42,97 @@ def _indent_text(text: str, prefix: str = "  ") -> str:
     return f"\n{prefix}".join(text.splitlines())
 
 
+def _get_tool_input_schema(
+    tool_name: Optional[str],
+    mcp_tools: Optional[dict] = None,
+) -> Optional[dict]:
+    if not tool_name:
+        return None
+    spec = BUILTIN_TOOLS.get(tool_name)
+    if spec is None and mcp_tools:
+        spec = mcp_tools.get(tool_name)
+    if spec is None:
+        return None
+    raw = getattr(spec, "inputSchema", None)
+    return raw if isinstance(raw, dict) else None
+
+
+def _validate_tool_args_against_schema(
+    tool_name: Optional[str],
+    args: Optional[dict],
+    mcp_tools: Optional[dict] = None,
+) -> Optional[str]:
+    """Return a short error string when args don't satisfy the input schema.
+
+    Lightweight check limited to the failure modes that matter for direct-exec:
+    unknown argument keys (the main evaluator-hallucination case) and missing
+    required keys. Type-checking is intentionally not enforced here — the
+    tool implementations own that — because a stricter pre-check would
+    reject too many borderline cases and force fallbacks unnecessarily.
+    Returns ``None`` when the args pass or when no schema is available.
+    """
+    if not tool_name:
+        return "missing tool name"
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return "arguments is not an object"
+    schema = _get_tool_input_schema(tool_name, mcp_tools)
+    if not schema:
+        return None
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return None
+    allowed_keys = set(props.keys())
+    unknown = [k for k in args.keys() if k not in allowed_keys]
+    if unknown:
+        expected = sorted(allowed_keys) or ["(none)"]
+        return (
+            f"unknown argument key(s) {sorted(unknown)!r}; "
+            f"expected one of {expected!r}"
+        )
+    required = schema.get("required")
+    if isinstance(required, list):
+        missing = [
+            r for r in required
+            if isinstance(r, str) and r not in args
+        ]
+        if missing:
+            return f"missing required argument(s) {sorted(missing)!r}"
+    return None
+
+
+def _format_tool_schema_hint(
+    tool_name: Optional[str],
+    mcp_tools: Optional[dict] = None,
+) -> str:
+    """Render ``toolName(param: type required, ...)`` for nudge injection."""
+    if not tool_name:
+        return ""
+    schema = _get_tool_input_schema(tool_name, mcp_tools)
+    if not schema:
+        return f"{tool_name}()"
+    props = schema.get("properties")
+    if not isinstance(props, dict) or not props:
+        return f"{tool_name}()"
+    required = set()
+    req_raw = schema.get("required")
+    if isinstance(req_raw, list):
+        required = {str(r) for r in req_raw if isinstance(r, str)}
+    parts = []
+    for key, spec in props.items():
+        type_hint = ""
+        if isinstance(spec, dict):
+            t = spec.get("type")
+            if isinstance(t, str):
+                type_hint = t
+        marker = " required" if key in required else ""
+        parts.append(
+            f"{key}: {type_hint}{marker}" if type_hint else f"{key}{marker}"
+        )
+    return f"{tool_name}(" + ", ".join(parts) + ")"
+
+
 def resolve_tool_router_model(cfg) -> str:
     """Pick the LLM model for tool routing.
 
@@ -1191,20 +1282,37 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if nudge_cap < 0:
         nudge_cap = 0
 
-    def _available_tools_summary() -> list[tuple[str, str]]:
-        """Build (name, one_line_desc) pairs for the current allow-list."""
-        pairs: list[tuple[str, str]] = []
+    def _available_tools_summary() -> list[tuple[str, str, Optional[dict]]]:
+        """Build (name, one_line_desc, input_schema) triples for the current allow-list.
+
+        The schema is threaded through so the evaluator can render exact
+        parameter names/types in its prompt. Without it, small evaluator
+        models hallucinate plausible argument keys (e.g. ``query`` instead
+        of ``search_query``), and the engine's direct-exec path invokes the
+        tool with invalid args, producing a loop of validation-error tool
+        results.
+        """
+        triples: list[tuple[str, str, Optional[dict]]] = []
         for name in allowed_tools:
             desc = ""
+            schema: Optional[dict] = None
             spec = BUILTIN_TOOLS.get(name)
-            if spec is not None and getattr(spec, "description", ""):
-                desc = str(spec.description).strip().splitlines()[0]
+            if spec is not None:
+                if getattr(spec, "description", ""):
+                    desc = str(spec.description).strip().splitlines()[0]
+                raw_schema = getattr(spec, "inputSchema", None)
+                if isinstance(raw_schema, dict):
+                    schema = raw_schema
             elif mcp_tools and name in mcp_tools:
                 mcp_spec = mcp_tools.get(name)
-                if mcp_spec is not None and getattr(mcp_spec, "description", ""):
-                    desc = str(mcp_spec.description).strip().splitlines()[0]
-            pairs.append((name, desc))
-        return pairs
+                if mcp_spec is not None:
+                    if getattr(mcp_spec, "description", ""):
+                        desc = str(mcp_spec.description).strip().splitlines()[0]
+                    raw_schema = getattr(mcp_spec, "inputSchema", None)
+                    if isinstance(raw_schema, dict):
+                        schema = raw_schema
+            triples.append((name, desc, schema))
+        return triples
 
     reply: Optional[str] = None
     # When the evaluator keeps returning 'continue' until we hit the turn cap,
@@ -1243,6 +1351,47 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _tc_name = _tc.get("name") if isinstance(_tc, dict) else None
             _tc_args = _tc.get("arguments") if isinstance(_tc, dict) else None
             if not isinstance(_tc_args, dict):
+                _tc_args = {}
+            # Validate arguments against the tool's input schema before
+            # executing. Small evaluator models sometimes invent plausible
+            # but wrong argument keys (e.g. `query` when the schema says
+            # `search_query`); running the tool with those keys produces
+            # a canned "please provide X" error and wastes a turn. On a
+            # validation miss we fall back to the textual-nudge path with
+            # the schema hint injected, without consuming the nudge budget
+            # — the evaluator's hallucination is not a directive the chat
+            # model ignored.
+            _schema_error = _validate_tool_args_against_schema(
+                _tc_name, _tc_args, mcp_tools
+            )
+            if _schema_error:
+                debug_log(
+                    f"  ⚠️ evaluator tool_call {_tc_name!r} args failed "
+                    f"schema validation ({_schema_error}); falling back "
+                    f"to text-nudge without consuming budget",
+                    "planning",
+                )
+                print(
+                    f"    ⚠️  Evaluator args invalid ({_schema_error}) — "
+                    f"handing back to model",
+                    flush=True,
+                )
+                # Enrich the pending nudge with the concrete schema hint
+                # so the chat model can emit the tool call with correct
+                # argument keys. Preserve any existing textual nudge the
+                # evaluator produced alongside the tool_call.
+                _schema_hint = _format_tool_schema_hint(_tc_name, mcp_tools)
+                _base_nudge = (pending_nudge or "").strip()
+                _fix_nudge = (
+                    f"The previous tool_call failed schema validation: "
+                    f"{_schema_error}. Emit a proper tool_calls block "
+                    f"for {_tc_name} using the exact signature: "
+                    f"{_schema_hint}."
+                )
+                pending_nudge = (
+                    f"{_base_nudge} {_fix_nudge}" if _base_nudge else _fix_nudge
+                )
+                _tc_name = None
                 _tc_args = {}
             # Reject toolSearchTool here: the allow-list widening logic
             # for that tool lives only on the model-emitted path, so a
