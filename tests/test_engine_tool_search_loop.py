@@ -678,6 +678,191 @@ def test_nudge_structured_tool_call_rejected_when_not_in_allowlist(
     )
 
 
+def test_direct_exec_invalid_args_falls_back_without_consuming_budget(
+    mock_config, db, dialogue_memory
+):
+    """Field bug (2026-04-22, gemma4:e2b, 'are there tube strikes today'):
+    the evaluator emitted a structured tool_call with ``{"query": "..."}``
+    for webSearch, whose schema requires ``search_query``. The tool
+    returned a canned validation error and the loop re-ran the identical
+    broken call for 8 turns until the max-turn cap fired.
+
+    Contract: the engine validates arguments against the tool's
+    inputSchema before direct-exec. On schema miss the engine must
+    (a) NOT invoke the tool, (b) NOT consume a nudge-budget slot (the
+    hallucination is the evaluator's fault, not the chat model's), and
+    (c) enrich the textual nudge with a concrete schema hint so the
+    chat model can emit the tool call itself with correct argument
+    keys on the same turn.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"
+    mock_config.evaluator_enabled = True
+    # nudge_cap=1 — if the validation-failure path wrongly consumes the
+    # budget, the next 'continue' would be forced-terminal and the chat
+    # model would never get a chance to emit the corrected tool call.
+    mock_config.evaluator_nudge_max = 1
+
+    invoked: list[tuple[str, dict]] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked.append((tool_name, tool_args or {}))
+        if tool_name == "webSearch":
+            return ToolExecutionResult(
+                success=True,
+                reply_text="UNTRUSTED WEB EXTRACT:\nNo tube strikes today.",
+                error_message=None,
+            )
+        return ToolExecutionResult(
+            success=True, reply_text="ok", error_message=None
+        )
+
+    # Turn sequence we expect:
+    #   Turn 1: chat → prose ("I do not have access..."); evaluator →
+    #           continue with INVALID tool_call ({"query": "..."}).
+    #   Turn 2 top: engine validates, rejects, injects schema hint into
+    #           pending_nudge. Chat → emits PROPER tool_calls. Engine
+    #           runs webSearch. (Chat turn #2 consumed.)
+    #   Turn 3: chat synthesises grounded reply from tool result →
+    #           evaluator returns terminal.
+    chat_responses = iter(
+        [
+            _assistant_content(
+                "I do not have access to real-time strike information."
+            ),
+            # Chat model reads the [Agent nudge: ...] with schema hint
+            # and emits a proper tool_calls payload with the correct key.
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "webSearch",
+                                "arguments": {
+                                    "search_query": "tube strikes today"
+                                },
+                            },
+                        }
+                    ],
+                }
+            },
+            _assistant_content("No tube strikes today."),
+        ]
+    )
+
+    def fake_chat(*args, **kwargs):
+        try:
+            return next(chat_responses)
+        except StopIteration:
+            return _assistant_content("done")
+
+    eval_results = iter(
+        [
+            # Evaluator hallucinates the wrong arg key.
+            '{"terminal": false, '
+            '"nudge": "call webSearch", '
+            '"reason": "real-time info needed", '
+            '"tool_call": {"name": "webSearch", '
+            '"arguments": {"query": "tube strikes today"}}}',
+            # After the corrected webSearch runs, grounded reply arrives.
+            '{"terminal": true, "nudge": "", "reason": "grounded"}',
+        ]
+    )
+
+    def fake_eval(**kwargs):
+        try:
+            return next(eval_results)
+        except StopIteration:
+            return '{"terminal": true, "nudge": "", "reason": "done"}'
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(
+             engine_mod, "select_tools", return_value=["webSearch", "stop"]
+         ), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch(
+             "jarvis.reply.evaluator.call_llm_direct",
+             side_effect=fake_eval,
+         ):
+        reply = engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="are there tube strikes today",
+            dialogue_memory=dialogue_memory,
+        )
+
+    # The engine must NOT have invoked webSearch with the bad args.
+    bad_calls = [
+        a for n, a in invoked if n == "webSearch" and "query" in a and "search_query" not in a
+    ]
+    assert not bad_calls, (
+        f"Engine direct-executed webSearch with invalid args instead of "
+        f"validating and falling back. Bad calls: {bad_calls!r}"
+    )
+    # It MUST have invoked webSearch with the correct args from the
+    # chat model's corrected tool_calls payload.
+    good_calls = [
+        a for n, a in invoked if n == "webSearch" and a.get("search_query")
+    ]
+    assert good_calls, (
+        f"Chat model never got a chance to emit a corrected tool_call — "
+        f"nudge budget was likely consumed by the invalid direct-exec. "
+        f"Invoked: {invoked!r}"
+    )
+    # Reply must be grounded in the webSearch result.
+    assert reply and "No tube strikes" in reply
+
+
+def test_validate_tool_args_catches_unknown_keys():
+    """Unit test for the schema validator — unknown arg key is the exact
+    failure mode the field log hit."""
+    from jarvis.reply.engine import _validate_tool_args_against_schema
+
+    err = _validate_tool_args_against_schema(
+        "webSearch",
+        {"query": "tube strikes today"},
+        mcp_tools=None,
+    )
+    assert err is not None
+    assert "unknown argument" in err.lower()
+    assert "search_query" in err
+
+
+def test_validate_tool_args_passes_correct_keys():
+    from jarvis.reply.engine import _validate_tool_args_against_schema
+
+    err = _validate_tool_args_against_schema(
+        "webSearch",
+        {"search_query": "tube strikes today"},
+        mcp_tools=None,
+    )
+    assert err is None
+
+
+def test_validate_tool_args_catches_missing_required():
+    from jarvis.reply.engine import _validate_tool_args_against_schema
+
+    err = _validate_tool_args_against_schema(
+        "webSearch",
+        {},
+        mcp_tools=None,
+    )
+    assert err is not None
+    assert "missing required" in err.lower()
+
+
 def test_direct_exec_records_signature_for_duplicate_suppression(
     mock_config, db, dialogue_memory
 ):

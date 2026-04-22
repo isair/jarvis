@@ -210,6 +210,63 @@ class TestEvaluateTurn:
         assert "Open an application by name" in sent
         assert "webSearch" in sent
 
+    def test_tool_schema_appears_in_prompt(self):
+        """Regression: without parameter names the evaluator tends to emit
+        hallucinated argument keys (``query`` instead of ``search_query``),
+        causing direct-exec to fail schema validation in a loop."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "search_query": {"type": "string"},
+            },
+            "required": ["search_query"],
+        }
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "tube strikes today",
+                "I cannot check real-time info.",
+                [("webSearch", "Search the web", schema)],
+                1,
+                self._cfg(),
+            )
+        sent = captured.get("user_content", "")
+        assert "webSearch(search_query: string required)" in sent, (
+            f"Expected parameter signature in prompt; got: {sent[:400]!r}"
+        )
+
+    def test_tool_schema_omitted_falls_back_to_name_only(self):
+        """Two-tuple form must still work for back-compat."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "q",
+                "r",
+                [("webSearch", "Search the web")],
+                1,
+                self._cfg(),
+            )
+        sent = captured.get("user_content", "")
+        assert "webSearch" in sent
+        # No hallucinated param signature when schema absent.
+        assert "webSearch(" not in sent
+
     def test_invoked_tools_appear_in_prompt(self):
         """Regression: without this context the evaluator cannot tell that
         a tool has already run, and keeps re-requesting it when the chat

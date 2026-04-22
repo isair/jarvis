@@ -137,6 +137,15 @@ _EVALUATOR_SYSTEM_PROMPT = (
     "prose (\"produce a natural-language reply\") or when you cannot "
     "identify the exact arguments — never fabricate arguments you did "
     "not extract from the garbled turn or derive from the user query.\n\n"
+    "  ARGUMENT KEYS MUST BE EXACT. Each tool in the toolbox is listed "
+    "with its parameter signature, e.g. `webSearch(search_query: string "
+    "required)`. When you emit `arguments`, use those exact parameter "
+    "names verbatim — do NOT invent plausible-sounding alternatives "
+    "(\"query\" when the schema says \"search_query\", \"url\" when it "
+    "says \"page_url\"). The engine will reject a call whose keys do "
+    "not match the schema. If the toolbox entry shows no parameters, "
+    "pass `{}`. If you are unsure what arguments a tool takes, omit "
+    "`tool_call` entirely and nudge in prose.\n\n"
     "Only two outcomes. Output strict JSON only, no prose, no code fences:\n"
     "  {\"terminal\": <bool>, \"nudge\": \"...\", \"reason\": \"...\", "
     "\"tool_call\": {\"name\": \"...\", \"arguments\": {...}} | null}\n\n"
@@ -225,13 +234,62 @@ def _resolve_evaluator_model(cfg) -> str:
     return ""
 
 
-def _format_available_tools(tools: list[tuple[str, str]]) -> str:
+def _format_param_schema(schema: Optional[dict]) -> str:
+    """Render a JSON schema as a compact ``(arg: type [required], ...)`` summary.
+
+    The evaluator uses this to emit ``tool_call.arguments`` with the correct
+    argument keys. Without the schema, a small evaluator model tends to
+    hallucinate plausible-looking argument names (``query`` instead of
+    ``search_query``) that pass through the engine's allow-list check but
+    fail the tool's own validation, producing an infinite repair loop.
+    """
+    if not isinstance(schema, dict):
+        return ""
+    props = schema.get("properties")
+    if not isinstance(props, dict) or not props:
+        return "()"
+    required = set()
+    req_raw = schema.get("required")
+    if isinstance(req_raw, list):
+        required = {str(r) for r in req_raw if isinstance(r, str)}
+    parts = []
+    for key, spec in props.items():
+        type_hint = ""
+        if isinstance(spec, dict):
+            t = spec.get("type")
+            if isinstance(t, str):
+                type_hint = t
+            elif isinstance(t, list):
+                type_hint = "|".join(str(x) for x in t if isinstance(x, str))
+        req_marker = " required" if key in required else ""
+        if type_hint:
+            parts.append(f"{key}: {type_hint}{req_marker}")
+        else:
+            parts.append(f"{key}{req_marker}")
+    return "(" + ", ".join(parts) + ")"
+
+
+def _format_available_tools(tools: list) -> str:
+    """Render the toolbox for the evaluator prompt.
+
+    Accepts either ``(name, desc)`` or ``(name, desc, schema)`` tuples. When
+    a schema is supplied its parameter names and types are rendered inline
+    so the evaluator emits ``tool_call.arguments`` with real argument keys
+    rather than guessed ones.
+    """
     if not tools:
         return "(none)"
     lines = []
-    for name, desc in tools:
+    for entry in tools:
+        if not isinstance(entry, tuple):
+            continue
+        name = entry[0] if len(entry) >= 1 else ""
+        desc = entry[1] if len(entry) >= 2 else ""
+        schema = entry[2] if len(entry) >= 3 else None
         desc_clean = (desc or "").strip().splitlines()[0] if desc else ""
-        lines.append(f"- {name}: {desc_clean}" if desc_clean else f"- {name}")
+        params = _format_param_schema(schema) if schema else ""
+        head = f"{name}{params}" if params else f"{name}"
+        lines.append(f"- {head}: {desc_clean}" if desc_clean else f"- {head}")
     return "\n".join(lines)
 
 
@@ -260,16 +318,19 @@ def _format_invoked_tools(invoked: list[tuple[str, str, str]]) -> str:
 def evaluate_turn(
     user_query: str,
     assistant_response_summary: str,
-    available_tools: list[tuple[str, str]],
+    available_tools: list,
     turns_used: int,
     cfg,
     invoked_tools: Optional[list[tuple[str, str, str]]] = None,
 ) -> EvaluatorResult:
     """Classify whether the agentic loop should terminate after this turn.
 
-    ``available_tools`` is a list of ``(name, one_line_description)`` tuples
-    supplied by the engine — not redacted; it is engine-controlled, not
-    user data.
+    ``available_tools`` is a list of ``(name, one_line_description)`` or
+    ``(name, one_line_description, input_schema)`` tuples supplied by the
+    engine — not redacted; it is engine-controlled, not user data. When the
+    schema is present, its parameter names/types are rendered inline in the
+    toolbox block so the evaluator emits ``tool_call.arguments`` with real
+    argument keys rather than hallucinated ones.
 
     ``invoked_tools`` is an optional list of ``(name, args_summary,
     result_summary)`` tuples for tools already executed during this reply.
