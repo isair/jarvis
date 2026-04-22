@@ -336,6 +336,8 @@ def _sanitise_messages(messages: list[dict]) -> list[dict]:
 
 
 def _build_evaluator_directive(
+    user_query: str,
+    assistant_response_summary: str,
     available_tools: list[tuple[str, str]],
     invoked_tools: list[tuple[str, str, str]],
     turns_used: int,
@@ -344,18 +346,31 @@ def _build_evaluator_directive(
 
     The chat-turn history (system prompt + dialogue + user query +
     assistant reply) is already in the KV cache. This directive adds
-    only what the evaluator needs on top: the classification rubric
-    plus the dynamic context the loop has produced (toolbox, tools
-    already invoked this reply, turns used).
+    the classification rubric and dynamic context on top, and ALSO
+    repeats the user query + assistant turn under explicit ``USER
+    QUERY`` / ``ASSISTANT TURN (summary)`` framing.
+
+    The repetition is load-bearing. Without it, small models struggle to
+    identify which assistant message in the chat history is the one they
+    should be classifying — the history contains synthesised tool-call
+    envelopes, tool results and prose replies interleaved, and the
+    evaluator kept re-firing the same structured ``tool_call`` in a
+    tight loop because the model scored an older tool-call envelope as
+    "the prose to judge" instead of the latest assistant reply. The
+    cost of duplicating two short strings here is negligible compared
+    with the reliability the explicit framing buys us, and the shared
+    prefix with the chat turn still carries the full KV cache benefit.
     """
     tools_block = _format_available_tools(available_tools)
     invoked_block = _format_invoked_tools(invoked_tools)
     return (
         f"{_EVALUATOR_SYSTEM_PROMPT}\n\n"
+        f"USER QUERY: {user_query}\n\n"
+        f"ASSISTANT TURN (summary): {assistant_response_summary}\n\n"
         f"AGENT TOOLBOX (for this turn):\n{tools_block}\n\n"
         f"TOOLS ALREADY INVOKED THIS REPLY (with args and results):\n{invoked_block}\n\n"
         f"TURNS USED SO FAR: {turns_used}\n\n"
-        "Classify your previous assistant reply now. Reply with strict JSON only. "
+        "Classify the ASSISTANT TURN above now. Reply with strict JSON only. "
         "Do NOT answer the user's query again, do NOT call a tool, do NOT emit prose."
     )
 
@@ -438,7 +453,11 @@ def evaluate_turn(
     )
     if use_cache_path:
         directive = _build_evaluator_directive(
-            available_tools, invoked_tools, turns_used,
+            user_query,
+            assistant_response_summary,
+            available_tools,
+            invoked_tools,
+            turns_used,
         )
         messages = _sanitise_messages(chat_messages) + [
             {"role": "user", "content": directive}

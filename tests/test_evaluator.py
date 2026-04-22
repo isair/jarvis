@@ -678,6 +678,65 @@ class TestEvaluatorCacheFriendlyPath:
         # Dynamic turns-used signal for the terminal-bias rubric
         assert "3" in tail
 
+    def test_cache_friendly_tail_repeats_user_query_and_assistant_turn(self):
+        """Regression: on small models, dropping the explicit ``USER
+        QUERY:`` / ``ASSISTANT TURN (summary):`` framing from the cache-
+        friendly directive caused the evaluator to misidentify which
+        assistant message it was judging (picking up an earlier tool-call
+        envelope instead of the latest prose reply), which produced a
+        tight loop where the evaluator kept re-emitting the same
+        structured ``tool_call`` for a tool that had already run.
+
+        The directive must repeat those two strings under explicit
+        labels even though they also appear in the chat history — small
+        models need the framing to anchor on the right message."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return {"message": {"content": '{"terminal": true, "nudge": "", "reason": ""}'}}
+
+        chat_messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "are there tube strikes today?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "c1", "function": {"name": "webSearch", "arguments": {"search_query": "tube strikes today"}}}],
+            },
+            {"role": "tool", "content": "(search result with relevant hits)"},
+            {"role": "assistant", "content": "There are no tube strikes today."},
+        ]
+        with patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "are there tube strikes today?",
+                "There are no tube strikes today.",
+                [("webSearch", "search the web", {"type": "object", "properties": {"search_query": {"type": "string"}}, "required": ["search_query"]})],
+                2,
+                self._cfg(),
+                chat_messages=chat_messages,
+                invoked_tools=[(
+                    "webSearch",
+                    '{"search_query": "tube strikes today"}',
+                    "(search result with relevant hits)",
+                )],
+            )
+        tail = captured["messages"][-1]["content"]
+        assert "USER QUERY:" in tail, (
+            "directive must carry explicit USER QUERY framing so the "
+            "model can identify which ask it is judging"
+        )
+        assert "ASSISTANT TURN (summary):" in tail, (
+            "directive must carry explicit ASSISTANT TURN framing so the "
+            "model judges the latest prose reply, not an earlier tool-"
+            "call envelope in the chat history"
+        )
+        assert "are there tube strikes today?" in tail
+        assert "There are no tube strikes today." in tail
+
     def test_cache_friendly_strips_non_standard_fields(self):
         """Engine annotates messages with internal fields (`tool_name` for
         duplicate detection). Those must be stripped before being sent to
