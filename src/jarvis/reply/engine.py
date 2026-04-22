@@ -2024,6 +2024,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             turns_used=turn,
             cfg=cfg,
             invoked_tools=list(invoked_tools_history[-5:]),
+            # Hand the live message history to the evaluator so it can ride
+            # the KV cache from the chat turn we just made. The evaluator
+            # only uses this when its model matches cfg.ollama_chat_model —
+            # otherwise the cache wouldn't be reusable across models and it
+            # falls back to a fresh call_llm_direct request.
+            chat_messages=messages,
         )
         # Nudge cap: once we've already burned through the cap, force
         # terminal to break nudge ping-pong even if the evaluator says

@@ -531,3 +531,178 @@ class TestEvaluatorTerminalBias:
             "Evaluator prompt should tell the judge to return continue "
             "when a multi-part query has at least one unaddressed part."
         )
+
+
+class TestEvaluatorCacheFriendlyPath:
+    """When the evaluator model matches the chat model, the evaluator rides
+    the chat turn's message history as a tail-appended user directive
+    instead of issuing a fresh request with a separate system prompt. The
+    cached KV prefix from the chat turn is reused — the evaluator only
+    prefills the short appended directive.
+
+    These tests verify the opt-in shape, not the cache behaviour itself
+    (which is Ollama-side and not observable from here).
+    """
+
+    def _cfg(self, **overrides):
+        class _C:
+            ollama_base_url = "http://x"
+            ollama_chat_model = "shared-small"
+            llm_digest_timeout_sec = 5.0
+            llm_thinking_enabled = False
+        c = _C()
+        for k, v in overrides.items():
+            setattr(c, k, v)
+        return c
+
+    def test_cache_friendly_path_used_when_models_match(self):
+        """Same small model for chat and evaluator → append, don't re-prefill."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return {"message": {"content": '{"terminal": true, "nudge": "", "reason": "done"}'}}
+
+        chat_messages = [
+            {"role": "system", "content": "unified system prompt"},
+            {"role": "user", "content": "what's 2+2?"},
+            {"role": "assistant", "content": "4."},
+        ]
+        with patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+            side_effect=_capture,
+        ), patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+        ) as direct_mock:
+            res = evaluate_turn(
+                "what's 2+2?",
+                "4.",
+                [("calc", "do maths")],
+                1,
+                self._cfg(),
+                chat_messages=chat_messages,
+            )
+        assert res.terminal is True
+        direct_mock.assert_not_called()
+        sent = captured.get("messages") or []
+        assert len(sent) == len(chat_messages) + 1, (
+            "cache-friendly path should append exactly one directive "
+            "message to the chat history"
+        )
+        assert sent[:-1] == chat_messages, (
+            "chat prefix must be identical so Ollama reuses the KV cache"
+        )
+        tail = sent[-1]
+        assert tail["role"] == "user"
+        assert "terminal" in tail["content"].lower()
+        # Tools must NOT be passed — the evaluator does not emit tool calls.
+        assert captured.get("tools") in (None, [])
+
+    def test_cache_friendly_path_skipped_when_models_differ(self):
+        """Different models load different KV caches — no cross-request reuse
+        possible. Fall back to the direct call path."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        cfg = self._cfg(
+            evaluator_model="dedicated-evaluator",
+            ollama_chat_model="big-chat",
+        )
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ), patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+        ) as chat_mock:
+            evaluate_turn(
+                "q", "r", [], 1, cfg,
+                chat_messages=[{"role": "user", "content": "q"}],
+            )
+        chat_mock.assert_not_called()
+        assert captured.get("chat_model") == "dedicated-evaluator"
+
+    def test_cache_friendly_path_skipped_when_chat_messages_missing(self):
+        """Back-compat: callers that haven't been updated still work via the
+        direct call path."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ), patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+        ) as chat_mock:
+            evaluate_turn("q", "r", [], 1, self._cfg())
+        chat_mock.assert_not_called()
+        assert captured.get("chat_model") == "shared-small"
+
+    def test_cache_friendly_tail_carries_dynamic_context(self):
+        """The appended directive must carry the dynamic context the
+        evaluator needs — toolbox + invoked tools + turns used — because
+        that data is NOT in the chat message history."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return {"message": {"content": '{"terminal": true, "nudge": "", "reason": ""}'}}
+
+        chat_messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "open youtube"},
+            {"role": "assistant", "content": "I can navigate you there."},
+        ]
+        with patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "open youtube",
+                "I can navigate you there.",
+                [("openApp", "Open an application by name")],
+                3,
+                self._cfg(),
+                chat_messages=chat_messages,
+                invoked_tools=[("stop", "{}", "(empty)")],
+            )
+        tail = captured["messages"][-1]["content"]
+        assert "openApp" in tail
+        assert "Open an application by name" in tail
+        assert "stop" in tail  # invoked tool history must appear
+        # Dynamic turns-used signal for the terminal-bias rubric
+        assert "3" in tail
+
+    def test_cache_friendly_strips_non_standard_fields(self):
+        """Engine annotates messages with internal fields (`tool_name` for
+        duplicate detection). Those must be stripped before being sent to
+        Ollama so the request body is clean and cache-deterministic."""
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return {"message": {"content": '{"terminal": true, "nudge": "", "reason": ""}'}}
+
+        chat_messages = [
+            {"role": "user", "content": "q", "tool_name": "internal_marker"},
+            {"role": "assistant", "content": "a"},
+        ]
+        with patch(
+            "jarvis.reply.evaluator.chat_with_messages",
+            side_effect=_capture,
+        ):
+            evaluate_turn(
+                "q", "a", [], 1, self._cfg(),
+                chat_messages=chat_messages,
+            )
+        sent = captured["messages"]
+        for m in sent:
+            assert "tool_name" not in m, (
+                "internal engine annotations must not leak into the "
+                "evaluator request"
+            )

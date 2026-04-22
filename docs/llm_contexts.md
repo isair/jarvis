@@ -39,8 +39,11 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/reply/evaluator.py](src/jarvis/reply/evaluator.py) — `evaluate_turn()`.
 - **Trigger**: after every agentic-loop turn that produced prose. Skipped on tool-call-only or malformed turns.
 - **Model / gating**: resolution chain `evaluator_model → intent_judge_model → ollama_chat_model`. Gated by `cfg.evaluator_enabled`: `None` → auto-ON for SMALL, auto-OFF for LARGE.
-- **Inputs**: redacted user query, assistant prose this turn, toolbox (name + one-liner), turns used, invoked-tools history (name + args/result summary).
-- **System prompt**: `_EVALUATOR_SYSTEM_PROMPT` at [evaluator.py:43](src/jarvis/reply/evaluator.py:43). Teaches terminal vs continue, tool-coverage, multi-part query counting, garbled-turn salvage, structured `tool_call` emission.
+- **Inputs**: redacted user query, assistant prose this turn, toolbox (name + one-liner + optional input schema), turns used, invoked-tools history (name + args/result summary), and **live chat-turn messages** for the cache-friendly path.
+- **System prompt**: `_EVALUATOR_SYSTEM_PROMPT` at [evaluator.py:43](src/jarvis/reply/evaluator.py:43). Teaches terminal vs continue, tool-coverage, multi-part query counting, garbled-turn salvage, structured `tool_call` emission, exact-argument-key rule.
+- **Transport**: two paths.
+  1. **Cache-friendly (default when evaluator model == chat model)**: the engine hands the evaluator its live `messages` list; the evaluator appends one user directive carrying the rubric + toolbox + invoked-tools + turns-used and fires `chat_with_messages`. Ollama's KV cache reuses the matching prefix, so the evaluator only prefills the short appended directive instead of re-processing the entire chat context on every loop iteration. Internal engine annotations (e.g. `tool_name`) are stripped so the wire shape stays deterministic for cache reuse.
+  2. **Fallback (different evaluator model, or no `chat_messages` handed over)**: fresh `call_llm_direct` with its own system prompt + rebuilt user block. Same parse and fail-open contract.
 - **Output**: strict JSON `EvaluatorResult{terminal, nudge, reason, tool_call}` ([evaluator.py:29](src/jarvis/reply/evaluator.py:29)). Consumed by the loop at ~engine.py:1580.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). Nudge cap `evaluator_nudge_max` (2). Fail-open → `terminal=True`.
 

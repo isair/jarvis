@@ -8,7 +8,7 @@ The axis is deliberately binary: from the agentic loop's perspective, "satisfied
 
 ### Input contract
 
-`evaluate_turn(user_query, assistant_response_summary, available_tools, turns_used, cfg, invoked_tools=None)`:
+`evaluate_turn(user_query, assistant_response_summary, available_tools, turns_used, cfg, invoked_tools=None, chat_messages=None)`:
 
 - `user_query` (str): the redacted user query that opened this reply. Defensively re-redacted on entry.
 - `assistant_response_summary` (str): the natural-language content produced by the chat model on the current turn. Redacted on entry in case the model echoed sensitive user text.
@@ -16,6 +16,7 @@ The axis is deliberately binary: from the agentic loop's perspective, "satisfied
 - `turns_used` (int): number of loop turns consumed so far.
 - `cfg`: config object providing the base URL, model, and timeout.
 - `invoked_tools` (optional list of `(name, args_summary, result_summary)` tuples): tools that have ALREADY executed during this reply, including direct-exec and model-emitted calls. Lets the evaluator distinguish "agent hasn't tried the tool" (→ nudge) from "tool already ran successfully, the chat model just failed to narrate the result" (→ terminal, do not re-invoke). Without this context, a small chat model that replies in prose after a successful direct-exec causes the evaluator to keep re-requesting the same tool indefinitely. Results are redacted defensively because tool output can echo user-provided text.
+- `chat_messages` (optional list of Ollama chat messages): the live message history from the chat turn that just produced `assistant_response_summary`. When provided AND the evaluator resolves to the same model as `cfg.ollama_chat_model`, the evaluator uses the **cache-friendly path**: it appends a single user directive to `chat_messages` and calls `chat_with_messages`, so Ollama's KV-cache reuse covers the shared prefix and the evaluator only prefills the short appended directive. When `chat_messages` is absent or the models differ (separate evaluator/judge model), the evaluator falls back to the fresh `call_llm_direct` path with its own system prompt. Engine-internal message fields (e.g. `tool_name` for duplicate detection) are stripped before being sent so the wire shape is cache-deterministic.
 
 ### Output contract
 

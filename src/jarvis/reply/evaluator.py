@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..debug import debug_log
-from ..llm import call_llm_direct
+from ..llm import call_llm_direct, chat_with_messages, extract_text_from_response
 from ..utils.redact import redact
 
 
@@ -315,6 +315,51 @@ def _format_invoked_tools(invoked: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
+_ALLOWED_MESSAGE_KEYS = {"role", "content", "tool_call_id", "tool_calls", "name"}
+
+
+def _sanitise_messages(messages: list[dict]) -> list[dict]:
+    """Strip engine-internal annotations (e.g. ``tool_name`` for duplicate
+    detection) that are not part of the Ollama chat-completion wire format.
+
+    Keeping the wire shape deterministic is load-bearing: Ollama reuses the
+    KV cache when the incoming prefix byte-matches the last request, so any
+    drift in message keys or ordering defeats the prompt-cache reuse that
+    the tail-append evaluator path was designed for.
+    """
+    clean: list[dict] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        clean.append({k: v for k, v in m.items() if k in _ALLOWED_MESSAGE_KEYS})
+    return clean
+
+
+def _build_evaluator_directive(
+    available_tools: list[tuple[str, str]],
+    invoked_tools: list[tuple[str, str, str]],
+    turns_used: int,
+) -> str:
+    """Build the tail-appended user directive for the cache-friendly path.
+
+    The chat-turn history (system prompt + dialogue + user query +
+    assistant reply) is already in the KV cache. This directive adds
+    only what the evaluator needs on top: the classification rubric
+    plus the dynamic context the loop has produced (toolbox, tools
+    already invoked this reply, turns used).
+    """
+    tools_block = _format_available_tools(available_tools)
+    invoked_block = _format_invoked_tools(invoked_tools)
+    return (
+        f"{_EVALUATOR_SYSTEM_PROMPT}\n\n"
+        f"AGENT TOOLBOX (for this turn):\n{tools_block}\n\n"
+        f"TOOLS ALREADY INVOKED THIS REPLY (with args and results):\n{invoked_block}\n\n"
+        f"TURNS USED SO FAR: {turns_used}\n\n"
+        "Classify your previous assistant reply now. Reply with strict JSON only. "
+        "Do NOT answer the user's query again, do NOT call a tool, do NOT emit prose."
+    )
+
+
 def evaluate_turn(
     user_query: str,
     assistant_response_summary: str,
@@ -322,6 +367,7 @@ def evaluate_turn(
     turns_used: int,
     cfg,
     invoked_tools: Optional[list[tuple[str, str, str]]] = None,
+    chat_messages: Optional[list[dict]] = None,
 ) -> EvaluatorResult:
     """Classify whether the agentic loop should terminate after this turn.
 
@@ -375,29 +421,67 @@ def evaluate_turn(
         timeout_sec = 8.0
     thinking = bool(getattr(cfg, "llm_thinking_enabled", False))
 
-    tools_block = _format_available_tools(available_tools)
-    invoked_block = _format_invoked_tools(invoked_tools)
-    user_content = (
-        f"USER QUERY: {user_query}\n\n"
-        f"ASSISTANT TURN (summary): {assistant_response_summary}\n\n"
-        f"AGENT TOOLBOX:\n{tools_block}\n\n"
-        f"TOOLS ALREADY INVOKED THIS REPLY (with args and results):\n{invoked_block}\n\n"
-        f"TURNS USED SO FAR: {turns_used}\n\n"
-        "Classify now. Reply with strict JSON only."
+    # Cache-friendly path: when the evaluator runs on the same model as the
+    # chat turn AND the caller hands us the live message history, ride that
+    # history as a tail-appended user directive instead of firing a fresh
+    # request with a separate system prompt. Ollama's KV cache reuses the
+    # matching prefix, so the evaluator only pays prefill cost for the short
+    # directive rather than re-processing the full chat context on every
+    # loop iteration. This is a pure latency optimisation — the parse and
+    # fail-open contract is identical on both paths.
+    chat_model_for_main_turn = getattr(cfg, "ollama_chat_model", "")
+    use_cache_path = (
+        isinstance(chat_messages, list)
+        and len(chat_messages) > 0
+        and chat_model
+        and chat_model == chat_model_for_main_turn
     )
-
-    try:
-        raw = call_llm_direct(
-            base_url=base_url,
-            chat_model=chat_model,
-            system_prompt=_EVALUATOR_SYSTEM_PROMPT,
-            user_content=user_content,
-            timeout_sec=timeout_sec,
-            thinking=thinking,
+    if use_cache_path:
+        directive = _build_evaluator_directive(
+            available_tools, invoked_tools, turns_used,
         )
-    except Exception as e:
-        debug_log(f"evaluator failed (non-fatal, terminal): {e}", "planning")
-        return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
+        messages = _sanitise_messages(chat_messages) + [
+            {"role": "user", "content": directive}
+        ]
+        try:
+            resp = chat_with_messages(
+                base_url=base_url,
+                chat_model=chat_model,
+                messages=messages,
+                timeout_sec=timeout_sec,
+                thinking=thinking,
+            )
+        except Exception as e:
+            debug_log(f"evaluator (cache path) failed (non-fatal, terminal): {e}", "planning")
+            return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
+        if not isinstance(resp, dict):
+            debug_log("evaluator (cache path) empty response — terminal", "planning")
+            return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
+        raw = extract_text_from_response(resp) or ""
+    else:
+        tools_block = _format_available_tools(available_tools)
+        invoked_block = _format_invoked_tools(invoked_tools)
+        user_content = (
+            f"USER QUERY: {user_query}\n\n"
+            f"ASSISTANT TURN (summary): {assistant_response_summary}\n\n"
+            f"AGENT TOOLBOX:\n{tools_block}\n\n"
+            f"TOOLS ALREADY INVOKED THIS REPLY (with args and results):\n{invoked_block}\n\n"
+            f"TURNS USED SO FAR: {turns_used}\n\n"
+            "Classify now. Reply with strict JSON only."
+        )
+
+        try:
+            raw = call_llm_direct(
+                base_url=base_url,
+                chat_model=chat_model,
+                system_prompt=_EVALUATOR_SYSTEM_PROMPT,
+                user_content=user_content,
+                timeout_sec=timeout_sec,
+                thinking=thinking,
+            )
+        except Exception as e:
+            debug_log(f"evaluator failed (non-fatal, terminal): {e}", "planning")
+            return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
     if not raw:
         debug_log("evaluator returned empty response — terminal", "planning")

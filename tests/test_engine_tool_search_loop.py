@@ -13,6 +13,44 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _bridge_evaluator_cache_path(monkeypatch):
+    """Bridge the evaluator's cache-friendly ``chat_with_messages`` path
+    back to the ``call_llm_direct`` stubs the individual tests install.
+
+    Tests in this module patch ``jarvis.reply.evaluator.call_llm_direct``
+    to stub evaluator outputs. When the evaluator's resolved model matches
+    ``cfg.ollama_chat_model`` (the small-model setups here do), the
+    evaluator takes the cache-friendly path through ``chat_with_messages``
+    instead — which is NOT patched, would hit the real network, and would
+    fail-open to terminal, breaking every continue-with-nudge assertion.
+
+    This fixture re-routes that path to whatever ``call_llm_direct`` is
+    currently installed, wrapping the returned JSON text in the chat-
+    response envelope the evaluator expects.
+    """
+    from jarvis.reply import evaluator as ev_mod
+
+    def _bridge(base_url, chat_model, messages, timeout_sec=8.0, **kwargs):
+        last_user = ""
+        for m in reversed(messages or []):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_user = m.get("content", "") or ""
+                break
+        text = ev_mod.call_llm_direct(
+            base_url=base_url,
+            chat_model=chat_model,
+            system_prompt="",
+            user_content=last_user,
+            timeout_sec=timeout_sec,
+        )
+        if text is None:
+            return None
+        return {"message": {"content": text}}
+
+    monkeypatch.setattr(ev_mod, "chat_with_messages", _bridge)
+
+
 def _assistant_tool_call(name: str, args: dict, call_id: str = "call_1"):
     return {
         "message": {
