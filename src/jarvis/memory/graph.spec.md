@@ -121,6 +121,7 @@ Piggybacks on the existing diary update flow in `conversation.py`:
    - **Recent nodes** — checked first; follows conversational momentum
    - **Top nodes** — checked second; matches frequently accessed knowledge domains
    - **Root traversal** — greedy top-down descent; LLM picks the best child at each level, or stops at the current node if none fit
+   - **Picker model**: `update_graph_from_dialogue` / `find_best_node` / `_llm_pick_best_child` accept an optional `picker_model` override. Callers (daemon, memory viewer's diary-import endpoint) resolve it via `resolve_tool_router_model(cfg)` so the best-child classification runs on the small warm router model instead of the big chat model. When `picker_model` is `None` the picker falls back to `ollama_chat_model`.
 4. **Append**: The fact is appended to the chosen node's data
 5. **Split**: If the node now exceeds `SPLIT_THRESHOLD`, auto-split is triggered
 

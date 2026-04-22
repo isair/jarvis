@@ -42,7 +42,7 @@ def _indent_text(text: str, prefix: str = "  ") -> str:
     return f"\n{prefix}".join(text.splitlines())
 
 
-def _resolve_tool_router_model(cfg) -> str:
+def resolve_tool_router_model(cfg) -> str:
     """Pick the LLM model for tool routing.
 
     Resolution order: explicit `tool_router_model` → `intent_judge_model` →
@@ -639,7 +639,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # this resolves to the chat model, so nothing changes there.
     try:
         search_params = extract_search_params_for_memory(
-            redacted, cfg.ollama_base_url, _resolve_tool_router_model(cfg),
+            redacted, cfg.ollama_base_url, resolve_tool_router_model(cfg),
             timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
             context_hint=context_hint,
@@ -820,7 +820,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         mcp_tools=mcp_tools,
         strategy=strategy,
         llm_base_url=cfg.ollama_base_url,
-        llm_model=_resolve_tool_router_model(cfg),
+        llm_model=resolve_tool_router_model(cfg),
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),

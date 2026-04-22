@@ -28,6 +28,11 @@ from jarvis import llm as _llm_module
 # Map caller __qualname__ → graph context name. Matches the 13 contexts in
 # docs/llm_contexts.md. Anything not listed gets lumped into "other" so we
 # notice new call sites drift in without us updating the doc.
+#
+# ⚠️  This mapping mirrors docs/llm_contexts.md. When you add, remove, or
+# rename an LLM context per the CLAUDE.md rule, update both in the same PR
+# — the perf harness silently buckets unknown callers into "other:<qualname>"
+# so drift here is visible but not loud.
 _CALLER_TO_CONTEXT: dict[str, str] = {
     # Context 1 — main chat loop uses chat_with_messages
     "run_reply_engine": "main_chat_turn",
@@ -48,6 +53,8 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # Context 7 — max-turn loop digest
     "digest_loop_for_max_turns": "max_turn_digest",
     # Context 8 — tool router
+    # (Context 9 — tool searcher — reuses select_tools_with_llm so it falls
+    # under the same bucket; that's intentional per docs/llm_contexts.md.)
     "select_tools_with_llm": "tool_router",
     # Context 10 — conversation summariser
     "generate_conversation_summary": "summariser",
@@ -55,6 +62,10 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     "extract_graph_memories": "graph_extract",
     # Context 12 — graph best-child picker
     "_llm_pick_best_child": "graph_best_child",
+    # Context 13 — tool-specific LLM calls
+    "_extract_place_from_user_text": "tool_weather",
+    "extract_and_log_meal": "tool_nutrition",
+    "generate_followups_for_meal": "tool_nutrition",
 }
 
 

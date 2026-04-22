@@ -48,7 +48,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `extract_search_params_for_memory()` (~line 71).
 - **Trigger**: once per reply before the loop.
-- **Model / gating**: resolved via `_resolve_tool_router_model(cfg)` — `tool_router_model → intent_judge_model → ollama_chat_model`. Small classification task; rides the same small/warm model as the router. Not optional; silent empty-dict on failure.
+- **Model / gating**: resolved via `resolve_tool_router_model(cfg)` — `tool_router_model → intent_judge_model → ollama_chat_model`. Small classification task; rides the same small/warm model as the router. Not optional; silent empty-dict on failure.
 - **Inputs**: user query, optional context hint (live-context compact summary), UTC now.
 - **System prompt**: inline at [enrichment.py:35-63](src/jarvis/reply/enrichment.py:35).
 - **Output**: `{keywords, from?, to?, questions?}`. Consumed by memory search at ~engine.py:1359.
@@ -88,7 +88,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/tools/selection.py](src/jarvis/tools/selection.py) — `select_tools_with_llm()` (~line 331).
 - **Trigger**: once per reply before the loop, if `tool_selection_strategy == "llm"` (default). Other strategies: `all`, `keyword`, `embedding`.
-- **Model / gating**: `_resolve_tool_router_model(cfg)` chain — `tool_router_model → intent_judge_model → ollama_chat_model`.
+- **Model / gating**: `resolve_tool_router_model(cfg)` chain — `tool_router_model → intent_judge_model → ollama_chat_model`.
 - **Inputs**: user query, tool catalogue (builtin + MCP with descriptions), optional narrow-down hint.
 - **System prompt**: inline (~lines 260-315). Teaches pick up-to-5 tools or `none`.
 - **Output**: comma-separated tool names or `none`. Capped at `_LLM_MAX_SELECTED` (5). Always-included tools (`stop`, `toolSearchTool`) are unioned in regardless.
@@ -125,7 +125,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `_llm_pick_best_child()` (~line 167).
 - **Trigger**: during graph insertion, per fact, to place it under the best existing category. Background.
-- **Model**: uses `picker_model` when passed through from `update_graph_from_dialogue` (daemon resolves it via `_resolve_tool_router_model(cfg)` → small model when available). Falls back to `ollama_chat_model` when no small model is configured.
+- **Model**: uses `picker_model` when passed through from `update_graph_from_dialogue` (daemon resolves it via `resolve_tool_router_model(cfg)` → small model when available). Falls back to `ollama_chat_model` when no small model is configured.
 - **Inputs**: fact text + numbered list of candidate child nodes (name + description).
 - **System prompt**: inline (~lines 156-161) — answer with number or `NONE`.
 - **Output**: child node id or `None` (fact still inserted, just not under an optimal parent).

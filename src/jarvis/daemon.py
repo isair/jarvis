@@ -245,8 +245,8 @@ def _check_and_update_diary(
             # Graph best-child picker is a one-digit classification — reuse the
             # tool-router model chain so placement runs on a small model instead
             # of paging in the big chat model for every fact.
-            from .reply.engine import _resolve_tool_router_model
-            graph_picker_model = _resolve_tool_router_model(cfg)
+            from .reply.engine import resolve_tool_router_model
+            graph_picker_model = resolve_tool_router_model(cfg)
 
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
