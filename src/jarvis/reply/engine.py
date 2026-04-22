@@ -23,7 +23,7 @@ from .evaluator import evaluate_turn
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query
-from .planner import plan_query, format_plan_block, progress_nudge
+from .planner import plan_query, format_plan_block, progress_nudge, tool_steps_of
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
@@ -1421,9 +1421,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             and action_plan
             and pending_tool_call is None
         ):
-            _plan_tool_steps = (
-                list(action_plan[:-1]) if len(action_plan) > 1 else list(action_plan)
-            )
+            _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = sum(
                 1 for m in messages if m.get("tool_name")
             )
@@ -1670,9 +1668,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     # Mirror the plan-aware / compound-query remainder-hint
                     # logic from the model-emitted path so multi-part queries
                     # don't stall when the evaluator fires a direct-exec.
+                    # `sum(...)` counts tool results already in `messages`;
+                    # the result for the tool we just executed is NOT yet
+                    # appended (that happens a few lines below). Add 1 so
+                    # the progress count reflects the completed step.
                     _tool_results_so_far = sum(
                         1 for m in messages if m.get("tool_name")
-                    )
+                    ) + 1
                     if action_plan:
                         _remainder_hint = progress_nudge(
                             action_plan, _tool_results_so_far
@@ -2101,9 +2103,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     # actual query + tools + memory, not from a
                     # hand-rolled conjunction table, so it generalises to
                     # multi-part queries the split heuristic misses.
+                    # The tool result for this turn is NOT yet in `messages`
+                    # (appended a few lines below). Add 1 so the count reflects
+                    # the completed step and the nudge points at the NEXT one.
                     tool_results_so_far = sum(
                         1 for m in messages if m.get("tool_name")
-                    )
+                    ) + 1
                     if action_plan:
                         remainder_hint = progress_nudge(
                             action_plan, tool_results_so_far

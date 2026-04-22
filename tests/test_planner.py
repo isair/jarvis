@@ -23,6 +23,7 @@ from jarvis.reply.planner import (
     progress_nudge,
     resolve_next_tool_call,
     resolve_planner_model,
+    tool_steps_of,
 )
 
 
@@ -73,16 +74,16 @@ class TestIsTrivialPlan:
     def test_empty_is_trivial(self):
         assert _is_trivial_plan([]) is True
 
-    def test_single_reply_is_trivial(self):
+    def test_single_step_is_trivial_regardless_of_language(self):
+        # Purely structural: any 1-step plan is trivial. Language-agnostic.
         assert _is_trivial_plan(["Reply to the user."]) is True
-        assert _is_trivial_plan(["Respond directly"]) is True
-        assert _is_trivial_plan(["Greet the user"]) is True
+        assert _is_trivial_plan(["Répondre à l'utilisateur."]) is True
+        assert _is_trivial_plan(["ユーザーに返信する"]) is True
+        assert _is_trivial_plan(["webSearch query='x'"]) is True
 
     def test_multi_step_is_not_trivial(self):
         assert _is_trivial_plan(["webSearch ...", "Reply to user"]) is False
-
-    def test_single_tool_step_is_not_trivial(self):
-        assert _is_trivial_plan(["webSearch query='x'"]) is False
+        assert _is_trivial_plan(["a", "b", "c"]) is False
 
 
 class TestResolvePlannerModel:
@@ -254,3 +255,43 @@ class TestResolveNextToolCall:
     def test_missing_schema_returns_none(self):
         cfg = _cfg()
         assert resolve_next_tool_call(cfg, "do the thing", [], []) is None
+
+    def test_drops_unknown_argument_keys(self):
+        cfg = _cfg()
+        raw = (
+            '{"name": "webSearch", "arguments": '
+            '{"query": "weather", "evil_key": "shell"}}'
+        )
+        with patch.object(planner_mod, "call_llm_direct", return_value=raw):
+            result = resolve_next_tool_call(
+                cfg, "search weather", [], self._schema()
+            )
+        assert result == ("webSearch", {"query": "weather"})
+
+    def test_keeps_args_as_is_when_schema_has_no_properties(self):
+        cfg = _cfg()
+        schema = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "freeform",
+                    "description": "freeform",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        raw = '{"name": "freeform", "arguments": {"anything": "goes"}}'
+        with patch.object(planner_mod, "call_llm_direct", return_value=raw):
+            result = resolve_next_tool_call(cfg, "do it", [], schema)
+        assert result == ("freeform", {"anything": "goes"})
+
+
+class TestToolStepsOf:
+    def test_multi_step_drops_final_synthesis_step(self):
+        assert tool_steps_of(["a", "b", "reply"]) == ["a", "b"]
+
+    def test_single_step_kept_as_is(self):
+        assert tool_steps_of(["only"]) == ["only"]
+
+    def test_empty_plan(self):
+        assert tool_steps_of([]) == []

@@ -45,9 +45,13 @@ from ..llm import call_llm_direct
 MAX_STEPS = 5
 
 # Absolute minimum query length worth planning. Very short queries
-# ("hi", "thanks", "what time is it") are either trivial or not
-# multi-step; running the planner for them just adds latency.
-MIN_QUERY_CHARS = 12
+# ("hi", "thanks", "what time is it", "weather now") are either trivial
+# or not multi-step; running the planner for them just adds latency.
+# 20 chars filters out most single-tool utterances while retaining
+# real multi-part queries (the shortest legitimate multi-step query we
+# see in evals — "director of Possessor and their films" — is 38
+# chars).
+MIN_QUERY_CHARS = 20
 
 
 def resolve_planner_model(cfg) -> str:
@@ -161,20 +165,23 @@ def _parse_plan(raw: str) -> List[str]:
 
 
 def _is_trivial_plan(steps: List[str]) -> bool:
-    """A plan with zero or one 'reply to the user' step adds no value —
-    the engine should treat it as empty and fall through to existing
-    behaviour."""
-    if not steps:
-        return True
-    if len(steps) == 1:
-        low = steps[0].lower()
-        # Single-reply-only plans; pattern-matched on verb roots that
-        # cover English and latin-script languages the planner might
-        # naturally emit.
-        for token in ("reply", "respond", "answer", "greet"):
-            if token in low:
-                return True
-    return False
+    """A single-step plan is treated as trivial and the engine falls
+    through to prior behaviour. The planner prompt mandates that any
+    plan with tool use emits ≥ 2 steps (at least one tool step plus a
+    final synthesis/reply step), so a 1-step plan is by contract a
+    pure reply. This check is language-agnostic — no verb matching."""
+    return len(steps) <= 1
+
+
+def tool_steps_of(plan: Sequence[str]) -> List[str]:
+    """Non-synthesis tool steps of a plan. The final step of a well-formed
+    multi-step plan is the synthesis/reply step (see planner prompt rule
+    8); tool steps are all non-final steps. For a 1-step plan we return
+    the step unchanged so downstream code doesn't trip on an empty list,
+    though `_is_trivial_plan` normally filters those out first."""
+    if len(plan) > 1:
+        return list(plan[:-1])
+    return list(plan)
 
 
 def plan_query(
@@ -223,6 +230,7 @@ def plan_query(
             user_content=user_content,
             timeout_sec=effective_timeout,
             thinking=False,
+            num_ctx=8192,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner: LLM call failed — {exc}", "planning")
@@ -272,9 +280,7 @@ def progress_nudge(steps: Sequence[str], tool_results_so_far: int) -> str:
     """
     if not steps:
         return ""
-    # The final "reply" step is not a tool step; count tool steps
-    # as all non-final steps.
-    tool_steps = list(steps[:-1]) if len(steps) > 1 else list(steps)
+    tool_steps = tool_steps_of(steps)
     total_tool_steps = len(tool_steps)
     if total_tool_steps == 0:
         return ""
@@ -367,8 +373,13 @@ def resolve_next_tool_call(
 
     # Build a compact allowed-tool schema: just names + short description +
     # parameter keys so the resolver can't waste tokens echoing descriptions.
+    # Also record each tool's declared property keys so we can strip
+    # unknown keys out of the resolved arguments before dispatch — the
+    # evaluator direct-exec path has a similar guard; this keeps the
+    # planner direct-exec path on par.
     allowed_names: list[str] = []
     schema_lines: list[str] = []
+    allowed_props: dict[str, set[str]] = {}
     for entry in tools_schema:
         fn = entry.get("function", {}) if isinstance(entry, dict) else {}
         name = fn.get("name") if isinstance(fn, dict) else None
@@ -378,9 +389,12 @@ def resolve_next_tool_call(
         params = (fn.get("parameters") or {}) if isinstance(fn, dict) else {}
         props = params.get("properties") if isinstance(params, dict) else None
         if isinstance(props, dict):
-            keys = ", ".join(sorted(props.keys()))
+            prop_keys = set(props.keys())
+            keys = ", ".join(sorted(prop_keys))
         else:
+            prop_keys = set()
             keys = ""
+        allowed_props[str(name)] = prop_keys
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
         schema_lines.append(f"- {name} (args: {keys}) — {first[:120]}")
@@ -401,6 +415,7 @@ def resolve_next_tool_call(
             user_content=user_content,
             timeout_sec=effective_timeout,
             thinking=False,
+            num_ctx=8192,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")
@@ -451,6 +466,20 @@ def resolve_next_tool_call(
             "planning",
         )
         return None
+    # Drop unknown argument keys so the LLM can't inject extras through
+    # the planner path. Tools declaring no properties get the args as-is
+    # (they're free-form by design).
+    declared = allowed_props.get(name, set())
+    if declared:
+        filtered = {k: v for k, v in args.items() if k in declared}
+        if filtered != args:
+            dropped = sorted(set(args.keys()) - declared)
+            debug_log(
+                f"planner.resolve_next_tool_call: dropped unknown args "
+                f"{dropped!r} for {name!r}",
+                "planning",
+            )
+        args = filtered
     return name, args
 
 
@@ -462,4 +491,5 @@ __all__ = [
     "format_plan_block",
     "progress_nudge",
     "resolve_next_tool_call",
+    "tool_steps_of",
 ]

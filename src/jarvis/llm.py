@@ -13,8 +13,14 @@ class ToolsNotSupportedError(Exception):
     pass
 
 
-def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False) -> Optional[str]:
-    """Direct LLM call without temporal context, location, or other ask_coach features."""
+def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False, num_ctx: int = 4096) -> Optional[str]:
+    """Direct LLM call without temporal context, location, or other ask_coach features.
+
+    ``num_ctx`` controls Ollama's context window for this call. Default 4096 is
+    fine for small classification-shaped passes; callers that assemble richer
+    prompts (planner with dialogue + memory + tool catalogue) should pass a
+    larger value to avoid silent truncation.
+    """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -24,7 +30,7 @@ def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_con
         "model": chat_model,
         "messages": messages,
         "stream": False,
-        "options": {"num_ctx": 4096},
+        "options": {"num_ctx": num_ctx},
         "think": thinking,
     }
     

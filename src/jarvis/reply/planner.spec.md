@@ -60,9 +60,12 @@ The planner prompt instructs the model to emit:
   and markdown fences are stripped.
 - Overlong steps (>200 chars) are truncated with an ellipsis.
 - The list is capped at `MAX_STEPS`.
-- Trivial single-reply plans (matching `reply|respond|answer|greet`)
-  return an empty list so the engine falls through to existing
-  behaviour.
+- Trivial plans (length ≤ 1) return an empty list so the engine falls
+  through to existing behaviour. The planner prompt (rule 8) mandates
+  a final synthesis step whenever any tool is planned, so a 1-step
+  plan is by contract a pure reply and adds no value. This check is
+  purely structural — no language-specific verb matching — so the
+  filter works for any language the planner emits.
 
 ### Engine integration
 
@@ -87,7 +90,14 @@ The planner prompt instructs the model to emit:
   `null`), unknown tools, or invalid JSON. All `None` paths fall back
   to the normal chat-model turn.
 - Validates the tool name against the provided schema's allow-list.
+- Filters the returned `arguments` against the tool's declared
+  JSON-schema property keys; unknown keys are dropped before dispatch.
+  Tools that declare no properties keep the args as-is (they are
+  free-form by design).
 - Tolerates markdown fences the model may add despite instructions.
+- Both planner LLM calls (`plan_query` and `resolve_next_tool_call`)
+  request `num_ctx=8192` from Ollama so enriched memory and tool
+  catalogue don't silently truncate in the 4096-token default window.
 
 ## Fail-open invariants
 
