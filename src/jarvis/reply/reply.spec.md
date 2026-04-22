@@ -271,7 +271,7 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `llm_chat_timeout_sec` (messages loop turn)
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.
-  - `memory_digest_enabled` (default `false`) distils the combined diary + graph dump into a short relevance-filtered note via a cheap LLM pass before injecting into the system prompt. Defaults to off because the extra digest pass adds latency and on small models frequently drops salient facts the main model would otherwise ground on. Set to `true` to force on, or `null` to opt back into the auto-on-for-SMALL behaviour. See **Memory Digest for Small Models** below.
+  - `memory_digest_enabled` (default `null` = auto-on for SMALL models ≤7B, off for LARGE) distils the combined diary + graph dump into a short relevance-filtered note via a cheap LLM pass before injecting into the system prompt. See **Memory Digest for Small Models** below.
   - `tool_result_digest_enabled` (default `false`) distils raw tool-result payloads (especially webSearch UNTRUSTED WEB EXTRACT blocks) into a short attributed fact note before appending as a tool-role message. Defaults to off because the extra digest pass adds latency per tool call and on small models frequently drops salient facts (numbers, names) the main model would otherwise ground on. Set to `true` to force on, or `null` to opt back into the auto-on-for-SMALL behaviour. See **Tool-Result Digest for Small Models** below.
 - Tools and MCP:
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
@@ -327,7 +327,7 @@ Small models (~2B parameters) degrade sharply as the system prompt grows. The ra
 To mitigate both, `digest_memory_for_query` (in `src/jarvis/reply/enrichment.py`) runs a cheap LLM pass over the raw diary + graph block and produces a short relevance-filtered note that replaces both `conversation_context` and `graph_context` in the reply system prompt.
 
 Behaviour:
-- **Gating**: `memory_digest_enabled` (config). Default `false` (off). `None` means auto-on for SMALL models, off for LARGE. Explicit `true`/`false` forces.
+- **Gating**: `memory_digest_enabled` (config). `None` (default) means auto-on for SMALL models, off for LARGE. Explicit `true`/`false` forces.
 - **Short-circuit**: if the raw block is below `_DIGEST_MIN_CHARS` (400 chars), it's passed through unchanged — the LLM round-trip costs more than it saves.
 - **Batching**: if the raw block exceeds `_DIGEST_BATCH_MAX_CHARS` (2000 chars, ~500 tokens), snippets are greedy-packed into batches, each distilled independently; surviving notes are joined. Single large snippets become their own oversized batch rather than being split mid-text.
 - **Graph is alpha**: when no graph nodes are present, only diary entries are digested. When only graph nodes are present, graph nodes alone are digested. Either channel is optional.

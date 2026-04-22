@@ -456,11 +456,8 @@ def get_default_config() -> Dict[str, Any]:
         "memory_enrichment_max_results": 3,
         "memory_search_max_results": 15,
         "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
-        # Defaults to off: the digest LLM pass adds latency and, on small
-        # models, often drops salient facts the main model would have
-        # grounded on. Set ``true`` to force on, or ``null`` to opt back
-        # into the old auto-on-for-small behaviour.
-        "memory_digest_enabled": False,
+        # None = auto (on for small models ≤7B, off for large). Set true/false to force.
+        "memory_digest_enabled": None,
         # Distil raw tool results (e.g. webSearch extracts) into a short
         # attributed fact note for small models. Defaults to off: the extra
         # digest LLM pass adds latency per tool call and, on small models,

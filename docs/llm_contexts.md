@@ -18,7 +18,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
   - Tool results from prior turns (raw or digested — see #6)
 - **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the evaluator (#3), tool orchestrator, and TTS pipeline.
-- **Limits**: no explicit `max_tokens` — Ollama defaults. Timeout `llm_chat_timeout_sec` (45s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session.
+- **Limits**: `num_ctx: 8192` (explicit). Timeout `llm_chat_timeout_sec` (45s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session. Risk: `fetch_web_page` truncates at 50,000 chars (~37k tokens) — a single fetch result landing in the messages history will blow the 8192 window; the model will silently see a truncated context.
 
 ## 2. Intent Judge
 
@@ -32,7 +32,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine.
-- **Limits**: `intent_judge_timeout_sec` (15s).
+- **Limits**: `intent_judge_timeout_sec` (15s). `num_ctx: 4096` (explicit — transcript buffer can reach 400+ tokens; Ollama's model default of 2048 would silently truncate it).
 
 ## 3. Evaluator (post-turn decision)
 
