@@ -22,14 +22,14 @@ integration in `src/jarvis/reply/engine.py`.
 ### When the planner runs
 
 - After tool selection (the router has produced a tools allow-list).
-- Only when the query is at least `MIN_QUERY_CHARS` long (default 12).
+- Only when the query is at least `MIN_QUERY_CHARS` long (default 20).
   Shorter utterances are either trivial or not multi-step.
 - Only when `cfg.planner_enabled` is True (default).
 - Only when an `ollama_base_url` and a resolvable model are available.
 
 ### Model resolution
 
-Same chain as the tool router and evaluator:
+Same chain as the tool router:
 
 1. `cfg.planner_model` (explicit override)
 2. `cfg.tool_router_model`
@@ -38,7 +38,7 @@ Same chain as the tool router and evaluator:
 
 Planning is classification-shaped so it rides the warm small model
 instead of paging in a separate planner model. This preserves KV-cache
-warmth across planner / router / evaluator.
+warmth across planner, router, and intent judge.
 
 ### Prompt contract (plan_query)
 
@@ -119,8 +119,9 @@ The planner prompt instructs the model to emit:
 ## Non-goals
 
 - The planner does not re-plan mid-turn. If the emitted plan is wrong,
-  the engine still progresses via the chat model's native tool calls
-  and the evaluator's termination check.
+  the engine still progresses via the chat model's native tool calls.
+  When the chat model produces natural-language content the loop
+  terminates immediately.
 - The planner does not validate semantic correctness of the plan; it
   trusts the model to produce sensible steps and relies on the
   resolver's schema-level guard to reject unknown tools.
