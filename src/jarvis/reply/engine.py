@@ -22,7 +22,7 @@ from .enrichment import (
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query
-from .planner import plan_query, format_plan_block, progress_nudge, tool_steps_of
+from .planner import plan_query, format_plan_block, progress_nudge, tool_steps_of, resolve_next_tool_call as _resolve_plan_step
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
@@ -219,9 +219,8 @@ def _is_malformed_model_output(content: str) -> bool:
       3. Gemma internal sentinels like ``<unusedNN>`` — never part of a
          user-facing reply.
 
-    Catching all three at engine level (before the evaluator runs) keeps
-    the deterministic guard as the primary defence, with the evaluator's
-    garbled-turn clause acting as defence-in-depth for novel shapes.
+    Catching all three at engine level keeps the deterministic guard as
+    the primary defence against malformed output reaching the user.
     """
     if not content or not content.strip():
         return False
@@ -1035,7 +1034,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _memory_ctx_parts.append(conversation_context)
         if graph_context:
             _memory_ctx_parts.append(graph_context)
-        _memory_ctx = "\n".join(_memory_ctx_parts)[:2000]
+        _memory_ctx_full = "\n".join(_memory_ctx_parts)
+        if len(_memory_ctx_full) > 2000:
+            debug_log(
+                f"planner memory context truncated {len(_memory_ctx_full)}→2000 chars",
+                "planning",
+            )
+        _memory_ctx = _memory_ctx_full[:2000]
 
         action_plan = plan_query(
             cfg=cfg,
@@ -1357,9 +1362,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
                 try:
-                    from .planner import resolve_next_tool_call as _resolve_next
                     _prior = list(invoked_tools_history)
-                    _resolved = _resolve_next(
+                    _resolved = _resolve_plan_step(
                         cfg=cfg,
                         next_step_text=_plan_tool_steps[_tool_results_so_far],
                         prior_results=_prior,
@@ -1667,10 +1671,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."})
                 continue
 
-            # Check if we already have results for this type of tool (prevents tool call loops)
+            # Check if we already have results for this type of tool (prevents tool call loops).
+            # In native-tools mode results carry role="tool"; in text-tools mode they carry
+            # role="user" with a "tool_name" key — check both to make the guard effective
+            # in small-model paths where direct-exec is most likely to loop.
             duplicate_tool_count = sum(
                 1 for msg in messages[-10:]
-                if msg.get("role") == "tool" and msg.get("tool_name") == tool_name
+                if msg.get("tool_name") == tool_name
+                and msg.get("role") in ("tool", "user")
             )
             if duplicate_tool_count >= 2:
                 debug_log(f"  ⚠️ Too many {tool_name} calls ({duplicate_tool_count}) - returning guidance", "planning")
@@ -1801,15 +1809,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
 
                 if use_text_tools:
-                    # Plan-aware remainder nudge (issue #231). When a
-                    # pre-loop plan exists, prefer it over the legacy
-                    # compound_query split: the plan was computed from the
-                    # actual query + tools + memory, not from a
-                    # hand-rolled conjunction table, so it generalises to
+                    # Plan-aware remainder nudge. When a pre-loop plan exists,
+                    # prefer it over the legacy compound_query split: the plan
+                    # was computed from the actual query + tools + memory, not
+                    # from a hand-rolled conjunction table, so it generalises to
                     # multi-part queries the split heuristic misses.
-                    # The tool result for this turn is NOT yet in `messages`
-                    # (appended a few lines below). Add 1 so the count reflects
-                    # the completed step and the nudge points at the NEXT one.
+                    # +1 because the current tool result is not yet in `messages`
+                    # (appended below); the nudge must point at the NEXT step,
+                    # not the one that just ran. The direct-exec path above uses
+                    # `_tool_results_so_far + 1` for the same reason.
                     tool_results_so_far = sum(
                         1 for m in messages if m.get("tool_name")
                     ) + 1

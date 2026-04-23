@@ -58,11 +58,7 @@ def test_plan_injects_action_plan_block_into_system_message(
              "extract_search_params_for_memory",
              return_value={"keywords": []},
          ), \
-         patch.object(engine_mod, "plan_query", return_value=plan), \
-         patch(
-             "jarvis.reply.evaluator.call_llm_direct",
-             return_value='{"terminal": true, "reason": "satisfied"}',
-         ):
+         patch.object(engine_mod, "plan_query", return_value=plan):
         engine_mod.run_reply_engine(
             db=db,
             cfg=mock_config,
@@ -142,11 +138,7 @@ def test_small_model_direct_execs_planned_tools_without_chat_llm(
              return_value={"keywords": []},
          ), \
          patch.object(engine_mod, "plan_query", return_value=plan), \
-         patch("jarvis.reply.planner.resolve_next_tool_call", side_effect=fake_resolve), \
-         patch(
-             "jarvis.reply.evaluator.call_llm_direct",
-             return_value='{"terminal": true, "reason": "satisfied"}',
-         ):
+         patch.object(engine_mod, "_resolve_plan_step", side_effect=fake_resolve):
         engine_mod.run_reply_engine(
             db=db,
             cfg=mock_config,
@@ -202,11 +194,7 @@ def test_empty_plan_falls_through_to_existing_behaviour(
              "extract_search_params_for_memory",
              return_value={"keywords": []},
          ), \
-         patch.object(engine_mod, "plan_query", return_value=[]), \
-         patch(
-             "jarvis.reply.evaluator.call_llm_direct",
-             return_value='{"terminal": true, "reason": "satisfied"}',
-         ):
+         patch.object(engine_mod, "plan_query", return_value=[]):
         engine_mod.run_reply_engine(
             db=db,
             cfg=mock_config,
@@ -218,4 +206,67 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     assert captured_system_messages
     assert "ACTION PLAN" not in captured_system_messages[0], (
         "Empty plan must NOT inject an ACTION PLAN block"
+    )
+
+
+def test_resolver_failure_on_tool_step_falls_back_to_chat(
+    mock_config, db, dialogue_memory
+):
+    """When resolve_next_tool_call returns None for a tool step (not synthesis),
+    the engine must fall through to the normal chat-model turn for that step."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    chat_call_count = [0]
+
+    def fake_chat(*args, **kwargs):
+        chat_call_count[0] += 1
+        # First fallback turn: model emits a tool call itself
+        if chat_call_count[0] == 1:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "tool_calls: [{\"id\": \"c1\", \"type\": \"function\", "
+                               "\"function\": {\"name\": \"webSearch\", "
+                               "\"arguments\": \"{\\\"search_query\\\": \\\"foo\\\"}\"}}]",
+                }
+            }
+        return _assistant_content("Here is what I found.")
+
+    invoked_tools: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append(tool_name)
+        return ToolExecutionResult(success=True, reply_text="Result", error_message=None)
+
+    plan = [
+        "webSearch query='foo'",
+        "Reply to the user with the combined findings.",
+    ]
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["webSearch", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", return_value=plan), \
+         patch.object(engine_mod, "_resolve_plan_step", return_value=None):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="search for foo and summarise",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert chat_call_count[0] >= 1, (
+        "Engine must call the chat model when the step resolver returns None"
+    )
+    assert "webSearch" in invoked_tools, (
+        "Chat model's own tool call should still be dispatched after resolver failure"
     )

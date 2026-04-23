@@ -123,7 +123,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 12. Task-list Planner (pre-loop decomposition)
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
-- **Trigger**: once per reply, after tool selection and before the agentic loop. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (12), or when no model / base URL is available.
+- **Trigger**: once per reply, after tool selection and before the agentic loop. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (20), or when no model / base URL is available.
 - **Model / gating**: resolution chain `planner_model → tool_router_model → intent_judge_model → ollama_chat_model`. Classification-shaped, rides the warm small model.
 - **Inputs**: user query, dialogue context, memory context, selected tool names + one-line descriptions.
 - **System prompt**: `_PROMPT_TEMPLATE` at [planner.py:73](src/jarvis/reply/planner.py:73). Teaches short imperative steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
