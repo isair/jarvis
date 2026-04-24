@@ -2071,11 +2071,11 @@ class VoiceListener(threading.Thread):
                     flush=True,
                 )
                 print(
-                    f"      👍 \"Check tomorrow's weather, find an activity that suits it, and tell me what to wear, {wake_word.title()}.\"",
+                    f"      👍 \"Check tomorrow's weather and local events, then recommend events that suit the weather, {wake_word.title()}.\"",
                     flush=True,
                 )
                 print(
-                    f"      👎 \"Plan something fun for me tomorrow, {wake_word.title()}.\"",
+                    f"      👎 \"What event should I go to tomorrow, {wake_word.title()}?\"",
                     flush=True,
                 )
 
