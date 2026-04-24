@@ -12,7 +12,13 @@ from src.jarvis.memory.graph import (
     _estimate_tokens,
     SPLIT_THRESHOLD,
     MERGE_THRESHOLD,
+    FIXED_BRANCHES,
 )
+
+# Number of fixed top-level branches seeded under root on bootstrap
+# (User / Directives / World). See graph.py FIXED_BRANCHES.
+SEEDED = len(FIXED_BRANCHES)
+BOOTSTRAP_NODE_COUNT = SEEDED + 1  # seeded branches + root
 
 
 @pytest.fixture
@@ -81,8 +87,9 @@ class TestGraphMemoryStoreBootstrap:
         root_nodes = [n for n in nodes if n.parent_id is None]
         assert len(root_nodes) == 1
 
-    def test_node_count_starts_at_one(self, store):
-        assert store.get_node_count() == 1  # root only
+    def test_node_count_starts_with_seeded_branches(self, store):
+        # root + fixed branches (User / Directives / World)
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
 
     def test_total_tokens_zero_for_empty_graph(self, store):
         assert store.get_total_tokens() == 0
@@ -174,7 +181,8 @@ class TestNodeRelationships:
         c = store.create_node(name="C", description="c", parent_id=a.id)
 
         root_children = store.get_children("root")
-        assert len(root_children) == 2
+        # 2 test nodes + SEEDED fixed branches
+        assert len(root_children) == 2 + SEEDED
         child_ids = {c.id for c in root_children}
         assert a.id in child_ids
         assert b.id in child_ids
@@ -210,19 +218,20 @@ class TestNodeRelationships:
 
         tree = store.get_subtree("root", max_depth=3)
         assert tree["node"]["id"] == "root"
-        assert len(tree["children"]) == 1
-        assert tree["children"][0]["node"]["id"] == a.id
-        assert len(tree["children"][0]["children"]) == 1
-        assert tree["children"][0]["children"][0]["node"]["id"] == b.id
+        assert len(tree["children"]) == 1 + SEEDED
+        a_child = next(c for c in tree["children"] if c["node"]["id"] == a.id)
+        assert len(a_child["children"]) == 1
+        assert a_child["children"][0]["node"]["id"] == b.id
 
     def test_get_subtree_depth_limit(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
         b = store.create_node(name="B", description="b", parent_id=a.id)
 
         tree = store.get_subtree("root", max_depth=1)
-        # root (depth 0) -> A (depth 1), but B (depth 2) should not appear
-        assert len(tree["children"]) == 1
-        assert tree["children"][0]["children"] == []
+        # root (depth 0) -> A + seeded branches (depth 1), but B (depth 2) should not appear
+        assert len(tree["children"]) == 1 + SEEDED
+        for child in tree["children"]:
+            assert child["children"] == []
 
 
 @pytest.mark.unit
@@ -282,8 +291,10 @@ class TestGraphVisualisation:
         data = store.get_graph_data("root", max_depth=5)
         assert "nodes" in data
         assert "edges" in data
-        assert len(data["nodes"]) == 3  # root, A, B
-        assert len(data["edges"]) == 2  # root->A, A->B
+        # root + seeded branches + A + B
+        assert len(data["nodes"]) == BOOTSTRAP_NODE_COUNT + 2
+        # seeded edges (root->each branch) + root->A + A->B
+        assert len(data["edges"]) == SEEDED + 2
 
     def test_graph_data_includes_depth(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
@@ -312,21 +323,21 @@ class TestGraphVisualisation:
         store.create_node(name="B", description="b", parent_id="root")
 
         all_nodes = store.get_all_nodes()
-        assert len(all_nodes) == 3  # root + A + B
+        assert len(all_nodes) == BOOTSTRAP_NODE_COUNT + 2  # root + seeded + A + B
 
     def test_node_count(self, store):
-        assert store.get_node_count() == 1
-        node = store.create_node(name="A", description="a", parent_id="root")
-        assert store.get_node_count() == 2
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
+        store.create_node(name="A", description="a", parent_id="root")
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT + 1
 
     def test_node_count_after_delete(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
         b = store.create_node(name="B", description="b", parent_id="root")
-        assert store.get_node_count() == 3  # root + A + B
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT + 2
         store.delete_node(a.id)
-        assert store.get_node_count() == 2  # root + B
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT + 1
         store.delete_node(b.id)
-        assert store.get_node_count() == 1  # root only
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
 
 
 @pytest.mark.unit

@@ -33,6 +33,56 @@ SUMMARY_MAX_LENGTH = 300     # max characters for a node description
 DECAY_HALF_LIFE_DAYS = 14    # days until a node's access score halves
 
 
+# ── Fixed top-level branches ────────────────────────────────────────────────
+#
+# The root is seeded with three fixed children on first run. The graph
+# is still self-organising below these — auto-split/merge runs within
+# each branch — but the top level is purpose-shaped, not content-shaped,
+# so the extractor can route each new fact into the right semantic slot.
+#
+# - USER: everything about the person the assistant serves (identity,
+#   tastes, preferences, plans, opinions). Warm-loaded into the system
+#   prompt on every turn.
+# - DIRECTIVES: imperatives the user issued at the assistant about its
+#   own behaviour ("be concise", "use British English", "stop apologising").
+#   Verbatim rules, never summarised. Warm-loaded on every turn.
+# - WORLD: external facts with attribution (current graph content —
+#   films, businesses, recipes, techniques). Unbounded. Not warm-loaded;
+#   retrieved on demand via searchMemory.
+#
+# The IDs are stable strings so re-opening an existing graph is
+# idempotent — no duplicate branches get seeded if the store already
+# has them.
+
+BRANCH_USER = "user"
+BRANCH_DIRECTIVES = "directives"
+BRANCH_WORLD = "world"
+
+FIXED_BRANCHES: tuple[tuple[str, str, str], ...] = (
+    (
+        BRANCH_USER,
+        "User",
+        "Everything about the user: identity, location, relationships, "
+        "tastes, preferences, history, plans, opinions. Always injected "
+        "into the system prompt.",
+    ),
+    (
+        BRANCH_DIRECTIVES,
+        "Directives",
+        "Imperatives the user issued at the assistant about its own "
+        "behaviour — tone, verbosity, language, style rules. Verbatim, "
+        "never summarised. Always injected into the system prompt.",
+    ),
+    (
+        BRANCH_WORLD,
+        "World",
+        "External facts the assistant has learned and wants to carry "
+        "forward: films, businesses, recipes, techniques, events. "
+        "Retrieved on demand via searchMemory.",
+    ),
+)
+
+
 # ── SQL helpers ────────────────────────────────────────────────────────────
 
 def _decay_score_sql(half_life_days: int = DECAY_HALF_LIFE_DAYS) -> str:
@@ -151,13 +201,20 @@ class GraphMemoryStore:
             self.conn.commit()
 
     def _ensure_root(self) -> None:
-        """Create the root node if it doesn't exist."""
+        """Create the root node and the three fixed top-level branches
+        (User / Directives / World) if they don't exist.
+
+        Idempotent: each branch has a stable string id, so re-opening an
+        existing graph never duplicates them. Branches are also created
+        on first boot for existing graphs that predate the taxonomy —
+        this is the migration path.
+        """
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             row = self.conn.execute(
                 "SELECT id FROM memory_nodes WHERE parent_id IS NULL LIMIT 1"
             ).fetchone()
             if row is None:
-                now = datetime.now(timezone.utc).isoformat()
                 self.conn.execute(
                     """INSERT INTO memory_nodes
                        (id, name, description, data, parent_id,
@@ -168,6 +225,20 @@ class GraphMemoryStore:
                 )
                 self.conn.commit()
                 debug_log("Created root memory node", "memory")
+
+            # Seed fixed top-level branches under root. Each row is
+            # inserted with INSERT OR IGNORE keyed on the stable id so
+            # repeated boots are no-ops.
+            for branch_id, name, description in FIXED_BRANCHES:
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO memory_nodes
+                       (id, name, description, data, parent_id,
+                        access_count, last_accessed, created_at, updated_at,
+                        data_token_count)
+                       VALUES (?, ?, ?, '', 'root', 0, ?, ?, ?, 0)""",
+                    (branch_id, name, description, now, now, now),
+                )
+            self.conn.commit()
 
     # ── CRUD ────────────────────────────────────────────────────────────
 

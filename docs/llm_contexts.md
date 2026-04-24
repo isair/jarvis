@@ -13,6 +13,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Redacted user query
   - Recent dialogue (last 5 minutes)
   - Unified system prompt from [src/jarvis/system_prompt.py](src/jarvis/system_prompt.py) + ASR note + tool-protocol guidance
+  - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default)
   - Digested memory enrichment (optional, see #4)
   - Time + location context (re-injected each turn)
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
@@ -102,13 +103,14 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: `(summary_text, topics_text)` → `conversation_summaries` table, embedded for vector search, feeds enrichment (#3) and graph extraction (#10).
 - **Limits**: `timeout_sec` (30s default).
 
-## 10. Knowledge Graph Fact Extraction
+## 10. Knowledge Graph Fact Extraction + Branch Classification
 
-- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `_llm_extract_facts()` (~line 98).
+- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `extract_graph_memories()`.
 - **Trigger**: after each daily summary (#9). Background.
 - **Model**: `ollama_chat_model`.
 - **Inputs**: summary text + optional date.
-- **Output**: JSON array of novel fact strings → memory graph nodes.
+- **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER.
+- **Output**: list of `(branch_id, fact_text)` tuples → routed into the tagged branch via branch-pinned descent (no cross-branch contamination).
 - **Limits**: `timeout_sec`. Failures → empty list.
 
 ## 11. Knowledge Graph Best-Child Picker

@@ -804,6 +804,39 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if _memory_topic_hint:
                 break
 
+    # Step 3.5: Warm profile — pull the User + Directives branches of
+    # the knowledge graph into a compact, query-agnostic block that gets
+    # injected into the system prompt on every turn. These two branches
+    # are bounded by design (identity + standing rules), don't depend on
+    # the query, and changing rarely — so loading them unconditionally
+    # is the right tradeoff. No LLM call, just a SQLite traversal.
+    #
+    # This is the architectural pivot that lets the planner stop routing
+    # personalisation queries through searchMemory: "news that might
+    # interest me" can be answered directly when the model already sees
+    # the user's interests in its system prompt.
+    warm_profile_block = ""
+    try:
+        from ..memory.graph import GraphMemoryStore
+        from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
+        _graph_store_warm = GraphMemoryStore(cfg.db_path)
+        _warm_profile = build_warm_profile(_graph_store_warm)
+        warm_profile_block = format_warm_profile_block(_warm_profile)
+        if warm_profile_block:
+            _user_len = len(_warm_profile.get("user", ""))
+            _dir_len = len(_warm_profile.get("directives", ""))
+            print(
+                f"  🪴 Warm profile: {_user_len} user chars, "
+                f"{_dir_len} directive chars",
+                flush=True,
+            )
+            debug_log(
+                f"warm profile loaded: user={_user_len} directives={_dir_len}",
+                "memory",
+            )
+    except Exception as e:
+        debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
     enrichment_source = getattr(cfg, "memory_enrichment_source", "diary")
@@ -1132,6 +1165,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append(
                 "Always respond in English regardless of the language the user speaks in."
             )
+
+        if warm_profile_block:
+            # Pre-query, query-agnostic user context. Lives OUTSIDE the
+            # conversation-history section because it isn't a history
+            # snapshot — it's the assistant's standing knowledge of who
+            # it's serving and what rules it's been told to obey. Kept
+            # here (rather than inside the Diary/Graph enrichment block
+            # below) because it must be present on every turn, not
+            # gated by the planner's searchMemory decision.
+            guidance.append("\n" + warm_profile_block)
 
         if conversation_context:
             # Two safety framings, both needed:
