@@ -1811,17 +1811,16 @@ def index() -> str:
 
             <div id="graph-content" class="tab-pane" style="display: none;">
                 <div class="alpha-disclaimer">
-                    <span class="alpha-badge">Alpha</span>
+                    <span class="alpha-badge">Beta</span>
                     <div class="alpha-body">
                         <p>
-                            🧪 The knowledge graph runs in the background but isn't <strong>used by default</strong> yet.
-                            Performance implications and real-world benefits are still being evaluated, and the design will
-                            likely go through significant refinement before it becomes a core part of Jarvis.
+                            🧪 The knowledge graph is on by default: a compact <strong>warm profile</strong>
+                            (User + Directives branches) is injected into every reply, and query-driven graph
+                            recall runs alongside the diary via <code>Enrichment Source = all</code>.
                         </p>
                         <p>
-                            👉 Want to try it now? Open <strong>Settings → Memory → Enrichment Source</strong> and switch it to
-                            <code>graph</code> (graph only) or <code>all</code> (diary + graph). Expect rough edges and please
-                            share feedback so we can refine it.
+                            👉 Structure and classification are stable; extractor quality is still being tuned.
+                            Please share feedback so we can keep refining it.
                         </p>
                     </div>
                 </div>
