@@ -12,40 +12,65 @@ from typing import Optional
 
 
 def _generate_sonar_ping_wav() -> bytes:
-    """Generate a pleasant pop sound as WAV bytes.
+    """Generate a seamlessly looping ambient pad as WAV bytes.
 
-    Creates a sound similar to macOS Pop.aiff:
-    - Clean sine tone
-    - Quick decay
-    - Subtle tremolo flutter for "shake" character
+    Designed to run indefinitely while Jarvis thinks — the clip has no
+    silent endpoints, so the loop point is inaudible and the texture
+    reads as one unbroken flowing sound rather than repeated swells.
+
+    Seamlessness is guaranteed mathematically: every sine in the mix uses
+    a frequency that completes an integer number of cycles across the
+    clip duration, and every LFO (amplitude cross-fades, vibrato) has a
+    period that divides the duration evenly. Start and end samples are
+    therefore identical, so the loop wraps with zero click.
+
+    - Three voices tuned to a D major-ninth-ish chord (D5, F#5, A5)
+    - Slow cross-fading LFOs give the illusion of melodic motion
+    - Gentle detune layer adds chorus-like warmth
+    - Subtle vibrato for organic feel
+    - Amplitude never drops to zero — texture is continuous
     """
     sample_rate = 44100
-    duration = 0.12  # 120ms - short and clean
+    duration = 4.0  # seamless loop length
 
-    freq = 520  # C5 area - clean mid-range tone
+    # Frequencies chosen so f * duration is an integer → perfect loop seam.
+    # duration = 4s, so any integer Hz works; these form a consonant chord.
+    f1 = 588.0   # ~D5
+    f2 = 740.0   # ~F#5
+    f3 = 880.0   # A5
+    f1_detune = 589.0  # slight chorus layer against f1
 
-    # Generate samples
     num_samples = int(sample_rate * duration)
     samples = []
+
+    two_pi = 2 * math.pi
+    lfo_w = two_pi / duration  # fundamental LFO, one cycle per loop
+    vib_w = two_pi * 2 / duration  # 0.5 Hz vibrato, two cycles per loop
 
     for i in range(num_samples):
         t = i / sample_rate
 
-        # Smooth envelope - quick attack, clean decay
-        attack = 1 - math.exp(-t * 600)
-        decay = math.exp(-t * 22)
-        envelope = attack * decay
+        # Cross-fading amplitudes — always sum to a steady continuous level.
+        # Each voice breathes in while another breathes out, so the overall
+        # texture never drops to silence.
+        a1 = 0.55 + 0.25 * math.sin(lfo_w * t)
+        a2 = 0.55 + 0.25 * math.sin(lfo_w * t + two_pi / 3)
+        a3 = 0.55 + 0.25 * math.sin(lfo_w * t + 2 * two_pi / 3)
 
-        # Tremolo flutter - fast amplitude wobble that fades
-        tremolo_rate = 55  # Hz
-        tremolo_depth = 0.25 * math.exp(-t * 30)  # Fades quickly
-        tremolo = 1 + tremolo_depth * math.sin(2 * math.pi * tremolo_rate * t)
+        # Gentle vibrato, periodic across the loop (±0.15%).
+        vibrato = 1 + 0.0015 * math.sin(vib_w * t)
 
-        # Clean sine tone
-        sample = envelope * tremolo * math.sin(2 * math.pi * freq * t)
+        v1 = math.sin(two_pi * f1 * vibrato * t)
+        v2 = math.sin(two_pi * f2 * vibrato * t + 0.9)
+        v3 = math.sin(two_pi * f3 * vibrato * t + 1.7)
+        vd = math.sin(two_pi * f1_detune * t + 0.3)
 
-        # Convert to 16-bit PCM
-        sample_int = int(sample * 32767 * 0.7)
+        tone = a1 * v1 + a2 * v2 + a3 * v3 + 0.18 * vd
+
+        # Normalise roughly to [-1, 1]; the cross-fade keeps sum bounded.
+        sample = tone / 2.2
+
+        sample_int = int(sample * 32767 * 0.32)
         samples.append(max(-32768, min(32767, sample_int)))
 
     # Build WAV file in memory
@@ -170,9 +195,9 @@ class TunePlayer:
                         [afplay, tmp_path],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=2.0
+                        timeout=30.0
                     )
-                    time.sleep(0.8)  # Gentle spacing
+                    time.sleep(0.05)  # Minimal gap — breaths flow into each other
                 except Exception:
                     break
         except Exception:
@@ -220,9 +245,9 @@ class TunePlayer:
                         cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=2.0
+                        timeout=30.0
                     )
-                    time.sleep(0.8)  # Gentle spacing like macOS
+                    time.sleep(0.05)  # Minimal gap — breaths flow into each other like macOS
                 except Exception:
                     break
         except Exception:
@@ -247,7 +272,7 @@ class TunePlayer:
                         wav_data,
                         winsound.SND_MEMORY | winsound.SND_NODEFAULT
                     )
-                    time.sleep(0.8)  # Gentle spacing like macOS
+                    time.sleep(0.05)  # Minimal gap — breaths flow into each other like macOS
                 except Exception:
                     break
         except ImportError:
