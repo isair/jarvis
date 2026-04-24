@@ -727,9 +727,27 @@ class TestLiveEndToEnd:
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_explicit_recall_then_search_live(self, mock_config, eval_db, eval_dialogue_memory):
+    @pytest.mark.parametrize("query", [
+        pytest.param(
+            "Recall my interests, then search the web for news on them, Jarvis.",
+            id="explicit-recall-then-search",
+        ),
+        pytest.param(
+            "Search the web for news that would interest me, Jarvis.",
+            id="news-that-would-interest-me",
+        ),
+        pytest.param(
+            "Find me news of interest to me, Jarvis.",
+            id="news-of-interest-to-me",
+        ),
+        pytest.param(
+            "What news today is interesting for me, Jarvis?",
+            id="news-interesting-for-me",
+        ),
+    ])
+    def test_interest_flavoured_query_live(self, query, mock_config, eval_db, eval_dialogue_memory):
         """
-        Live eval: explicit two-step imperative "recall X, then search Y" phrasing.
+        Live eval: interest-flavoured phrasings must surface seeded interests.
 
         Field regression (2026-04-24, gemma4:e2b): user said "Recall my interests
         and search the web for news on them, Jarvis." The intent judge paraphrased
@@ -739,15 +757,15 @@ class TestLiveEndToEnd:
         punted with "what are your interests so I can search the web for news
         for you?" instead of acting on the seeded interests.
 
-        This eval pins the bar: with interests available via enrichment, the
-        small model must either (a) search with an interest-flavoured query or
-        (b) name at least one seeded interest in its reply, and must NOT bounce
-        the question back.
+        The bar for every phrasing variant ("of interest to me", "would interest
+        me", "interesting for me", "recall my interests"): enrichment surfaces
+        the seeded interests into memory context, the planner weaves them into
+        the search step, and the reply names at least one. The model must NOT
+        bounce the question back.
         """
         from jarvis.reply.engine import run_reply_engine
         from helpers import JUDGE_MODEL
 
-        query = "Recall my interests, then search the web for news on them, Jarvis."
         capture = ToolCallCapture()
 
         mock_config.ollama_base_url = "http://localhost:11434"
@@ -778,7 +796,7 @@ class TestLiveEndToEnd:
         tools_used = [c["name"] for c in capture.calls]
         response_lower = (response or "").lower()
 
-        print(f"\n📝 Live Recall-Then-Search Eval ({JUDGE_MODEL}):")
+        print(f"\n📝 Live Interest-Flavoured Eval ({JUDGE_MODEL}):")
         print(f"   Query: {query}")
         print(f"   Tools called: {tools_used}")
         print(f"   Response: {(response or '')[:200]}...")
@@ -814,7 +832,7 @@ class TestLiveEndToEnd:
             f"Response: {(response or '')[:300]}"
         )
 
-        print(f"   ✅ Recall-then-search grounded on seeded interests")
+        print(f"   ✅ Interest-flavoured query grounded on seeded interests")
 
 
 # =============================================================================
