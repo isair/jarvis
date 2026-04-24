@@ -861,6 +861,42 @@ class TestEchoRejectionDoesNotExtendFollowUpWindow:
         listener.state_manager.stop()
 
 
+@pytest.mark.unit
+class TestLongTtsTailEcho:
+    """Echoes of the TAIL of a long TTS response must still be rejected. The
+    fuzzy echo check previously truncated TTS to 300 chars, so tail echoes from
+    longer responses slipped through and were accepted as user speech."""
+
+    @patch("builtins.print")
+    def test_tail_echo_from_long_tts_rejected(self, _print):
+        """Echo of the final clause of a ~370-char TTS is caught, not accepted."""
+        long_tts = (
+            "You asked for something interesting, so I found that there are "
+            "over 1800 creative writing prompts available across various genres, "
+            "including themes like a character losing the ability to create or "
+            "an intangible concept becoming a real object. I also found that "
+            "evolving marketing tactics rely on using data, leveraging "
+            "analytics, and being agile to understand user behavior."
+        )
+        assert len(long_tts) > 300  # Guard: the bug only manifests past old cap
+
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+        listener.echo_detector.track_tts_start(long_tts)
+        _simulate_tts_finish(listener)
+        _wait_for_hot_window_active(listener)
+
+        # Mic picks up the tail of the TTS response — this is pure echo.
+        tail_echo = "leveraging analytics and being agile to understand user behavior."
+        _install_intent_judge(
+            listener,
+            _make_judgment(directed=False, reasoning="Segment is an echo"),
+        )
+        listener._process_transcript(tail_echo, utterance_energy=0.01)
+
+        assert _accepted_query(listener) == ""
+        listener.state_manager.stop()
+
+
 # ---------------------------------------------------------------------------
 # Tests: Early beep and face state feedback
 # ---------------------------------------------------------------------------
