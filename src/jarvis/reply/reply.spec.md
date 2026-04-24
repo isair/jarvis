@@ -105,8 +105,7 @@ Design principles enforced by the engine:
    - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
 
    Tool allow-list per turn:
-   - When the planner produced a non-empty plan, the allow-list is the set of tool names referenced in the plan (plan-driven). The separate `select_tools` LLM call is skipped — the planner already saw the full catalogue and committed to specific tools.
-   - When the planner returned `[]` (fail-open), `select_tools` still runs exactly as before to produce the default allow-list.
+   - `select_tools` always runs and is the authoritative picker. When the planner produced a non-empty plan, the tools it referenced are unioned into the router's allow-list so a tool the planner named but the router missed is still callable. An earlier variant let the planner replace the router to save one LLM call; reverted when tool-picking quality dropped on small models (they default to `webSearch` where a dedicated tool like `getWeather` should win).
    - The per-turn allow-list exposed to the chat model is: `<plan or router picks>` + `stop` (the sentinel) + `toolSearchTool`.
    - `toolSearchTool` wraps the same routing logic (`select_tools`) but is invokable mid-loop. It takes a refined natural-language description of what the model is trying to accomplish and returns the expanded set of candidate tools. When invoked, the returned tools are merged into the allow-list for subsequent turns (still plus `stop` and `toolSearchTool` itself). This gives the agent a single-shot escape hatch when the initial routing was too narrow without widening the allow-list to "everything" by default.
    - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.

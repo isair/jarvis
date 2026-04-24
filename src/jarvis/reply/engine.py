@@ -1034,49 +1034,46 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 6: Tool allow-list for this turn.
     #
-    # Two paths:
-    #   - Plan-driven: when the planner emitted a non-empty plan, the
-    #     set of tools it referenced IS the allow-list. We skip the
-    #     separate `select_tools` LLM call — the planner already saw
-    #     the full catalog and committed to specific tools.
-    #   - Fail-open: when the planner returned [] (disabled, timeout,
-    #     short query), we run the legacy router so behaviour is no
-    #     worse than before the planner existed.
+    # The tool router (`select_tools`) is the authoritative picker. The
+    # planner's tool references are advisory — unioned into the allow-list
+    # so a tool the planner named but the router missed is still callable,
+    # but the router's picks are never dropped. Small models (gemma4:e2b)
+    # tend to default to the most universal tool they know (typically
+    # `webSearch`) when they should pick a specific one (`getWeather`,
+    # `getTime`); the dedicated router is tuned for that classification
+    # and consistently outperforms the planner at it. An earlier variant
+    # of this step let the planner REPLACE the router to save one LLM
+    # call; that was reverted when measurable tool-picking quality dropped.
+    _plan_under_specified = bool(action_plan) and plan_has_unresolved_tool_steps(
+        action_plan, _full_catalog_names
+    )
     try:
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
 
-    _plan_under_specified = bool(action_plan) and plan_has_unresolved_tool_steps(
-        action_plan, _full_catalog_names
+    allowed_tools = select_tools(
+        query=redacted,
+        builtin_tools=BUILTIN_TOOLS,
+        mcp_tools=mcp_tools,
+        strategy=strategy,
+        llm_base_url=cfg.ollama_base_url,
+        llm_model=resolve_tool_router_model(cfg),
+        llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+        embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+        embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+        context_hint=context_hint,
     )
+    _selection_source = strategy.value
     if action_plan and not _plan_under_specified:
-        allowed_tools = tool_names_in_plan(action_plan, _full_catalog_names)
-        # `stop` is the termination sentinel — always exposed so the
-        # chat model can emit it once it has enough to answer.
-        if "stop" not in allowed_tools:
-            allowed_tools.append("stop")
-        _selection_source = "plan"
-    else:
-        if action_plan:
-            debug_log(
-                "planner: non-empty plan with unresolved tool steps; "
-                "falling back to tool router",
-                "planning",
-            )
-        allowed_tools = select_tools(
-            query=redacted,
-            builtin_tools=BUILTIN_TOOLS,
-            mcp_tools=mcp_tools,
-            strategy=strategy,
-            llm_base_url=cfg.ollama_base_url,
-            llm_model=resolve_tool_router_model(cfg),
-            llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-            embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-            embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
-            context_hint=context_hint,
-        )
-        _selection_source = strategy.value
+        for _plan_name in tool_names_in_plan(action_plan, _full_catalog_names):
+            if _plan_name not in allowed_tools:
+                allowed_tools.append(_plan_name)
+                _selection_source = f"{strategy.value}+plan"
+    # `stop` is the termination sentinel — always exposed so the chat
+    # model can emit it once it has enough to answer.
+    if "stop" not in allowed_tools:
+        allowed_tools.append("stop")
     # Always expose the escape-hatch tool so the chat model can widen the
     # allow-list mid-loop when the initial routing turned out too narrow.
     if "toolSearchTool" not in allowed_tools:

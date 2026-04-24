@@ -377,3 +377,73 @@ def test_paraphrased_plan_skips_direct_exec_for_small_models(
     assert resolver_calls[0] == 0, (
         "Direct-exec resolver must not run when the plan is under-specified"
     )
+
+
+def test_router_always_runs_and_plan_tools_are_unioned(
+    mock_config, db, dialogue_memory
+):
+    """select_tools is the authoritative picker. When the planner picks
+    tools, the names are unioned into the router's allow-list, not used
+    to replace it. Small models often pick the most universal tool
+    (webSearch) instead of a dedicated one (getWeather); the router is
+    tuned for that classification and must remain authoritative."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = False
+
+    router_calls = [0]
+    captured_allow_lists: list[list[str]] = []
+
+    def fake_select_tools(*args, **kwargs):
+        router_calls[0] += 1
+        # Router picks getWeather — the dedicated tool for this question.
+        return ["getWeather", "stop"]
+
+    def fake_chat(*args, **kwargs):
+        # Grab the schema from kwargs/args to inspect the allow-list.
+        schema = kwargs.get("tools") or []
+        names = [s.get("function", {}).get("name") for s in schema if isinstance(s, dict)]
+        captured_allow_lists.append([n for n in names if n])
+        return _assistant_content("Sunny.")
+
+    def fake_tool_runner(*args, **kwargs):
+        return ToolExecutionResult(success=True, reply_text="ok", error_message=None)
+
+    # Planner picks webSearch (the weaker, more universal choice).
+    plan = [
+        "webSearch query='weather in Hackney'",
+        "Reply to the user with the combined findings.",
+    ]
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", side_effect=fake_select_tools), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", return_value=plan):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="how's the weather here?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert router_calls[0] == 1, (
+        "select_tools must always run, even when the planner picks tools"
+    )
+    assert captured_allow_lists, "chat model must have been called"
+    exposed = captured_allow_lists[0]
+    # Router's pick (authoritative, specific) is present …
+    assert "getWeather" in exposed, (
+        "Router's dedicated pick must be preserved in the allow-list"
+    )
+    # … and the planner's pick is unioned in, not dropped.
+    assert "webSearch" in exposed, (
+        "Planner's tool picks must be unioned into the allow-list"
+    )

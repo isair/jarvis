@@ -19,9 +19,15 @@ The engine uses the plan for three things:
    `searchMemory topic='<topic>'` directive on queries that need past
    user context; we skip the keyword-extraction LLM call, the diary
    / graph lookup, and the memory-digest LLM call otherwise.
-2. **Replace the tool router** — the tool names the planner references
-   become the allow-list directly, eliminating a separate
-   `select_tools` LLM call when the planner was confident.
+2. **Augment the tool router** — the tool names the planner references
+   are unioned into the router-selected allow-list, so a tool the
+   planner named but the router missed is still callable. The router
+   (`select_tools`) remains the authoritative picker; an earlier
+   variant let the planner replace it to save one LLM call, but
+   measurable tool-picking quality dropped (gemma4:e2b class models
+   default to the most universal tool they know — typically
+   `webSearch` — when they should pick a dedicated one like
+   `getWeather`). The dedicated router is tuned for that classification.
 3. **Drive direct execution** for small models, as before — each
    planned step is resolved to a concrete tool call without
    round-tripping the chat model for intermediate turns.
@@ -108,22 +114,17 @@ The engine consumes the plan in two phases.
   anchors on what the planner wanted to look up rather than
   re-deriving from the raw utterance.
 - `tool_names_in_plan(plan, known_names)` — ordered de-duped list of
-  tool names the planner referenced. When non-empty this **replaces
-  the tool router**: the planner already saw the full catalogue and
-  committed to specific tools, so the extra `select_tools` LLM call
-  is redundant. `stop` and `toolSearchTool` are always added to the
-  allow-list regardless. When the plan is empty (fail-open), the
-  engine falls back to calling `select_tools` as before.
+  tool names the planner referenced. The engine unions this into the
+  router-selected allow-list (never replaces it). `stop` and
+  `toolSearchTool` are always added regardless.
 - `plan_has_unresolved_tool_steps(plan, known_names)` — true when the
   plan has non-synthesis steps but names no known tool (e.g. the
-  model wrote `get the weather` instead of `getWeather ...`). Treated
-  as under-specification: the engine falls back to `select_tools` so
-  the chat model isn't left with only `stop` + `toolSearchTool` and
-  forced to hallucinate a tool name from training priors. The
-  direct-exec path is ALSO skipped in this state — vague step text
-  ("get the weather") would otherwise force the resolver LLM to guess
-  arguments (e.g. emitting `location='Nowhere'` for a bare weather
-  request). The chat model takes the turn instead.
+  model wrote `get the weather` instead of `getWeather ...`). In
+  this state the direct-exec path is skipped — vague step text
+  would otherwise force the resolver LLM to guess arguments (e.g.
+  emitting `location='Nowhere'` for a bare weather request). The
+  chat model takes the turn instead, using the router-selected
+  allow-list.
 - `strip_memory_directives(plan)` — the engine strips the
   `searchMemory` step from the plan once memory has been fetched, so
   downstream consumers (system-message injection, direct-exec,
