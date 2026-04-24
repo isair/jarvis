@@ -2058,14 +2058,16 @@ class VoiceListener(threading.Thread):
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
             print(f"\n{'─' * 50}\n🎙️  Listening! Try: \"How's the weather, {wake_word.title()}?\"", flush=True)
 
-            # Small-model disclaimer: gemma4:e2b and e4b can't infer your
-            # intent from vague prompts, but they can still execute complex
-            # flows if you spell out the steps. Assume the model is dumb and
-            # lay things out for it.
-            chat_model_lower = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip().lower()
-            if chat_model_lower in ("gemma4:e2b", "gemma4:e4b"):
+            # Small-model disclaimer: SMALL models can't infer your intent
+            # from vague prompts, but they can still execute complex flows
+            # if you spell out the steps. Assume the model is dumb and lay
+            # things out for it. Classification lives in model_variants so
+            # it stays in sync when supported models change.
+            from ..reply.prompts.model_variants import detect_model_size, ModelSize
+            chat_model_name = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
+            if chat_model_name and detect_model_size(chat_model_name) == ModelSize.SMALL:
                 print(
-                    f"  ⚠️  Tiny model in use ({chat_model_lower}). Assume it can't infer — spell out the steps.",
+                    f"  ⚠️  Small model in use ({chat_model_name}). Assume it can't infer — spell out the steps.",
                     flush=True,
                 )
                 print(
