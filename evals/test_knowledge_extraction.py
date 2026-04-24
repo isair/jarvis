@@ -210,8 +210,14 @@ REFRAMING_CASES = [
 # =============================================================================
 
 def _run_extraction(case: ExtractionTestCase, config: MockConfig) -> list[str]:
-    """Run extract_graph_memories with the given case and config."""
-    return extract_graph_memories(
+    """Run extract_graph_memories with the given case and config.
+
+    Returns a flat list of fact strings. The extractor now returns
+    ``(branch_id, fact)`` tuples; these evals predate branch tagging
+    and only care about the fact text. The new branch-routing evals
+    live in ``test_graph_branch_routing.py``.
+    """
+    tagged = extract_graph_memories(
         summary=case.summary,
         ollama_base_url=config.ollama_base_url,
         ollama_chat_model=config.ollama_chat_model,
@@ -219,6 +225,7 @@ def _run_extraction(case: ExtractionTestCase, config: MockConfig) -> list[str]:
         thinking=False,
         date_utc=case.date_utc,
     )
+    return [fact for _branch, fact in tagged]
 
 
 def _fact_matches_keyword(facts: list[str], keyword: str) -> bool:
