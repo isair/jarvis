@@ -261,9 +261,6 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("memory_enrichment_max_results", "Enrichment Results",
       "Max memory results for context enrichment",
       "memory", "int", min_val=1, max_val=50)
-    f("memory_search_max_results", "Search Results",
-      "Max memory results for search queries",
-      "memory", "int", min_val=1, max_val=50)
     f("memory_enrichment_source", "Enrichment Source",
       "Which memory system enriches replies: all (diary + graph), diary only, or graph only",
       "memory", "choice", choices=[("diary", "Diary only"), ("graph", "Graph only"), ("all", "All (diary + graph)")])
