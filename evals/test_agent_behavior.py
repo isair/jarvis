@@ -792,14 +792,10 @@ class TestLiveEndToEnd:
         ]
         is_asking_user = any(p in response_lower for p in asking_phrases)
 
-        msg_asked = (
+        assert not is_asking_user, (
             f"Model bounced the question back instead of acting on seeded "
             f"interests. Response: {(response or '')[:300]}"
         )
-        if is_asking_user:
-            if JUDGE_MODEL.startswith("gemma4"):
-                pytest.xfail(f"{JUDGE_MODEL} flake. {msg_asked}")
-            pytest.fail(msg_asked)
 
         # Secondary bar: the reply or the search query must name an interest.
         interest_terms = ["ai", "space", "astronomy", "machine learning", "spacex", "mars"]
@@ -812,15 +808,11 @@ class TestLiveEndToEnd:
             any(t in q for t in interest_terms) for q in search_queries
         )
 
-        msg_grounded = (
+        assert reply_mentions_interest or search_mentions_interest, (
             f"Model did not ground on seeded interests. "
             f"Tools: {tools_used}. Search queries: {search_queries}. "
             f"Response: {(response or '')[:300]}"
         )
-        if not (reply_mentions_interest or search_mentions_interest):
-            if JUDGE_MODEL.startswith("gemma4"):
-                pytest.xfail(f"{JUDGE_MODEL} flake. {msg_grounded}")
-            pytest.fail(msg_grounded)
 
         print(f"   ✅ Recall-then-search grounded on seeded interests")
 
