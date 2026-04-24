@@ -13,12 +13,12 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Redacted user query
   - Recent dialogue (last 5 minutes)
   - Unified system prompt from [src/jarvis/system_prompt.py](src/jarvis/system_prompt.py) + ASR note + tool-protocol guidance
-  - Digested memory enrichment (optional, see #5)
+  - Digested memory enrichment (optional, see #4)
   - Time + location context (re-injected each turn)
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
-  - Tool results from prior turns (raw or digested — see #6)
+  - Tool results from prior turns (raw or digested — see #5)
 - **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the tool orchestrator and TTS pipeline. Natural-language content is delivered immediately; no post-turn evaluator runs.
-- **Limits**: no explicit `max_tokens` — Ollama defaults. Timeout `llm_chat_timeout_sec` (45s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session.
+- **Limits**: `num_ctx: 8192` (explicit). Timeout `llm_chat_timeout_sec` (45s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session. Risk: `fetch_web_page` truncates at 50,000 chars (~37k tokens) — mitigated for SMALL models by tool-result digest (#5) which compresses the payload before it enters the messages history. LARGE models receive the raw payload and may silently see a truncated context.
 
 ## 2. Intent Judge
 
@@ -32,7 +32,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine.
-- **Limits**: `intent_judge_timeout_sec` (15s).
+- **Limits**: `intent_judge_timeout_sec` (15s). `num_ctx: 4096` (explicit — transcript buffer can reach 400+ tokens; Ollama's model default of 2048 would silently truncate it).
 
 ## 3. Memory Enrichment Extractor
 
@@ -47,7 +47,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 4. Memory Digest (optional, SMALL models)
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_memory_for_query()` + `_distil_batch()`.
-- **Trigger**: once per reply when enrichment returns hits AND `memory_digest_enabled` (auto-ON for SMALL ≤7B, OFF for LARGE). Skipped if raw < `_DIGEST_MIN_CHARS` (400). Batched if raw > `_DIGEST_BATCH_MAX_CHARS` (2000).
+- **Trigger**: once per reply when enrichment returns hits AND `memory_digest_enabled` (default OFF; `null` = auto-ON for SMALL ≤7B / OFF for LARGE). Skipped if raw < `_DIGEST_MIN_CHARS` (400). Batched if raw > `_DIGEST_BATCH_MAX_CHARS` (2000).
 - **Model / gating**: `ollama_chat_model`. Gated by `memory_digest_enabled`.
 - **Inputs**: user query, raw diary entries, raw graph nodes.
 - **System prompt**: `_DIGEST_SYSTEM_PROMPT` at [enrichment.py:122](src/jarvis/reply/enrichment.py:122). Teaches relevance filtering, preference-signal detection, attribution preservation, `NONE` sentinel, identity queries.
@@ -57,7 +57,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 5. Tool-Result Digest (optional, opt-in)
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_tool_result_for_query()` + `_distil_tool_batch()`.
-- **Trigger**: after each tool result in the loop, if `tool_result_digest_enabled`. Default is `false` (off everywhere); `null` opts into auto-ON-for-SMALL. Skipped if raw < 400 chars (`_TOOL_DIGEST_MIN_CHARS`); batched if > 2500 (`_TOOL_DIGEST_BATCH_MAX_CHARS`).
+- **Trigger**: after each tool result in the loop, if `tool_result_digest_enabled` (default `null` = auto-ON for SMALL ≤7B, OFF for LARGE). Primary motivation on small models: prevents `fetch_web_page`'s 50k-char payloads from filling the 8192 num_ctx window. Skipped if raw < 400 chars (`_TOOL_DIGEST_MIN_CHARS`); batched if > 2500 (`_TOOL_DIGEST_BATCH_MAX_CHARS`).
 - **Model / gating**: `ollama_chat_model`. Gated by `tool_result_digest_enabled`.
 - **Inputs**: user query, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.

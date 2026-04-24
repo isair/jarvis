@@ -267,8 +267,8 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `llm_chat_timeout_sec` (messages loop turn)
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.
-  - `memory_digest_enabled` (default `null` = auto-on for SMALL models, off for LARGE) distils the combined diary + graph dump into a short relevance-filtered note via a cheap LLM pass before injecting into the system prompt. See **Memory Digest for Small Models** below.
-  - `tool_result_digest_enabled` (default `false`) distils raw tool-result payloads (especially webSearch UNTRUSTED WEB EXTRACT blocks) into a short attributed fact note before appending as a tool-role message. Defaults to off because the extra digest pass adds latency per tool call and on small models frequently drops salient facts (numbers, names) the main model would otherwise ground on. Set to `true` to force on, or `null` to opt back into the auto-on-for-SMALL behaviour. See **Tool-Result Digest for Small Models** below.
+  - `memory_digest_enabled` (default `null` = auto-on for SMALL models ≤7B, off for LARGE) distils the combined diary + graph dump into a short relevance-filtered note via a cheap LLM pass before injecting into the system prompt. See **Memory Digest for Small Models** below.
+  - `tool_result_digest_enabled` (default `null` = auto-on for SMALL models ≤7B) distils raw tool-result payloads (especially webSearch UNTRUSTED WEB EXTRACT blocks and fetch_web_page responses) into a short attributed fact note before appending as a tool-role message. Auto-on for small models mitigates large payloads (fetch_web_page truncates at 50,000 chars) blowing the 8192 num_ctx window. Set to `true` to force on, `false` to force off. See **Tool-Result Digest for Small Models** below.
 - Tools and MCP:
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
 - Agentic loop:
