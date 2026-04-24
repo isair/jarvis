@@ -477,20 +477,20 @@ class LowPolyFaceWidget(QWidget):
             self._gaze_x *= 0.95
             self._gaze_y *= 0.95
 
-        # Listening animation - bell ring echoes
-        # Tempo locked to the thinking pad's LFO period (5s = 150 frames
-        # at 30 FPS) so on-screen motion breathes in time with the tone.
+        # Listening animation - bell ring echoes.
+        # Tempo locked to the thinking pad's unison-beat period (1s,
+        # third-slowest wave after the 5s LFO and 1.67s voice-peak
+        # spacing) = 30 frames at 30 FPS.
         if self._jarvis_state == JarvisState.LISTENING:
             self._listening_pulse_time += 1
-            # Spawn a new ring once per LFO cycle (150 frames ≈ 5s).
-            if self._listening_pulse_time >= 150:
+            if self._listening_pulse_time >= 30:
                 self._listening_pulse_time = 0
                 self._listening_rings.append(0.0)  # Add new ring at expansion 0
 
-            # Update existing rings (expand them over one full LFO cycle).
+            # Expand each ring over one beat (1s).
             new_rings = []
             for ring in self._listening_rings:
-                ring += 1.0 / 150.0
+                ring += 1.0 / 30.0
                 if ring < 1.0:  # Keep if not fully expanded
                     new_rings.append(ring)
             self._listening_rings = new_rings
@@ -508,10 +508,10 @@ class LowPolyFaceWidget(QWidget):
             self._dictation_pulse_phase += 0.08  # Steady pulse speed
 
         # Spinner animation (while thinking or post-dictation processing).
-        # One full revolution per pad LFO cycle (5s = 150 frames at 30
-        # FPS) so the rotation matches the tone's slowest breath.
+        # One full revolution per pad unison-beat period (1s = 30 frames
+        # at 30 FPS) — third-slowest wave in the thinking tone.
         if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
-            self._spinner_angle += 360.0 / 150.0  # 2.4 deg/frame → one rev per 5s
+            self._spinner_angle += 360.0 / 30.0  # 12 deg/frame → one rev per 1s
             if self._spinner_angle >= 360:
                 self._spinner_angle -= 360
 
