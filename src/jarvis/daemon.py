@@ -349,8 +349,8 @@ def main() -> None:
     print("✓ Dialogue memory initialized", flush=True)
 
     # Knowledge graph: wipe + re-seed if the on-disk shape predates the
-    # User/Directives/World taxonomy. Alpha feature, non-destructive to
-    # the diary — users can re-import via the memory viewer.
+    # User/Directives/World taxonomy. Non-destructive to the diary —
+    # users can re-import via the memory viewer.
     try:
         from .memory.graph import GraphMemoryStore
         _graph_store_boot = GraphMemoryStore(cfg.db_path)

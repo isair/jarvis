@@ -483,7 +483,7 @@ class TestDigestMemoryForQuery:
         assert "Note 1." in result
 
     def test_graph_parts_alone_produce_digest(self):
-        """Graph is in alpha and optional — exercise the graph-only path."""
+        """Graph is in beta and optional — exercise the graph-only path."""
         from jarvis.reply.enrichment import digest_memory_for_query
 
         # Pad with enough chars to clear the MIN threshold.

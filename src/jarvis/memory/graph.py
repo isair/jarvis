@@ -243,10 +243,10 @@ class GraphMemoryStore:
     def migrate_legacy_shape(self) -> bool:
         """Wipe the graph if it has a non-conforming (pre-taxonomy) shape.
 
-        The knowledge graph is an alpha feature and the purpose-driven
-        taxonomy (root → User / Directives / World) is a hard
-        reorganisation: pre-existing nodes under root that don't match
-        this shape would sit invisible to the warm profile forever.
+        The purpose-driven taxonomy (root → User / Directives / World)
+        is a hard reorganisation: pre-existing nodes under root that
+        don't match this shape would sit invisible to the warm profile
+        forever.
         Rather than carrying them as dead weight, we wipe on daemon
         start-up and let the diary re-import repopulate with correctly
         classified facts.
