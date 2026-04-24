@@ -1,6 +1,5 @@
 from __future__ import annotations
 import io
-import math
 import struct
 import threading
 import time
@@ -10,68 +9,69 @@ import shutil
 import tempfile
 from typing import Optional
 
+import numpy as np
+
 
 def _generate_sonar_ping_wav() -> bytes:
-    """Generate a seamlessly looping ambient pad as WAV bytes.
+    """Generate a long, seamlessly looping warm ambient pad as WAV bytes.
 
-    Designed to run indefinitely while Jarvis thinks — the clip has no
-    silent endpoints, so the loop point is inaudible and the texture
-    reads as one unbroken flowing sound rather than repeated swells.
+    Designed to run indefinitely while Jarvis thinks. Two tricks make the
+    looping imperceptible:
 
-    Seamlessness is guaranteed mathematically: every sine in the mix uses
-    a frequency that completes an integer number of cycles across the
-    clip duration, and every LFO (amplitude cross-fades, vibrato) has a
-    period that divides the duration evenly. Start and end samples are
-    therefore identical, so the loop wraps with zero click.
+    1. Mathematical seam: every sine frequency (in Hz) is an integer, and
+       every LFO period evenly divides the clip duration (in seconds), so
+       start and end samples match exactly — no click at the wrap point.
+    2. Long duration (60s): subprocess-relaunch gaps on some platforms
+       can add a noticeable pause between plays. Making the clip long
+       means the relaunch happens at most once per minute, which is rare
+       enough to stay invisible for normal thinking sessions.
 
-    - Three voices tuned to a D major-ninth-ish chord (D5, F#5, A5)
-    - Slow cross-fading LFOs give the illusion of melodic motion
-    - Gentle detune layer adds chorus-like warmth
-    - Subtle vibrato for organic feel
-    - Amplitude never drops to zero — texture is continuous
+    Tone character:
+    - Warm low-mid chord: A3, C#4, E4 (A major triad, one octave down
+      from the earlier version so it's no longer high-pitched)
+    - Three voices with phase-offset cross-fading LFOs so the blend
+      shifts continuously but amplitude never drops to silence
+    - Gentle chorus detune layer for warmth
+    - Subtle vibrato for organic motion
     """
     sample_rate = 44100
-    duration = 4.0  # seamless loop length
+    duration_s = 60  # seconds — rarely relaunches, stays seamless at seam
 
-    # Frequencies chosen so f * duration is an integer → perfect loop seam.
-    # duration = 4s, so any integer Hz works; these form a consonant chord.
-    f1 = 588.0   # ~D5
-    f2 = 740.0   # ~F#5
-    f3 = 880.0   # A5
-    f1_detune = 589.0  # slight chorus layer against f1
+    # Voices: A major triad one octave below the earlier D-chord.
+    # Integer Hz → integer cycles over any whole-second duration.
+    f1 = 220   # A3
+    f2 = 275   # ~C#4 (within 1.3 cents of 277.18, imperceptible)
+    f3 = 330   # ~E4  (within 2 cents of 329.63, imperceptible)
+    f1_det = 221  # chorus layer, ~8 cents above f1
 
-    num_samples = int(sample_rate * duration)
-    samples = []
+    # LFO periods that divide duration evenly → they wrap seamlessly too.
+    lfo_period = 6.0   # amplitude cross-fade: 10 cycles per loop
+    vib_period = 4.0   # vibrato: 15 cycles per loop
 
-    two_pi = 2 * math.pi
-    lfo_w = two_pi / duration  # fundamental LFO, one cycle per loop
-    vib_w = two_pi * 2 / duration  # 0.5 Hz vibrato, two cycles per loop
+    n = int(sample_rate * duration_s)
+    t = np.arange(n, dtype=np.float64) / sample_rate
+    two_pi = 2 * np.pi
 
-    for i in range(num_samples):
-        t = i / sample_rate
+    # Cross-fading amplitudes, phase-offset by 120° so the sum stays
+    # roughly constant — the texture never drops to silence.
+    lfo_w = two_pi / lfo_period
+    a1 = 0.55 + 0.25 * np.sin(lfo_w * t)
+    a2 = 0.55 + 0.25 * np.sin(lfo_w * t + two_pi / 3)
+    a3 = 0.55 + 0.25 * np.sin(lfo_w * t + 2 * two_pi / 3)
 
-        # Cross-fading amplitudes — always sum to a steady continuous level.
-        # Each voice breathes in while another breathes out, so the overall
-        # texture never drops to silence.
-        a1 = 0.55 + 0.25 * math.sin(lfo_w * t)
-        a2 = 0.55 + 0.25 * math.sin(lfo_w * t + two_pi / 3)
-        a3 = 0.55 + 0.25 * math.sin(lfo_w * t + 2 * two_pi / 3)
+    # Gentle vibrato (±0.15% pitch modulation).
+    vibrato = 1 + 0.0015 * np.sin(two_pi * t / vib_period)
 
-        # Gentle vibrato, periodic across the loop (±0.15%).
-        vibrato = 1 + 0.0015 * math.sin(vib_w * t)
+    v1 = np.sin(two_pi * f1 * vibrato * t)
+    v2 = np.sin(two_pi * f2 * vibrato * t + 0.9)
+    v3 = np.sin(two_pi * f3 * vibrato * t + 1.7)
+    vd = np.sin(two_pi * f1_det * t + 0.3)
 
-        v1 = math.sin(two_pi * f1 * vibrato * t)
-        v2 = math.sin(two_pi * f2 * vibrato * t + 0.9)
-        v3 = math.sin(two_pi * f3 * vibrato * t + 1.7)
-        vd = math.sin(two_pi * f1_detune * t + 0.3)
+    tone = a1 * v1 + a2 * v2 + a3 * v3 + 0.18 * vd
+    signal = (tone / 2.2) * 0.32  # normalise and set overall level
 
-        tone = a1 * v1 + a2 * v2 + a3 * v3 + 0.18 * vd
-
-        # Normalise roughly to [-1, 1]; the cross-fade keeps sum bounded.
-        sample = tone / 2.2
-
-        sample_int = int(sample * 32767 * 0.32)
-        samples.append(max(-32768, min(32767, sample_int)))
+    samples = np.clip(signal * 32767, -32768, 32767).astype(np.int16)
+    num_samples = samples.size
 
     # Build WAV file in memory
     wav_buffer = io.BytesIO()
@@ -101,8 +101,7 @@ def _generate_sonar_ping_wav() -> bytes:
     # data chunk
     wav_buffer.write(b'data')
     wav_buffer.write(struct.pack('<I', data_size))
-    for sample in samples:
-        wav_buffer.write(struct.pack('<h', sample))
+    wav_buffer.write(samples.tobytes())
 
     return wav_buffer.getvalue()
 
@@ -195,7 +194,7 @@ class TunePlayer:
                         [afplay, tmp_path],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=30.0
+                        timeout=120.0
                     )
                     time.sleep(0.05)  # Minimal gap — breaths flow into each other
                 except Exception:
@@ -245,7 +244,7 @@ class TunePlayer:
                         cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=30.0
+                        timeout=120.0
                     )
                     time.sleep(0.05)  # Minimal gap — breaths flow into each other like macOS
                 except Exception:
