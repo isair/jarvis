@@ -292,6 +292,25 @@ def tool_names_in_plan(
     return out
 
 
+def plan_has_unresolved_tool_steps(
+    plan: Sequence[str], known_names: Sequence[str],
+) -> bool:
+    """True when the plan has non-synthesis tool steps but names none of
+    them as a known tool.
+
+    Small models sometimes paraphrase ("get the weather") instead of
+    naming the tool ("getWeather ..."). When that happens the plan-driven
+    allow-list becomes empty and the chat model ends up with only
+    ``stop`` + ``toolSearchTool``, which makes it hallucinate a tool
+    name out of training priors. Treat this as planner under-specification
+    and let the engine fall back to the tool router.
+    """
+    steps = tool_steps_of(plan)
+    if not steps:
+        return False
+    return not tool_names_in_plan(plan, known_names)
+
+
 def plan_query(
     cfg,
     query: str,
@@ -697,6 +716,7 @@ __all__ = [
     "resolve_next_tool_call",
     "tool_steps_of",
     "tool_names_in_plan",
+    "plan_has_unresolved_tool_steps",
     "plan_requires_memory",
     "strip_memory_directives",
     "memory_topic_of",

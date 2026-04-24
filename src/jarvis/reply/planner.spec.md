@@ -114,6 +114,12 @@ The engine consumes the plan in two phases.
   is redundant. `stop` and `toolSearchTool` are always added to the
   allow-list regardless. When the plan is empty (fail-open), the
   engine falls back to calling `select_tools` as before.
+- `plan_has_unresolved_tool_steps(plan, known_names)` — true when the
+  plan has non-synthesis steps but names no known tool (e.g. the
+  model wrote `get the weather` instead of `getWeather ...`). Treated
+  as under-specification: the engine falls back to `select_tools` so
+  the chat model isn't left with only `stop` + `toolSearchTool` and
+  forced to hallucinate a tool name from training priors.
 - `strip_memory_directives(plan)` — the engine strips the
   `searchMemory` step from the plan once memory has been fetched, so
   downstream consumers (system-message injection, direct-exec,

@@ -270,3 +270,56 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     assert "webSearch" in invoked_tools, (
         "Chat model's own tool call should still be dispatched after resolver failure"
     )
+
+
+def test_paraphrased_plan_falls_back_to_tool_router(
+    mock_config, db, dialogue_memory
+):
+    """Small models sometimes emit prose steps like "get the weather"
+    instead of naming the tool. The plan is non-empty but references
+    no known tool — the engine must fall back to `select_tools` so the
+    chat model isn't left with only stop + toolSearchTool (and then
+    hallucinate a tool name from priors)."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools
+    mock_config.evaluator_enabled = False
+
+    select_tools_called = [0]
+
+    def fake_select_tools(*args, **kwargs):
+        select_tools_called[0] += 1
+        return ["getWeather", "stop"]
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("Sunny.")
+
+    def fake_tool_runner(*args, **kwargs):
+        return ToolExecutionResult(success=True, reply_text="ok", error_message=None)
+
+    plan = [
+        "get the weather",  # paraphrased — no tool name
+        "Reply to the user with the combined findings.",
+    ]
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", side_effect=fake_select_tools), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", return_value=plan):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="how's the weather today?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert select_tools_called[0] == 1, (
+        "Paraphrased plan with unresolved tool steps must fall back to select_tools"
+    )

@@ -28,6 +28,7 @@ from .planner import (
     progress_nudge,
     tool_steps_of,
     tool_names_in_plan,
+    plan_has_unresolved_tool_steps,
     plan_requires_memory,
     strip_memory_directives,
     memory_topic_of,
@@ -1046,7 +1047,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
 
-    if action_plan:
+    if action_plan and not plan_has_unresolved_tool_steps(
+        action_plan, _full_catalog_names
+    ):
         allowed_tools = tool_names_in_plan(action_plan, _full_catalog_names)
         # `stop` is the termination sentinel — always exposed so the
         # chat model can emit it once it has enough to answer.
@@ -1054,6 +1057,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             allowed_tools.append("stop")
         _selection_source = "plan"
     else:
+        if action_plan:
+            debug_log(
+                "planner: non-empty plan with unresolved tool steps; "
+                "falling back to tool router",
+                "planning",
+            )
         allowed_tools = select_tools(
             query=redacted,
             builtin_tools=BUILTIN_TOOLS,

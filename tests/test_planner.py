@@ -28,6 +28,7 @@ from jarvis.reply.planner import (
     resolve_next_tool_call,
     resolve_planner_model,
     strip_memory_directives,
+    plan_has_unresolved_tool_steps,
     tool_names_in_plan,
     tool_steps_of,
 )
@@ -556,3 +557,28 @@ class TestToolNamesInPlan:
 
     def test_empty_plan(self):
         assert tool_names_in_plan([], ["webSearch"]) == []
+
+
+class TestPlanHasUnresolvedToolSteps:
+    def test_true_when_step_paraphrases_tool(self):
+        plan = ["get the weather", "Reply to the user."]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather", "stop"]) is True
+
+    def test_false_when_step_names_tool(self):
+        plan = ["getWeather", "Reply to the user."]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is False
+
+    def test_false_for_reply_only_plan(self):
+        # No tool steps at all — the planner explicitly decided no tools.
+        assert plan_has_unresolved_tool_steps(
+            ["Reply to the user."], ["getWeather"]
+        ) is False
+
+    def test_false_for_empty_plan(self):
+        assert plan_has_unresolved_tool_steps([], ["getWeather"]) is False
+
+    def test_false_when_search_memory_only_and_reply(self):
+        # searchMemory is a directive, not a tool — but there's also no
+        # real tool step paraphrased either.
+        plan = ["searchMemory topic='t'", "Reply to the user."]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is False
