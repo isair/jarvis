@@ -2069,7 +2069,7 @@ class VoiceListener(threading.Thread):
                     flush=True,
                 )
                 print(
-                    f"      👍 \"{wake_word.title()}, recall what topics I'm interested in, then search the web for recent news on those topics and summarise.\"",
+                    f"      👍 \"{wake_word.title()}, recall my interests, then search the web for news on them.\"",
                     flush=True,
                 )
                 print(
