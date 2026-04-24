@@ -47,7 +47,7 @@ Design principles enforced by the engine:
    ]
 
    System message composition:
-   - Start with the unified `SYSTEM_PROMPT`.
+   - Start with the unified persona prompt rendered by `build_system_prompt(cfg.wake_word.capitalize())`, so the butler's name matches the user's wake word.
    - Append ASR note: inputs come from speech transcription and may include errors; prefer user intent and ask brief clarifying questions when uncertain.
    - Append the tool-use protocol (allowed response formats and MCP invocation format if configured).
    - Append diary enrichment under a combined reference-only + recency-weighting framing when enrichment produced context. Entries are ordered newest-first with `[YYYY-MM-DD]` prefixes preserved. The preamble carries two load-bearing clauses:

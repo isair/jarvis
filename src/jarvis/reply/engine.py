@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
-from ..system_prompt import SYSTEM_PROMPT
+from ..system_prompt import build_system_prompt
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
@@ -1062,8 +1062,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
         action_plan = []
 
+    _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
+    _persona_prompt = build_system_prompt(_assistant_name)
+
     def _build_initial_system_message() -> str:
-        guidance = [SYSTEM_PROMPT.strip()]
+        guidance = [_persona_prompt.strip()]
 
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
@@ -1425,7 +1428,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 cfg=cfg,
                                 tool_name=_name,
                                 tool_args=_args,
-                                system_prompt=SYSTEM_PROMPT,
+                                system_prompt=_persona_prompt,
                                 original_prompt="",
                                 redacted_text=redacted,
                                 max_retries=1,
@@ -1694,7 +1697,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cfg=cfg,
                 tool_name=tool_name,
                 tool_args=tool_args,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=_persona_prompt,
                 original_prompt="",
                 redacted_text=redacted,
                 max_retries=1,
