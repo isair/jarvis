@@ -100,8 +100,14 @@ Before the listener announces "Listening!", it pre-loads every model the first e
      🎤 Whisper 'small' loaded on cpu
      💬 Chat model 'llama3.1' ready
      🧠 Intent judge 'gemma4:e2b' ready
-🎙️  Listening! Try: "How's the weather, Jarvis?"
+🎙️  Listening! Try:
+      "How's the weather, Jarvis?"
+      "I just ate a Big Mac, Jarvis."
+      "What are you thinking, Jarvis?"
+      "What do you know about me, Jarvis?"
 ```
+
+On small models, a caveat line is appended above a more involved example to set expectations (`⚠️ Small model in use (…). Assume it can't infer — spell out the steps for anything more involved:`). The Chrome MCP tip continues to appear as its own block when the browser tool is detected.
 
 **What gets warmed:**
 - **Whisper** — loading the model; additionally a silent-audio transcribe so the first real utterance doesn't pay the cold-decode cost. Both the MLX and faster-whisper backends do this.

@@ -2056,7 +2056,12 @@ class VoiceListener(threading.Thread):
 
             # Show ready message only after stream is confirmed active
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
-            print(f"\n{'─' * 50}\n🎙️  Listening! Try: \"How's the weather, {wake_word.title()}?\"", flush=True)
+            wake_title = wake_word.title()
+            print(f"\n{'─' * 50}\n🎙️  Listening! Try:", flush=True)
+            print(f"      \"How's the weather, {wake_title}?\"", flush=True)
+            print(f"      \"I just ate a Big Mac, {wake_title}.\"", flush=True)
+            print(f"      \"What are you thinking, {wake_title}?\"", flush=True)
+            print(f"      \"What do you know about me, {wake_title}?\"", flush=True)
 
             # Small-model disclaimer: SMALL models can't infer your intent
             # from vague prompts, but they can still execute complex flows
@@ -2067,15 +2072,11 @@ class VoiceListener(threading.Thread):
             chat_model_name = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
             if chat_model_name and detect_model_size(chat_model_name) == ModelSize.SMALL:
                 print(
-                    f"  ⚠️  Small model in use ({chat_model_name}). Assume it can't infer — spell out the steps.",
+                    f"  ⚠️  Small model in use ({chat_model_name}). Assume it can't infer — spell out the steps for anything more involved:",
                     flush=True,
                 )
                 print(
-                    f"      👍 \"Check tomorrow's weather and local events, then recommend events that suit the weather, {wake_word.title()}.\"",
-                    flush=True,
-                )
-                print(
-                    f"      👎 \"What event should I go to tomorrow, {wake_word.title()}?\"",
+                    f"      \"Tell me tomorrow's weather, then find local events for tomorrow, then recommend ones that suit the weather, {wake_title}.\"",
                     flush=True,
                 )
 
@@ -2091,15 +2092,11 @@ class VoiceListener(threading.Thread):
                 has_chrome_mcp = False
             if has_chrome_mcp:
                 print(
-                    f"  🌐 Chrome MCP detected. Name the destination URL so the browser tool can act directly.",
+                    f"  🌐 Chrome MCP detected. Name the destination URL so the browser tool can act directly:",
                     flush=True,
                 )
                 print(
-                    f"      👍 \"Navigate to youtube.com, {wake_word.title()}.\"",
-                    flush=True,
-                )
-                print(
-                    f"      👎 \"Open YouTube, {wake_word.title()}.\"",
+                    f"      \"Navigate to youtube.com, {wake_title}.\"",
                     flush=True,
                 )
 
