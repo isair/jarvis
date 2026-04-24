@@ -24,6 +24,17 @@ NUTRITION_SYS = (
 )
 
 
+def _strip_code_fence(text: str) -> str:
+    """Strip ```json ... ``` or ``` ... ``` fences that small models often add."""
+    s = text.strip()
+    if s.startswith("```"):
+        # Drop first fence line
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+        if s.endswith("```"):
+            s = s[: -3]
+    return s.strip()
+
+
 def _safe_float(x: Any) -> Optional[float]:
     """Safely convert value to float."""
     try:
@@ -48,11 +59,13 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     raw = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=cfg.llm_chat_timeout_sec, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
+        debug_log(f"logMeal extractor returned NONE for text={original_text[:120]!r}", "nutrition")
         return None
     data: Dict[str, Any]
     try:
-        data = json.loads(text)
-    except Exception:
+        data = json.loads(_strip_code_fence(text))
+    except Exception as e:
+        debug_log(f"logMeal extractor JSON parse failed: {e!r}; raw={text[:200]!r}", "nutrition")
         return None
     ts = datetime.now(timezone.utc).isoformat()
     meal_id = db.insert_meal(
@@ -184,16 +197,15 @@ class LogMealTool(Tool):
         """Execute the log meal tool."""
         context.user_print("🥗 Logging your meal…")
 
-        # First attempt: use provided args if complete
-        required = [
-            "description", "calories_kcal", "protein_g", "carbs_g", "fat_g",
-            "fiber_g", "sugar_g", "sodium_mg", "potassium_mg", "micros", "confidence"
-        ]
+        # First attempt: use provided args if they carry at least a description and a kcal estimate.
+        # Missing optional fields (micros, potassium, etc.) are stored as NULL by log_meal_from_args,
+        # which is still more useful than discarding the model's output and retrying from scratch.
+        def _has_min_fields(a: Dict[str, Any]) -> bool:
+            desc = a.get("description")
+            kcal = a.get("calories_kcal")
+            return bool(desc and isinstance(desc, str)) and isinstance(kcal, (int, float))
 
-        def _has_all_fields(a: Dict[str, Any]) -> bool:
-            return all(k in a for k in required)
-
-        if args and isinstance(args, dict) and _has_all_fields(args):
+        if args and isinstance(args, dict) and _has_min_fields(args):
             debug_log("logMeal: using provided args", "nutrition")
             meal_id = log_meal_from_args(context.db, args, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
             if meal_id is not None:
@@ -222,8 +234,8 @@ class LogMealTool(Tool):
                 if meal_summary:
                     debug_log("logMeal: extraction+log succeeded", "nutrition")
                     return ToolExecutionResult(success=True, reply_text=meal_summary)
-            except Exception:
-                pass
+            except Exception as e:
+                debug_log(f"logMeal extract_and_log_meal attempt {attempt+1} raised: {e!r}", "nutrition")
 
         debug_log("logMeal: failed", "nutrition")
         context.user_print("⚠️ I couldn't log that meal automatically.")
