@@ -87,9 +87,3 @@ def build_system_prompt(assistant_name: str = "Jarvis") -> str:
     """
     name = (assistant_name or "Jarvis").strip() or "Jarvis"
     return _SYSTEM_PROMPT_TEMPLATE.format(name=name)
-
-
-# Default-name instance, kept for call sites that don't have cfg handy
-# (tool-retry paths, tests). Prefer `build_system_prompt(cfg.wake_word...)`
-# in the main reply loop so the persona matches the user's wake word.
-SYSTEM_PROMPT: str = build_system_prompt()

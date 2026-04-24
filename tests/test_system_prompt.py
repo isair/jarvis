@@ -5,7 +5,7 @@ wake word to e.g. "Friday" produces a butler named Friday, not one still
 hardcoded to Jarvis.
 """
 
-from jarvis.system_prompt import SYSTEM_PROMPT, build_system_prompt
+from jarvis.system_prompt import build_system_prompt
 
 
 class TestBuildSystemPrompt:
@@ -26,6 +26,3 @@ class TestBuildSystemPrompt:
         assert "named Jarvis" in build_system_prompt("")
         assert "named Jarvis" in build_system_prompt("   ")
         assert "named Jarvis" in build_system_prompt(None)  # type: ignore[arg-type]
-
-    def test_module_level_constant_uses_default(self):
-        assert "named Jarvis" in SYSTEM_PROMPT
