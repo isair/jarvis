@@ -61,6 +61,22 @@ class TestLogMealTool:
         mock_log_meal.assert_called_once()
         mock_followups.assert_called_once()
 
+    @patch('src.jarvis.tools.builtin.nutrition.log_meal.log_meal_from_args')
+    @patch('src.jarvis.tools.builtin.nutrition.log_meal.generate_followups_for_meal')
+    def test_run_with_partial_args_logs_without_retry(self, mock_followups, mock_log_meal):
+        """Partial args with description + kcal should still log directly, not fall to extractor."""
+        mock_log_meal.return_value = 789
+        mock_followups.return_value = "Hydrate."
+
+        args = {"description": "Big Mac", "calories_kcal": 540, "protein_g": 25}
+
+        result = self.tool.run(args, self.context)
+
+        assert result.success is True
+        assert "Logged meal #789" in result.reply_text
+        assert "Big Mac" in result.reply_text
+        mock_log_meal.assert_called_once()
+
     @patch('src.jarvis.tools.builtin.nutrition.log_meal.extract_and_log_meal')
     def test_run_with_extraction_fallback(self, mock_extract):
         """Test meal logging with text extraction fallback."""
