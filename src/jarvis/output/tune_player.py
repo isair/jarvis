@@ -11,8 +11,10 @@ from typing import Optional
 
 import numpy as np
 
+from ..debug import debug_log
 
-def _generate_sonar_ping_wav() -> bytes:
+
+def _generate_thinking_pad_wav() -> bytes:
     """Generate a long, seamlessly looping warm ambient pad as WAV bytes.
 
     Designed to run indefinitely while Jarvis thinks. Two tricks make the
@@ -35,7 +37,6 @@ def _generate_sonar_ping_wav() -> bytes:
       perfectly in tune, giving chorus-like warmth and body.
     - Phase-offset cross-fading LFOs on the three chord voices so the
       blend shifts continuously while total amplitude stays steady.
-    - Subtle vibrato for organic motion.
     """
     sample_rate = 44100
     duration_s = 60  # seconds — rarely relaunches, stays seamless at seam
@@ -132,15 +133,15 @@ def _generate_sonar_ping_wav() -> bytes:
 
 
 # Cache the generated WAV data
-_SONAR_PING_WAV: Optional[bytes] = None
+_THINKING_PAD_WAV: Optional[bytes] = None
 
 
-def _get_sonar_ping_wav() -> bytes:
-    """Get cached sonar ping WAV data, generating if needed."""
-    global _SONAR_PING_WAV
-    if _SONAR_PING_WAV is None:
-        _SONAR_PING_WAV = _generate_sonar_ping_wav()
-    return _SONAR_PING_WAV
+def _get_thinking_pad_wav() -> bytes:
+    """Get cached thinking-pad WAV data, generating on first call."""
+    global _THINKING_PAD_WAV
+    if _THINKING_PAD_WAV is None:
+        _THINKING_PAD_WAV = _generate_thinking_pad_wav()
+    return _THINKING_PAD_WAV
 
 
 class TunePlayer:
@@ -158,6 +159,7 @@ class TunePlayer:
         if not self.enabled or self._thread is not None:
             return
 
+        debug_log("thinking tune: start", category="tune")
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._play_tune, daemon=True)
         self._thread.start()
@@ -171,21 +173,22 @@ class TunePlayer:
         if self._thread is None:
             return
 
+        debug_log("thinking tune: stop", category="tune")
         self._stop_event.set()
 
         proc = self._current_process
         if proc is not None:
             try:
                 proc.terminate()
-            except Exception:
-                pass
+            except Exception as exc:
+                debug_log(f"thinking tune: terminate failed: {exc}", category="tune")
 
         if platform.system().lower() == "windows":
             try:
                 import winsound
                 winsound.PlaySound(None, winsound.SND_PURGE)
-            except Exception:
-                pass
+            except Exception as exc:
+                debug_log(f"thinking tune: winsound purge failed: {exc}", category="tune")
 
         self._thread.join(timeout=2.0)
         self._thread = None
@@ -199,9 +202,9 @@ class TunePlayer:
     def _play_tune(self) -> None:
         """Play a gentle processing tune in a loop."""
         self._is_playing.set()
-        
+
         system = platform.system().lower()
-        
+
         try:
             if system == "darwin":
                 self._play_macos_tune()
@@ -209,8 +212,11 @@ class TunePlayer:
                 self._play_linux_tune()
             elif system == "windows":
                 self._play_windows_tune()
-        except Exception:
-            # If we can't play system sounds, fall back to simple beeps
+            else:
+                debug_log(f"thinking tune: unknown platform {system!r}; falling back", category="tune")
+                self._play_fallback_tune()
+        except Exception as exc:
+            debug_log(f"thinking tune: platform player failed ({exc!r}); falling back", category="tune")
             self._play_fallback_tune()
         finally:
             self._is_playing.clear()
@@ -246,16 +252,16 @@ class TunePlayer:
             self._current_process = None
 
     def _play_macos_tune(self) -> None:
-        """Play tune on macOS using afplay with generated pop sound."""
+        """Play the thinking pad on macOS via afplay, looping until stop."""
         import os
 
         afplay = shutil.which("afplay")
         if not afplay:
+            debug_log("thinking tune: afplay not found; falling back", category="tune")
             self._play_fallback_tune()
             return
 
-        # Write WAV to temp file
-        wav_data = _get_sonar_ping_wav()
+        wav_data = _get_thinking_pad_wav()
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -267,36 +273,37 @@ class TunePlayer:
             while not self._stop_event.is_set():
                 try:
                     self._run_and_wait([afplay, tmp_path])
-                except Exception:
+                except Exception as exc:
+                    debug_log(f"thinking tune: afplay run failed: {exc!r}", category="tune")
                     break
                 if self._stop_event.is_set():
                     break
                 time.sleep(0.05)
-        except Exception:
+        except Exception as exc:
+            debug_log(f"thinking tune: macOS playback setup failed: {exc!r}", category="tune")
             self._play_fallback_tune()
         finally:
             if tmp_path:
                 try:
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    debug_log(f"thinking tune: temp cleanup failed: {exc!r}", category="tune")
                             
     def _play_linux_tune(self) -> None:
-        """Play tune on Linux using paplay, aplay, or ffplay with generated sonar ping."""
+        """Play the thinking pad on Linux via paplay/aplay/ffplay, looping until stop."""
         import os
 
-        # Find a suitable audio player
         paplay = shutil.which("paplay")  # PulseAudio
         aplay = shutil.which("aplay")    # ALSA
         ffplay = shutil.which("ffplay")  # FFmpeg
 
         player = paplay or aplay or ffplay
         if not player:
+            debug_log("thinking tune: no Linux audio player found; falling back", category="tune")
             self._play_fallback_tune()
             return
 
-        # Write WAV to temp file (these players need a file)
-        wav_data = _get_sonar_ping_wav()
+        wav_data = _get_thinking_pad_wav()
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -305,7 +312,6 @@ class TunePlayer:
                 tmp_file.write(wav_data)
                 tmp_path = tmp_file.name
 
-            # Build command based on player
             if player == ffplay:
                 cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path]
             else:
@@ -314,20 +320,21 @@ class TunePlayer:
             while not self._stop_event.is_set():
                 try:
                     self._run_and_wait(cmd)
-                except Exception:
+                except Exception as exc:
+                    debug_log(f"thinking tune: linux player run failed: {exc!r}", category="tune")
                     break
                 if self._stop_event.is_set():
                     break
                 time.sleep(0.05)
-        except Exception:
+        except Exception as exc:
+            debug_log(f"thinking tune: linux playback setup failed: {exc!r}", category="tune")
             self._play_fallback_tune()
         finally:
-            # Clean up temp file
             if tmp_path:
                 try:
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    debug_log(f"thinking tune: temp cleanup failed: {exc!r}", category="tune")
             
     def _play_windows_tune(self) -> None:
         """Play tune on Windows using winsound SND_LOOP for seamless playback.
@@ -339,11 +346,12 @@ class TunePlayer:
         try:
             import winsound
         except ImportError:
+            debug_log("thinking tune: winsound unavailable; falling back", category="tune")
             self._play_fallback_tune()
             return
 
         try:
-            wav_data = _get_sonar_ping_wav()
+            wav_data = _get_thinking_pad_wav()
             flags = (
                 winsound.SND_MEMORY
                 | winsound.SND_ASYNC
@@ -354,13 +362,14 @@ class TunePlayer:
             # Block this worker thread until stop is requested; the OS
             # handles looping, so we just wait.
             self._stop_event.wait()
-        except Exception:
+        except Exception as exc:
+            debug_log(f"thinking tune: winsound playback failed: {exc!r}", category="tune")
             self._play_fallback_tune()
         finally:
             try:
                 winsound.PlaySound(None, winsound.SND_PURGE)
-            except Exception:
-                pass
+            except Exception as exc:
+                debug_log(f"thinking tune: winsound stop failed: {exc!r}", category="tune")
             
     def _play_fallback_tune(self) -> None:
         """Fallback tune using print statements (silent but indicates activity)."""
