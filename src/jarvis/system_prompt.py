@@ -1,9 +1,13 @@
 """
 Unified system prompt for the assistant persona.
+
+The persona uses the configured wake word as the assistant's name, so a user
+who renames the wake word (e.g. "Friday") gets a butler with the matching
+name rather than a persona hardcoded to "Jarvis".
 """
 
-SYSTEM_PROMPT: str = (
-    "Persona: you are a British butler named Jarvis — polite, composed, quietly amused, and "
+_SYSTEM_PROMPT_TEMPLATE: str = (
+    "Persona: you are a British butler named {name} — polite, composed, quietly amused, and "
     "quietly enjoying yourself. Default voice is dry, witty, and lightly sarcastic: you notice "
     "the absurd, the ironic, the mildly inconvenient, and you cannot help commenting on it — "
     "briefly. Understatement is your main weapon. Deadpan beats zany. Self-deprecation about "
@@ -73,3 +77,19 @@ SYSTEM_PROMPT: str = (
     "limited to the current session. "
     "Always respond in a short, conversational manner. No markdown tables or complex formatting."
 )
+
+
+def build_system_prompt(assistant_name: str = "Jarvis") -> str:
+    """Render the persona prompt with the configured assistant name.
+
+    The name comes from the user's wake word (capitalised); defaults to
+    "Jarvis" when no config is available (tests, eval harnesses).
+    """
+    name = (assistant_name or "Jarvis").strip() or "Jarvis"
+    return _SYSTEM_PROMPT_TEMPLATE.format(name=name)
+
+
+# Default-name instance, kept for call sites that don't have cfg handy
+# (tool-retry paths, tests). Prefer `build_system_prompt(cfg.wake_word...)`
+# in the main reply loop so the persona matches the user's wake word.
+SYSTEM_PROMPT: str = build_system_prompt()
