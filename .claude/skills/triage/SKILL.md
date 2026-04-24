@@ -23,9 +23,18 @@ gh issue list --state open --limit 50 --json number,title,author,createdAt,updat
 ```
 
 ```bash
-gh api graphql -f query='{repository(owner:"isair",name:"jarvis"){discussions(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number title author{login} category{name} updatedAt comments(last:5){totalCount nodes{id author{login} createdAt body}}}}}}' \
+gh api graphql -f query='{repository(owner:"isair",name:"jarvis"){discussions(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number title author{login} category{name} updatedAt comments(last:5){totalCount nodes{id author{login} createdAt body replies(last:10){nodes{id author{login} createdAt body}}}}}}}}' \
   --jq '.data.repository.discussions.nodes'
 ```
+
+**Important**: GitHub Discussions are threaded. The top-level `comments` list does
+not include sub-replies, so a fresh reporter question that lives under an owner
+comment will look like an unanswered top-level thread if you forget to fetch
+`replies`. The query above pulls both. When deciding "untriaged" vs "awaiting
+reporter", scan the **last reply across the whole tree**, not just the last
+top-level comment. A common shape: owner answers at the top level, reporter
+replies underneath, owner replies underneath that. The newest message is two
+levels deep, and you'll miss it if you only look at the top-level list.
 
 Classify each thread into one of:
 
@@ -113,6 +122,19 @@ gh api graphql -f query='mutation($id:ID!,$body:String!){addDiscussionComment(in
 ```
 
 Get the discussion `id` field from the Step 1 GraphQL output. It's the outer `id` on the discussion node, not the inner `id` inside `comments.nodes` (that one is the comment's node id, used in Step 6 for edits).
+
+**Verify the node id before posting.** Discussion node ids look like `D_kwDOPgt_k84Albb5` and a single-character typo will silently route the comment to a completely unrelated repo's discussion (the prefix encodes the repo, but neighbouring ids belong to other repos). Two safeguards:
+
+1. Copy the id straight from the Step 1 output, never retype it.
+2. The mutation response returns the comment URL: `addDiscussionComment.comment.url`. Inspect it. If the host path is anything other than `github.com/isair/jarvis/discussions/<N>`, you posted to the wrong repo. Delete the comment immediately:
+   ```bash
+   gh api graphql -f query='mutation($id:ID!){deleteDiscussionComment(input:{id:$id}){comment{id}}}' -F id=<comment node id>
+   ```
+   Then repost with the correct discussion id.
+
+To reply to a specific comment (threaded sub-reply) rather than at the top level, pass `replyToId` in the mutation input. Otherwise the reply goes to the root.
+
+If a `body` you want to post starts with `@`, use `-f body="..."`, not `-F body="..."`. `gh` interprets `-F` values starting with `@` as file paths.
 
 ## Step 6. Clean up your own past comments
 
