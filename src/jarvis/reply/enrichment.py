@@ -56,6 +56,7 @@ Examples:
 "what did I eat yesterday?" → {{"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
 "remember that password I mentioned today?" → {{"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
 "what news might interest me?" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}}
+"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}}
 "recommend a restaurant I'd enjoy" (no location in context) → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}}
 "recommend a restaurant I'd enjoy" (location already in context) → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?"]}}
 "suggest a movie for me" → {{"keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}}

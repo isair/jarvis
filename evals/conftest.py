@@ -102,6 +102,7 @@ TEST_DESCRIPTIONS = {
     "test_llm_uses_enrichment_for_personalised_queries": "LLM uses enrichment-surfaced interests for personalised search",
     "test_weather_query_live": "Live weather query with real LLM",
     "test_personalized_query_recalls_memory_live": "Live: LLM checks memory before asking about interests",
+    "test_interest_flavoured_query_live": "Live: interest-flavoured phrasings surface seeded interests into the reply",
     # Nutrition extraction tests
     "test_meal_extraction_accuracy": "Extracts accurate macros for common meals",
     "test_extraction_returns_valid_json_structure": "Returns valid JSON with all required fields",

@@ -2058,6 +2058,27 @@ class VoiceListener(threading.Thread):
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
             print(f"\n{'─' * 50}\n🎙️  Listening! Try: \"How's the weather, {wake_word.title()}?\"", flush=True)
 
+            # Small-model disclaimer: SMALL models can't infer your intent
+            # from vague prompts, but they can still execute complex flows
+            # if you spell out the steps. Assume the model is dumb and lay
+            # things out for it. Classification lives in model_variants so
+            # it stays in sync when supported models change.
+            from ..reply.prompts.model_variants import detect_model_size, ModelSize
+            chat_model_name = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
+            if chat_model_name and detect_model_size(chat_model_name) == ModelSize.SMALL:
+                print(
+                    f"  ⚠️  Small model in use ({chat_model_name}). Assume it can't infer — spell out the steps.",
+                    flush=True,
+                )
+                print(
+                    f"      👍 \"Check tomorrow's weather and local events, then recommend events that suit the weather, {wake_word.title()}.\"",
+                    flush=True,
+                )
+                print(
+                    f"      👎 \"What event should I go to tomorrow, {wake_word.title()}?\"",
+                    flush=True,
+                )
+
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState

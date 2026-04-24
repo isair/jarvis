@@ -725,6 +725,115 @@ class TestLiveEndToEnd:
         print(f"   Response mentions user interests: {response_mentions_interests}")
         print(f"   ✅ Personalized query handling: PASS")
 
+    @pytest.mark.eval
+    @requires_judge_llm
+    @pytest.mark.parametrize("query", [
+        pytest.param(
+            "Recall my interests, then search the web for news on them, Jarvis.",
+            id="explicit-recall-then-search",
+        ),
+        pytest.param(
+            "Search the web for news that would interest me, Jarvis.",
+            id="news-that-would-interest-me",
+        ),
+        pytest.param(
+            "Find me news of interest to me, Jarvis.",
+            id="news-of-interest-to-me",
+        ),
+        pytest.param(
+            "What news today is interesting for me, Jarvis?",
+            id="news-interesting-for-me",
+        ),
+    ])
+    def test_interest_flavoured_query_live(self, query, mock_config, eval_db, eval_dialogue_memory):
+        """
+        Live eval: interest-flavoured phrasings must surface seeded interests.
+
+        Field regression (2026-04-24, gemma4:e2b): user said "Recall my interests
+        and search the web for news on them, Jarvis." The intent judge paraphrased
+        the utterance down to "search the web for news on my interests", dropping
+        the explicit recall step. Enrichment then surfaced unrelated diary
+        entries (weather chatter), the digest came back empty, and the model
+        punted with "what are your interests so I can search the web for news
+        for you?" instead of acting on the seeded interests.
+
+        The bar for every phrasing variant ("of interest to me", "would interest
+        me", "interesting for me", "recall my interests"): enrichment surfaces
+        the seeded interests into memory context, the planner weaves them into
+        the search step, and the reply names at least one. The model must NOT
+        bounce the question back.
+        """
+        from jarvis.reply.engine import run_reply_engine
+        from helpers import JUDGE_MODEL
+
+        capture = ToolCallCapture()
+
+        mock_config.ollama_base_url = "http://localhost:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+
+        mock_enrichment_context = [
+            "[2024-12-15] User is passionate about space exploration and astronomy",
+            "[2024-12-20] User follows AI and machine learning developments closely",
+        ]
+
+        mock_tool_run = create_mock_tool_run(capture, {
+            "webSearch": (
+                "AI breakthrough announced, SpaceX launch successful, "
+                "new Mars rover findings, open-source LLM released"
+            ),
+            "fetchWebPage": "Full article about AI and space news...",
+        })
+
+        with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
+             patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: London, UK", None)), \
+             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context):
+
+            response = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text=query, dialogue_memory=eval_dialogue_memory
+            )
+
+        tools_used = [c["name"] for c in capture.calls]
+        response_lower = (response or "").lower()
+
+        print(f"\n📝 Live Interest-Flavoured Eval ({JUDGE_MODEL}):")
+        print(f"   Query: {query}")
+        print(f"   Tools called: {tools_used}")
+        print(f"   Response: {(response or '')[:200]}...")
+
+        # Primary failure mode: bouncing the question back.
+        asking_phrases = [
+            "what are your interests", "what topics", "what are you interested",
+            "could you let me know", "what kind of", "tell me what",
+            "what subjects", "any particular", "which topics", "any specific",
+            "what type of", "interested in?", "so i can search",
+        ]
+        is_asking_user = any(p in response_lower for p in asking_phrases)
+
+        assert not is_asking_user, (
+            f"Model bounced the question back instead of acting on seeded "
+            f"interests. Response: {(response or '')[:300]}"
+        )
+
+        # Secondary bar: the reply or the search query must name an interest.
+        interest_terms = ["ai", "space", "astronomy", "machine learning", "spacex", "mars"]
+        reply_mentions_interest = any(t in response_lower for t in interest_terms)
+        search_queries = [
+            (c["args"].get("search_query") or c["args"].get("query") or "").lower()
+            for c in capture.calls if c["name"] == "webSearch"
+        ]
+        search_mentions_interest = any(
+            any(t in q for t in interest_terms) for q in search_queries
+        )
+
+        assert reply_mentions_interest or search_mentions_interest, (
+            f"Model did not ground on seeded interests. "
+            f"Tools: {tools_used}. Search queries: {search_queries}. "
+            f"Response: {(response or '')[:300]}"
+        )
+
+        print(f"   ✅ Interest-flavoured query grounded on seeded interests")
+
 
 # =============================================================================
 # Helpfulness Evaluations (Anti-Deflection)
