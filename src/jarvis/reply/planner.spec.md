@@ -86,6 +86,20 @@ The planner prompt instructs the model to emit:
 
 ### resolve_next_tool_call
 
+- **Fast path**: if the step text is fully concrete (tool name in the
+  allow-list + `key='value'` / `key="value"` pairs matching the tool's
+  declared property keys, and no `<placeholder>`), parse it
+  deterministically and return without any LLM call. This removes the
+  resolver LLM as a failure surface for the common case — small models
+  occasionally flake (timeout, empty, spurious `null`) even on
+  trivially-concrete steps like `webSearch query='foo'`, which used to
+  fall back to the chat model and produce a refusal instead of the
+  search. The fast path is purely regex-driven, language-agnostic, and
+  never calls the model.
+- **LLM path**: when the step contains a `<placeholder>`, uses unknown
+  argument keys, or doesn't fit the `key=value` shape, the step is
+  passed to the LLM resolver which can substitute entities from prior
+  results and remap names.
 - Returns `None` for synthesis steps (the LLM emits the literal
   `null`), unknown tools, or invalid JSON. All `None` paths fall back
   to the normal chat-model turn.

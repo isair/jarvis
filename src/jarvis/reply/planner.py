@@ -352,6 +352,69 @@ def _format_prior_results(prior_results: Sequence[Tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
+_PLAN_STEP_KV_RE = re.compile(
+    # `key='value'`, `key="value"`, or `key=bareword` — the planner prompt
+    # steers toward quoted values but bare tokens occasionally slip through.
+    r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"(?:'(?P<sq>[^']*)'|\"(?P<dq>[^\"]*)\"|(?P<bare>\S+))"
+)
+
+
+def _parse_plan_step_concrete(
+    next_step_text: str,
+    allowed_names: Sequence[str],
+    allowed_props: dict,
+) -> Optional[Tuple[str, dict]]:
+    """Deterministically parse ``toolName key='value' key2="value2"`` steps.
+
+    Returns ``(name, args)`` when the step is fully concrete — tool name in
+    the allow-list, arg keys match the tool's declared properties, and the
+    text contains no ``<placeholder>`` that needs entity substitution from
+    prior results. Returns ``None`` otherwise so the caller falls back to
+    the LLM resolver.
+
+    Why this exists: small models occasionally flake on the resolver LLM
+    call (timeout, empty output, spurious ``null``) even for trivially
+    concrete steps like ``webSearch query='foo'``. When the step has no
+    placeholders, nothing creative is needed — a regex parse is both more
+    reliable and faster than an LLM round-trip.
+    """
+    if "<" in next_step_text and ">" in next_step_text:
+        # Angle-bracket placeholder present — needs entity substitution
+        # from prior results, which only the LLM resolver can do.
+        return None
+    stripped = next_step_text.strip()
+    if not stripped:
+        return None
+    # First whitespace-delimited token is the tool name.
+    head, _, rest = stripped.partition(" ")
+    name = head.strip().rstrip(":")
+    if not name or name not in allowed_names:
+        return None
+    args: dict = {}
+    for m in _PLAN_STEP_KV_RE.finditer(rest):
+        key = m.group("key")
+        value = m.group("sq")
+        if value is None:
+            value = m.group("dq")
+        if value is None:
+            value = m.group("bare") or ""
+        args[key] = value
+    if not args:
+        # No parseable key=value pairs — the step might be a prose-shaped
+        # description (e.g. `webSearch for the director's latest film`).
+        # Defer to the LLM resolver.
+        return None
+    declared = allowed_props.get(name, set())
+    if declared:
+        unknown = set(args.keys()) - declared
+        if unknown:
+            # The planner used key names that don't match the tool's
+            # schema — surface to the LLM resolver which can remap them.
+            return None
+    return name, args
+
+
 def resolve_next_tool_call(
     cfg,
     next_step_text: str,
@@ -362,6 +425,11 @@ def resolve_next_tool_call(
 ) -> Optional[Tuple[str, dict]]:
     """Turn a planned step + prior results into a concrete tool call.
 
+    Fast path: if the step is fully concrete (tool name + ``key='value'``
+    args, no ``<placeholder>``), parse it deterministically and return
+    without an LLM call. Otherwise fall through to the LLM resolver which
+    handles placeholder substitution from prior results.
+
     Returns ``(tool_name, arguments)`` or ``None`` if the step is a
     synthesis step, the LLM call fails, or the emitted JSON is invalid /
     references an unknown tool.
@@ -370,17 +438,6 @@ def resolve_next_tool_call(
         return None
     if not tools_schema:
         return None
-
-    base_url = getattr(cfg, "ollama_base_url", "") or ""
-    model = resolve_planner_model(cfg)
-    if not base_url or not model:
-        return None
-
-    effective_timeout = float(
-        timeout_sec
-        if timeout_sec is not None
-        else getattr(cfg, "planner_timeout_sec", 6.0)
-    )
 
     # Build a compact allowed-tool schema: just names + short description +
     # parameter keys so the resolver can't waste tokens echoing descriptions.
@@ -409,6 +466,29 @@ def resolve_next_tool_call(
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
         schema_lines.append(f"- {name} (args: {keys}) — {first[:120]}")
+
+    # Fast path: fully-concrete plan step parses deterministically.
+    fast = _parse_plan_step_concrete(
+        next_step_text, allowed_names, allowed_props,
+    )
+    if fast is not None:
+        debug_log(
+            f"planner.resolve_next_tool_call: fast-parsed "
+            f"{fast[0]}({fast[1]!r}) without LLM",
+            "planning",
+        )
+        return fast
+
+    base_url = getattr(cfg, "ollama_base_url", "") or ""
+    model = resolve_planner_model(cfg)
+    if not base_url or not model:
+        return None
+
+    effective_timeout = float(
+        timeout_sec
+        if timeout_sec is not None
+        else getattr(cfg, "planner_timeout_sec", 6.0)
+    )
 
     user_content = (
         f"ALLOWED TOOLS:\n{chr(10).join(schema_lines)}\n\n"

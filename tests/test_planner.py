@@ -268,6 +268,92 @@ class TestResolveNextToolCall:
             )
         assert result == ("webSearch", {"query": "weather"})
 
+    def test_deterministic_parse_skips_llm_for_concrete_step(self):
+        """A fully concrete plan step (tool name + `key='value'` args, no
+        ``<placeholder>``) must be parsed deterministically without calling
+        the LLM resolver at all.
+
+        Motivation (2026-04-24 field trace): a follow-up query produced the
+        plan `webSearch query='Justin Bieber most famous songs'` — trivially
+        concrete — but the LLM resolver flaked (returned ``null`` or
+        garbage) and the engine fell back to the chat model, which then
+        refused. Parsing concrete steps deterministically removes the LLM
+        call as a failure surface for the common case.
+        """
+        cfg = _cfg()
+        call_count = [0]
+
+        def _spy(*args, **kwargs):
+            call_count[0] += 1
+            return "null"
+
+        with patch.object(planner_mod, "call_llm_direct", side_effect=_spy):
+            result = resolve_next_tool_call(
+                cfg,
+                "webSearch query='Justin Bieber most famous songs'",
+                [],
+                self._schema(),
+            )
+
+        assert result == (
+            "webSearch",
+            {"query": "Justin Bieber most famous songs"},
+        )
+        assert call_count[0] == 0, (
+            f"LLM should not be called for a concrete step; was called {call_count[0]}×"
+        )
+
+    def test_deterministic_parse_still_rejects_unknown_tool(self):
+        """The fast path must still honour the allow-list — a concrete step
+        naming a tool not in the schema falls through to ``None``, not to an
+        unfiltered dispatch."""
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct", return_value="null"):
+            assert resolve_next_tool_call(
+                cfg,
+                "mysteryTool query='anything'",
+                [],
+                self._schema(),
+            ) is None
+
+    def test_falls_back_to_llm_when_step_has_placeholder(self):
+        """Steps containing an ``<entity from step N>`` placeholder need
+        entity substitution from prior results — that requires the LLM
+        resolver, so the fast path must decline and defer."""
+        cfg = _cfg()
+        raw = (
+            '{"name": "webSearch", "arguments": '
+            '{"query": "films directed by Brandon Cronenberg"}}'
+        )
+        with patch.object(
+            planner_mod, "call_llm_direct", return_value=raw,
+        ) as spy:
+            result = resolve_next_tool_call(
+                cfg,
+                "webSearch query='films directed by <director name from step 1>'",
+                [("webSearch", '{"query": "Possessor director"}',
+                  "Possessor directed by Brandon Cronenberg.")],
+                self._schema(),
+            )
+        assert result == (
+            "webSearch",
+            {"query": "films directed by Brandon Cronenberg"},
+        )
+        assert spy.called, "Placeholder substitution must go through the LLM"
+
+    def test_deterministic_parse_handles_double_quoted_values(self):
+        """Planner output occasionally uses double quotes — parse both."""
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct") as spy:
+            result = resolve_next_tool_call(
+                cfg,
+                'webSearch query="weather in Paris"',
+                [],
+                self._schema(),
+            )
+        assert result == ("webSearch", {"query": "weather in Paris"})
+        assert not spy.called
+
     def test_keeps_args_as_is_when_schema_has_no_properties(self):
         cfg = _cfg()
         schema = [
