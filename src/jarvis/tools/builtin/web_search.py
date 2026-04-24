@@ -1,6 +1,7 @@
 """Web search tool implementation using DuckDuckGo."""
 
 import ipaddress
+import re
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -164,18 +165,69 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
         return None
 
 
+# Minimum token length to count as a "content token" for query-relevance
+# scoring. Strips the vast majority of cross-language stopwords (a, the, of,
+# is, in, on, le, la, el, de) without resorting to a per-language list.
+# CJK/Arabic/etc. whitespace-separated tokens are typically longer than this,
+# so the filter degrades to "count everything" for those scripts, which is
+# the safe behaviour: we don't silently drop meaningful tokens.
+_QUERY_TOKEN_MIN_LEN = 3
+
+
+def _extract_content_tokens(text: str) -> List[str]:
+    """Split ``text`` into lowercase Unicode word tokens of length ≥ 3.
+
+    The same tokenisation is applied to both the query and each candidate
+    extract so relevance scoring compares like with like. Unicode-aware so
+    it works across Latin / Cyrillic / Greek / CJK scripts; we never key on
+    a hardcoded stopword list.
+    """
+    if not text:
+        return []
+    # \w in Python's re with the default Unicode flag matches word chars in
+    # any script. We lowercase first so "Bieber" and "bieber" collide.
+    return [
+        tok for tok in re.findall(r"\w+", text.lower(), flags=re.UNICODE)
+        if len(tok) >= _QUERY_TOKEN_MIN_LEN
+    ]
+
+
+def _score_extract_against_query(extract: str, query_tokens: set) -> int:
+    """Count how many distinct query tokens appear in ``extract``.
+
+    An extract that shares zero tokens with the query is almost certainly
+    not an answer to the query — it's a cookie banner, a modal, a paywall,
+    or an unrelated page. The cascade uses this to reject boilerplate
+    without ever classifying *what kind* of boilerplate it is.
+    """
+    if not extract or not query_tokens:
+        return 0
+    extract_tokens = set(_extract_content_tokens(extract))
+    return len(query_tokens & extract_tokens)
+
+
 def _cascade_fetch(candidates: List[Tuple[str, str]],
-                   wall_clock_sec: float = _CASCADE_WALL_CLOCK_SEC
+                   wall_clock_sec: float = _CASCADE_WALL_CLOCK_SEC,
+                   query: Optional[str] = None,
                    ) -> Optional[str]:
     """Fetch the top candidates in parallel under a shared wall-clock cap.
 
-    Rank preference is preserved — a successful top-1 fetch wins over a
-    faster top-2/3, and the pool short-circuits once top-1 returns. Shared
-    between the DDG and Brave search paths so the SSRF guard, redirect
-    walking, byte cap, and timing semantics stay identical.
+    Selection rules, in order:
+
+    1. Drop candidates whose extract shares zero content tokens with
+       ``query`` — a fetch that returned bytes but none of the user's
+       words is indistinguishable from a fetch that failed (the 2026-04-24
+       "Close" modal field failure). Skipped when ``query`` is empty.
+    2. Among surviving candidates, prefer the higher-ranked one — a top-1
+       success still wins over a top-2/3 that happens to score identically.
+
+    Returns ``None`` when no candidate passes (1), so the caller emits the
+    links-only envelope instead of handing the synthesis model a payload
+    it can't ground an answer in.
     """
     if not candidates:
         return None
+    query_tokens: set = set(_extract_content_tokens(query or ""))
     results_by_rank: Dict[int, Optional[str]] = {}
     with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
         future_to_rank = {
@@ -192,7 +244,14 @@ def _cascade_fetch(candidates: List[Tuple[str, str]],
                         f"Fetch raised for result #{rank + 1}: {e}", "web",
                     )
                     results_by_rank[rank] = None
-                if 0 in results_by_rank and results_by_rank[0]:
+                # Short-circuit only when the top-1 result is both present
+                # AND relevant to the query — otherwise keep waiting for
+                # lower-ranked candidates that might actually answer it.
+                top = results_by_rank.get(0)
+                if top and (
+                    not query_tokens
+                    or _score_extract_against_query(top, query_tokens) > 0
+                ):
                     break
         except TimeoutError:
             debug_log(
@@ -202,11 +261,27 @@ def _cascade_fetch(candidates: List[Tuple[str, str]],
             )
     for rank in range(len(candidates)):
         content = results_by_rank.get(rank)
-        if content:
+        if not content:
+            continue
+        if query_tokens:
+            score = _score_extract_against_query(content, query_tokens)
+            if score == 0:
+                debug_log(
+                    f"Result #{rank + 1} returned {len(content)} chars but 0 "
+                    f"query-token overlap; skipping as boilerplate",
+                    "web",
+                )
+                continue
+            debug_log(
+                f"Fetched {len(content)} chars from result #{rank + 1} "
+                f"(relevance score {score}/{len(query_tokens)})",
+                "web",
+            )
+        else:
             debug_log(
                 f"Fetched {len(content)} chars from result #{rank + 1}", "web",
             )
-            return content
+        return content
     return None
 
 
@@ -542,6 +617,7 @@ class WebSearchTool(Tool):
                 fetched_content = _cascade_fetch(
                     result_urls[:3],
                     wall_clock_sec=min(_CASCADE_WALL_CLOCK_SEC, _budget_left()),
+                    query=search_query,
                 )
 
             # Fallback chain: DDG failed to give us a usable answer (either
@@ -579,6 +655,7 @@ class WebSearchTool(Tool):
                             wall_clock_sec=min(
                                 _CASCADE_WALL_CLOCK_SEC, _budget_left()
                             ),
+                            query=search_query,
                         )
                         if fetched_content:
                             used_source = "brave"

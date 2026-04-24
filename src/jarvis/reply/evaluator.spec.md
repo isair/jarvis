@@ -1,3 +1,5 @@
+> **Deprecated**: The evaluator is no longer called from the reply engine. The task-list planner (`planner.spec.md`) replaces its per-turn correction role. This file is preserved for reference only.
+
 ## Agentic-Loop Evaluator Spec
 
 ### Purpose

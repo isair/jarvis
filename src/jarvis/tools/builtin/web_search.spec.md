@@ -15,9 +15,21 @@ memory.
    (`//duckduckgo.com/l/?uddg=…`) are unwrapped to the real destination.
 3. **Parallel cascade fetch**: if there's no instant answer and we have
    result URLs, fetch the top 3 results **in parallel** under a single
-   `_CASCADE_WALL_CLOCK_SEC` (8s) wall-clock cap. Rank preference is
-   preserved — a successful top-1 fetch wins over a faster top-2/3, and
-   the pool short-circuits once top-1 returns.
+   `_CASCADE_WALL_CLOCK_SEC` (8s) wall-clock cap. Selection rules:
+   - Drop any extract that shares zero content tokens (≥3-char Unicode
+     word tokens) with the user's query. An extract that returned bytes
+     but none of the user's words is boilerplate (cookie banner, modal,
+     paywall, 404) regardless of the specific shape, and is
+     indistinguishable from a fetch that failed outright.
+   - Among surviving candidates, prefer the higher-ranked one — a top-1
+     success still wins over a top-2/3 that happens to score identically.
+   - The pool short-circuits once the top-1 result is both present AND
+     relevant, so a quickly-returning relevant top-1 ends the race early.
+   - If no candidate passes the relevance filter, return `None` so the
+     caller emits the links-only envelope. This replaces "first fetch
+     with bytes" as the selection criterion and stops the 2026-04-24
+     field failure where a "Close" modal page was handed to the
+     synthesis model as though it were the answer.
 4. **Reply assembly**: emits an envelope (see below) prefixed to the
    instant-answer section, the fenced Content block (if any), and the
    link list.
@@ -184,7 +196,12 @@ default.
 Regression tests assert:
 
 1. **Cascade**: top-1 failure falls back to top-2; rank preference means a
-   top-2 success is preferred over a top-3 distractor even in a race.
+   top-2 success is preferred over a top-3 distractor even in a race. An
+   extract that shares zero content tokens with the query is skipped even
+   when ranked top-1, so a lower-ranked relevant result wins. When every
+   extract scores zero overlap, the cascade returns `None` and the
+   links-only envelope fires rather than passing boilerplate to the
+   synthesis model as though it were the answer.
 2. **Links-only envelope**: when every fetch returns None, the envelope
    contains the anti-confabulation clauses above and does NOT advertise a
    Content block.

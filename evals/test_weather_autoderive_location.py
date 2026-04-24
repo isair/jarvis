@@ -175,3 +175,20 @@ class TestWeatherAutoDerivesLocation:
             f"Phrase hit: {asked_for_location!r}. "
             f"Response: {(response or '')[:400]}"
         )
+
+        # Args guard: the queries here never name a place, so getWeather
+        # must be called with no `location` arg (or empty string). The
+        # 2026-04-24 field regression had the planner stuffing a temporal
+        # qualifier into `location=` (e.g. `location='today'`, which
+        # geocoded to "Todaya" in the Philippines); the mock happily
+        # returned the canned payload regardless, so an args-blind eval
+        # would pass over this silently.
+        weather_args = capture.get_args("getWeather") or {}
+        location_arg = (weather_args.get("location") or "").strip()
+        assert location_arg == "", (
+            f"[{variant}] getWeather was called with a fabricated location "
+            f"argument: location={location_arg!r}. The user named no place, "
+            f"so the tool must be called with empty args so it auto-uses "
+            f"the user's detected location. Full args: {weather_args!r}. "
+            f"Response: {(response or '')[:400]}"
+        )
