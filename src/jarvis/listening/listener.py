@@ -2058,21 +2058,22 @@ class VoiceListener(threading.Thread):
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
             print(f"\n{'─' * 50}\n🎙️  Listening! Try: \"How's the weather, {wake_word.title()}?\"", flush=True)
 
-            # Small-model disclaimer: gemma4:e2b and e4b struggle with
-            # indirect or multi-step phrasing. Nudge the user toward direct
-            # queries so they get better results out of the box.
+            # Small-model disclaimer: gemma4:e2b and e4b can't infer your
+            # intent from vague prompts, but they can still execute complex
+            # flows if you spell out the steps. Assume the model is dumb and
+            # lay things out for it.
             chat_model_lower = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip().lower()
             if chat_model_lower in ("gemma4:e2b", "gemma4:e4b"):
                 print(
-                    f"  ⚠️  Tiny model in use ({chat_model_lower}). Keep queries direct and clear for best results.",
+                    f"  ⚠️  Tiny model in use ({chat_model_lower}). Assume it can't infer — spell out the steps.",
                     flush=True,
                 )
                 print(
-                    f"      👍 \"Search the web for news about AI, {wake_word.title()}.\"",
+                    f"      👍 \"{wake_word.title()}, recall what topics I'm interested in, then search the web for recent news on those topics and summarise.\"",
                     flush=True,
                 )
                 print(
-                    f"      👎 \"Think about my interests and find something interesting to me, {wake_word.title()}.\"",
+                    f"      👎 \"Tell me some news that might interest me, {wake_word.title()}.\"",
                     flush=True,
                 )
 
