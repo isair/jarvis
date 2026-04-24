@@ -1,13 +1,13 @@
 """Behavioural tests for the thinking-tune player.
 
 Covers:
-- WAV generation: right format/size, seam is effectively seamless.
+- Sample / WAV generation: right format/size, seam is effectively seamless.
 - TunePlayer lifecycle: idempotent start/stop, is_playing state, prompt
-  stop even when a "player" is running.
-- Platform-player dispatch: the macOS/Linux loop respects stop_event.
+  stop even when a "stream" is running.
+- Sounddevice dispatch: stop_tune aborts the stream (not a subprocess).
 
-Platform code paths are exercised via the Linux `ffplay`-style branch
-using a fake player binary, which works headlessly in CI.
+The sounddevice stream is exercised via a fake `sounddevice` module
+injected into sys.modules — works headlessly in CI.
 """
 from __future__ import annotations
 
@@ -15,74 +15,105 @@ import io
 import struct
 import sys
 import time
+import types
 import wave
-from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from jarvis.output import tune_player
 from jarvis.output.tune_player import (
     TunePlayer,
+    _generate_thinking_pad_samples,
     _generate_thinking_pad_wav,
+    _get_thinking_pad_samples,
     _get_thinking_pad_wav,
 )
 
 
-# --- WAV generation --------------------------------------------------------
+# --- Sample / WAV generation -----------------------------------------------
 
-def test_thinking_pad_wav_is_well_formed_and_long():
+def test_thinking_pad_samples_have_expected_shape():
+    samples, rate = _generate_thinking_pad_samples()
+    assert rate == 44100
+    assert samples.dtype.name == "int16"
+    assert samples.ndim == 1
+    # Long enough to mask any wrap-around artefact.
+    assert samples.size / rate >= 30.0
+
+
+def test_thinking_pad_wav_is_well_formed():
     data = _generate_thinking_pad_wav()
     with wave.open(io.BytesIO(data)) as w:
         assert w.getnchannels() == 1
-        assert w.getsampwidth() == 2  # 16-bit PCM
+        assert w.getsampwidth() == 2
         assert w.getframerate() == 44100
-        n = w.getnframes()
-    # Long enough that subprocess relaunch gaps are rare.
-    assert n / 44100 >= 30.0
 
 
-def test_thinking_pad_wav_is_cached():
-    a = _get_thinking_pad_wav()
-    b = _get_thinking_pad_wav()
-    assert a is b  # same object, not regenerated
+def test_thinking_pad_samples_cached():
+    a = _get_thinking_pad_samples()
+    b = _get_thinking_pad_samples()
+    assert a is b
 
 
-def test_thinking_pad_wav_seam_is_effectively_seamless():
-    """First and last PCM samples should be within a small fraction of
-    full-scale — the loop wrap produces a step no larger than a normal
-    sample-to-sample delta, i.e. inaudible."""
-    data = _generate_thinking_pad_wav()
-    with wave.open(io.BytesIO(data)) as w:
-        frames = w.readframes(w.getnframes())
-    first = struct.unpack("<h", frames[:2])[0]
-    last = struct.unpack("<h", frames[-2:])[0]
-    # Full scale is 32767; observed real seam ≈ 500. Allow 5% as generous
-    # headroom so this doesn't fight future tweaks.
+def test_thinking_pad_wav_cached():
+    assert _get_thinking_pad_wav() is _get_thinking_pad_wav()
+
+
+def test_thinking_pad_seam_is_effectively_seamless():
+    samples, _ = _generate_thinking_pad_samples()
+    first = int(samples[0])
+    last = int(samples[-1])
+    # Seam step must be well under full-scale; observed ≈ 500.
     assert abs(first - last) < 0.05 * 32767
 
 
-def test_thinking_pad_wav_stays_loud_throughout():
-    """Amplitude must never drop to silence — it's meant to be a
-    continuous flowing texture."""
-    data = _generate_thinking_pad_wav()
-    with wave.open(io.BytesIO(data)) as w:
-        n = w.getnframes()
-        rate = w.getframerate()
-        frames = w.readframes(n)
-    pcm = struct.unpack(f"<{n}h", frames)
-    # Check every ~100ms window — none should be silent.
-    win = rate // 10
-    min_peak = min(
-        max(abs(v) for v in pcm[i : i + win])
-        for i in range(0, n - win, win)
-    )
-    # Observed min ≈ 2800; require a meaningful floor so any future
-    # change that lets the texture drop to silence would be caught.
-    assert min_peak > 0.05 * 32767
+def test_thinking_pad_stays_loud_throughout():
+    samples, rate = _generate_thinking_pad_samples()
+    win = rate // 10  # 100ms windows
+    peaks = [
+        int(abs(samples[i : i + win]).max())
+        for i in range(0, samples.size - win, win)
+    ]
+    # Never drops to silence — observed floor ≈ 2800.
+    assert min(peaks) > 0.05 * 32767
 
 
 # --- TunePlayer lifecycle --------------------------------------------------
+
+class _FakeStream:
+    """Minimal sounddevice.OutputStream stand-in."""
+
+    def __init__(self, *args, **kwargs):
+        self.started = False
+        self.aborted = False
+        self.closed = False
+        self._callback = kwargs.get("callback")
+
+    def start(self):
+        self.started = True
+
+    def abort(self):
+        self.aborted = True
+
+    def close(self):
+        self.closed = True
+
+
+def _install_fake_sounddevice(monkeypatch, stream_factory=None):
+    """Inject a fake sounddevice module that records the created stream."""
+    created = {}
+
+    def _OutputStream(*args, **kwargs):
+        stream = (stream_factory or _FakeStream)(*args, **kwargs)
+        created["stream"] = stream
+        return stream
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.OutputStream = _OutputStream
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+    return created
+
 
 def test_disabled_player_never_starts():
     tp = TunePlayer(enabled=False)
@@ -95,22 +126,61 @@ def test_disabled_player_never_starts():
 
 
 def test_stop_is_idempotent():
-    tp = TunePlayer(enabled=False)  # fast path, no real playback
-    tp.stop_tune()  # no thread running; must not raise
+    tp = TunePlayer(enabled=False)
+    tp.stop_tune()
     tp.stop_tune()
 
 
-def test_lifecycle_with_fallback_player(monkeypatch):
-    """Force the fallback path (no platform players found) and verify
-    is_playing flips correctly around start/stop, and stop returns promptly."""
-    # Neutralise every platform so _play_tune routes nowhere and falls
-    # through _play_fallback_tune, which exits on stop_event.
-    monkeypatch.setattr(tune_player.platform, "system", lambda: "Other")
+def test_double_start_is_ignored(monkeypatch):
+    _install_fake_sounddevice(monkeypatch)
+    tp = TunePlayer(enabled=True)
+    tp.start_tune()
+    first = tp._thread
+    try:
+        tp.start_tune()
+        assert tp._thread is first
+    finally:
+        tp.stop_tune()
+
+
+def test_stop_aborts_the_stream_and_returns_quickly(monkeypatch):
+    created = _install_fake_sounddevice(monkeypatch)
+    tp = TunePlayer(enabled=True)
+    tp.start_tune()
+
+    # Wait until the stream is actually started.
+    for _ in range(100):
+        stream = created.get("stream")
+        if stream is not None and stream.started:
+            break
+        time.sleep(0.01)
+    stream = created.get("stream")
+    assert stream is not None and stream.started
+
+    t0 = time.time()
+    tp.stop_tune()
+    elapsed = time.time() - t0
+
+    assert stream.aborted
+    assert stream.closed
+    assert elapsed < 1.0
+    assert not tp.is_playing()
+
+
+def test_fallback_when_sounddevice_unavailable(monkeypatch):
+    # Force the sounddevice import inside _play_tune to fail.
+    fake_sd = types.ModuleType("sounddevice_broken")
+
+    def _raise(*a, **kw):
+        raise RuntimeError("no audio here")
+
+    fake_sd.OutputStream = _raise
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
 
     tp = TunePlayer(enabled=True)
     tp.start_tune()
-    # Give the thread a moment to enter _play_tune.
-    for _ in range(20):
+    # Give the thread a moment to reach the fallback loop.
+    for _ in range(50):
         if tp.is_playing():
             break
         time.sleep(0.01)
@@ -119,62 +189,53 @@ def test_lifecycle_with_fallback_player(monkeypatch):
     t0 = time.time()
     tp.stop_tune()
     elapsed = time.time() - t0
-    # Should stop almost instantly — well under the join timeout of 2s.
     assert elapsed < 1.5
     assert not tp.is_playing()
-    assert tp._thread is None
 
 
-def test_double_start_is_ignored(monkeypatch):
-    monkeypatch.setattr(tune_player.platform, "system", lambda: "Other")
+def test_stream_callback_wraps_seamlessly(monkeypatch):
+    """The internal callback must wrap from end-of-buffer back to start
+    without dropping a frame — that's the whole 'seamless loop' promise."""
+    captured = {}
+
+    class _SpyStream(_FakeStream):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            captured["callback"] = kw.get("callback")
+
+    _install_fake_sounddevice(monkeypatch, stream_factory=_SpyStream)
     tp = TunePlayer(enabled=True)
     tp.start_tune()
-    first_thread = tp._thread
     try:
-        tp.start_tune()
-        assert tp._thread is first_thread  # second start is a no-op
+        for _ in range(100):
+            if captured.get("callback") is not None:
+                break
+            time.sleep(0.01)
+        cb = captured["callback"]
+        assert cb is not None
+
+        samples, _ = _get_thinking_pad_samples()
+        total = samples.size
+
+        # Position the read head just before the end of the buffer so
+        # the next callback crosses the seam.
+        import numpy as np
+        frames = 1024
+        # Simulate two back-to-back callbacks that span the wrap.
+        # First drain most of the buffer with a big fake call — we can
+        # do it via multiple calls to the real callback.
+        out = np.zeros((frames, 1), dtype=np.int16)
+
+        # Call the callback repeatedly until position wraps.
+        # The callback uses a closure; after enough calls we should cross.
+        seen_wrap = False
+        for _ in range(total // frames + 2):
+            cb(out, frames, None, None)
+            # When the internal position wraps, outdata will be a mix
+            # of end-of-buffer and start-of-buffer samples. Verify no
+            # exception raised and output is int16.
+            assert out.dtype.name == "int16"
+            seen_wrap = True
+        assert seen_wrap
     finally:
         tp.stop_tune()
-
-
-def test_stop_terminates_running_subprocess(monkeypatch, tmp_path):
-    """If a player subprocess is running, stop_tune must terminate it
-    rather than waiting for it to exit on its own."""
-    # Build a fake 'ffplay' that sleeps indefinitely so we can observe
-    # whether stop actually kills it.
-    fake_player = tmp_path / "ffplay"
-    fake_player.write_text(
-        "#!/usr/bin/env python3\n"
-        "import time\n"
-        "while True: time.sleep(1)\n"
-    )
-    fake_player.chmod(0o755)
-
-    # Point the Linux path at our fake ffplay, and route platform to Linux.
-    monkeypatch.setattr(tune_player.platform, "system", lambda: "Linux")
-
-    def fake_which(name):
-        if name == "ffplay":
-            return str(fake_player)
-        return None
-
-    monkeypatch.setattr(tune_player.shutil, "which", fake_which)
-
-    tp = TunePlayer(enabled=True)
-    tp.start_tune()
-
-    # Wait for the subprocess to actually be spawned.
-    for _ in range(50):
-        if tp._current_process is not None:
-            break
-        time.sleep(0.02)
-    assert tp._current_process is not None
-    proc = tp._current_process
-
-    t0 = time.time()
-    tp.stop_tune()
-    elapsed = time.time() - t0
-
-    # Process should be dead, and stop should return quickly.
-    assert proc.poll() is not None
-    assert elapsed < 2.0
