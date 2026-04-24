@@ -16,13 +16,20 @@ import pytest
 from jarvis.reply import planner as planner_mod
 from jarvis.reply.planner import (
     MAX_STEPS,
+    SEARCH_MEMORY_DIRECTIVE,
     _is_trivial_plan,
     _parse_plan,
     format_plan_block,
+    is_search_memory_step,
+    memory_topic_of,
     plan_query,
+    plan_requires_memory,
     progress_nudge,
     resolve_next_tool_call,
     resolve_planner_model,
+    strip_memory_directives,
+    plan_has_unresolved_tool_steps,
+    tool_names_in_plan,
     tool_steps_of,
 )
 
@@ -88,16 +95,22 @@ class TestIsTrivialPlan:
 
 class TestResolvePlannerModel:
     def test_prefers_explicit_planner_model(self):
-        cfg = _cfg(planner_model="gemma-plan", tool_router_model="router")
+        cfg = _cfg(planner_model="gemma-plan", ollama_chat_model="chat")
         assert resolve_planner_model(cfg) == "gemma-plan"
 
-    def test_falls_through_to_router(self):
-        cfg = _cfg(tool_router_model="router-x")
-        assert resolve_planner_model(cfg) == "router-x"
-
-    def test_falls_through_to_chat_model(self):
-        cfg = _cfg()
+    def test_tracks_chat_model_by_default(self):
+        cfg = _cfg(ollama_chat_model="gemma4:e2b")
         assert resolve_planner_model(cfg) == "gemma4:e2b"
+
+    def test_ignores_tool_router_model(self):
+        # Planner must track the chat model — not the router. Upgrading
+        # the chat model through setup must upgrade the planner too.
+        cfg = _cfg(tool_router_model="router-x", ollama_chat_model="chat-y")
+        assert resolve_planner_model(cfg) == "chat-y"
+
+    def test_upgrading_chat_model_upgrades_planner(self):
+        cfg = _cfg(ollama_chat_model="gpt-oss:20b")
+        assert resolve_planner_model(cfg) == "gpt-oss:20b"
 
     def test_returns_empty_when_no_candidates(self):
         cfg = _cfg(ollama_chat_model="")
@@ -107,17 +120,17 @@ class TestResolvePlannerModel:
 class TestPlanQuery:
     def test_short_query_returns_empty(self):
         cfg = _cfg()
-        assert plan_query(cfg, "hi", "", "", []) == []
+        assert plan_query(cfg, "hi", "", []) == []
 
     def test_disabled_returns_empty(self):
         cfg = _cfg(planner_enabled=False)
         long = "what films did the director of Possessor make?"
-        assert plan_query(cfg, long, "", "", []) == []
+        assert plan_query(cfg, long, "", []) == []
 
     def test_missing_model_returns_empty(self):
         cfg = _cfg(ollama_chat_model="")
         long = "what films did the director of Possessor make?"
-        assert plan_query(cfg, long, "", "", []) == []
+        assert plan_query(cfg, long, "", []) == []
 
     def test_returns_parsed_steps(self):
         cfg = _cfg()
@@ -131,24 +144,28 @@ class TestPlanQuery:
                 cfg,
                 "what films did the director of Possessor make?",
                 "",
-                "",
                 [("webSearch", "Search the web.")],
             )
         assert len(steps) == 3
         assert "Possessor" in steps[0]
         assert steps[-1].lower().startswith("reply")
 
-    def test_trivial_plan_returns_empty(self):
+    def test_single_reply_plan_is_preserved(self):
+        """A 1-step reply-only plan is the planner's POSITIVE "no memory,
+        no tools needed" signal. It must NOT be filtered to [] — the
+        engine distinguishes [] (fail-open) from ["Reply ..."] (explicit
+        skip-everything decision) and uses the latter to skip the
+        memory extractor and tool router entirely.
+        """
         cfg = _cfg()
         with patch.object(planner_mod, "call_llm_direct", return_value="Reply to user."):
             steps = plan_query(
                 cfg,
                 "tell me a joke about cats please",
                 "",
-                "",
                 [],
             )
-        assert steps == []
+        assert steps == ["Reply to user."]
 
     def test_llm_failure_returns_empty(self):
         cfg = _cfg()
@@ -157,10 +174,25 @@ class TestPlanQuery:
                 cfg,
                 "what films did the director of Possessor make?",
                 "",
-                "",
                 [("webSearch", "Search the web.")],
             )
         assert steps == []
+
+    def test_memory_context_arg_still_accepted_for_back_compat(self):
+        """Old callers pass `memory_context=` as a positional or keyword
+        argument. Planner now ignores it (the planner runs before memory
+        search), but the signature must still accept it so downstream
+        code doesn't break."""
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct", return_value="Reply to user."):
+            steps = plan_query(
+                cfg,
+                "tell me a joke about cats please",
+                "",
+                [],
+                memory_context="some old memory text",
+            )
+        assert steps == ["Reply to user."]
 
     def test_prompt_warns_against_fabricating_optional_arguments(self):
         """The planner prompt must explicitly tell the model to omit
@@ -206,7 +238,11 @@ class TestProgressNudge:
         assert progress_nudge([], 0) == ""
 
     def test_single_reply_step_returns_empty(self):
-        assert progress_nudge(["Reply to user"], 0) != ""
+        """A 1-step reply-only plan has no tool steps, so there is
+        nothing to nudge. The empty string tells the engine to skip
+        injecting a progress reminder after the (non-existent) tool
+        result."""
+        assert progress_nudge(["Reply to user"], 0) == ""
 
     def test_points_at_next_step(self):
         steps = ["webSearch query='foo'", "webSearch query='bar'", "Reply to user"]
@@ -434,8 +470,121 @@ class TestToolStepsOf:
     def test_multi_step_drops_final_synthesis_step(self):
         assert tool_steps_of(["a", "b", "reply"]) == ["a", "b"]
 
-    def test_single_step_kept_as_is(self):
-        assert tool_steps_of(["only"]) == ["only"]
+    def test_single_step_has_no_tool_steps(self):
+        """A 1-step plan is reply-only by contract (rule 9), so it
+        contributes no tool steps. Engine uses this to skip the
+        direct-exec path and the progress nudge for pure-reply plans."""
+        assert tool_steps_of(["only"]) == []
 
     def test_empty_plan(self):
         assert tool_steps_of([]) == []
+
+    def test_strips_search_memory_directive(self):
+        plan = [
+            "searchMemory topic='user preferences'",
+            "webSearch query='foo'",
+            "Reply to the user.",
+        ]
+        assert tool_steps_of(plan) == ["webSearch query='foo'"]
+
+
+class TestIsSearchMemoryStep:
+    def test_detects_directive(self):
+        assert is_search_memory_step("searchMemory topic='x'") is True
+        assert is_search_memory_step("  SEARCHMEMORY topic='x'") is True
+
+    def test_rejects_other_steps(self):
+        assert is_search_memory_step("webSearch query='foo'") is False
+        assert is_search_memory_step("Reply to the user.") is False
+
+
+class TestMemoryTopicOf:
+    def test_single_quoted(self):
+        assert memory_topic_of("searchMemory topic='pets'") == "pets"
+
+    def test_double_quoted(self):
+        assert memory_topic_of('searchMemory topic="favourite films"') == "favourite films"
+
+    def test_bare_value(self):
+        assert memory_topic_of("searchMemory topic=preferences") == "preferences"
+
+    def test_missing_topic_returns_empty(self):
+        assert memory_topic_of("searchMemory") == ""
+
+
+class TestPlanRequiresMemory:
+    def test_true_when_directive_present(self):
+        assert plan_requires_memory([
+            "searchMemory topic='pets'",
+            "Reply to user",
+        ]) is True
+
+    def test_false_when_only_tools_and_reply(self):
+        assert plan_requires_memory([
+            "webSearch query='foo'",
+            "Reply to the user.",
+        ]) is False
+
+    def test_false_for_empty(self):
+        assert plan_requires_memory([]) is False
+
+
+class TestStripMemoryDirectives:
+    def test_removes_directive(self):
+        plan = [
+            "searchMemory topic='pets'",
+            "Reply to user",
+        ]
+        assert strip_memory_directives(plan) == ["Reply to user"]
+
+    def test_leaves_tool_only_plan_untouched(self):
+        plan = ["webSearch query='foo'", "Reply"]
+        assert strip_memory_directives(plan) == plan
+
+
+class TestToolNamesInPlan:
+    def test_extracts_known_names_in_order(self):
+        plan = [
+            "webSearch query='a'",
+            "getWeather",
+            "webSearch query='b'",  # duplicate should dedup
+            "Reply to the user.",
+        ]
+        names = tool_names_in_plan(plan, ["webSearch", "getWeather", "stop"])
+        assert names == ["webSearch", "getWeather"]
+
+    def test_filters_unknown_names(self):
+        plan = ["hallucinatedTool x='y'", "webSearch query='q'", "Reply"]
+        assert tool_names_in_plan(plan, ["webSearch"]) == ["webSearch"]
+
+    def test_ignores_search_memory_directive(self):
+        plan = ["searchMemory topic='t'", "webSearch query='q'", "Reply"]
+        assert tool_names_in_plan(plan, ["webSearch", "searchMemory"]) == ["webSearch"]
+
+    def test_empty_plan(self):
+        assert tool_names_in_plan([], ["webSearch"]) == []
+
+
+class TestPlanHasUnresolvedToolSteps:
+    def test_true_when_step_paraphrases_tool(self):
+        plan = ["get the weather", "Reply to the user."]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather", "stop"]) is True
+
+    def test_false_when_step_names_tool(self):
+        plan = ["getWeather", "Reply to the user."]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is False
+
+    def test_false_for_reply_only_plan(self):
+        # No tool steps at all — the planner explicitly decided no tools.
+        assert plan_has_unresolved_tool_steps(
+            ["Reply to the user."], ["getWeather"]
+        ) is False
+
+    def test_false_for_empty_plan(self):
+        assert plan_has_unresolved_tool_steps([], ["getWeather"]) is False
+
+    def test_false_when_search_memory_only_and_reply(self):
+        # searchMemory is a directive, not a tool — but there's also no
+        # real tool step paraphrased either.
+        plan = ["searchMemory topic='t'", "Reply to the user."]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is False

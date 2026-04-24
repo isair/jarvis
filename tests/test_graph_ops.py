@@ -18,12 +18,15 @@ if "requests" not in sys.modules:
     sys.modules["requests"].exceptions.Timeout = type("Timeout", (Exception,), {})
 
 from src.jarvis.memory.graph import GraphMemoryStore, SPLIT_THRESHOLD
+from src.jarvis.memory.graph import BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD
 from src.jarvis.memory.graph_ops import (
     extract_graph_memories,
     _llm_pick_best_child,
     find_best_node,
     auto_split_node,
     update_graph_from_dialogue,
+    build_warm_profile,
+    format_warm_profile_block,
 )
 
 
@@ -67,16 +70,36 @@ def populated_store(store):
 
 @pytest.mark.unit
 class TestExtractGraphMemories:
-    """Tests for memory extraction from conversation summaries."""
+    """Tests for memory extraction from conversation summaries.
+
+    The extractor now emits ``(branch_id, fact_text)`` tuples, where
+    branch_id is one of ``user`` / ``directives`` / ``world``. Callers
+    route each fact into the corresponding top-level branch of the
+    knowledge graph.
+    """
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_extracts_facts(self, mock_llm):
-
-        mock_llm.return_value = '["Prefers dark roast coffee", "Works at Acme Corp"]'
+        mock_llm.return_value = (
+            '[{"branch": "USER", "fact": "Prefers dark roast coffee"},'
+            ' {"branch": "WORLD", "fact": "Acme Corp is based in London"}]'
+        )
         facts = extract_graph_memories("summary text", "http://localhost", "model")
         assert len(facts) == 2
-        assert "dark roast coffee" in facts[0]
-        assert "Acme Corp" in facts[1]
+        assert facts[0] == ("user", "Prefers dark roast coffee")
+        assert facts[1] == ("world", "Acme Corp is based in London")
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_classifies_directive_branch(self, mock_llm):
+        """A user-issued behavioural rule must land in the DIRECTIVES
+        branch so it survives verbatim into the warm system-prompt
+        blob, rather than being summarised alongside descriptive user
+        facts."""
+        mock_llm.return_value = (
+            '[{"branch": "DIRECTIVES", "fact": "Always answer in British English"}]'
+        )
+        facts = extract_graph_memories("summary", "http://localhost", "model")
+        assert facts == [("directives", "Always answer in British English")]
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_returns_empty_when_nothing_worth_storing(self, mock_llm):
@@ -102,16 +125,39 @@ class TestExtractGraphMemories:
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_handles_json_embedded_in_text(self, mock_llm):
 
-        mock_llm.return_value = 'Sure! Here are the facts:\n["Likes hiking", "Has a cat named Luna"]\nHope that helps!'
+        mock_llm.return_value = (
+            'Sure! Here are the facts:\n'
+            '[{"branch": "USER", "fact": "Likes hiking"},'
+            ' {"branch": "USER", "fact": "Has a cat named Luna"}]\n'
+            'Hope that helps!'
+        )
         facts = extract_graph_memories("summary", "http://localhost", "model")
         assert len(facts) == 2
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_filters_empty_strings(self, mock_llm):
 
-        mock_llm.return_value = '["Valid fact", "", "  ", "Another fact"]'
+        mock_llm.return_value = (
+            '[{"branch": "USER", "fact": "Valid fact"},'
+            ' {"branch": "USER", "fact": ""},'
+            ' {"branch": "USER", "fact": "   "},'
+            ' {"branch": "USER", "fact": "Another fact"}]'
+        )
         facts = extract_graph_memories("summary", "http://localhost", "model")
         assert len(facts) == 2
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_unknown_branch_defaults_to_user(self, mock_llm):
+        """When the model emits a branch label we don't recognise, the
+        fact still gets stored — under USER — rather than silently
+        dropping a potentially useful piece of information. The
+        assistant is a personal agent; user-scoped context is the
+        safer default for unclassified items."""
+        mock_llm.return_value = (
+            '[{"branch": "MISC", "fact": "Some useful fact"}]'
+        )
+        facts = extract_graph_memories("summary", "http://localhost", "model")
+        assert facts == [("user", "Some useful fact")]
 
 
 # ── _llm_pick_best_child ──────────────────────────────────────────────
@@ -251,10 +297,30 @@ class TestFindBestNode:
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
     def test_empty_graph_writes_to_root(self, mock_pick, store):
-
+        """With seeded branches under root but nothing else, an
+        unclassified fact with no branch pin will try to pick among
+        the seeded branches. If the picker declines all of them
+        (returns None), traversal halts at root."""
+        # Picker declines at every level so traversal breaks at root.
+        mock_pick.return_value = None
         result = find_best_node(store, "First ever fact", "http://localhost", "model")
         assert result == "root"
-        # No LLM calls needed — no children anywhere
+
+    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
+    def test_branch_pin_skips_shortcut_entry_points(self, mock_pick, store):
+        """When a branch is pinned, the recent / top shortcut entry
+        points are skipped entirely — the fact descends only through
+        the pinned branch's subtree. With an empty branch, that means
+        the branch root itself is the write target, and the picker is
+        never consulted."""
+        mock_pick.return_value = None
+        result = find_best_node(
+            store, "Likes jazz music", "http://localhost", "model",
+            branch_root_id="user",
+        )
+        assert result == "user"
+        # The picker was never called because the User branch has no
+        # children yet; descent terminated immediately at the branch root.
         mock_pick.assert_not_called()
 
 
@@ -408,33 +474,41 @@ class TestUpdateGraphFromDialogue:
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_full_flow_extracts_and_stores(self, mock_llm, store):
-
-        # First call: extraction. Subsequent calls: traversal (returns None → writes to root)
-        mock_llm.side_effect = [
-            '["Likes jazz music", "Works at Acme Corp"]',  # extraction
-            "NONE",  # traversal for fact 1 (recent — no recent nodes, skipped)
-            "NONE",  # traversal for fact 1 (top — no top nodes, skipped)
-            "NONE",  # traversal for fact 1 (root children — none)
-            "NONE",  # traversal for fact 2 (recent)
-            "NONE",  # traversal for fact 2 (top)
-            "NONE",  # traversal for fact 2 (root children — still no children since root now has data not children)
-        ]
+        """End-to-end: extraction emits branch-tagged facts, the
+        orchestrator pins traversal to each fact's branch, and the
+        fact lands inside that branch's subtree. Because the fixed
+        branches are seeded at store creation and the branch subtree
+        is empty on a fresh store, each fact writes to the branch
+        root node directly."""
+        # First call: extraction. With empty branches, no LLM calls are
+        # needed for traversal — find_best_node goes straight to the
+        # branch root because it has no children.
+        mock_llm.return_value = (
+            '[{"branch": "USER", "fact": "Likes jazz music"},'
+            ' {"branch": "WORLD", "fact": "Acme Corp is based in London"}]'
+        )
 
         stored = update_graph_from_dialogue(
             store=store,
-            summary="User mentioned they like jazz music and work at Acme Corp",
+            summary="User likes jazz; Acme Corp is in London",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
 
         assert len(stored) == 2
-        # Each entry is (fact, node_name); the caller uses these for logging.
         for fact, node_name in stored:
             assert isinstance(fact, str) and fact
             assert isinstance(node_name, str) and node_name
+
+        user_node = store.get_node("user")
+        world_node = store.get_node("world")
+        assert user_node is not None and "jazz" in user_node.data
+        assert world_node is not None and "Acme" in world_node.data
+        # The un-classified facts should NOT have landed on the root
+        # itself — the branch pinning keeps them inside their subtree.
         root = store.get_node("root")
-        assert "jazz" in root.data
-        assert "Acme" in root.data
+        assert "jazz" not in root.data
+        assert "Acme" not in root.data
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_no_facts_extracted(self, mock_llm, store):
@@ -463,3 +537,102 @@ class TestUpdateGraphFromDialogue:
         )
 
         assert stored == []
+
+
+# ── Warm profile helpers ──────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestBuildWarmProfile:
+    """build_warm_profile reads User + Directives branches."""
+
+    def test_empty_graph_returns_empty_sections(self, store):
+        profile = build_warm_profile(store)
+        assert profile == {"user": "", "directives": ""}
+
+    def test_collects_user_branch_only(self, store):
+        store.create_node(
+            name="Identity",
+            description="Who the user is",
+            data="User's name is Baris.",
+            parent_id=BRANCH_USER,
+        )
+        profile = build_warm_profile(store)
+        assert "Baris" in profile["user"]
+        assert profile["directives"] == ""
+
+    def test_collects_directives_branch_only(self, store):
+        store.create_node(
+            name="Tone",
+            description="Reply style",
+            data="Always reply briefly.",
+            parent_id=BRANCH_DIRECTIVES,
+        )
+        profile = build_warm_profile(store)
+        assert "briefly" in profile["directives"]
+        assert profile["user"] == ""
+
+    def test_ignores_world_branch(self, store):
+        store.create_node(
+            name="News",
+            description="External fact",
+            data="Paris is the capital of France.",
+            parent_id=BRANCH_WORLD,
+        )
+        profile = build_warm_profile(store)
+        assert profile["user"] == ""
+        assert profile["directives"] == ""
+
+    def test_respects_char_caps(self, store):
+        long_fact = "x" * 5000
+        store.create_node(
+            name="Long", description="d", data=long_fact, parent_id=BRANCH_USER,
+        )
+        profile = build_warm_profile(store, user_max_chars=200)
+        assert len(profile["user"]) <= 200
+        assert profile["user"].endswith("…")
+
+    def test_walks_branch_subtree(self, store):
+        child = store.create_node(
+            name="Sub", description="child of user",
+            data="User lives in Brighton.", parent_id=BRANCH_USER,
+        )
+        store.create_node(
+            name="Grandchild", description="deeper",
+            data="User moved in 2023.", parent_id=child.id,
+        )
+        profile = build_warm_profile(store)
+        assert "Brighton" in profile["user"]
+        assert "2023" in profile["user"]
+
+
+@pytest.mark.unit
+class TestFormatWarmProfileBlock:
+    """format_warm_profile_block uses denial-template mirroring."""
+
+    def test_empty_profile_returns_empty_string(self):
+        assert format_warm_profile_block({"user": "", "directives": ""}) == ""
+
+    def test_user_only_omits_directives_heading(self):
+        out = format_warm_profile_block({"user": "Name is Baris.", "directives": ""})
+        assert "INFORMATION THE USER HAS SHARED" in out
+        assert "STANDING INSTRUCTIONS" not in out
+        assert "Baris" in out
+
+    def test_directives_only_omits_user_heading(self):
+        out = format_warm_profile_block({"user": "", "directives": "Reply briefly."})
+        assert "STANDING INSTRUCTIONS" in out
+        assert "INFORMATION THE USER HAS SHARED" not in out
+        assert "briefly" in out
+
+    def test_both_sections_rendered(self):
+        out = format_warm_profile_block(
+            {"user": "Name is Baris.", "directives": "Reply briefly."}
+        )
+        assert "INFORMATION THE USER HAS SHARED" in out
+        assert "STANDING INSTRUCTIONS" in out
+        # User section appears before directives
+        assert out.index("INFORMATION THE USER") < out.index("STANDING INSTRUCTIONS")
+
+    def test_whitespace_only_treated_as_empty(self):
+        assert format_warm_profile_block({"user": "   \n", "directives": "\t"}) == ""

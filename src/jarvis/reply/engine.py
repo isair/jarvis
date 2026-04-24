@@ -22,7 +22,19 @@ from .enrichment import (
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query
-from .planner import plan_query, format_plan_block, progress_nudge, tool_steps_of, resolve_next_tool_call as _resolve_plan_step
+from .planner import (
+    plan_query,
+    format_plan_block,
+    progress_nudge,
+    tool_steps_of,
+    tool_names_in_plan,
+    plan_has_unresolved_tool_steps,
+    plan_requires_memory,
+    strip_memory_directives,
+    memory_topic_of,
+    is_search_memory_step,
+    resolve_next_tool_call as _resolve_plan_step,
+)
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
@@ -704,6 +716,128 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
+    # Load MCP tools cache now so the planner sees the full catalog.
+    mcp_tools: dict = {}
+    if getattr(cfg, "mcps", {}):
+        try:
+            from ..tools.registry import get_cached_mcp_tools
+            mcp_tools = get_cached_mcp_tools()
+        except Exception as e:
+            debug_log(f"⚠️ Failed to get cached MCP tools: {e}", "mcp")
+            mcp_tools = {}
+
+    # ── Step 3: Pre-flight planner ─────────────────────────────────────
+    # The planner runs FIRST, before any memory lookup or tool routing.
+    # Its job is to decide up front what preparation this turn needs:
+    #
+    #   - Does answering require information the user shared in prior
+    #     conversations? If yes, the planner emits a leading
+    #     ``searchMemory topic='...'`` directive and we run diary + graph
+    #     enrichment; otherwise we skip the keyword-extraction LLM call,
+    #     the diary/graph queries, and the memory-digest LLM call.
+    #   - Are any external tools needed? The tool names the planner
+    #     references become the allow-list directly — we skip the
+    #     separate tool-router LLM call.
+    #
+    # Fail-open: if the planner returns ``[]`` (short query, disabled,
+    # LLM timeout, empty response), we fall through to the legacy safe
+    # defaults — run the memory extractor and the tool router as before.
+    # A positive single-step ``["Reply to the user."]`` plan is NOT the
+    # same as ``[]``: it's the planner deciding no memory or tools are
+    # needed. Both cases are preserved for the engine to distinguish.
+    _all_builtin_names = list(BUILTIN_TOOLS.keys())
+    _all_mcp_names = list(mcp_tools.keys())
+    _full_catalog_names = _all_builtin_names + _all_mcp_names
+    _full_tools_schema = generate_tools_json_schema(_full_catalog_names, mcp_tools)
+    _planner_tool_catalog: list[tuple[str, str]] = []
+    for _schema in (_full_tools_schema or []):
+        _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
+        if isinstance(_fn, dict):
+            _nm = _fn.get("name")
+            _desc = (_fn.get("description") or "").strip().splitlines()
+            _first = _desc[0] if _desc else ""
+            if _nm:
+                _planner_tool_catalog.append((str(_nm), _first[:120]))
+
+    _dialogue_lines: list[str] = []
+    for _m in (recent_messages or [])[-6:]:
+        _role = _m.get("role", "")
+        _content = (_m.get("content") or "").strip().replace("\n", " ")
+        if _role in ("user", "assistant") and _content:
+            _dialogue_lines.append(f"{_role}: {_content[:200]}")
+    _dialogue_ctx = "\n".join(_dialogue_lines)
+
+    action_plan: list[str] = []
+    try:
+        action_plan = plan_query(
+            cfg=cfg,
+            query=redacted,
+            dialogue_context=_dialogue_ctx,
+            tools=_planner_tool_catalog,
+        )
+    except Exception as _plan_exc:  # pragma: no cover — defensive
+        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
+        action_plan = []
+    if action_plan:
+        _plan_preview = " | ".join(s[:50] for s in action_plan)
+        print(
+            f"  🗺️ Plan: {len(action_plan)} step(s) — {_plan_preview}",
+            flush=True,
+        )
+        debug_log(
+            f"planner produced {len(action_plan)} step(s)", "planning"
+        )
+
+    # Gating decisions derived from the plan.
+    # - Empty plan → fail-open: behave like before (memory + router).
+    # - Plan with `searchMemory` directive → run memory enrichment.
+    # - Plan without it → skip memory work entirely (no keyword LLM,
+    #   no diary search, no graph search, no digest LLM).
+    needs_memory = (not action_plan) or plan_requires_memory(action_plan)
+    # Topic hint from the directive (if any) — passed to the memory
+    # extractor so keyword selection is anchored on what the planner
+    # actually wanted to look up, instead of re-deriving from the raw
+    # query for a second time.
+    _memory_topic_hint = ""
+    for _step in action_plan:
+        if is_search_memory_step(_step):
+            _memory_topic_hint = memory_topic_of(_step)
+            if _memory_topic_hint:
+                break
+
+    # Step 3.5: Warm profile — pull the User + Directives branches of
+    # the knowledge graph into a compact, query-agnostic block that gets
+    # injected into the system prompt on every turn. These two branches
+    # are bounded by design (identity + standing rules), don't depend on
+    # the query, and changing rarely — so loading them unconditionally
+    # is the right tradeoff. No LLM call, just a SQLite traversal.
+    #
+    # This is the architectural pivot that lets the planner stop routing
+    # personalisation queries through searchMemory: "news that might
+    # interest me" can be answered directly when the model already sees
+    # the user's interests in its system prompt.
+    warm_profile_block = ""
+    try:
+        from ..memory.graph import GraphMemoryStore
+        from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
+        _graph_store_warm = GraphMemoryStore(cfg.db_path)
+        _warm_profile = build_warm_profile(_graph_store_warm)
+        warm_profile_block = format_warm_profile_block(_warm_profile)
+        if warm_profile_block:
+            _user_len = len(_warm_profile.get("user", ""))
+            _dir_len = len(_warm_profile.get("directives", ""))
+            print(
+                f"  🪴 Warm profile: {_user_len} user chars, "
+                f"{_dir_len} directive chars",
+                flush=True,
+            )
+            debug_log(
+                f"warm profile loaded: user={_user_len} directives={_dir_len}",
+                "memory",
+            )
+    except Exception as e:
+        debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
     enrichment_source = getattr(cfg, "memory_enrichment_source", "diary")
@@ -721,28 +855,38 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     questions: list[str] = []
 
     context_hint = _build_enrichment_context_hint(cfg, recent_messages)
+    search_params: dict = {}
 
-    # Extract keywords and implicit questions (needed by both diary and graph enrichment).
-    # Keyword/time extraction is a small classification job — reuse the tool-router
-    # model chain (intent_judge_model → chat_model) so we don't page in the big
-    # chat model just to emit a 5-item JSON blob. On small single-model setups
-    # this resolves to the chat model, so nothing changes there.
-    try:
-        search_params = extract_search_params_for_memory(
-            redacted, cfg.ollama_base_url, resolve_tool_router_model(cfg),
-            timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
-            thinking=getattr(cfg, 'llm_thinking_enabled', False),
-            context_hint=context_hint,
-        )
-        keywords = search_params.get('keywords', [])
-        questions = search_params.get('questions', [])
-        if keywords:
-            print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
-            debug_log(f"extracted keywords: {keywords}", "memory")
-        if questions:
-            debug_log(f"implicit questions: {questions}", "memory")
-    except Exception as e:
-        debug_log(f"keyword extraction failed: {e}", "memory")
+    # Extract keywords and implicit questions only when the planner asked
+    # for a memory search (or the planner failed and we're falling open).
+    # For queries the planner classified as reply-only ("what are you
+    # thinking", a greeting, a pure opinion) this skips an LLM call we'd
+    # have paid unconditionally in the old flow.
+    if needs_memory:
+        try:
+            _extractor_query = redacted
+            if _memory_topic_hint:
+                # Anchor the extractor on the planner's topic hint so
+                # keyword selection tracks what the planner actually
+                # wanted to look up, not just the surface utterance.
+                _extractor_query = f"{redacted}\n[Memory topic: {_memory_topic_hint}]"
+            search_params = extract_search_params_for_memory(
+                _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
+                timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+                thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                context_hint=context_hint,
+            )
+            keywords = search_params.get('keywords', [])
+            questions = search_params.get('questions', [])
+            if keywords:
+                print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
+                debug_log(f"extracted keywords: {keywords}", "memory")
+            if questions:
+                debug_log(f"implicit questions: {questions}", "memory")
+        except Exception as e:
+            debug_log(f"keyword extraction failed: {e}", "memory")
+    else:
+        debug_log("memory enrichment skipped: planner did not request it", "memory")
 
     # Step 4a: Diary enrichment (episodic conversation history)
     if enrichment_source in ("all", "diary") and keywords:
@@ -888,22 +1032,26 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"memory digest step failed (non-fatal): {e}", "memory")
 
-    # Step 6: Tool selection and description
-    # Use cached MCP tools (discovered at startup, refreshed on memory expiry or manual request)
-    mcp_tools = {}
-    if getattr(cfg, "mcps", {}):
-        try:
-            from ..tools.registry import get_cached_mcp_tools
-            mcp_tools = get_cached_mcp_tools()
-        except Exception as e:
-            debug_log(f"⚠️ Failed to get cached MCP tools: {e}", "mcp")
-            mcp_tools = {}
-
-    # Select tools relevant to this query (strategy controlled by config)
+    # Step 6: Tool allow-list for this turn.
+    #
+    # The tool router (`select_tools`) is the authoritative picker. The
+    # planner's tool references are advisory — unioned into the allow-list
+    # so a tool the planner named but the router missed is still callable,
+    # but the router's picks are never dropped. Small models (gemma4:e2b)
+    # tend to default to the most universal tool they know (typically
+    # `webSearch`) when they should pick a specific one (`getWeather`,
+    # `getTime`); the dedicated router is tuned for that classification
+    # and consistently outperforms the planner at it. An earlier variant
+    # of this step let the planner REPLACE the router to save one LLM
+    # call; that was reverted when measurable tool-picking quality dropped.
+    _plan_under_specified = bool(action_plan) and plan_has_unresolved_tool_steps(
+        action_plan, _full_catalog_names
+    )
     try:
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
+
     allowed_tools = select_tools(
         query=redacted,
         builtin_tools=BUILTIN_TOOLS,
@@ -914,29 +1062,33 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
-        # Same compact context the memory extractor uses, so the router can
-        # judge "already answerable from live context → 'none'" directly
-        # from the visible data rather than from enumerated special-cases.
-        # Degrades gracefully: if time/location lookup failed, context_hint
-        # is None or partial and the router simply picks on content.
         context_hint=context_hint,
     )
+    _selection_source = strategy.value
+    if action_plan and not _plan_under_specified:
+        for _plan_name in tool_names_in_plan(action_plan, _full_catalog_names):
+            if _plan_name not in allowed_tools:
+                allowed_tools.append(_plan_name)
+                _selection_source = f"{strategy.value}+plan"
+    # `stop` is the termination sentinel — always exposed so the chat
+    # model can emit it once it has enough to answer.
+    if "stop" not in allowed_tools:
+        allowed_tools.append("stop")
     # Always expose the escape-hatch tool so the chat model can widen the
     # allow-list mid-loop when the initial routing turned out too narrow.
-    # `stop` is already guaranteed by the selector's _ALWAYS_INCLUDED set.
     if "toolSearchTool" not in allowed_tools:
         allowed_tools.append("toolSearchTool")
-    # Surface tool selection in the user-visible console so it's debuggable
-    # without voice_debug. When the list is very long the most-relevant
-    # handful is already enough signal (the full list is in debug_log).
     _selected_preview = ", ".join(allowed_tools[:8]) + (
         f" (+{len(allowed_tools) - 8} more)" if len(allowed_tools) > 8 else ""
     )
     print(
-        f"  🔧 Tools ({strategy.value}): {len(allowed_tools)} selected — {_selected_preview}",
+        f"  🔧 Tools ({_selection_source}): {len(allowed_tools)} selected — {_selected_preview}",
         flush=True,
     )
-    debug_log(f"  🔧 Tool selection ({strategy.value}): {len(allowed_tools)} tools selected", "planning")
+    debug_log(
+        f"  🔧 Tool selection ({_selection_source}): {len(allowed_tools)} tools selected",
+        "planning",
+    )
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
     tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
@@ -995,72 +1147,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "planning",
             )
 
-    # Pre-loop task-list planner (issue #231). One short LLM pass over the
-    # query + dialogue + memory + allowed tools that emits an ordered list
-    # of concrete sub-tasks. We inject the plan into the initial system
-    # message as an ``ACTION PLAN:`` block and, in the tool-result loop,
-    # use the plan to drive a progress-aware remainder nudge. The plan is
-    # advisory, not executed directly — the chat model still emits tool
-    # calls itself, but now with a pre-committed structure it can follow
-    # instead of having to re-derive the multi-step shape every turn.
-    #
-    # Fails open: empty plan means "fall through to prior behaviour"
-    # (compound_query split + generic completeness prompt).
-    action_plan: list[str] = []
-    try:
-        _plan_tools: list[tuple[str, str]] = []
-        for _schema in (tools_json_schema or []):
-            _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
-            if isinstance(_fn, dict):
-                _nm = _fn.get("name")
-                _desc = (_fn.get("description") or "").strip().splitlines()
-                _first = _desc[0] if _desc else ""
-                if _nm:
-                    _plan_tools.append((str(_nm), _first[:120]))
-        # Compose a compact dialogue snippet (last ~3 turns) for the planner.
-        _dialogue_lines: list[str] = []
-        for _m in (recent_messages or [])[-6:]:
-            _role = _m.get("role", "")
-            _content = (_m.get("content") or "").strip().replace("\n", " ")
-            if _role in ("user", "assistant") and _content:
-                _dialogue_lines.append(f"{_role}: {_content[:200]}")
-        _dialogue_ctx = "\n".join(_dialogue_lines)
-        # Concatenate the memory context sources the system message already
-        # uses, so the planner sees exactly what the chat model will see.
-        _memory_ctx_parts: list[str] = []
-        if memory_digest_text:
-            _memory_ctx_parts.append(memory_digest_text)
-        if conversation_context:
-            _memory_ctx_parts.append(conversation_context)
-        if graph_context:
-            _memory_ctx_parts.append(graph_context)
-        _memory_ctx_full = "\n".join(_memory_ctx_parts)
-        if len(_memory_ctx_full) > 2000:
-            debug_log(
-                f"planner memory context truncated {len(_memory_ctx_full)}→2000 chars",
-                "planning",
-            )
-        _memory_ctx = _memory_ctx_full[:2000]
-
-        action_plan = plan_query(
-            cfg=cfg,
-            query=redacted,
-            dialogue_context=_dialogue_ctx,
-            memory_context=_memory_ctx,
-            tools=_plan_tools,
-        )
-        if action_plan:
-            _plan_preview = " | ".join(s[:50] for s in action_plan)
-            print(
-                f"  🗺️ Plan: {len(action_plan)} step(s) — {_plan_preview}",
-                flush=True,
-            )
-            debug_log(
-                f"planner produced {len(action_plan)} step(s)", "planning"
-            )
-    except Exception as _plan_exc:  # pragma: no cover — defensive
-        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
-        action_plan = []
+    # Strip the engine-internal `searchMemory` directive from the plan
+    # before anything downstream reads it — the chat model shouldn't see
+    # a pseudo-tool it can't call, and the direct-exec path must step
+    # over it since we've already satisfied the directive by running the
+    # memory enrichment above. The planner's ordered tool/synthesis
+    # steps are preserved unchanged.
+    action_plan = strip_memory_directives(action_plan)
 
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)
@@ -1079,6 +1172,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append(
                 "Always respond in English regardless of the language the user speaks in."
             )
+
+        if warm_profile_block:
+            # Pre-query, query-agnostic user context. Lives OUTSIDE the
+            # conversation-history section because it isn't a history
+            # snapshot — it's the assistant's standing knowledge of who
+            # it's serving and what rules it's been told to obey. Kept
+            # here (rather than inside the Diary/Graph enrichment block
+            # below) because it must be present on every turn, not
+            # gated by the planner's searchMemory decision.
+            guidance.append("\n" + warm_profile_block)
 
         if conversation_context:
             # Two safety framings, both needed:
@@ -1127,7 +1230,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 + memory_digest_text
             )
 
-        if action_plan:
+        if len(action_plan) > 1:
+            # A single "Reply to the user." plan is the planner's
+            # positive no-op: memory/tools not needed. Injecting an
+            # ACTION PLAN block for it would just add noise.
             guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
@@ -1356,7 +1462,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # See planner.spec.md.
         if (
             use_text_tools
-            and action_plan
+            and len(action_plan) > 1
+            and not _plan_under_specified
         ):
             _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = sum(

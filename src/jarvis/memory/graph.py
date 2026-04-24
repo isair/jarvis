@@ -33,6 +33,56 @@ SUMMARY_MAX_LENGTH = 300     # max characters for a node description
 DECAY_HALF_LIFE_DAYS = 14    # days until a node's access score halves
 
 
+# ── Fixed top-level branches ────────────────────────────────────────────────
+#
+# The root is seeded with three fixed children on first run. The graph
+# is still self-organising below these — auto-split/merge runs within
+# each branch — but the top level is purpose-shaped, not content-shaped,
+# so the extractor can route each new fact into the right semantic slot.
+#
+# - USER: everything about the person the assistant serves (identity,
+#   tastes, preferences, plans, opinions). Warm-loaded into the system
+#   prompt on every turn.
+# - DIRECTIVES: imperatives the user issued at the assistant about its
+#   own behaviour ("be concise", "use British English", "stop apologising").
+#   Verbatim rules, never summarised. Warm-loaded on every turn.
+# - WORLD: external facts with attribution (current graph content —
+#   films, businesses, recipes, techniques). Unbounded. Not warm-loaded;
+#   retrieved on demand via searchMemory.
+#
+# The IDs are stable strings so re-opening an existing graph is
+# idempotent — no duplicate branches get seeded if the store already
+# has them.
+
+BRANCH_USER = "user"
+BRANCH_DIRECTIVES = "directives"
+BRANCH_WORLD = "world"
+
+FIXED_BRANCHES: tuple[tuple[str, str, str], ...] = (
+    (
+        BRANCH_USER,
+        "User",
+        "Everything about the user: identity, location, relationships, "
+        "tastes, preferences, history, plans, opinions. Always injected "
+        "into the system prompt.",
+    ),
+    (
+        BRANCH_DIRECTIVES,
+        "Directives",
+        "Imperatives the user issued at the assistant about its own "
+        "behaviour — tone, verbosity, language, style rules. Verbatim, "
+        "never summarised. Always injected into the system prompt.",
+    ),
+    (
+        BRANCH_WORLD,
+        "World",
+        "External facts the assistant has learned and wants to carry "
+        "forward: films, businesses, recipes, techniques, events. "
+        "Retrieved on demand via searchMemory.",
+    ),
+)
+
+
 # ── SQL helpers ────────────────────────────────────────────────────────────
 
 def _decay_score_sql(half_life_days: int = DECAY_HALF_LIFE_DAYS) -> str:
@@ -151,13 +201,20 @@ class GraphMemoryStore:
             self.conn.commit()
 
     def _ensure_root(self) -> None:
-        """Create the root node if it doesn't exist."""
+        """Create the root node and the three fixed top-level branches
+        (User / Directives / World) if they don't exist.
+
+        Idempotent: each branch has a stable string id, so re-opening an
+        existing graph never duplicates them. Branches are also created
+        on first boot for existing graphs that predate the taxonomy —
+        this is the migration path.
+        """
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             row = self.conn.execute(
                 "SELECT id FROM memory_nodes WHERE parent_id IS NULL LIMIT 1"
             ).fetchone()
             if row is None:
-                now = datetime.now(timezone.utc).isoformat()
                 self.conn.execute(
                     """INSERT INTO memory_nodes
                        (id, name, description, data, parent_id,
@@ -168,6 +225,77 @@ class GraphMemoryStore:
                 )
                 self.conn.commit()
                 debug_log("Created root memory node", "memory")
+
+            # Seed fixed top-level branches under root. Each row is
+            # inserted with INSERT OR IGNORE keyed on the stable id so
+            # repeated boots are no-ops.
+            for branch_id, name, description in FIXED_BRANCHES:
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO memory_nodes
+                       (id, name, description, data, parent_id,
+                        access_count, last_accessed, created_at, updated_at,
+                        data_token_count)
+                       VALUES (?, ?, ?, '', 'root', 0, ?, ?, ?, 0)""",
+                    (branch_id, name, description, now, now, now),
+                )
+            self.conn.commit()
+
+    def migrate_legacy_shape(self) -> bool:
+        """Wipe the graph if it has a non-conforming (pre-taxonomy) shape.
+
+        The purpose-driven taxonomy (root → User / Directives / World)
+        is a hard reorganisation: pre-existing nodes under root that
+        don't match this shape would sit invisible to the warm profile
+        forever.
+        Rather than carrying them as dead weight, we wipe on daemon
+        start-up and let the diary re-import repopulate with correctly
+        classified facts.
+
+        Called ONLY from the daemon start-up path — the memory viewer
+        instantiates ``GraphMemoryStore`` read-mostly and must not
+        trigger a wipe mid-session.
+
+        Non-conforming shape is defined as:
+          - root has a direct child whose id is not in ``FIXED_BRANCHES``
+          - OR root's own ``data`` column is non-empty (cold-start writes
+            that landed on root before the taxonomy existed).
+
+        Returns True if a wipe happened, False if the graph was already
+        in the expected shape.
+        """
+        expected_ids = {bid for bid, _, _ in FIXED_BRANCHES}
+        with self._lock:
+            root_row = self.conn.execute(
+                "SELECT data FROM memory_nodes WHERE id = 'root'"
+            ).fetchone()
+            root_has_data = bool(root_row and (root_row["data"] or "").strip())
+
+            rogue_child = self.conn.execute(
+                "SELECT id FROM memory_nodes "
+                "WHERE parent_id = 'root' AND id NOT IN ({}) LIMIT 1".format(
+                    ",".join("?" * len(expected_ids))
+                ),
+                tuple(expected_ids),
+            ).fetchone()
+
+            if not root_has_data and rogue_child is None:
+                return False
+
+            reason = (
+                "root holds pre-taxonomy data"
+                if root_has_data
+                else f"found non-conforming root child: {rogue_child['id']!r}"
+            )
+            debug_log(
+                f"wiping knowledge graph ({reason}); will re-seed fixed branches",
+                "memory",
+            )
+            self.conn.execute("DELETE FROM memory_nodes")
+            self.conn.commit()
+
+        # Re-seed root + fixed branches from scratch.
+        self._ensure_root()
+        return True
 
     # ── CRUD ────────────────────────────────────────────────────────────
 

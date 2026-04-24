@@ -6,6 +6,38 @@ A self-organising node graph that stores the assistant's accumulated world knowl
 
 The graph dynamically structures knowledge by topic relevance using a hierarchical tree where nodes auto-split when they grow too large. Three fast-access entry points — **recent nodes**, **top nodes**, and **root node** — ensure the most relevant knowledge is always reachable without exhaustive search.
 
+## Fixed Top-Level Branches
+
+On first bootstrap the graph seeds three non-deletable branches under root, defined in `FIXED_BRANCHES` in `graph.py`:
+
+| Branch ID | Name | Purpose |
+|-----------|------|---------|
+| `user` | User | Everything about the user: identity, location, tastes, habits, history |
+| `directives` | Directives | Imperatives the user issued at the assistant: reply style, tone rules, standing instructions |
+| `world` | World | External facts the assistant has learned: discoveries, practical knowledge, current events |
+
+These branches are created idempotently via `INSERT OR IGNORE` on stable IDs. The structure is intentionally shallow and purpose-driven — splits deepen each subtree over time, but the top layer stays fixed so the **warm profile** (see below) has a stable shape.
+
+No Other branch: the extractor defaults unknown classifications to `user`. A fact that genuinely belongs nowhere should not be stored.
+
+### Legacy-Shape Migration (destructive)
+
+`GraphMemoryStore.migrate_legacy_shape()` checks the on-disk graph against the expected shape at daemon start-up. The graph is considered non-conforming if root has any direct child that isn't one of the fixed branches, or if root's own `data` column is non-empty (cold-start writes that landed on root before the taxonomy existed). In either case the entire `memory_nodes` table is wiped and root + the three fixed branches are re-seeded.
+
+Why destructive: pre-taxonomy nodes sitting under root would remain invisible to the warm profile forever. Carrying them as dead weight is worse than a clean slate. The diary is untouched, so users can re-populate via "Import from Diary" in the memory viewer once the wipe completes. Knowledge nodes are in beta — the structure and classification are now stable but the extractor quality is still being tuned.
+
+Called **only** from the daemon start-up path in `daemon.main()`. The memory viewer and reply engine instantiate `GraphMemoryStore` without triggering the migration, so a mid-session open never wipes anything.
+
+### Branch-Pinned Traversal
+
+`find_best_node(..., branch_root_id=...)` skips the recent/top entry points and descends from the given branch root only. This prevents cross-branch contamination when routing extracted facts: a User fact cannot land in the World subtree just because a World node was recently touched.
+
+## Warm Profile
+
+`build_warm_profile(store, *, user_max_chars, directives_max_chars)` returns a `{"user": "...", "directives": "..."}` dict by walking the User and Directives subtrees breadth-first (ordered by each sibling's decayed access score) and concatenating node data up to the char caps. `format_warm_profile_block(profile)` renders it as a labelled system-prompt section using denial-template mirroring (see CLAUDE.md): the headings literally occupy the semantic slot that small-model canonical denials refer to ("INFORMATION THE USER HAS SHARED IN PRIOR CONVERSATIONS", "STANDING INSTRUCTIONS FROM THE USER").
+
+The warm profile is injected into every reply's initial system message (see `reply/engine.py` Step 3.5) unconditionally and query-agnostically — personalisation is the default, not something gated behind a question-detection heuristic. No LLM call is involved in composition; it's a pure SQLite read.
+
 ## Data Model
 
 ### MemoryNode
@@ -116,8 +148,8 @@ The graph memory system is fully automatic — no tool calls required. It integr
 Piggybacks on the existing diary update flow in `conversation.py`:
 
 1. After a successful diary update, the conversation summary is passed to `update_graph_from_dialogue()`
-2. **Extract**: LLM extracts novel knowledge from the summary — anything learned that the assistant wouldn't already know. This includes user-specific facts, real-world discoveries (opening hours, local businesses), practical knowledge (recipes, techniques), and current events. Requests are reframed as knowledge ("user asked about CEX hours" → "CEX Kensington closes at 6pm on Sundays"). The diary entry date is included for temporal context. Patterns and consolidation emerge through auto-split.
-3. **Traverse**: Each fact is placed in the best-fitting node using the three entry points:
+2. **Extract + classify**: LLM extracts novel knowledge from the summary and classifies each fact into one of the three fixed branches (`USER` / `DIRECTIVES` / `WORLD`). Output is a JSON list of `{"branch": "...", "fact": "..."}` objects. Rough routing heuristic baked into the prompt: if the user is *telling the assistant how to behave* → DIRECTIVES; if the user is *telling the assistant about themselves* → USER; if the assistant *discovered a fact about the world* → WORLD. Unknown branches default to USER. Requests are reframed as knowledge ("user asked about CEX hours" → "CEX Kensington closes at 6pm on Sundays"). Patterns and consolidation emerge through auto-split.
+3. **Traverse**: Each fact is placed in the best-fitting node using branch-pinned descent from its tagged branch root (recent/top shortcuts are skipped so cross-branch contamination is impossible):
    - **Recent nodes** — checked first; follows conversational momentum
    - **Top nodes** — checked second; matches frequently accessed knowledge domains
    - **Root traversal** — greedy top-down descent; LLM picks the best child at each level, or stops at the current node if none fit
@@ -125,7 +157,7 @@ Piggybacks on the existing diary update flow in `conversation.py`:
 4. **Append**: The fact is appended to the chosen node's data
 5. **Split**: If the node now exceeds `SPLIT_THRESHOLD`, auto-split is triggered
 
-Cold start: everything goes to root until enough data accumulates for the first auto-split. The tree structure emerges organically.
+Cold start: each fact lands directly on its tagged branch root (User / Directives / World) until enough data accumulates there for the first auto-split. The tree structure emerges organically under each branch.
 
 LLM failure at any step is non-fatal — the diary update still succeeds, and the graph simply misses that cycle.
 
@@ -144,7 +176,9 @@ Controlled by `memory_enrichment_source` config:
 - `"diary"` — only diary (conversation summaries) used for enrichment
 - `"graph"` — only graph (structured knowledge) used for enrichment
 
-Default is `"diary"` — graph enrichment can be enabled once tested. Both systems always receive writes regardless of this setting.
+Default is `"all"` — both channels enrich replies. The graph has graduated from alpha to beta with the purpose-driven taxonomy and warm profile now always-on, so the default flipped from `"diary"` to include graph recall too. Both systems always receive writes regardless of this setting.
+
+Note: the always-on warm profile (User + Directives injected on every turn) is separate from query-driven enrichment. Warm profile covers "who the user is"; enrichment covers "what the user has said/seen about this specific topic". The graph contributes to both.
 
 ## Configuration
 
@@ -158,7 +192,7 @@ Default is `"diary"` — graph enrichment can be enabled once tested. Both syste
 | `DECAY_HALF_LIFE_DAYS` | 14 | Days until a node's access score halves |
 | `MAX_TRAVERSAL_DEPTH` | 8 | Safety limit on graph traversal |
 | `SUMMARY_MAX_LENGTH` | 300 | Max chars for node description |
-| `memory_enrichment_source` | `"diary"` | Which system enriches replies: `"all"`, `"diary"`, or `"graph"` |
+| `memory_enrichment_source` | `"all"` | Which system enriches replies: `"all"`, `"diary"`, or `"graph"` |
 
 ## UI: Memory Viewer Integration
 

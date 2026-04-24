@@ -31,9 +31,20 @@ Design principles enforced by the engine:
 2. Recent Dialogue Context
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
 
-4. Conversation Memory Enrichment (optional)
+3. Pre-flight Planner
+   - The task-list planner (`plan_query` in `src/jarvis/reply/planner.py`) runs **first**, before any memory lookup or tool routing. It sees the query, a compact dialogue snippet, and the full builtin + MCP tool catalogue (names + one-line descriptions).
+   - The planner emits an ordered list of short sub-tasks (max 5). Two of the tokens are structural for the engine:
+     - `searchMemory topic='...'` as a leading step means "answering requires information from prior conversations"; the engine runs memory enrichment. Omitting it means "no memory needed".
+     - Concrete tool steps (e.g. `webSearch query='...'`) name specific tools; the engine uses those names as the allow-list directly.
+   - An empty plan (disabled, LLM timeout, too short) is the fail-open state — the engine reverts to running the memory extractor and the `select_tools` router as before.
+   - A single-step `["Reply to the user."]` plan is a positive "no memory, no tools" decision — the engine skips the memory extractor, the tool router, the diary / graph / digest LLM calls, and the direct-exec path entirely.
+   - See `planner.spec.md` for the full prompt contract, helpers, and fail-open invariants.
+
+4. Conversation Memory Enrichment (gated)
+   - Runs only when the planner emitted a `searchMemory` directive OR the planner returned an empty plan (fail-open). Skipped otherwise, along with the keyword-extractor LLM call, the diary and graph queries, and the memory-digest LLM call.
    - Extract search parameters via `extract_search_params_for_memory(query, base_url, router_model, ..., context_hint=...)`.
      - Runs on the tool-router model chain (`resolve_tool_router_model(cfg)` → `tool_router_model → intent_judge_model → ollama_chat_model`), not the big chat model. The extractor is a small classification-shaped task and rides the already-warm router/judge model instead of paging in the chat weights.
+     - The planner's `topic` hint (when present) is appended to the query the extractor sees, so keyword selection anchors on what the planner actually wanted to look up.
      - Output fields: `keywords: List[str]`, optional `from`, optional `to`, optional `questions: List[str]`.
      - `context_hint` carries a compact summary of what is already live in the assistant's context (current time, location, short-term dialogue). The extractor uses it to skip implicit personal questions whose answers are already visible — those facts do not need to be pulled from long-term memory.
    - If `keywords` present, call `search_conversation_memory_by_keywords(db, keywords, from_time, to_time, ...)` to retrieve relevant snippets (bounded by configured max results).
@@ -79,8 +90,8 @@ Design principles enforced by the engine:
    - When detected, the engine falls back to the standard "I had trouble understanding that request" error reply (model-size-aware). The malformed content is never shown to the user.
 
    Task-list planner (all model sizes, strongest impact on small models):
-   - After tool selection and before the agentic loop begins, the engine calls `plan_query` in `src/jarvis/reply/planner.py`. The planner runs one short LLM pass on the router/intent-judge/chat-model chain (same warm small model as other classification-shaped passes) and emits an ordered list of short imperative sub-tasks (max 5). See `planner.spec.md` for the prompt contract and fail-open semantics.
-   - When the planner emits a non-trivial plan, `format_plan_block(steps)` appends an `ACTION PLAN:` section to the initial system message so the chat model can see its own pre-committed sub-tasks in order.
+   - The planner runs at the **front** of the reply flow (see step 3 above), not after tool selection. By the time the agentic loop starts, the plan already exists, the memory block has either been run or skipped based on the plan's `searchMemory` directive, and the tool allow-list has been derived from the tool names the plan referenced. See `planner.spec.md` for the prompt contract and fail-open semantics.
+   - When the plan has more than one step, `format_plan_block(steps)` appends an `ACTION PLAN:` section to the initial system message so the chat model can see its own pre-committed sub-tasks in order. A single reply-only plan renders nothing — it's the planner's positive no-op signal.
    - When `use_text_tools` is True and the plan still has unexecuted tool steps, the engine runs `resolve_next_tool_call` at the top of each loop iteration. That call converts the next planned step (with `<placeholder>` entity references) into a concrete `{name, arguments}` JSON, validates the name against the per-turn allow-list, and direct-executes the tool. The chat model is only invoked for the final synthesis turn. This direct-exec path fires at the top of each loop iteration, before the chat model is called.
    - After each tool result, `progress_nudge(steps, tool_results_so_far)` builds a per-turn remainder hint that names the next planned step and reminds the model to substitute entities discovered in prior results. This replaces the generic completeness prompt whenever a plan is present.
    - If the planner returns an empty list (short query, disabled, LLM failure, trivial single-reply plan), the engine behaves exactly as it did pre-planner and falls through to the compound-query fallback below.
@@ -94,8 +105,8 @@ Design principles enforced by the engine:
    - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
 
    Tool allow-list per turn:
-   - Initial routing (the existing `select_tools` call) still runs once, before the loop, outside the LLM's awareness. Its output determines the *default* tool allow-list for the loop.
-   - The per-turn allow-list exposed to the chat model is: `<router's picks>` + `stop` (the sentinel) + `toolSearchTool`.
+   - `select_tools` always runs and is the authoritative picker. When the planner produced a non-empty plan, the tools it referenced are unioned into the router's allow-list so a tool the planner named but the router missed is still callable. An earlier variant let the planner replace the router to save one LLM call; reverted when tool-picking quality dropped on small models (they default to `webSearch` where a dedicated tool like `getWeather` should win).
+   - The per-turn allow-list exposed to the chat model is: `<plan or router picks>` + `stop` (the sentinel) + `toolSearchTool`.
    - `toolSearchTool` wraps the same routing logic (`select_tools`) but is invokable mid-loop. It takes a refined natural-language description of what the model is trying to accomplish and returns the expanded set of candidate tools. When invoked, the returned tools are merged into the allow-list for subsequent turns (still plus `stop` and `toolSearchTool` itself). This gives the agent a single-shot escape hatch when the initial routing was too narrow without widening the allow-list to "everything" by default.
    - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.
 
@@ -323,7 +334,7 @@ Behaviour:
 - **Gating**: `memory_digest_enabled` (config). `None` (default) means auto-on for SMALL models, off for LARGE. Explicit `true`/`false` forces.
 - **Short-circuit**: if the raw block is below `_DIGEST_MIN_CHARS` (400 chars), it's passed through unchanged — the LLM round-trip costs more than it saves.
 - **Batching**: if the raw block exceeds `_DIGEST_BATCH_MAX_CHARS` (2000 chars, ~500 tokens), snippets are greedy-packed into batches, each distilled independently; surviving notes are joined. Single large snippets become their own oversized batch rather than being split mid-text.
-- **Graph is alpha**: when no graph nodes are present, only diary entries are digested. When only graph nodes are present, graph nodes alone are digested. Either channel is optional.
+- **Graph is beta**: when no graph nodes are present, only diary entries are digested. When only graph nodes are present, graph nodes alone are digested. Either channel is optional.
 - **NONE sentinel**: the distil prompt instructs the model to reply `NONE` (or variants `(NONE)`, `[NONE]`, `N/A`) when nothing in the snippets is directly relevant. This maps to an empty digest — no memory block is injected at all.
 - **Engagement-as-preference for recommendation queries**: for recommendation / opinion / "what should I" queries (watch, cook, read, listen, visit, etc.), past user interactions with items in the same domain count as preference signals even when no preference was stated in plain words. The distil prompt surfaces the specific items the user has engaged with (and flags them as "already covered" so the assistant can avoid re-recommending them), rather than NONE-ing them out for lacking an explicit "I prefer X" statement. Domain-agnostic. Guarded by `evals/test_memory_digest_preferences.py`.
 - **Length cap**: per-batch digests are truncated to `_DIGEST_MAX_CHARS` (500 chars) with an ellipsis; the combined digest across batches is at most `_DIGEST_MAX_CHARS * num_batches`, but in practice most batches return NONE.

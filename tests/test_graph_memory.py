@@ -12,7 +12,13 @@ from src.jarvis.memory.graph import (
     _estimate_tokens,
     SPLIT_THRESHOLD,
     MERGE_THRESHOLD,
+    FIXED_BRANCHES,
 )
+
+# Number of fixed top-level branches seeded under root on bootstrap
+# (User / Directives / World). See graph.py FIXED_BRANCHES.
+SEEDED = len(FIXED_BRANCHES)
+BOOTSTRAP_NODE_COUNT = SEEDED + 1  # seeded branches + root
 
 
 @pytest.fixture
@@ -81,8 +87,9 @@ class TestGraphMemoryStoreBootstrap:
         root_nodes = [n for n in nodes if n.parent_id is None]
         assert len(root_nodes) == 1
 
-    def test_node_count_starts_at_one(self, store):
-        assert store.get_node_count() == 1  # root only
+    def test_node_count_starts_with_seeded_branches(self, store):
+        # root + fixed branches (User / Directives / World)
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
 
     def test_total_tokens_zero_for_empty_graph(self, store):
         assert store.get_total_tokens() == 0
@@ -101,6 +108,63 @@ class TestGraphMemoryStoreBootstrap:
         root = store.get_root()
         store.update_node(root.id, description="updated description")
         assert store.get_total_tokens() == 0
+
+
+@pytest.mark.unit
+class TestMigrateLegacyShape:
+    """Startup wipe when the on-disk graph predates the User/Directives/World taxonomy."""
+
+    def test_no_wipe_on_fresh_graph(self, store):
+        """Freshly seeded graph (root + 3 branches, no data) is conforming."""
+        assert store.migrate_legacy_shape() is False
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
+
+    def test_no_wipe_when_only_descendants_of_fixed_branches(self, store):
+        """Children grown under User/Directives/World are fine — the shape
+        check only looks at direct root children."""
+        store.create_node(
+            name="Identity", description="who the user is",
+            data="User's name is Baris.", parent_id="user",
+        )
+        assert store.migrate_legacy_shape() is False
+        # Content preserved
+        assert any(
+            n.name == "Identity" for n in store.get_all_nodes()
+        )
+
+    def test_wipes_when_root_has_rogue_child(self, store):
+        """Pre-taxonomy nodes sitting directly under root trigger a wipe."""
+        store.create_node(
+            name="People", description="pre-taxonomy category",
+            data="Alice is a friend.", parent_id="root",
+        )
+        assert store.migrate_legacy_shape() is True
+        # After wipe: only root + seeded branches, no rogue child
+        names = {n.name for n in store.get_all_nodes()}
+        assert "People" not in names
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
+
+    def test_wipes_when_root_itself_has_data(self, store):
+        """Cold-start facts appended to root before the taxonomy existed
+        also count as non-conforming."""
+        store.conn.execute(
+            "UPDATE memory_nodes SET data = ? WHERE id = 'root'",
+            ("Some pre-taxonomy fact on root.",),
+        )
+        store.conn.commit()
+        assert store.migrate_legacy_shape() is True
+        root = store.get_root()
+        assert root.data == ""
+
+    def test_reseeds_fixed_branches_after_wipe(self, store):
+        """After a wipe the three fixed branches are present again."""
+        store.create_node(
+            name="Rogue", description="x", data="y", parent_id="root",
+        )
+        assert store.migrate_legacy_shape() is True
+        children = store.get_children("root")
+        child_ids = {c.id for c in children}
+        assert child_ids == {b[0] for b in FIXED_BRANCHES}
 
 
 @pytest.mark.unit
@@ -174,7 +238,8 @@ class TestNodeRelationships:
         c = store.create_node(name="C", description="c", parent_id=a.id)
 
         root_children = store.get_children("root")
-        assert len(root_children) == 2
+        # 2 test nodes + SEEDED fixed branches
+        assert len(root_children) == 2 + SEEDED
         child_ids = {c.id for c in root_children}
         assert a.id in child_ids
         assert b.id in child_ids
@@ -210,19 +275,20 @@ class TestNodeRelationships:
 
         tree = store.get_subtree("root", max_depth=3)
         assert tree["node"]["id"] == "root"
-        assert len(tree["children"]) == 1
-        assert tree["children"][0]["node"]["id"] == a.id
-        assert len(tree["children"][0]["children"]) == 1
-        assert tree["children"][0]["children"][0]["node"]["id"] == b.id
+        assert len(tree["children"]) == 1 + SEEDED
+        a_child = next(c for c in tree["children"] if c["node"]["id"] == a.id)
+        assert len(a_child["children"]) == 1
+        assert a_child["children"][0]["node"]["id"] == b.id
 
     def test_get_subtree_depth_limit(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
         b = store.create_node(name="B", description="b", parent_id=a.id)
 
         tree = store.get_subtree("root", max_depth=1)
-        # root (depth 0) -> A (depth 1), but B (depth 2) should not appear
-        assert len(tree["children"]) == 1
-        assert tree["children"][0]["children"] == []
+        # root (depth 0) -> A + seeded branches (depth 1), but B (depth 2) should not appear
+        assert len(tree["children"]) == 1 + SEEDED
+        for child in tree["children"]:
+            assert child["children"] == []
 
 
 @pytest.mark.unit
@@ -282,8 +348,10 @@ class TestGraphVisualisation:
         data = store.get_graph_data("root", max_depth=5)
         assert "nodes" in data
         assert "edges" in data
-        assert len(data["nodes"]) == 3  # root, A, B
-        assert len(data["edges"]) == 2  # root->A, A->B
+        # root + seeded branches + A + B
+        assert len(data["nodes"]) == BOOTSTRAP_NODE_COUNT + 2
+        # seeded edges (root->each branch) + root->A + A->B
+        assert len(data["edges"]) == SEEDED + 2
 
     def test_graph_data_includes_depth(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
@@ -312,21 +380,21 @@ class TestGraphVisualisation:
         store.create_node(name="B", description="b", parent_id="root")
 
         all_nodes = store.get_all_nodes()
-        assert len(all_nodes) == 3  # root + A + B
+        assert len(all_nodes) == BOOTSTRAP_NODE_COUNT + 2  # root + seeded + A + B
 
     def test_node_count(self, store):
-        assert store.get_node_count() == 1
-        node = store.create_node(name="A", description="a", parent_id="root")
-        assert store.get_node_count() == 2
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
+        store.create_node(name="A", description="a", parent_id="root")
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT + 1
 
     def test_node_count_after_delete(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
         b = store.create_node(name="B", description="b", parent_id="root")
-        assert store.get_node_count() == 3  # root + A + B
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT + 2
         store.delete_node(a.id)
-        assert store.get_node_count() == 2  # root + B
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT + 1
         store.delete_node(b.id)
-        assert store.get_node_count() == 1  # root only
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
 
 
 @pytest.mark.unit

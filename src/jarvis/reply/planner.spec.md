@@ -6,11 +6,31 @@ Small chat models (gemma4:e2b class) don't reliably decompose multi-step
 queries turn-by-turn. They stop after one tool call when a second is
 needed, echo the raw user utterance into tool arguments, or skip tools
 entirely and confabulate from training. The planner fixes this by
-running a single cheap classification-shaped LLM pass at the top of the
-reply flow that emits a short ordered list of sub-tasks. The engine
-then uses that plan both as context for the chat model and as the
-driver of a direct-execution path that resolves each step to a concrete
-tool call without needing the chat model to plan turn-by-turn.
+running a single cheap classification-shaped LLM pass **at the very
+front of the reply flow** that emits a short ordered list of sub-tasks.
+
+The planner runs **before** memory search and tool routing, and it
+**gates** both: every preparatory step the reply flow might take
+(pulling past-conversation memory, narrowing the tool allow-list,
+direct-executing tool calls) is decided by the plan.
+
+The engine uses the plan for three things:
+1. **Gate memory enrichment** — the planner emits an explicit
+   `searchMemory topic='<topic>'` directive on queries that need past
+   user context; we skip the keyword-extraction LLM call, the diary
+   / graph lookup, and the memory-digest LLM call otherwise.
+2. **Augment the tool router** — the tool names the planner references
+   are unioned into the router-selected allow-list, so a tool the
+   planner named but the router missed is still callable. The router
+   (`select_tools`) remains the authoritative picker; an earlier
+   variant let the planner replace it to save one LLM call, but
+   measurable tool-picking quality dropped (gemma4:e2b class models
+   default to the most universal tool they know — typically
+   `webSearch` — when they should pick a dedicated one like
+   `getWeather`). The dedicated router is tuned for that classification.
+3. **Drive direct execution** for small models, as before — each
+   planned step is resolved to a concrete tool call without
+   round-tripping the chat model for intermediate turns.
 
 ## Scope
 
@@ -21,24 +41,33 @@ integration in `src/jarvis/reply/engine.py`.
 
 ### When the planner runs
 
-- After tool selection (the router has produced a tools allow-list).
-- Only when the query is at least `MIN_QUERY_CHARS` long (default 20).
-  Shorter utterances are either trivial or not multi-step.
+- **First**, immediately after the dialogue context is assembled and
+  MCP tools are loaded. Memory search and tool routing run *after* the
+  planner so that both can be gated on its output.
+- The planner sees the full builtin + MCP tool catalog (name +
+  one-line description). It does not see memory content — it decides
+  whether memory is needed, via the `searchMemory` directive.
+- Only when the query is at least `MIN_QUERY_CHARS` long (default 4).
+  Pure noise like "hi" / "ok" still short-circuits.
 - Only when `cfg.planner_enabled` is True (default).
 - Only when an `ollama_base_url` and a resolvable model are available.
 
 ### Model resolution
 
-Same chain as the tool router:
+1. `cfg.planner_model` (explicit override, for benchmarking)
+2. `cfg.ollama_chat_model`
 
-1. `cfg.planner_model` (explicit override)
-2. `cfg.tool_router_model`
-3. `cfg.intent_judge_model`
-4. `cfg.ollama_chat_model`
+The planner must track the chat model. The plan is the scaffolding the
+chat model follows; a weaker planner on top of a stronger chat model
+produces bad scaffolding the chat model then fights against. The chat
+model is also the one the user picked during setup as their quality
+target, so upgrading it (through the setup wizard or config) must
+automatically upgrade plan quality without requiring a second choice.
 
-Planning is classification-shaped so it rides the warm small model
-instead of paging in a separate planner model. This preserves KV-cache
-warmth across planner, router, and intent judge.
+Note: the planner pays a cache miss relative to the tool router, which
+*does* ride the warm small model. This is the intended trade-off —
+plan quality drives everything downstream, router quality only narrows
+one turn's allow-list.
 
 ### Prompt contract (plan_query)
 
@@ -46,12 +75,19 @@ The planner prompt instructs the model to emit:
 
 - Short imperative sub-tasks, one per line.
 - At most `MAX_STEPS` (default 5) steps.
-- Tool names from the provided allow-list only.
-- Concrete arguments composed against dialogue + memory context, not
-  the raw utterance.
+- As the FIRST step, a `searchMemory topic='<topic>'` directive **only
+  when** answering requires information the user shared in prior
+  conversations. Omit otherwise — every extra directive is an
+  avoidable LLM call downstream.
+- Tool names from the provided catalog only (exact match), for any
+  concrete tool step.
+- Concrete arguments composed against dialogue context, not the raw
+  utterance. Optional arguments that the user did not supply must be
+  omitted, not fabricated from unrelated words.
 - Angle-bracket placeholders (e.g. `<director name from step 1>`) for
   entities the lookup will reveal at runtime.
-- A final synthesis/reply step when any tools are planned.
+- A final synthesis/reply step when any `searchMemory` or tool step
+  was planned.
 - Steps in the same language the user wrote the query in.
 
 ### Parsing and hygiene
@@ -60,17 +96,50 @@ The planner prompt instructs the model to emit:
   and markdown fences are stripped.
 - Overlong steps (>200 chars) are truncated with an ellipsis.
 - The list is capped at `MAX_STEPS`.
-- Trivial plans (length ≤ 1) return an empty list so the engine falls
-  through to existing behaviour. The planner prompt (rule 8) mandates
-  a final synthesis step whenever any tool is planned, so a 1-step
-  plan is by contract a pure reply and adds no value. This check is
-  purely structural — no language-specific verb matching — so the
-  filter works for any language the planner emits.
+- The planner no longer filters out 1-step plans. A single
+  `["Reply to the user."]` plan is the planner's *positive* decision
+  that no memory or tools are needed — the engine uses that to skip
+  the memory extractor, the tool router, and the direct-exec path
+  entirely. Only an **empty** list means "planner failed / disabled;
+  fall open to legacy safe defaults" (run memory enrichment + tool
+  router). The two states must stay distinguishable.
 
 ### Engine integration
 
+The engine consumes the plan in two phases.
+
+**Phase 1 — preparation gating (before the turn loop starts):**
+
+- `plan_requires_memory(plan)` — true iff any step is a `searchMemory`
+  directive. The engine uses it to gate the entire memory-enrichment
+  block (keyword extractor LLM call, diary / graph lookups, digest
+  LLM call). Optional `memory_topic_of(step)` extracts the directive's
+  `topic='...'` hint, threaded into the keyword extractor so it
+  anchors on what the planner wanted to look up rather than
+  re-deriving from the raw utterance.
+- `tool_names_in_plan(plan, known_names)` — ordered de-duped list of
+  tool names the planner referenced. The engine unions this into the
+  router-selected allow-list (never replaces it). `stop` and
+  `toolSearchTool` are always added regardless.
+- `plan_has_unresolved_tool_steps(plan, known_names)` — true when the
+  plan has non-synthesis steps but names no known tool (e.g. the
+  model wrote `get the weather` instead of `getWeather ...`). In
+  this state the direct-exec path is skipped — vague step text
+  would otherwise force the resolver LLM to guess arguments (e.g.
+  emitting `location='Nowhere'` for a bare weather request). The
+  chat model takes the turn instead, using the router-selected
+  allow-list.
+- `strip_memory_directives(plan)` — the engine strips the
+  `searchMemory` step from the plan once memory has been fetched, so
+  downstream consumers (system-message injection, direct-exec,
+  progress nudge) see a plan of pure tool + synthesis steps.
+
+**Phase 2 — loop integration (existing behaviour):**
+
 - `format_plan_block(steps)` renders an `ACTION PLAN:` block that is
   appended to the initial system message. Empty plan renders nothing.
+  Single-step reply-only plans are not rendered either — they are
+  noise to the chat model since the plan just says "reply".
 - `progress_nudge(steps, tool_results_so_far)` produces a remainder
   hint injected after each tool result, naming the next planned step
   and reminding the model to substitute discovered entities and avoid

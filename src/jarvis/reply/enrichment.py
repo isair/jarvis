@@ -307,8 +307,8 @@ def digest_memory_for_query(
     batch is distilled independently; the surviving notes are joined.
     Empty is the correct answer most of the time.
 
-    The graph is currently in alpha and optional — when no graph nodes are
-    provided, only diary entries are digested.
+    The graph is in beta and optional — when no graph nodes are provided,
+    only diary entries are digested.
 
     Returns:
       - A short string (usually ≤ _DIGEST_MAX_CHARS, up to one per batch)

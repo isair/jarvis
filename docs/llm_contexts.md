@@ -13,6 +13,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Redacted user query
   - Recent dialogue (last 5 minutes)
   - Unified system prompt from [src/jarvis/system_prompt.py](src/jarvis/system_prompt.py) + ASR note + tool-protocol guidance
+  - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default)
   - Digested memory enrichment (optional, see #4)
   - Time + location context (re-injected each turn)
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
@@ -37,11 +38,11 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 3. Memory Enrichment Extractor
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `extract_search_params_for_memory()` (~line 71).
-- **Trigger**: once per reply before the loop.
-- **Model / gating**: resolved via `resolve_tool_router_model(cfg)` — `tool_router_model → intent_judge_model → ollama_chat_model`. Small classification task; rides the same small/warm model as the router. Not optional; silent empty-dict on failure.
-- **Inputs**: user query, optional context hint (live-context compact summary), UTC now.
+- **Trigger**: once per reply, **only when the pre-flight planner (#12) emitted a `searchMemory` directive or returned an empty plan (fail-open)**. Pure reply-only plans skip this entirely — saves one LLM call per greeting / small-talk turn.
+- **Model / gating**: resolved via `resolve_tool_router_model(cfg)` — `tool_router_model → intent_judge_model → ollama_chat_model`. Small classification task; rides the same small/warm model as the router. Silent empty-dict on failure.
+- **Inputs**: user query (with the planner's `topic` hint appended when present), optional context hint (live-context compact summary), UTC now.
 - **System prompt**: inline at [enrichment.py:35-63](src/jarvis/reply/enrichment.py:35).
-- **Output**: `{keywords, from?, to?, questions?}`. Consumed by memory search at ~engine.py:1359.
+- **Output**: `{keywords, from?, to?, questions?}`. Consumed by memory search in the reply engine.
 - **Limits**: up to 2 retries; timeout from `llm_tools_timeout_sec`.
 
 ## 4. Memory Digest (optional, SMALL models)
@@ -77,7 +78,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 7. Tool Router (pre-loop tool selection)
 
 - **File**: [src/jarvis/tools/selection.py](src/jarvis/tools/selection.py) — `select_tools_with_llm()` (~line 331).
-- **Trigger**: once per reply before the loop, if `tool_selection_strategy == "llm"` (default). Other strategies: `all`, `keyword`, `embedding`.
+- **Trigger**: once per reply before the loop. Always runs — the router is the authoritative tool picker. When the pre-flight planner (#12) referenced tools, those names are unioned into the router's allow-list but never replace it; small models tend to default to `webSearch` where a dedicated tool like `getWeather` should win, and the router is tuned for that classification. `tool_selection_strategy == "llm"` is the default; other strategies (`all`, `keyword`, `embedding`) also run here.
 - **Model / gating**: `resolve_tool_router_model(cfg)` chain — `tool_router_model → intent_judge_model → ollama_chat_model`.
 - **Inputs**: user query, tool catalogue (builtin + MCP with descriptions), optional narrow-down hint.
 - **System prompt**: inline (~lines 260-315). Teaches pick up-to-5 tools or `none`.
@@ -102,13 +103,14 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: `(summary_text, topics_text)` → `conversation_summaries` table, embedded for vector search, feeds enrichment (#3) and graph extraction (#10).
 - **Limits**: `timeout_sec` (30s default).
 
-## 10. Knowledge Graph Fact Extraction
+## 10. Knowledge Graph Fact Extraction + Branch Classification
 
-- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `_llm_extract_facts()` (~line 98).
+- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `extract_graph_memories()`.
 - **Trigger**: after each daily summary (#9). Background.
 - **Model**: `ollama_chat_model`.
 - **Inputs**: summary text + optional date.
-- **Output**: JSON array of novel fact strings → memory graph nodes.
+- **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER.
+- **Output**: list of `(branch_id, fact_text)` tuples → routed into the tagged branch via branch-pinned descent (no cross-branch contamination).
 - **Limits**: `timeout_sec`. Failures → empty list.
 
 ## 11. Knowledge Graph Best-Child Picker
@@ -120,15 +122,15 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: inline (~lines 156-161) — answer with number or `NONE`.
 - **Output**: child node id or `None` (fact still inserted, just not under an optimal parent).
 
-## 12. Task-list Planner (pre-loop decomposition)
+## 12. Task-list Planner (pre-flight decomposition, gates the whole turn)
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
-- **Trigger**: once per reply, after tool selection and before the agentic loop. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (20), or when no model / base URL is available.
-- **Model / gating**: resolution chain `planner_model → tool_router_model → intent_judge_model → ollama_chat_model`. Classification-shaped, rides the warm small model.
-- **Inputs**: user query, dialogue context, memory context, selected tool names + one-line descriptions.
-- **System prompt**: `_PROMPT_TEMPLATE` at [planner.py:73](src/jarvis/reply/planner.py:73). Teaches short imperative steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
-- **Output**: list of plan steps (max `MAX_STEPS` = 5). Consumed by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop for small models.
-- **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`. Trivial single-reply plans are dropped.
+- **Trigger**: once per reply, **at the very front of the reply flow** (before memory search, before tool routing). Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), or when no model / base URL is available.
+- **Model / gating**: resolution chain `planner_model (override) → ollama_chat_model`. The planner tracks the chat model so upgrading the chat model (via setup wizard or config) automatically upgrades plan quality.
+- **Inputs**: user query, dialogue context, full builtin + MCP tool catalogue (names + one-line descriptions). **No** memory context — the planner decides *whether* memory is needed.
+- **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups, short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
+- **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
+- **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`.
 
 ## 13. Plan Step Resolver (per direct-exec turn, small models)
 
@@ -153,16 +155,16 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 |---|---------|-----------|-----------|------------|
 | 1 | Main chat loop | 1-8 | No | LARGE |
 | 2 | Intent judge | 1 (voice only) | fallback available | SMALL |
-| 3 | Memory enrichment extract | 1 | No | SMALL (via router chain) |
+| 3 | Memory enrichment extract | 0-1 | gated by planner | SMALL (via router chain) |
 | 4 | Memory digest | 0-N | auto by size | SMALL (uses chat model) |
 | 5 | Tool-result digest | 0-N | auto by size | SMALL (uses chat model) |
 | 6 | Max-turn digest | 0-1 | No | SMALL |
-| 7 | Tool router | 1 | yes (strategy) | SMALL |
+| 7 | Tool router | 1 | always runs; planner picks unioned in | SMALL |
 | 8 | Tool searcher | 0-3 | model-initiated | SMALL (reuses #7) |
 | 9 | Summariser | ~1/session | No (background) | LARGE |
 | 10 | Graph extraction | ~1/session | No (background) | LARGE |
 | 11 | Graph best-child | 0-N | No (background) | SMALL (via router chain) |
-| 12 | Planner (plan_query) | 1 | yes (planner_enabled) | SMALL (via router chain) |
+| 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
 
@@ -189,11 +191,11 @@ Driven by `detect_model_size(model_name) → SMALL (≤7B) | LARGE (8B+)`:
 ```
 user input
   └─▶ [2] Intent Judge            (voice only, SMALL)
-        └─▶ [3] Enrichment extract
-              └─▶ [4] Memory digest  (optional, SMALL path)
-                    └─▶ [7] Tool router
-                          └─▶ [12] Planner (pre-loop)
-                                └─▶ AGENTIC LOOP  (≤ agentic_max_turns)
+        └─▶ [12] Planner (pre-flight — gates the rest of the turn)
+              ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)
+              ├─ plan empty (fail-open)      → [3] Enrichment extract → [4] Memory digest + [7] Tool router
+              └─ plan reply-only             → skip #3, #4, and #7 entirely
+                    └─▶ AGENTIC LOOP  (≤ agentic_max_turns)
                                       ├─ [13] Plan step resolver (SMALL, direct-exec)
                                       ├─ [1] Main chat turn
                                       ├─ tool execution

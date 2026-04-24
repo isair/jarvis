@@ -48,66 +48,99 @@ from ..llm import call_llm_direct
 # readable and prevents the model from treating the plan as exhaustive.
 MAX_STEPS = 5
 
-# Absolute minimum query length worth planning. Very short queries
-# ("hi", "thanks", "what time is it", "weather now") are either trivial
-# or not multi-step; running the planner for them just adds latency.
-# 20 chars filters out most single-tool utterances while retaining
-# real multi-part queries (the shortest legitimate multi-step query we
-# see in evals — "director of Possessor and their films" — is 38
-# chars).
-MIN_QUERY_CHARS = 20
+# Absolute minimum query length worth planning. The planner now runs
+# FIRST in the reply flow (before memory search and tool routing), so
+# even short queries benefit: a "Reply to user." plan lets the engine
+# skip the memory enrichment LLM call and the tool router LLM call
+# entirely. We keep a tiny floor to drop pure noise ("hi", "ok", ".").
+MIN_QUERY_CHARS = 4
+
+# Prefix the planner uses to signal "fetch memory before the rest of the
+# plan". It's not a real tool — the engine intercepts the directive,
+# runs diary / graph enrichment, and strips the step before the plan is
+# injected into the chat model's system prompt. Keeping the token
+# language-agnostic (snake-case identifier) so the planner prompt can
+# demand it verbatim in any language.
+SEARCH_MEMORY_DIRECTIVE = "searchMemory"
 
 
 def resolve_planner_model(cfg) -> str:
     """Pick the LLM for planning.
 
-    Same chain as the tool router and evaluator: explicit
-    `planner_model` → `tool_router_model` → `intent_judge_model` →
-    `ollama_chat_model`. Planning is classification-shaped (map a query
-    to a short ordered list of actions) so it lives on the same small,
-    warm model as the other per-turn classification passes.
+    Planning quality scales directly with the chat model: the plan is
+    the scaffolding the chat model then follows, so the two must be
+    matched. A weaker planner on top of a stronger chat model produces
+    bad scaffolding the chat model then has to fight against; and the
+    chat model is the one the user picked during setup as their
+    quality target. An explicit `planner_model` override still wins —
+    useful for benchmarking a dedicated planner — but the default is
+    to track the chat model verbatim so upgrading the chat model
+    automatically upgrades the plans.
     """
-    for candidate in (
-        getattr(cfg, "planner_model", ""),
-        getattr(cfg, "tool_router_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
+    override = getattr(cfg, "planner_model", "") or ""
+    if override:
+        return override
+    return getattr(cfg, "ollama_chat_model", "") or ""
 
 
 _PROMPT_TEMPLATE = (
-    "You are a planning assistant. Decompose the user's query into a short "
-    "ordered list of concrete sub-tasks the main assistant should execute, "
-    "one per line.\n\n"
+    "You are a planning assistant. You run BEFORE anything else: before "
+    "any memory lookup, before any tool is selected. Your job is to "
+    "decide — up front — what preparatory work the main assistant needs "
+    "(fetching past-conversation memory, calling external tools) and in "
+    "what order. Decompose the user's query into a short ordered list "
+    "of concrete sub-tasks, one per line.\n\n"
     "Rules:\n"
     "1. Each step is a single short imperative sentence (under 15 words).\n"
-    "2. Use ONLY tools from the AVAILABLE TOOLS list below, by exact name.\n"
-    "3. When a step uses a tool, name it explicitly and give a concrete "
+    "2. PERSONALISED queries ALWAYS need memory FIRST. A query is "
+    "personalised when the answer depends on who the user is — their "
+    "tastes, interests, history, habits, diet, preferences. The tell: "
+    "swap 'me' for 'a random person' and the query stops making sense "
+    "(e.g. 'news that might interest a random person' is incoherent; "
+    "'what is the capital of France' is unchanged). For ANY such "
+    "query, emit as the FIRST step: `searchMemory topic='<what to "
+    "look up>'`. Linguistic triggers that ALL qualify: 'for me', "
+    "'I'd like', 'I'd enjoy', 'interest me', 'suits me', "
+    "'recommend … (to me / for me)', 'suggest …', 'what should I "
+    "(watch/read/cook/do/eat/buy)', 'something I would'. YES-examples "
+    "(MUST start with searchMemory): 'news that might interest me' → "
+    "searchMemory topic='user interests'; 'what should I watch "
+    "tonight' → searchMemory topic='films the user has engaged with'; "
+    "'what should I cook for dinner' → searchMemory topic='user food "
+    "preferences and dietary restrictions'; 'suggest something I'd "
+    "enjoy watching' → searchMemory topic='user viewing tastes'. "
+    "NO-examples (DO NOT emit searchMemory): 'who is Britney Spears', "
+    "'what is the capital of France', 'what's the weather today', "
+    "'search the web for Possessor 2020'. If no prior-conversation "
+    "memory is needed, OMIT this step entirely — every extra "
+    "searchMemory directive costs a real LLM call.\n"
+    "3. Use external tools ONLY from the AVAILABLE TOOLS list below, "
+    "by exact name. If no tool is needed (greeting, small-talk, "
+    "opinion, a question about yourself, a fact already in the "
+    "dialogue), DO NOT invent tool steps.\n"
+    "4. When a step uses a tool, name it explicitly and give a concrete "
     "argument (e.g. `webSearch query='Possessor 2020 director'`).\n"
-    "4. Compose tool arguments against the user's actual intent plus "
-    "dialogue and memory context — do NOT echo the raw user utterance. "
+    "5. Compose tool arguments against the user's actual intent plus "
+    "dialogue context — do NOT echo the raw user utterance. "
     "If the user did NOT explicitly supply a value for an optional "
     "argument, OMIT that argument — the tool uses sensible defaults "
     "(current location, current time, default unit). Do NOT fabricate "
     "a value by grabbing an unrelated word from the utterance: a word "
     "describing WHEN is not a location; a word describing WHO is not a "
     "query topic. When in doubt, emit the tool with no arguments.\n"
-    "5. If the query depends on an earlier tool result (e.g. \"what other "
+    "6. If the query depends on an earlier tool result (e.g. \"what other "
     "films has that director made\"), list the dependent step AFTER the "
     "lookup step it depends on. For entities the lookup will reveal, use "
     "an angle-bracket placeholder in the dependent step's argument — e.g. "
     "`webSearch query='films directed by <director name from step 1>'`. "
     "The main assistant will substitute the concrete value at execution "
     "time.\n"
-    "6. Resolve pronouns against DIALOGUE CONTEXT before writing the step.\n"
-    "7. If MEMORY CONTEXT already contains the answer, plan a synthesis "
-    "step directly without a tool lookup.\n"
-    "8. Final step is always a synthesis/reply step if any tools were "
-    "planned: `Reply to the user with the combined findings.`\n"
-    "9. For trivial greetings or small-talk, emit a single step: "
+    "7. Resolve pronouns against DIALOGUE CONTEXT before writing the step.\n"
+    "8. Final step is always a synthesis/reply step when any "
+    "searchMemory or tool steps were planned: "
+    "`Reply to the user with the combined findings.`\n"
+    "9. For trivial greetings, small-talk, opinions or questions the "
+    "assistant can answer directly, emit a single step: "
     "`Reply to the user.`\n"
     "10. Maximum {max_steps} steps. Do not number them — one step per line.\n"
     "11. Output ONLY the steps, no preamble, no trailing commentary, no "
@@ -119,7 +152,6 @@ _PROMPT_TEMPLATE = (
 def _build_user_message(
     query: str,
     dialogue_context: str,
-    memory_context: str,
     tools: Sequence[Tuple[str, str]],
 ) -> str:
     parts = []
@@ -132,10 +164,6 @@ def _build_user_message(
         parts.append(f"DIALOGUE CONTEXT (most recent last):\n{dialogue_context.strip()}")
     else:
         parts.append("DIALOGUE CONTEXT: (empty)")
-    if memory_context.strip():
-        parts.append(f"MEMORY CONTEXT:\n{memory_context.strip()}")
-    else:
-        parts.append("MEMORY CONTEXT: (empty)")
     parts.append(f"USER QUERY: {query.strip()}")
     parts.append("\nEmit the plan now, one step per line, no numbering.")
     return "\n\n".join(parts)
@@ -175,46 +203,139 @@ def _parse_plan(raw: str) -> List[str]:
 
 
 def _is_trivial_plan(steps: List[str]) -> bool:
-    """A single-step plan is treated as trivial and the engine falls
-    through to prior behaviour. The planner prompt mandates that any
-    plan with tool use emits ≥ 2 steps (at least one tool step plus a
-    final synthesis/reply step), so a 1-step plan is by contract a
-    pure reply. This check is language-agnostic — no verb matching."""
+    """Retained for callers; the planner no longer filters these out
+    internally. The engine now treats ``[]`` as "planner failed,
+    fall open to safe defaults" and ``["Reply to the user."]`` as a
+    positive "no memory, no tools needed" decision — those two cases
+    must remain distinguishable, so this helper is advisory only."""
     return len(steps) <= 1
 
 
+def is_search_memory_step(step: str) -> bool:
+    """Is this step the planner's `searchMemory` directive?"""
+    return step.strip().lower().startswith(SEARCH_MEMORY_DIRECTIVE.lower())
+
+
+_MEMORY_TOPIC_RE = re.compile(
+    r"topic\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|(\S+))",
+    re.IGNORECASE,
+)
+
+
+def memory_topic_of(step: str) -> str:
+    """Extract the `topic='...'` argument from a searchMemory step.
+
+    Returns an empty string when the planner emitted the directive with
+    no topic — the engine then falls back to its own keyword extractor.
+    """
+    m = _MEMORY_TOPIC_RE.search(step)
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or m.group(3) or "").strip()
+
+
+def plan_requires_memory(plan: Sequence[str]) -> bool:
+    """True if any planned step is a ``searchMemory`` directive."""
+    return any(is_search_memory_step(s) for s in plan)
+
+
+def strip_memory_directives(plan: Sequence[str]) -> List[str]:
+    """Remove `searchMemory` directives from a plan.
+
+    The directive is engine-internal — the chat model should never see
+    it in the injected ACTION PLAN block (it's not a tool it can call).
+    """
+    return [s for s in plan if not is_search_memory_step(s)]
+
+
 def tool_steps_of(plan: Sequence[str]) -> List[str]:
-    """Non-synthesis tool steps of a plan. The final step of a well-formed
-    multi-step plan is the synthesis/reply step (see planner prompt rule
-    8); tool steps are all non-final steps. For a 1-step plan we return
-    the step unchanged so downstream code doesn't trip on an empty list,
-    though `_is_trivial_plan` normally filters those out first."""
-    if len(plan) > 1:
-        return list(plan[:-1])
-    return list(plan)
+    """Non-synthesis, non-directive tool steps of a plan.
+
+    Drops any `searchMemory` directives (engine-internal) and the final
+    synthesis step. A 1-step plan is a reply-only plan by the planner's
+    contract (rule 9), so it has no tool steps and we return an empty
+    list — that lets the engine's plan-driven paths (direct-exec,
+    progress nudge) skip cleanly for the pure-reply case.
+    """
+    steps = strip_memory_directives(plan)
+    if len(steps) > 1:
+        return list(steps[:-1])
+    return []
+
+
+_TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def tool_names_in_plan(
+    plan: Sequence[str], known_names: Sequence[str],
+) -> List[str]:
+    """Extract tool names referenced in non-synthesis plan steps.
+
+    Preserves order of first appearance so the downstream allow-list
+    presentation stays stable. Ignores the synthesis step and any
+    searchMemory directives. Only names present in ``known_names`` are
+    returned — this is the allow-list guard that prevents the chat
+    model from seeing hallucinated tool names.
+    """
+    known = set(known_names)
+    seen: set[str] = set()
+    out: List[str] = []
+    for step in tool_steps_of(plan):
+        m = _TOOL_NAME_HEAD_RE.match(step)
+        if not m:
+            continue
+        candidate = m.group(1)
+        if candidate in known and candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+def plan_has_unresolved_tool_steps(
+    plan: Sequence[str], known_names: Sequence[str],
+) -> bool:
+    """True when the plan has non-synthesis tool steps but names none of
+    them as a known tool.
+
+    Small models sometimes paraphrase ("get the weather") instead of
+    naming the tool ("getWeather ..."). When that happens the plan-driven
+    allow-list becomes empty and the chat model ends up with only
+    ``stop`` + ``toolSearchTool``, which makes it hallucinate a tool
+    name out of training priors. Treat this as planner under-specification
+    and let the engine fall back to the tool router.
+    """
+    steps = tool_steps_of(plan)
+    if not steps:
+        return False
+    return not tool_names_in_plan(plan, known_names)
 
 
 def plan_query(
     cfg,
     query: str,
     dialogue_context: str,
-    memory_context: str,
     tools: Sequence[Tuple[str, str]],
     *,
     timeout_sec: Optional[float] = None,
+    memory_context: str = "",  # deprecated; planner now runs before memory
 ) -> List[str]:
-    """Run a short planning LLM pass over the query + context.
+    """Run a short planning LLM pass over the query + dialogue context.
 
-    Returns an ordered list of sub-task descriptions. Empty list means
-    "no useful plan" — the engine should proceed as if the planner had
-    never run.
+    Returns an ordered list of sub-task descriptions. An empty list
+    means "planner failed" — the engine should fall open to its
+    pre-planner safe defaults (run memory enrichment + tool router).
+    A single ``["Reply to the user."]`` is a valid plan and means
+    "answer directly; skip both memory and tools".
+
+    ``memory_context`` is accepted for backward compatibility with old
+    callers but no longer used: the planner runs before memory search
+    so it decides *whether* memory is needed, via the searchMemory
+    directive, rather than consulting memory itself.
     """
+    del memory_context  # intentionally unused since planner now runs first
     if not query or len(query.strip()) < MIN_QUERY_CHARS:
         return []
 
-    # Gate on explicit config flag. Default ON when no tools were
-    # selected (planner can't help if there's nothing to plan with) is
-    # handled by the caller — here we just respect the feature gate.
     if not getattr(cfg, "planner_enabled", True):
         return []
 
@@ -230,7 +351,7 @@ def plan_query(
     )
 
     system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
-    user_content = _build_user_message(query, dialogue_context, memory_context, tools)
+    user_content = _build_user_message(query, dialogue_context, tools)
 
     try:
         raw = call_llm_direct(
@@ -251,10 +372,8 @@ def plan_query(
         return []
 
     steps = _parse_plan(raw)
-    if _is_trivial_plan(steps):
-        debug_log(f"planner: trivial plan, ignoring ({steps!r})", "planning")
+    if not steps:
         return []
-
     debug_log(
         f"planner: {len(steps)} step(s) — "
         + " | ".join(s[:60] for s in steps),
@@ -588,10 +707,17 @@ def resolve_next_tool_call(
 __all__ = [
     "MAX_STEPS",
     "MIN_QUERY_CHARS",
+    "SEARCH_MEMORY_DIRECTIVE",
     "resolve_planner_model",
     "plan_query",
     "format_plan_block",
     "progress_nudge",
     "resolve_next_tool_call",
     "tool_steps_of",
+    "tool_names_in_plan",
+    "plan_has_unresolved_tool_steps",
+    "plan_requires_memory",
+    "strip_memory_directives",
+    "memory_topic_of",
+    "is_search_memory_step",
 ]
