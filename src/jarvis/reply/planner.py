@@ -88,7 +88,13 @@ _PROMPT_TEMPLATE = (
     "3. When a step uses a tool, name it explicitly and give a concrete "
     "argument (e.g. `webSearch query='Possessor 2020 director'`).\n"
     "4. Compose tool arguments against the user's actual intent plus "
-    "dialogue and memory context — do NOT echo the raw user utterance.\n"
+    "dialogue and memory context — do NOT echo the raw user utterance. "
+    "If the user did NOT explicitly supply a value for an optional "
+    "argument, OMIT that argument — the tool uses sensible defaults "
+    "(current location, current time, default unit). Do NOT fabricate "
+    "a value by grabbing an unrelated word from the utterance: a word "
+    "describing WHEN is not a location; a word describing WHO is not a "
+    "query topic. When in doubt, emit the tool with no arguments.\n"
     "5. If the query depends on an earlier tool result (e.g. \"what other "
     "films has that director made\"), list the dependent step AFTER the "
     "lookup step it depends on. For entities the lookup will reveal, use "
@@ -391,6 +397,11 @@ def _parse_plan_step_concrete(
     name = head.strip().rstrip(":")
     if not name or name not in allowed_names:
         return None
+    rest_stripped = rest.strip()
+    # Bare tool name (no trailing content) — the planner is following the
+    # "omit optional arguments" rule, dispatch with empty args.
+    if not rest_stripped:
+        return name, {}
     args: dict = {}
     for m in _PLAN_STEP_KV_RE.finditer(rest):
         key = m.group("key")
@@ -401,9 +412,9 @@ def _parse_plan_step_concrete(
             value = m.group("bare") or ""
         args[key] = value
     if not args:
-        # No parseable key=value pairs — the step might be a prose-shaped
-        # description (e.g. `webSearch for the director's latest film`).
-        # Defer to the LLM resolver.
+        # Rest has content but no parseable key=value pairs — the step is
+        # prose-shaped (e.g. `webSearch for the director's latest film`).
+        # Defer to the LLM resolver which can infer the right shape.
         return None
     declared = allowed_props.get(name, set())
     if declared:

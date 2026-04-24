@@ -162,6 +162,33 @@ class TestPlanQuery:
             )
         assert steps == []
 
+    def test_prompt_warns_against_fabricating_optional_arguments(self):
+        """The planner prompt must explicitly tell the model to omit
+        optional arguments when the user didn't supply a value, and warn
+        against grabbing unrelated words from the utterance as fake values.
+
+        2026-04-24 field regression: gemma4:e2b responded to "how's the
+        weather going to be today" with a plan step of
+        ``getWeather location='today'``. The temporal qualifier "today"
+        was geocoded to a village called "Todaya" in the Philippines —
+        because the small model was trained by our prompt to always give
+        a concrete argument, even when the user's utterance had none to
+        give. This content-assertion guards the fix so the rule can't be
+        silently reverted during future prompt edits without a test
+        failure pointing the editor at the behavioural consequence.
+        """
+        prompt = planner_mod._PROMPT_TEMPLATE.lower()
+        assert "omit" in prompt, (
+            "Planner prompt must tell the model to OMIT optional args "
+            "when no value was provided."
+        )
+        # The guidance must name the exact failure mode so the model
+        # doesn't pattern-match on generic 'omit' without knowing why.
+        assert "fabricate" in prompt or "do not fabricate" in prompt, (
+            "Planner prompt must warn against fabricating argument values "
+            "from unrelated words in the utterance."
+        )
+
 
 class TestFormatPlanBlock:
     def test_empty_returns_empty_string(self):
@@ -340,6 +367,37 @@ class TestResolveNextToolCall:
             {"query": "films directed by Brandon Cronenberg"},
         )
         assert spy.called, "Placeholder substitution must go through the LLM"
+
+    def test_deterministic_parse_accepts_bare_tool_name_as_empty_args(self):
+        """A plan step naming the tool with no trailing args must parse to
+        ``(name, {})`` without an LLM call.
+
+        This is the shape the planner emits when it follows the
+        "omit optional arguments" rule — e.g. a weather query with no
+        named place plans as ``getWeather`` (no args), and the tool
+        auto-derives location from the user's geoip context.
+        """
+        cfg = _cfg()
+        schema = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "getWeather",
+                    "description": "Weather.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": [],
+                    },
+                },
+            }
+        ]
+        with patch.object(planner_mod, "call_llm_direct") as spy:
+            result = resolve_next_tool_call(cfg, "getWeather", [], schema)
+        assert result == ("getWeather", {})
+        assert not spy.called, (
+            "Bare tool name must not trigger an LLM round-trip"
+        )
 
     def test_deterministic_parse_handles_double_quoted_values(self):
         """Planner output occasionally uses double quotes — parse both."""
