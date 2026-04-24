@@ -1047,9 +1047,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
 
-    if action_plan and not plan_has_unresolved_tool_steps(
+    _plan_under_specified = bool(action_plan) and plan_has_unresolved_tool_steps(
         action_plan, _full_catalog_names
-    ):
+    )
+    if action_plan and not _plan_under_specified:
         allowed_tools = tool_names_in_plan(action_plan, _full_catalog_names)
         # `stop` is the termination sentinel — always exposed so the
         # chat model can emit it once it has enough to answer.
@@ -1465,6 +1466,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if (
             use_text_tools
             and len(action_plan) > 1
+            and not _plan_under_specified
         ):
             _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = sum(

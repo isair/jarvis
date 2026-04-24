@@ -119,7 +119,11 @@ The engine consumes the plan in two phases.
   model wrote `get the weather` instead of `getWeather ...`). Treated
   as under-specification: the engine falls back to `select_tools` so
   the chat model isn't left with only `stop` + `toolSearchTool` and
-  forced to hallucinate a tool name from training priors.
+  forced to hallucinate a tool name from training priors. The
+  direct-exec path is ALSO skipped in this state — vague step text
+  ("get the weather") would otherwise force the resolver LLM to guess
+  arguments (e.g. emitting `location='Nowhere'` for a bare weather
+  request). The chat model takes the turn instead.
 - `strip_memory_directives(plan)` — the engine strips the
   `searchMemory` step from the plan once memory has been fetched, so
   downstream consumers (system-message injection, direct-exec,

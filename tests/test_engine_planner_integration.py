@@ -323,3 +323,57 @@ def test_paraphrased_plan_falls_back_to_tool_router(
     assert select_tools_called[0] == 1, (
         "Paraphrased plan with unresolved tool steps must fall back to select_tools"
     )
+
+
+def test_paraphrased_plan_skips_direct_exec_for_small_models(
+    mock_config, db, dialogue_memory
+):
+    """Under-specified plans (prose steps, no tool names) would otherwise
+    force the step resolver LLM to guess arguments from vague step text
+    (e.g. emitting location='Nowhere' for a plain "get the weather"
+    step). Skip direct-exec entirely in that case — let the chat model
+    handle the turn with the router-selected allow-list."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → direct-exec path
+    mock_config.evaluator_enabled = False
+
+    resolver_calls = [0]
+
+    def fake_resolver(*args, **kwargs):
+        resolver_calls[0] += 1
+        return ("getWeather", {"location": "Nowhere"})
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("Sunny.")
+
+    def fake_tool_runner(*args, **kwargs):
+        return ToolExecutionResult(success=True, reply_text="ok", error_message=None)
+
+    plan = [
+        "get the weather",  # paraphrased — no tool name
+        "Reply to the user with the combined findings.",
+    ]
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["getWeather", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", return_value=plan), \
+         patch.object(engine_mod, "_resolve_plan_step", side_effect=fake_resolver):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="how's the weather today?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert resolver_calls[0] == 0, (
+        "Direct-exec resolver must not run when the plan is under-specified"
+    )
