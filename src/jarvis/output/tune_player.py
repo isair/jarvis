@@ -232,7 +232,11 @@ class TunePlayer:
                     samplerate=sample_rate,
                     channels=1,
                     dtype='int16',
-                    blocksize=1024,
+                    # Large block + high latency: fewer callbacks, fewer
+                    # GIL acquisitions, lighter touch on the rest of the
+                    # app. 8192 frames ≈ 186ms per wakeup vs 23ms before.
+                    blocksize=8192,
+                    latency='high',
                     callback=callback,
                 )
             except Exception as exc:
