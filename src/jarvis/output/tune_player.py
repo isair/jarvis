@@ -1,273 +1,280 @@
 from __future__ import annotations
 import io
-import math
 import struct
 import threading
 import time
-import platform
-import subprocess
-import shutil
-import tempfile
 from typing import Optional
 
+import numpy as np
 
-def _generate_sonar_ping_wav() -> bytes:
-    """Generate a pleasant pop sound as WAV bytes.
+from ..debug import debug_log
 
-    Creates a sound similar to macOS Pop.aiff:
-    - Clean sine tone
-    - Quick decay
-    - Subtle tremolo flutter for "shake" character
+
+def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
+    """Generate the thinking pad as a raw int16 mono buffer.
+
+    Designed to run indefinitely while Jarvis thinks. Two tricks make
+    the looping imperceptible:
+
+    1. Mathematical seam: every sine frequency (in Hz) is an integer,
+       and every LFO period evenly divides the clip duration (in
+       seconds), so start and end samples match exactly — no click at
+       the wrap point.
+    2. Short duration (10s): the sounddevice callback loops the
+       buffer natively in the OS audio thread, so there's no
+       per-iteration gap. A shorter buffer keeps generation cheap
+       (~70ms) and memory small.
+
+    Tone character — choir-"ahh" / bowed-string pad:
+    - A major triad (A3 / C#4 / E4) with a natural harmonic spectrum
+      (partials 1-6 with 1/n-style rolloff) so each voice has real
+      timbre instead of sounding like a pure sine.
+    - Three-way unison detune per chord tone (-1 Hz, 0, +1 Hz) —
+      mirrors how an ensemble of human singers or strings is never
+      perfectly in tune, giving chorus-like warmth and body.
+    - Phase-offset cross-fading LFOs on the three chord voices so the
+      blend shifts continuously while total amplitude stays steady.
+
+    Returns (int16 mono samples, sample_rate).
     """
     sample_rate = 44100
-    duration = 0.12  # 120ms - short and clean
+    duration_s = 10
 
-    freq = 520  # C5 area - clean mid-range tone
+    chord_roots = (220, 275, 330)  # A3, ~C#4, ~E4 — integer Hz for seamless seam
+    harmonic_gains = (1.00, 0.55, 0.30, 0.18, 0.10, 0.06)
+    harmonic_phases = (0.0, 0.7, 1.3, 2.1, 0.4, 1.9)
+    unison_offsets = (-1, 0, 1)
+    lfo_period = 5.0  # amplitude cross-fade: 2 cycles per 10s loop (evenly divides)
 
-    # Generate samples
-    num_samples = int(sample_rate * duration)
-    samples = []
+    n = int(sample_rate * duration_s)
+    t = np.arange(n, dtype=np.float64) / sample_rate
+    two_pi = 2 * np.pi
 
-    for i in range(num_samples):
-        t = i / sample_rate
+    lfo_w = two_pi / lfo_period
+    voice_amps = [
+        0.55 + 0.25 * np.sin(lfo_w * t + k * two_pi / 3)
+        for k in range(3)
+    ]
 
-        # Smooth envelope - quick attack, clean decay
-        attack = 1 - math.exp(-t * 600)
-        decay = math.exp(-t * 22)
-        envelope = attack * decay
+    voice_signals = []
+    for root in chord_roots:
+        unison_sum = np.zeros(n, dtype=np.float64)
+        for offset in unison_offsets:
+            f = root + offset
+            for h_idx, (gain, phase0) in enumerate(
+                zip(harmonic_gains, harmonic_phases)
+            ):
+                partial_freq = (h_idx + 1) * f
+                phase = two_pi * partial_freq * t + phase0
+                unison_sum += gain * np.sin(phase)
+        voice_signals.append(unison_sum)
 
-        # Tremolo flutter - fast amplitude wobble that fades
-        tremolo_rate = 55  # Hz
-        tremolo_depth = 0.25 * math.exp(-t * 30)  # Fades quickly
-        tremolo = 1 + tremolo_depth * math.sin(2 * math.pi * tremolo_rate * t)
+    tone = sum(a * v for a, v in zip(voice_amps, voice_signals))
+    peak = float(np.max(np.abs(tone))) or 1.0
+    signal = (tone / peak) * 0.32
 
-        # Clean sine tone
-        sample = envelope * tremolo * math.sin(2 * math.pi * freq * t)
+    samples = np.clip(signal * 32767, -32768, 32767).astype(np.int16)
+    return samples, sample_rate
 
-        # Convert to 16-bit PCM
-        sample_int = int(sample * 32767 * 0.7)
-        samples.append(max(-32768, min(32767, sample_int)))
 
-    # Build WAV file in memory
+def _generate_thinking_pad_wav() -> bytes:
+    """WAV-wrapped version of the thinking pad (kept for test coverage)."""
+    samples, sample_rate = _generate_thinking_pad_samples()
+    num_samples = samples.size
+
     wav_buffer = io.BytesIO()
-
-    # WAV header
     num_channels = 1
     bits_per_sample = 16
     byte_rate = sample_rate * num_channels * bits_per_sample // 8
     block_align = num_channels * bits_per_sample // 8
     data_size = num_samples * block_align
 
-    # RIFF header
     wav_buffer.write(b'RIFF')
     wav_buffer.write(struct.pack('<I', 36 + data_size))
     wav_buffer.write(b'WAVE')
 
-    # fmt chunk
     wav_buffer.write(b'fmt ')
-    wav_buffer.write(struct.pack('<I', 16))  # chunk size
-    wav_buffer.write(struct.pack('<H', 1))   # PCM format
+    wav_buffer.write(struct.pack('<I', 16))
+    wav_buffer.write(struct.pack('<H', 1))
     wav_buffer.write(struct.pack('<H', num_channels))
     wav_buffer.write(struct.pack('<I', sample_rate))
     wav_buffer.write(struct.pack('<I', byte_rate))
     wav_buffer.write(struct.pack('<H', block_align))
     wav_buffer.write(struct.pack('<H', bits_per_sample))
 
-    # data chunk
     wav_buffer.write(b'data')
     wav_buffer.write(struct.pack('<I', data_size))
-    for sample in samples:
-        wav_buffer.write(struct.pack('<h', sample))
+    wav_buffer.write(samples.tobytes())
 
     return wav_buffer.getvalue()
 
 
-# Cache the generated WAV data
-_SONAR_PING_WAV: Optional[bytes] = None
+_THINKING_PAD_WAV: Optional[bytes] = None
+_THINKING_PAD_SAMPLES: Optional[tuple[np.ndarray, int]] = None
 
 
-def _get_sonar_ping_wav() -> bytes:
-    """Get cached sonar ping WAV data, generating if needed."""
-    global _SONAR_PING_WAV
-    if _SONAR_PING_WAV is None:
-        _SONAR_PING_WAV = _generate_sonar_ping_wav()
-    return _SONAR_PING_WAV
+def _get_thinking_pad_wav() -> bytes:
+    """Get cached thinking-pad WAV data, generating on first call."""
+    global _THINKING_PAD_WAV
+    if _THINKING_PAD_WAV is None:
+        _THINKING_PAD_WAV = _generate_thinking_pad_wav()
+    return _THINKING_PAD_WAV
+
+
+def _get_thinking_pad_samples() -> tuple[np.ndarray, int]:
+    """Get cached raw int16 samples for sounddevice playback."""
+    global _THINKING_PAD_SAMPLES
+    if _THINKING_PAD_SAMPLES is None:
+        _THINKING_PAD_SAMPLES = _generate_thinking_pad_samples()
+    return _THINKING_PAD_SAMPLES
+
+
+def _prewarm_cache() -> None:
+    """Pre-generate samples off the hot path so the first start_tune()
+    doesn't compete with the first LLM call for CPU."""
+    try:
+        _get_thinking_pad_samples()
+    except Exception as exc:
+        debug_log(f"thinking tune: prewarm failed: {exc!r}", category="tune")
+
+
+threading.Thread(target=_prewarm_cache, daemon=True).start()
 
 
 class TunePlayer:
-    """Plays a simple tune while processing is happening."""
-    
+    """Plays a thinking-pad tune in a loop while Jarvis is processing.
+
+    Uses sounddevice (PortAudio) for playback, which is the same API TTS
+    uses. This matters: if the tune held the audio output device via a
+    separate path (e.g. afplay subprocess killed mid-stream), macOS
+    CoreAudio could take seconds to release the device, stalling TTS.
+    Using one API means clean release — stop returns in milliseconds and
+    TTS can open the device immediately after.
+    """
+
     def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._is_playing = threading.Event()
-        
+        self._stream_lock = threading.Lock()
+        self._stream = None  # sounddevice.OutputStream, set while playing
+
     def start_tune(self) -> None:
-        """Start playing the processing tune."""
         if not self.enabled or self._thread is not None:
             return
-            
+
+        debug_log("thinking tune: start", category="tune")
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._play_tune, daemon=True)
         self._thread.start()
-        
+
     def stop_tune(self) -> None:
-        """Stop the processing tune."""
+        """Stop the tune immediately, releasing the audio device."""
         if self._thread is None:
             return
-            
+
+        debug_log("thinking tune: stop", category="tune")
         self._stop_event.set()
+
+        with self._stream_lock:
+            stream = self._stream
+        if stream is not None:
+            try:
+                stream.abort()
+            except Exception as exc:
+                debug_log(f"thinking tune: stream abort failed: {exc!r}", category="tune")
+
         self._thread.join(timeout=1.0)
         self._thread = None
         self._is_playing.clear()
-        
+
     def is_playing(self) -> bool:
-        """Check if tune is currently playing."""
         return self._is_playing.is_set()
-        
+
     def _play_tune(self) -> None:
-        """Play a gentle processing tune in a loop."""
         self._is_playing.set()
-        
-        system = platform.system().lower()
-        
         try:
-            if system == "darwin":
-                self._play_macos_tune()
-            elif system == "linux":
-                self._play_linux_tune()
-            elif system == "windows":
-                self._play_windows_tune()
-        except Exception:
-            # If we can't play system sounds, fall back to simple beeps
-            self._play_fallback_tune()
+            try:
+                import sounddevice as sd
+            except Exception as exc:
+                debug_log(f"thinking tune: sounddevice unavailable: {exc!r}", category="tune")
+                self._play_fallback_tune()
+                return
+
+            try:
+                samples, sample_rate = _get_thinking_pad_samples()
+            except Exception as exc:
+                debug_log(f"thinking tune: sample generation failed: {exc!r}", category="tune")
+                self._play_fallback_tune()
+                return
+
+            position = [0]  # list so the callback closure can mutate it
+            total = samples.size
+
+            def callback(outdata, frames, time_info, status):
+                # No I/O here — this runs in the realtime audio thread.
+                start = position[0]
+                end = start + frames
+                if end <= total:
+                    outdata[:, 0] = samples[start:end]
+                    position[0] = end % total
+                else:
+                    # Wrap around the seamless seam.
+                    first = total - start
+                    outdata[:first, 0] = samples[start:total]
+                    remainder = frames - first
+                    outdata[first:, 0] = samples[:remainder]
+                    position[0] = remainder
+
+            try:
+                stream = sd.OutputStream(
+                    samplerate=sample_rate,
+                    channels=1,
+                    dtype='int16',
+                    # Large block + high latency: fewer callbacks, fewer
+                    # GIL acquisitions, lighter touch on the rest of the
+                    # app. 8192 frames ≈ 186ms per wakeup vs 23ms before.
+                    blocksize=8192,
+                    latency='high',
+                    callback=callback,
+                )
+            except Exception as exc:
+                debug_log(f"thinking tune: stream open failed: {exc!r}", category="tune")
+                self._play_fallback_tune()
+                return
+
+            try:
+                with self._stream_lock:
+                    self._stream = stream
+                stream.start()
+                # Hand off to the OS audio thread. Wake when stop is
+                # requested — no polling loop, no per-iteration gap.
+                self._stop_event.wait()
+            except Exception as exc:
+                debug_log(f"thinking tune: stream playback failed: {exc!r}", category="tune")
+            finally:
+                try:
+                    stream.close()
+                except Exception as exc:
+                    debug_log(f"thinking tune: stream close failed: {exc!r}", category="tune")
+                with self._stream_lock:
+                    self._stream = None
         finally:
             self._is_playing.clear()
-            
-    def _play_macos_tune(self) -> None:
-        """Play tune on macOS using afplay with generated pop sound."""
-        import os
 
-        afplay = shutil.which("afplay")
-        if not afplay:
-            self._play_fallback_tune()
-            return
-
-        # Write WAV to temp file
-        wav_data = _get_sonar_ping_wav()
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                suffix=".wav", delete=False
-            ) as tmp_file:
-                tmp_file.write(wav_data)
-                tmp_path = tmp_file.name
-
-            while not self._stop_event.is_set():
-                try:
-                    subprocess.run(
-                        [afplay, tmp_path],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=2.0
-                    )
-                    time.sleep(0.8)  # Gentle spacing
-                except Exception:
-                    break
-        except Exception:
-            self._play_fallback_tune()
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-                            
-    def _play_linux_tune(self) -> None:
-        """Play tune on Linux using paplay, aplay, or ffplay with generated sonar ping."""
-        import os
-
-        # Find a suitable audio player
-        paplay = shutil.which("paplay")  # PulseAudio
-        aplay = shutil.which("aplay")    # ALSA
-        ffplay = shutil.which("ffplay")  # FFmpeg
-
-        player = paplay or aplay or ffplay
-        if not player:
-            self._play_fallback_tune()
-            return
-
-        # Write WAV to temp file (these players need a file)
-        wav_data = _get_sonar_ping_wav()
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                suffix=".wav", delete=False
-            ) as tmp_file:
-                tmp_file.write(wav_data)
-                tmp_path = tmp_file.name
-
-            # Build command based on player
-            if player == ffplay:
-                cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path]
-            else:
-                cmd = [player, tmp_path]
-
-            while not self._stop_event.is_set():
-                try:
-                    subprocess.run(
-                        cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=2.0
-                    )
-                    time.sleep(0.8)  # Gentle spacing like macOS
-                except Exception:
-                    break
-        except Exception:
-            self._play_fallback_tune()
-        finally:
-            # Clean up temp file
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-            
-    def _play_windows_tune(self) -> None:
-        """Play tune on Windows using winsound with generated sonar ping."""
-        try:
-            import winsound
-            wav_data = _get_sonar_ping_wav()
-            while not self._stop_event.is_set():
-                try:
-                    # Play the sonar ping from memory
-                    winsound.PlaySound(
-                        wav_data,
-                        winsound.SND_MEMORY | winsound.SND_NODEFAULT
-                    )
-                    time.sleep(0.8)  # Gentle spacing like macOS
-                except Exception:
-                    break
-        except ImportError:
-            # winsound not available, fallback to visual indicator
-            self._play_fallback_tune()
-            
     def _play_fallback_tune(self) -> None:
-        """Fallback tune using print statements (silent but indicates activity)."""
-        # Very subtle fallback - just a brief visual indicator
+        """Fallback for environments without a usable audio output."""
         patterns = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         i = 0
         while not self._stop_event.is_set():
             try:
-                print(f"\r[jarvis] {patterns[i % len(patterns)]} processing...", 
+                print(f"\r[jarvis] {patterns[i % len(patterns)]} processing...",
                       end="", flush=True)
                 time.sleep(0.2)
                 i += 1
             except Exception:
                 break
-        # Clear the spinner
         try:
             print("\r" + " " * 30 + "\r", end="", flush=True)
         except Exception:
