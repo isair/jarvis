@@ -162,8 +162,6 @@ class TunePlayer:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._is_playing = threading.Event()
-        self._stream_lock = threading.Lock()
-        self._stream = None  # sounddevice.OutputStream, set while playing
 
     def start_tune(self) -> None:
         if not self.enabled or self._thread is not None:
@@ -175,21 +173,22 @@ class TunePlayer:
         self._thread.start()
 
     def stop_tune(self) -> None:
-        """Stop the tune immediately, releasing the audio device."""
+        """Stop the tune immediately, releasing the audio device.
+
+        We deliberately do NOT call ``stream.abort()`` from this thread —
+        only the tune thread (`_play_tune`'s finally block) touches the
+        stream. Calling abort() here and then close() over there races on
+        macOS: PortAudio/CoreAudio emits a spurious
+        ``||PaMacCore (AUHAL)|| Error … err=''!obj''`` on every stop
+        because the AudioObject is being torn down twice. Setting the
+        stop event is enough — `stream.close()` discards pending buffers
+        as if abort() had been called.
+        """
         if self._thread is None:
             return
 
         debug_log("thinking tune: stop", category="tune")
         self._stop_event.set()
-
-        with self._stream_lock:
-            stream = self._stream
-        if stream is not None:
-            try:
-                stream.abort()
-            except Exception as exc:
-                debug_log(f"thinking tune: stream abort failed: {exc!r}", category="tune")
-
         self._thread.join(timeout=1.0)
         self._thread = None
         self._is_playing.clear()
@@ -250,8 +249,6 @@ class TunePlayer:
                 return
 
             try:
-                with self._stream_lock:
-                    self._stream = stream
                 stream.start()
                 # Hand off to the OS audio thread. Wake when stop is
                 # requested — no polling loop, no per-iteration gap.
@@ -263,8 +260,6 @@ class TunePlayer:
                     stream.close()
                 except Exception as exc:
                     debug_log(f"thinking tune: stream close failed: {exc!r}", category="tune")
-                with self._stream_lock:
-                    self._stream = None
         finally:
             self._is_playing.clear()
 
