@@ -4,7 +4,9 @@ Covers:
 - Sample / WAV generation: right format/size, seam is effectively seamless.
 - TunePlayer lifecycle: idempotent start/stop, is_playing state, prompt
   stop even when a "stream" is running.
-- Sounddevice dispatch: stop_tune aborts the stream (not a subprocess).
+- Sounddevice dispatch: stop_tune closes the stream cleanly from the
+  owning thread (no cross-thread abort — that races with close on
+  macOS CoreAudio and logs a spurious !obj error).
 
 The sounddevice stream is exercised via a fake `sounddevice` module
 injected into sys.modules — works headlessly in CI.
@@ -148,7 +150,7 @@ def test_double_start_is_ignored(monkeypatch):
         tp.stop_tune()
 
 
-def test_stop_aborts_the_stream_and_returns_quickly(monkeypatch):
+def test_stop_closes_the_stream_and_returns_quickly(monkeypatch):
     created = _install_fake_sounddevice(monkeypatch)
     tp = TunePlayer(enabled=True)
     tp.start_tune()
@@ -166,8 +168,10 @@ def test_stop_aborts_the_stream_and_returns_quickly(monkeypatch):
     tp.stop_tune()
     elapsed = time.time() - t0
 
-    assert stream.aborted
+    # Only the tune thread closes the stream; stop_tune must NOT abort
+    # from the caller's thread — that races with close() on macOS.
     assert stream.closed
+    assert not stream.aborted
     assert elapsed < 1.0
     assert not tp.is_playing()
 
