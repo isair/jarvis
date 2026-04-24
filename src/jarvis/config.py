@@ -471,7 +471,7 @@ def get_default_config() -> Dict[str, Any]:
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 3,
         "memory_search_max_results": 15,
-        "memory_enrichment_source": "diary",  # "all", "diary", or "graph"
+        "memory_enrichment_source": "all",  # "all", "diary", or "graph"
         # None = auto (on for small models ≤7B, off for large). Set true/false to force.
         "memory_digest_enabled": None,
         # Distil raw tool results (e.g. webSearch extracts) into a short
@@ -658,9 +658,9 @@ def load_settings() -> Settings:
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 3))
     memory_search_max_results = int(merged.get("memory_search_max_results", 15))
-    memory_enrichment_source = str(merged.get("memory_enrichment_source", "diary")).lower()
+    memory_enrichment_source = str(merged.get("memory_enrichment_source", "all")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
-        memory_enrichment_source = "diary"
+        memory_enrichment_source = "all"
     _digest_raw = merged.get("memory_digest_enabled", None)
     memory_digest_enabled: Optional[bool]
     if _digest_raw is None:

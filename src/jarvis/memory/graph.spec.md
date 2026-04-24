@@ -176,7 +176,9 @@ Controlled by `memory_enrichment_source` config:
 - `"diary"` — only diary (conversation summaries) used for enrichment
 - `"graph"` — only graph (structured knowledge) used for enrichment
 
-Default is `"diary"` — graph enrichment can be enabled once tested. Both systems always receive writes regardless of this setting.
+Default is `"all"` — both channels enrich replies. The graph has graduated from alpha to beta with the purpose-driven taxonomy and warm profile now always-on, so the default flipped from `"diary"` to include graph recall too. Both systems always receive writes regardless of this setting.
+
+Note: the always-on warm profile (User + Directives injected on every turn) is separate from query-driven enrichment. Warm profile covers "who the user is"; enrichment covers "what the user has said/seen about this specific topic". The graph contributes to both.
 
 ## Configuration
 
@@ -190,7 +192,7 @@ Default is `"diary"` — graph enrichment can be enabled once tested. Both syste
 | `DECAY_HALF_LIFE_DAYS` | 14 | Days until a node's access score halves |
 | `MAX_TRAVERSAL_DEPTH` | 8 | Safety limit on graph traversal |
 | `SUMMARY_MAX_LENGTH` | 300 | Max chars for node description |
-| `memory_enrichment_source` | `"diary"` | Which system enriches replies: `"all"`, `"diary"`, or `"graph"` |
+| `memory_enrichment_source` | `"all"` | Which system enriches replies: `"all"`, `"diary"`, or `"graph"` |
 
 ## UI: Memory Viewer Integration
 
