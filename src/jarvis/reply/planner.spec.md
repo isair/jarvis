@@ -54,16 +54,20 @@ integration in `src/jarvis/reply/engine.py`.
 
 ### Model resolution
 
-Same chain as the tool router:
+1. `cfg.planner_model` (explicit override, for benchmarking)
+2. `cfg.ollama_chat_model`
 
-1. `cfg.planner_model` (explicit override)
-2. `cfg.tool_router_model`
-3. `cfg.intent_judge_model`
-4. `cfg.ollama_chat_model`
+The planner must track the chat model. The plan is the scaffolding the
+chat model follows; a weaker planner on top of a stronger chat model
+produces bad scaffolding the chat model then fights against. The chat
+model is also the one the user picked during setup as their quality
+target, so upgrading it (through the setup wizard or config) must
+automatically upgrade plan quality without requiring a second choice.
 
-Planning is classification-shaped so it rides the warm small model
-instead of paging in a separate planner model. This preserves KV-cache
-warmth across planner, router, and intent judge.
+Note: the planner pays a cache miss relative to the tool router, which
+*does* ride the warm small model. This is the intended trade-off —
+plan quality drives everything downstream, router quality only narrows
+one turn's allow-list.
 
 ### Prompt contract (plan_query)
 

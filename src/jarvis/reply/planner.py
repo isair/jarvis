@@ -67,21 +67,20 @@ SEARCH_MEMORY_DIRECTIVE = "searchMemory"
 def resolve_planner_model(cfg) -> str:
     """Pick the LLM for planning.
 
-    Same chain as the tool router and evaluator: explicit
-    `planner_model` → `tool_router_model` → `intent_judge_model` →
-    `ollama_chat_model`. Planning is classification-shaped (map a query
-    to a short ordered list of actions) so it lives on the same small,
-    warm model as the other per-turn classification passes.
+    Planning quality scales directly with the chat model: the plan is
+    the scaffolding the chat model then follows, so the two must be
+    matched. A weaker planner on top of a stronger chat model produces
+    bad scaffolding the chat model then has to fight against; and the
+    chat model is the one the user picked during setup as their
+    quality target. An explicit `planner_model` override still wins —
+    useful for benchmarking a dedicated planner — but the default is
+    to track the chat model verbatim so upgrading the chat model
+    automatically upgrades the plans.
     """
-    for candidate in (
-        getattr(cfg, "planner_model", ""),
-        getattr(cfg, "tool_router_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
+    override = getattr(cfg, "planner_model", "") or ""
+    if override:
+        return override
+    return getattr(cfg, "ollama_chat_model", "") or ""
 
 
 _PROMPT_TEMPLATE = (

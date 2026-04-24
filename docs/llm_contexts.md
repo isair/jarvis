@@ -78,7 +78,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 7. Tool Router (pre-loop tool selection)
 
 - **File**: [src/jarvis/tools/selection.py](src/jarvis/tools/selection.py) — `select_tools_with_llm()` (~line 331).
-- **Trigger**: once per reply before the loop, **only when the pre-flight planner (#12) returned an empty plan (fail-open)**. When the planner produced a plan, the tool names the planner referenced become the allow-list directly and this router LLM call is skipped. `tool_selection_strategy == "llm"` is still the default for the fail-open path; other strategies (`all`, `keyword`, `embedding`) apply there too.
+- **Trigger**: once per reply before the loop. Always runs — the router is the authoritative tool picker. When the pre-flight planner (#12) referenced tools, those names are unioned into the router's allow-list but never replace it; small models tend to default to `webSearch` where a dedicated tool like `getWeather` should win, and the router is tuned for that classification. `tool_selection_strategy == "llm"` is the default; other strategies (`all`, `keyword`, `embedding`) also run here.
 - **Model / gating**: `resolve_tool_router_model(cfg)` chain — `tool_router_model → intent_judge_model → ollama_chat_model`.
 - **Inputs**: user query, tool catalogue (builtin + MCP with descriptions), optional narrow-down hint.
 - **System prompt**: inline (~lines 260-315). Teaches pick up-to-5 tools or `none`.
@@ -126,10 +126,10 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
 - **Trigger**: once per reply, **at the very front of the reply flow** (before memory search, before tool routing). Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), or when no model / base URL is available.
-- **Model / gating**: resolution chain `planner_model → tool_router_model → intent_judge_model → ollama_chat_model`. Classification-shaped, rides the warm small model.
+- **Model / gating**: resolution chain `planner_model (override) → ollama_chat_model`. The planner tracks the chat model so upgrading the chat model (via setup wizard or config) automatically upgrades plan quality.
 - **Inputs**: user query, dialogue context, full builtin + MCP tool catalogue (names + one-line descriptions). **No** memory context — the planner decides *whether* memory is needed.
 - **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups, short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
-- **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and replaces the tool router (#7). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 + #7 unconditionally. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
+- **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
 - **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`.
 
 ## 13. Plan Step Resolver (per direct-exec turn, small models)
@@ -159,12 +159,12 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 4 | Memory digest | 0-N | auto by size | SMALL (uses chat model) |
 | 5 | Tool-result digest | 0-N | auto by size | SMALL (uses chat model) |
 | 6 | Max-turn digest | 0-1 | No | SMALL |
-| 7 | Tool router | 0-1 | skipped when planner produced a plan | SMALL |
+| 7 | Tool router | 1 | always runs; planner picks unioned in | SMALL |
 | 8 | Tool searcher | 0-3 | model-initiated | SMALL (reuses #7) |
 | 9 | Summariser | ~1/session | No (background) | LARGE |
 | 10 | Graph extraction | ~1/session | No (background) | LARGE |
 | 11 | Graph best-child | 0-N | No (background) | SMALL (via router chain) |
-| 12 | Planner (plan_query) | 1 | yes (planner_enabled) | SMALL (via router chain) |
+| 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
 

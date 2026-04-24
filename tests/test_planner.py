@@ -95,16 +95,22 @@ class TestIsTrivialPlan:
 
 class TestResolvePlannerModel:
     def test_prefers_explicit_planner_model(self):
-        cfg = _cfg(planner_model="gemma-plan", tool_router_model="router")
+        cfg = _cfg(planner_model="gemma-plan", ollama_chat_model="chat")
         assert resolve_planner_model(cfg) == "gemma-plan"
 
-    def test_falls_through_to_router(self):
-        cfg = _cfg(tool_router_model="router-x")
-        assert resolve_planner_model(cfg) == "router-x"
-
-    def test_falls_through_to_chat_model(self):
-        cfg = _cfg()
+    def test_tracks_chat_model_by_default(self):
+        cfg = _cfg(ollama_chat_model="gemma4:e2b")
         assert resolve_planner_model(cfg) == "gemma4:e2b"
+
+    def test_ignores_tool_router_model(self):
+        # Planner must track the chat model — not the router. Upgrading
+        # the chat model through setup must upgrade the planner too.
+        cfg = _cfg(tool_router_model="router-x", ollama_chat_model="chat-y")
+        assert resolve_planner_model(cfg) == "chat-y"
+
+    def test_upgrading_chat_model_upgrades_planner(self):
+        cfg = _cfg(ollama_chat_model="gpt-oss:20b")
+        assert resolve_planner_model(cfg) == "gpt-oss:20b"
 
     def test_returns_empty_when_no_candidates(self):
         cfg = _cfg(ollama_chat_model="")
