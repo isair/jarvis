@@ -348,6 +348,19 @@ def main() -> None:
     )
     print("✓ Dialogue memory initialized", flush=True)
 
+    # Knowledge graph: wipe + re-seed if the on-disk shape predates the
+    # User/Directives/World taxonomy. Alpha feature, non-destructive to
+    # the diary — users can re-import via the memory viewer.
+    try:
+        from .memory.graph import GraphMemoryStore
+        _graph_store_boot = GraphMemoryStore(cfg.db_path)
+        if _graph_store_boot.migrate_legacy_shape():
+            print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
+            print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
+        _graph_store_boot.close()
+    except Exception as e:
+        debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
+
     # Check location detection status
     if cfg.location_enabled:
         location_context = get_location_context(

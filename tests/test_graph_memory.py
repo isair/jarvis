@@ -111,6 +111,63 @@ class TestGraphMemoryStoreBootstrap:
 
 
 @pytest.mark.unit
+class TestMigrateLegacyShape:
+    """Startup wipe when the on-disk graph predates the User/Directives/World taxonomy."""
+
+    def test_no_wipe_on_fresh_graph(self, store):
+        """Freshly seeded graph (root + 3 branches, no data) is conforming."""
+        assert store.migrate_legacy_shape() is False
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
+
+    def test_no_wipe_when_only_descendants_of_fixed_branches(self, store):
+        """Children grown under User/Directives/World are fine — the shape
+        check only looks at direct root children."""
+        store.create_node(
+            name="Identity", description="who the user is",
+            data="User's name is Baris.", parent_id="user",
+        )
+        assert store.migrate_legacy_shape() is False
+        # Content preserved
+        assert any(
+            n.name == "Identity" for n in store.get_all_nodes()
+        )
+
+    def test_wipes_when_root_has_rogue_child(self, store):
+        """Pre-taxonomy nodes sitting directly under root trigger a wipe."""
+        store.create_node(
+            name="People", description="pre-taxonomy category",
+            data="Alice is a friend.", parent_id="root",
+        )
+        assert store.migrate_legacy_shape() is True
+        # After wipe: only root + seeded branches, no rogue child
+        names = {n.name for n in store.get_all_nodes()}
+        assert "People" not in names
+        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
+
+    def test_wipes_when_root_itself_has_data(self, store):
+        """Cold-start facts appended to root before the taxonomy existed
+        also count as non-conforming."""
+        store.conn.execute(
+            "UPDATE memory_nodes SET data = ? WHERE id = 'root'",
+            ("Some pre-taxonomy fact on root.",),
+        )
+        store.conn.commit()
+        assert store.migrate_legacy_shape() is True
+        root = store.get_root()
+        assert root.data == ""
+
+    def test_reseeds_fixed_branches_after_wipe(self, store):
+        """After a wipe the three fixed branches are present again."""
+        store.create_node(
+            name="Rogue", description="x", data="y", parent_id="root",
+        )
+        assert store.migrate_legacy_shape() is True
+        children = store.get_children("root")
+        child_ids = {c.id for c in children}
+        assert child_ids == {b[0] for b in FIXED_BRANCHES}
+
+
+@pytest.mark.unit
 class TestNodeCRUD:
     """Create, read, update, delete operations."""
 

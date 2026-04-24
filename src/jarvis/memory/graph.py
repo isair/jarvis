@@ -240,6 +240,63 @@ class GraphMemoryStore:
                 )
             self.conn.commit()
 
+    def migrate_legacy_shape(self) -> bool:
+        """Wipe the graph if it has a non-conforming (pre-taxonomy) shape.
+
+        The knowledge graph is an alpha feature and the purpose-driven
+        taxonomy (root → User / Directives / World) is a hard
+        reorganisation: pre-existing nodes under root that don't match
+        this shape would sit invisible to the warm profile forever.
+        Rather than carrying them as dead weight, we wipe on daemon
+        start-up and let the diary re-import repopulate with correctly
+        classified facts.
+
+        Called ONLY from the daemon start-up path — the memory viewer
+        instantiates ``GraphMemoryStore`` read-mostly and must not
+        trigger a wipe mid-session.
+
+        Non-conforming shape is defined as:
+          - root has a direct child whose id is not in ``FIXED_BRANCHES``
+          - OR root's own ``data`` column is non-empty (cold-start writes
+            that landed on root before the taxonomy existed).
+
+        Returns True if a wipe happened, False if the graph was already
+        in the expected shape.
+        """
+        expected_ids = {bid for bid, _, _ in FIXED_BRANCHES}
+        with self._lock:
+            root_row = self.conn.execute(
+                "SELECT data FROM memory_nodes WHERE id = 'root'"
+            ).fetchone()
+            root_has_data = bool(root_row and (root_row["data"] or "").strip())
+
+            rogue_child = self.conn.execute(
+                "SELECT id FROM memory_nodes "
+                "WHERE parent_id = 'root' AND id NOT IN ({}) LIMIT 1".format(
+                    ",".join("?" * len(expected_ids))
+                ),
+                tuple(expected_ids),
+            ).fetchone()
+
+            if not root_has_data and rogue_child is None:
+                return False
+
+            reason = (
+                "root holds pre-taxonomy data"
+                if root_has_data
+                else f"found non-conforming root child: {rogue_child['id']!r}"
+            )
+            debug_log(
+                f"wiping knowledge graph ({reason}); will re-seed fixed branches",
+                "memory",
+            )
+            self.conn.execute("DELETE FROM memory_nodes")
+            self.conn.commit()
+
+        # Re-seed root + fixed branches from scratch.
+        self._ensure_root()
+        return True
+
     # ── CRUD ────────────────────────────────────────────────────────────
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
