@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 import random
 import threading
+import time as _time
 from typing import Optional, List, Tuple
 from enum import Enum
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
@@ -222,7 +223,8 @@ class LowPolyFaceWidget(QWidget):
         self._spinner_angle = 0.0  # Rotation angle for thinking spinner
 
         # Listening animation - bell ring echoes
-        self._listening_pulse_time = 0.0  # Time for spawning rings
+        self._listening_started_at: Optional[float] = None  # Wall-clock start time
+        self._listening_rings_spawned = 0  # How many rings spawned this session
         self._listening_rings: List[float] = []  # Active ring expansions (0.0 to 1.0)
         self._dictation_pulse_phase = 0.0  # Steady pulse phase for DICTATING state
 
@@ -422,10 +424,18 @@ class LowPolyFaceWidget(QWidget):
     def _animate(self):
         """Animation tick - update all animated properties."""
         # Poll Jarvis state directly (more reliable than cross-thread signals)
+        prev_state = self._jarvis_state
         try:
             self._jarvis_state = self._state_manager.state
         except Exception:
             pass
+        # Re-anchor the listening ring clock each time we enter LISTENING
+        # so the first ring lands with the first audible click and later
+        # rings stay phase-locked to wall time.
+        if (self._jarvis_state == JarvisState.LISTENING
+                and prev_state != JarvisState.LISTENING):
+            self._listening_started_at = _time.monotonic()
+            self._listening_rings_spawned = 0
 
         # Update activation level based on state
         if self._jarvis_state == JarvisState.ASLEEP:
@@ -478,20 +488,25 @@ class LowPolyFaceWidget(QWidget):
             self._gaze_y *= 0.95
 
         # Listening animation - bell ring echoes.
-        # Tempo locked to the thinking pad's unison-beat period (1s,
-        # third-slowest wave after the 5s LFO and 1.67s voice-peak
-        # spacing) = 30 frames at 30 FPS.
-        if self._jarvis_state == JarvisState.LISTENING:
-            self._listening_pulse_time += 1
-            if self._listening_pulse_time >= 30:
-                self._listening_pulse_time = 0
-                self._listening_rings.append(0.0)  # Add new ring at expansion 0
+        # Phase-locked to wall time since LISTENING started, matched to
+        # the thinking pad's 2s pulse cycle. Frame-counting drifts vs
+        # the 44.1 kHz audio clock; wall time doesn't.
+        pulse_cycle_s = 2.0
+        ring_lifespan_s = 2.0
+        if self._jarvis_state == JarvisState.LISTENING and self._listening_started_at is not None:
+            elapsed = _time.monotonic() - self._listening_started_at
+            target_spawned = int(elapsed / pulse_cycle_s) + 1  # First ring at t=0
+            while self._listening_rings_spawned < target_spawned:
+                spawn_time = self._listening_rings_spawned * pulse_cycle_s
+                age = max(0.0, elapsed - spawn_time)
+                self._listening_rings.append(age / ring_lifespan_s)
+                self._listening_rings_spawned += 1
 
-            # Expand each ring over one beat (1s).
+            # Age existing rings by one frame (33ms at 30 FPS).
             new_rings = []
             for ring in self._listening_rings:
-                ring += 1.0 / 30.0
-                if ring < 1.0:  # Keep if not fully expanded
+                ring += (1.0 / 30.0) / ring_lifespan_s
+                if ring < 1.0:
                     new_rings.append(ring)
             self._listening_rings = new_rings
         else:
@@ -508,10 +523,9 @@ class LowPolyFaceWidget(QWidget):
             self._dictation_pulse_phase += 0.08  # Steady pulse speed
 
         # Spinner animation (while thinking or post-dictation processing).
-        # One full revolution per pad unison-beat period (1s = 30 frames
-        # at 30 FPS) — third-slowest wave in the thinking tone.
+        # One full revolution per pad pulse cycle (2s = 60 frames at 30 FPS).
         if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
-            self._spinner_angle += 360.0 / 30.0  # 12 deg/frame → one rev per 1s
+            self._spinner_angle += 6.0  # 6 deg/frame → one rev per 2s
             if self._spinner_angle >= 360:
                 self._spinner_angle -= 360
 

@@ -38,7 +38,7 @@ def test_thinking_pad_samples_have_expected_shape():
     assert rate == 44100
     assert samples.dtype.name == "int16"
     assert samples.ndim == 1
-    # Long enough to feel continuous; sounddevice loops it natively.
+    # Long enough to contain several pulse-silence cycles.
     assert samples.size / rate >= 5.0
 
 
@@ -68,15 +68,20 @@ def test_thinking_pad_seam_is_effectively_seamless():
     assert abs(first - last) < 0.05 * 32767
 
 
-def test_thinking_pad_stays_loud_throughout():
+def test_thinking_pad_breathes():
+    """The pad is intentionally not continuous — it has a short audible
+    breath followed by a silent pause each loop so long thinking runs
+    aren't fatiguing. Verify both extremes exist."""
     samples, rate = _generate_thinking_pad_samples()
     win = rate // 10  # 100ms windows
     peaks = [
         int(abs(samples[i : i + win]).max())
         for i in range(0, samples.size - win, win)
     ]
-    # Never drops to silence — observed floor ≈ 2800.
-    assert min(peaks) > 0.05 * 32767
+    # At least one window is clearly audible (the hold section).
+    assert max(peaks) > 0.10 * 32767
+    # At least one window is effectively silent (the rest pause).
+    assert min(peaks) < 0.005 * 32767
 
 
 # --- TunePlayer lifecycle --------------------------------------------------
