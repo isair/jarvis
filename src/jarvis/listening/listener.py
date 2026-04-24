@@ -2079,6 +2079,30 @@ class VoiceListener(threading.Thread):
                     flush=True,
                 )
 
+            # Chrome MCP tip: the chrome MCP exposes a `navigate` tool that
+            # takes a URL. Vague phrasing like "Open YouTube" forces the model
+            # to guess a URL; "Navigate to youtube.com" maps directly to the
+            # tool's argument and is more reliable on small models.
+            try:
+                from ..tools.registry import get_cached_mcp_tools
+                mcp_tool_names = list(get_cached_mcp_tools().keys())
+                has_chrome_mcp = any("chrome" in name.lower() for name in mcp_tool_names)
+            except Exception:
+                has_chrome_mcp = False
+            if has_chrome_mcp:
+                print(
+                    f"  🌐 Chrome MCP detected. Name the destination URL so the browser tool can act directly.",
+                    flush=True,
+                )
+                print(
+                    f"      👍 \"Navigate to youtube.com, {wake_word.title()}.\"",
+                    flush=True,
+                )
+                print(
+                    f"      👎 \"Open YouTube, {wake_word.title()}.\"",
+                    flush=True,
+                )
+
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
