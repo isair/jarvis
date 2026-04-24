@@ -17,9 +17,8 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     the looping imperceptible:
 
     1. Mathematical seam: every sine frequency (in Hz) is an integer,
-       and every LFO period evenly divides the clip duration (in
-       seconds), so start and end samples match exactly — no click at
-       the wrap point.
+       so start and end samples match exactly — no click at the wrap
+       point.
     2. Short duration (10s): the sounddevice callback loops the
        buffer natively in the OS audio thread, so there's no
        per-iteration gap. A shorter buffer keeps generation cheap
@@ -27,51 +26,57 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
 
     Tone character — choir-"ahh" / bowed-string pad:
     - A major triad (A3 / C#4 / E4) with a natural harmonic spectrum
-      (partials 1-6 with 1/n-style rolloff) so each voice has real
+      (fundamental only) so each voice has real
       timbre instead of sounding like a pure sine.
     - Three-way unison detune per chord tone (-1 Hz, 0, +1 Hz) —
       mirrors how an ensemble of human singers or strings is never
-      perfectly in tune, giving chorus-like warmth and body.
-    - Phase-offset cross-fading LFOs on the three chord voices so the
-      blend shifts continuously while total amplitude stays steady.
+      perfectly in tune, giving chorus-like warmth and body and a
+      gentle ~1 Hz beat between the outer layers.
 
     Returns (int16 mono samples, sample_rate).
     """
     sample_rate = 44100
+    # 10s buffer = 5 pulse cycles of 2s each (1s tone + 1s silence).
     duration_s = 10
+    pulse_cycle_s = 2.0
+    tone_s = 1.0  # audible portion per cycle
+    attack_s = 0.008  # ~8ms fast attack gives the slight "click"
 
     chord_roots = (220, 275, 330)  # A3, ~C#4, ~E4 — integer Hz for seamless seam
-    harmonic_gains = (1.00, 0.55, 0.30, 0.18, 0.10, 0.06)
-    harmonic_phases = (0.0, 0.7, 1.3, 2.1, 0.4, 1.9)
     unison_offsets = (-1, 0, 1)
-    lfo_period = 5.0  # amplitude cross-fade: 2 cycles per 10s loop (evenly divides)
 
     n = int(sample_rate * duration_s)
     t = np.arange(n, dtype=np.float64) / sample_rate
     two_pi = 2 * np.pi
 
-    lfo_w = two_pi / lfo_period
-    voice_amps = [
-        0.55 + 0.25 * np.sin(lfo_w * t + k * two_pi / 3)
-        for k in range(3)
-    ]
+    # Single-cycle envelope: fast linear attack → exponential decay →
+    # silence for the rest of the cycle. Tiles across the whole buffer.
+    cycle_len = int(sample_rate * pulse_cycle_s)
+    tone_len = int(sample_rate * tone_s)
+    attack_len = max(1, int(sample_rate * attack_s))
+    decay_len = tone_len - attack_len
+    one_cycle = np.zeros(cycle_len, dtype=np.float64)
+    one_cycle[:attack_len] = np.linspace(0.0, 1.0, attack_len, endpoint=True)
+    # Exponential decay from 1.0 down to effectively 0 over the tone body.
+    decay = np.exp(-4.0 * np.arange(decay_len) / decay_len)
+    one_cycle[attack_len:tone_len] = decay
+    # Tile three cycles across the 9s buffer (matches duration_s exactly).
+    num_cycles = n // cycle_len
+    envelope = np.zeros(n, dtype=np.float64)
+    for i in range(num_cycles):
+        envelope[i * cycle_len:(i + 1) * cycle_len] = one_cycle
 
-    voice_signals = []
+    # Build the triad once: three pure sines per chord tone with ±1 Hz
+    # unison detune for the characteristic beat.
+    tone = np.zeros(n, dtype=np.float64)
     for root in chord_roots:
-        unison_sum = np.zeros(n, dtype=np.float64)
         for offset in unison_offsets:
             f = root + offset
-            for h_idx, (gain, phase0) in enumerate(
-                zip(harmonic_gains, harmonic_phases)
-            ):
-                partial_freq = (h_idx + 1) * f
-                phase = two_pi * partial_freq * t + phase0
-                unison_sum += gain * np.sin(phase)
-        voice_signals.append(unison_sum)
-
-    tone = sum(a * v for a, v in zip(voice_amps, voice_signals))
+            tone += np.sin(two_pi * f * t)
     peak = float(np.max(np.abs(tone))) or 1.0
-    signal = (tone / peak) * 0.32
+    tone = tone / peak
+
+    signal = tone * envelope * 0.38
 
     samples = np.clip(signal * 32767, -32768, 32767).astype(np.int16)
     return samples, sample_rate
