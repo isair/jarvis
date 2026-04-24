@@ -466,7 +466,7 @@ class VoiceListener(threading.Thread):
                 last_tts_text = self.echo_detector._last_tts_text or ""
                 if last_tts_text:
                     echo_score = fuzz.partial_ratio(
-                        text_lower[:150], last_tts_text.lower()[:300]
+                        text_lower, last_tts_text.lower()
                     )
                     tts_words = len(last_tts_text.split())
                     text_words = len(text_lower.split())
@@ -693,7 +693,7 @@ class VoiceListener(threading.Thread):
                     is_pure_echo = False
                     if last_tts_text_fb:
                         echo_score = fuzz.partial_ratio(
-                            text_lower[:150], last_tts_text_fb.lower()[:300]
+                            text_lower, last_tts_text_fb.lower()
                         )
                         tts_words = len(last_tts_text_fb.split())
                         text_words = len(text_lower.split())
@@ -761,7 +761,7 @@ class VoiceListener(threading.Thread):
                         # and the intent judge's extraction should be used instead.
                         if last_tts_text:
                             echo_score = fuzz.partial_ratio(
-                                text_lower[:150], last_tts_text.lower()[:300]
+                                text_lower, last_tts_text.lower()
                             )
                             tts_words = len(last_tts_text.split())
                             text_words = len(text_lower.split())
@@ -774,8 +774,8 @@ class VoiceListener(threading.Thread):
                                 # TTS too, it's genuinely pure echo. If the query is
                                 # different, the judge extracted real user speech.
                                 query_echo_score = fuzz.partial_ratio(
-                                    intent_judgment.query[:100].lower(),
-                                    last_tts_text.lower()[:200]
+                                    intent_judgment.query.lower(),
+                                    last_tts_text.lower()
                                 )
                                 if query_echo_score >= 70:
                                     debug_log(f"🔇 Echo in hot window (directed, score={echo_score}): \"{text_lower}\"", "voice")
@@ -854,7 +854,7 @@ class VoiceListener(threading.Thread):
                         # Only reject pure echo (similar word count to TTS)
                         if last_tts_text:
                             echo_score = fuzz.partial_ratio(
-                                text_lower[:150], last_tts_text.lower()[:300]
+                                text_lower, last_tts_text.lower()
                             )
                             tts_words = len(last_tts_text.split())
                             text_words = len(text_lower.split())
@@ -932,7 +932,7 @@ class VoiceListener(threading.Thread):
                             is_pure_echo = False
                             if last_tts_text:
                                 echo_score = fuzz.partial_ratio(
-                                    text_lower[:150], last_tts_text.lower()[:300]
+                                    text_lower, last_tts_text.lower()
                                 )
                                 tts_words = len(last_tts_text.split())
                                 text_words = len(text_lower.split())
@@ -972,7 +972,7 @@ class VoiceListener(threading.Thread):
                         is_pure_echo = False
                         if last_tts_text:
                             echo_score = fuzz.partial_ratio(
-                                text_lower[:150], last_tts_text.lower()[:300]
+                                text_lower, last_tts_text.lower()
                             )
                             tts_words = len(last_tts_text.split())
                             text_words = len(text_lower.split())
