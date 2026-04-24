@@ -38,8 +38,8 @@ def test_thinking_pad_samples_have_expected_shape():
     assert rate == 44100
     assert samples.dtype.name == "int16"
     assert samples.ndim == 1
-    # Long enough to mask any wrap-around artefact.
-    assert samples.size / rate >= 30.0
+    # Long enough to feel continuous; sounddevice loops it natively.
+    assert samples.size / rate >= 5.0
 
 
 def test_thinking_pad_wav_is_well_formed():

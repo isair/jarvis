@@ -20,9 +20,10 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
        and every LFO period evenly divides the clip duration (in
        seconds), so start and end samples match exactly — no click at
        the wrap point.
-    2. Long duration (60s): at the callback-loop level the seam is
-       stepped through once per minute, deep in the inaudible sample
-       delta, so the whole clip reads as one continuous texture.
+    2. Short duration (10s): the sounddevice callback loops the
+       buffer natively in the OS audio thread, so there's no
+       per-iteration gap. A shorter buffer keeps generation cheap
+       (~70ms) and memory small.
 
     Tone character — choir-"ahh" / bowed-string pad:
     - A major triad (A3 / C#4 / E4) with a natural harmonic spectrum
@@ -37,13 +38,13 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     Returns (int16 mono samples, sample_rate).
     """
     sample_rate = 44100
-    duration_s = 60
+    duration_s = 10
 
     chord_roots = (220, 275, 330)  # A3, ~C#4, ~E4 — integer Hz for seamless seam
     harmonic_gains = (1.00, 0.55, 0.30, 0.18, 0.10, 0.06)
     harmonic_phases = (0.0, 0.7, 1.3, 2.1, 0.4, 1.9)
     unison_offsets = (-1, 0, 1)
-    lfo_period = 6.0  # amplitude cross-fade: 10 cycles per 60s loop
+    lfo_period = 5.0  # amplitude cross-fade: 2 cycles per 10s loop (evenly divides)
 
     n = int(sample_rate * duration_s)
     t = np.arange(n, dtype=np.float64) / sample_rate
@@ -128,6 +129,18 @@ def _get_thinking_pad_samples() -> tuple[np.ndarray, int]:
     return _THINKING_PAD_SAMPLES
 
 
+def _prewarm_cache() -> None:
+    """Pre-generate samples off the hot path so the first start_tune()
+    doesn't compete with the first LLM call for CPU."""
+    try:
+        _get_thinking_pad_samples()
+    except Exception as exc:
+        debug_log(f"thinking tune: prewarm failed: {exc!r}", category="tune")
+
+
+threading.Thread(target=_prewarm_cache, daemon=True).start()
+
+
 class TunePlayer:
     """Plays a thinking-pad tune in a loop while Jarvis is processing.
 
@@ -200,8 +213,7 @@ class TunePlayer:
             total = samples.size
 
             def callback(outdata, frames, time_info, status):
-                if status:
-                    debug_log(f"thinking tune: stream status {status}", category="tune")
+                # No I/O here — this runs in the realtime audio thread.
                 start = position[0]
                 end = start + frames
                 if end <= total:
