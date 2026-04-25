@@ -57,7 +57,7 @@ CLASS_DESCRIPTIONS = {
     "TestToolUsage": "Validates tool selection and argument quality",
     "TestMultiStepReasoning": "Complex scenarios requiring tool chaining and synthesis",
     "TestMemoryEnrichment": "Tests automatic memory enrichment keyword extraction",
-    "TestLiveEndToEnd": "Live tests with real LLM inference",
+    "TestLiveEndToEnd": "End-to-end tests against real LLM inference",
     "TestNutritionExtraction": "Tests LLM nutrition extraction accuracy for meal logging",
     "TestNutritionToolIntegration": "Tests full meal logging tool with macro extraction",
     "TestNutritionModelComparison": "Baseline tests for comparing nutrition extraction across models",
@@ -79,7 +79,7 @@ CLASS_DESCRIPTIONS = {
     "TestTopicSwitching": "Tests correct tool selection when conversation topic changes",
     "TestFollowUpContext": "Tests context retention for follow-up questions",
     "TestMultiTurnExtended": "Extended multi-turn scenarios with longer conversations",
-    "TestGreetingNoToolsLive": "Live tests that greetings don't trigger tool calls",
+    "TestGreetingNoToolsLive": "Tests that greetings don't trigger tool calls",
     "TestHelpfulness": "Tests that agent uses tools proactively instead of deflecting",
     "TestDiaryRecencyOrder": "Tests that diary search returns newer entries before older ones",
     "TestGraphRecencySuperseding": "Tests that graph handles contradicting facts with date context",
@@ -128,6 +128,17 @@ TEST_DESCRIPTIONS = {
     "test_tool_retry_after_failure_live": "Assistant retries a tool after the first attempt fails",
     "test_graph_knowledge_surfaced_in_reply_live": "Graph-enriched facts surface in the reply, no denial",
     "test_does_not_deny_long_term_memory_live": "Assistant does not deny having long-term memory",
+    # Multi-step entity / complex flow tests
+    "test_chained_research_possessor_director": "Chained research: who directed Possessor and what else have they made",
+    "test_parallel_comparison_paris_vs_london": "Parallel weather lookup: compare Paris and London",
+    "test_director_then_filmography_requires_two_searches": "Director-then-filmography needs two searches",
+    "test_two_turn_celebrity_flow": "Two-turn celebrity flow: identity then pronoun follow-up",
+    "test_single_weather_call_terminates": "Single weather query ends after one tool call",
+    "test_max_turn_triggers_digest": "Max-turn cap delivers a digest reply, never silence",
+    # Knowledge extraction
+    "test_judge_mixed_summary_filters_noise": "Mixed summary: keep novel facts, drop stale weather/recommendations",
+    "test_judge_empty_conversation_returns_empty": "Trivial conversations produce no extracted facts",
+    "test_open_ended_prompt_grounds_in_graph_context_live": "Open-ended prompt grounds in stored knowledge",
 }
 
 
@@ -178,6 +189,47 @@ def _extract_judge_notes(stdout: Optional[str]) -> Optional[Dict[str, str]]:
     return notes if notes else None
 
 
+def _humanise_test_name(test_name: str) -> str:
+    """Turn ``test_some_thing_does_X`` into ``Some thing does X``.
+
+    Last-resort fallback used when a test has no entry in TEST_DESCRIPTIONS
+    and no parametrize id. Keeps the report readable for non-technical
+    readers — they shouldn't have to parse Python identifiers.
+    """
+    name = test_name
+    if name.startswith("test_"):
+        name = name[5:]
+    name = name.replace("_", " ").strip()
+    if not name:
+        return test_name
+    return name[0].upper() + name[1:]
+
+
+def _strip_redundant_prefix(label: str) -> str:
+    """Drop noisy prefixes from human-readable case labels.
+
+    Every eval is live by design (the suite drives a real model), so the
+    ``Live:`` / ``Live `` prefix is uninformative. Same for trailing model
+    suffixes like ``-gpt-oss:20b`` that pytest cross-products into
+    parametrize ids — the Model column already shows that.
+    """
+    s = label.strip()
+    # Trailing "-<model>" suffix injected by pytest parametrize cross-product.
+    for suffix in ("-gpt-oss:20b", "-gemma4:e2b", "-gemma4:e4b"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)].rstrip()
+            break
+    # Leading "Live:" / "Live " prefix is redundant — the suite is live.
+    lower = s.lower()
+    for prefix in ("live: ", "live: ", "live "):
+        if lower.startswith(prefix):
+            s = s[len(prefix):].lstrip()
+            if s:
+                s = s[0].upper() + s[1:]
+            break
+    return s
+
+
 def _get_test_description(test_name: str, case_id: Optional[str]) -> str:
     """
     Get the description for a test case.
@@ -186,11 +238,14 @@ def _get_test_description(test_name: str, case_id: Optional[str]) -> str:
     For non-parametrized tests, use the TEST_DESCRIPTIONS lookup.
     """
     if case_id:
-        # Parametrized test: the ID is the description (defined in the test file)
-        return case_id
+        return _strip_redundant_prefix(case_id)
 
-    # Non-parametrized test: use lookup or fall back to test name
-    return TEST_DESCRIPTIONS.get(test_name, test_name)
+    raw = TEST_DESCRIPTIONS.get(test_name)
+    if raw is not None:
+        return _strip_redundant_prefix(raw)
+    # Last-resort: humanise the raw test name so the report doesn't expose
+    # Python identifiers to non-technical readers.
+    return _humanise_test_name(test_name)
 
 
 # =============================================================================

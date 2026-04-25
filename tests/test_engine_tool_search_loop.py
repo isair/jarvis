@@ -156,8 +156,14 @@ def test_initial_allowlist_always_includes_toolsearchtool(
             )
 
     assert captured_allow_lists, "generate_tools_json_schema was never called"
-    assert "toolSearchTool" in captured_allow_lists[0], (
-        f"toolSearchTool missing from initial allow-list: {captured_allow_lists[0]}"
+    # The engine now runs the router before the planner, which builds an
+    # auxiliary schema for the planner's tool catalogue (router-narrowed,
+    # no escape hatch) before the final chat-model schema. The escape hatch
+    # only joins in the chat-model allow-list. Assert it appears somewhere
+    # in the captured calls — implementations are free to reuse the same
+    # schema generator at multiple call sites.
+    assert any("toolSearchTool" in al for al in captured_allow_lists), (
+        f"toolSearchTool missing from any allow-list: {captured_allow_lists}"
     )
 
 

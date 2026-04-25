@@ -9,10 +9,10 @@ entirely and confabulate from training. The planner fixes this by
 running a single cheap classification-shaped LLM pass **at the very
 front of the reply flow** that emits a short ordered list of sub-tasks.
 
-The planner runs **after the tool router** and **before memory
-search**. The router narrows the catalogue first so the planner's
-tool steps reference concrete chosen names; the planner then **gates
-memory enrichment** and **drives direct execution** for small models.
+The planner runs **after the tool router** and **before memory search**.
+The router narrows the catalogue first so the planner's tool steps reference
+concrete chosen names; the planner then **gates memory enrichment** and
+**drives direct execution** for small models.
 
 The engine uses the plan for three things:
 1. **Gate memory enrichment** — the planner emits an explicit
@@ -24,10 +24,7 @@ The engine uses the plan for three things:
    in as a safety net. Feeding the planner the narrowed catalogue
    (instead of the full 30+ list) stops small planners from
    paraphrasing ("get the weather") and from defaulting to
-   `webSearch` when a more specific tool exists. An earlier variant
-   let the planner replace the router to save one LLM call, but
-   measurable tool-picking quality dropped — the dedicated router
-   stays the authoritative picker.
+   `webSearch` when a more specific tool exists.
 3. **Drive direct execution** for small models, as before — each
    planned step is resolved to a concrete tool call without
    round-tripping the chat model for intermediate turns.

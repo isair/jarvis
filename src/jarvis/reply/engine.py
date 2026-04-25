@@ -759,12 +759,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 2a: Tool routing FIRST.
     #
-    # The router runs before the planner so the planner sees a concrete,
-    # narrowed tool catalogue rather than the full 30+ list. Two gains:
-    # small planners stop paraphrasing tool names ("get the weather")
-    # because the relevant ones are already named for them; and the
-    # narrowed list keeps the planner's prompt tight, which matters for
-    # gemma-class chat models that lose accuracy fast as the prompt grows.
+    # The router runs before the planner so the planner sees concrete,
+    # narrowed tool names — not a 30+ catalogue it has to paraphrase. Two
+    # gains: small planners stop inventing tool names ("get the weather")
+    # because the relevant ones are already named for them; and tool steps
+    # come out concrete ("getWeather location='Paris'") so the direct-exec
+    # fast path parses without needing the resolver LLM round-trip.
     context_hint = _build_enrichment_context_hint(cfg, recent_messages)
     try:
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
@@ -782,7 +782,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
         context_hint=context_hint,
     )
-    _selection_source = strategy.value
     _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
     _planner_tool_catalog: list[tuple[str, str]] = []
     for _schema in (_planner_schema or []):
@@ -1060,22 +1059,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 6: Tool allow-list for this turn.
     #
-    # The router already ran at the very top of the flow (Step 2a) so the
-    # planner could see a narrowed catalogue. We reuse that selection here
-    # rather than re-running select_tools — one router LLM call per turn,
-    # not two. The planner's tool references are advisory: unioned into
-    # the allow-list when the plan named concrete tools the router missed,
-    # but never replacing the router's picks. Small models (gemma4:e2b)
-    # tend to default to the most universal tool they know (typically
-    # `webSearch`) when they should pick a specific one (`getWeather`,
-    # `getTime`); the dedicated router is tuned for that classification
-    # and consistently outperforms the planner at it. An earlier variant
-    # let the planner REPLACE the router to save one LLM call; that was
-    # reverted when measurable tool-picking quality dropped.
+    # The router already ran upstream (before the planner) so the planner's
+    # tool steps reference concrete router-chosen names. We start from the
+    # router's picks and union in any names the planner referenced — these
+    # should already be a subset, but we keep the union as a safety net in
+    # case the planner paraphrased and `tool_names_in_plan` mapped one back.
     _plan_under_specified = bool(action_plan) and plan_has_unresolved_tool_steps(
         action_plan, _full_catalog_names
     )
     allowed_tools = list(routed_tools)
+    _selection_source = strategy.value
     if action_plan and not _plan_under_specified:
         for _plan_name in tool_names_in_plan(action_plan, _full_catalog_names):
             if _plan_name not in allowed_tools:

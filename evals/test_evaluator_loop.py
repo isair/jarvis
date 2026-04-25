@@ -399,9 +399,15 @@ class TestNudgeCapEnforcement:
 
 
 class TestMaxTurnDigestCaveat:
-    """Forcing the evaluator to always return 'continue' drives the loop to
-    exhaust agentic_max_turns. The max-turn digest path must fire and the
-    reply must remain non-empty (not a raw empty string)."""
+    """Behaviour: when the agentic loop exhausts ``agentic_max_turns``
+    without ever emitting a natural-language reply (a pathological pure-
+    tool-call loop), the engine must still deliver a non-empty reply by
+    running the digest backstop.
+
+    Evaluator-driven coverage was removed when the evaluator was retired
+    in favour of the planner. The behaviour the user cares about — "you
+    must never be left with an empty reply, even if the loop misbehaves"
+    — is asserted here without coupling to deprecated internals."""
 
     @pytest.mark.eval
     @requires_judge_llm
@@ -409,11 +415,9 @@ class TestMaxTurnDigestCaveat:
         self, mock_config, eval_db, eval_dialogue_memory
     ):
         from jarvis.reply.engine import run_reply_engine
-        from jarvis.reply.evaluator import EvaluatorResult
 
         _configure(mock_config)
         mock_config.agentic_max_turns = 3
-        mock_config.evaluator_nudge_max = 99  # defeat the cap for this test
         capture = ToolCallCapture()
 
         def _respond(name, args):
@@ -430,15 +434,29 @@ class TestMaxTurnDigestCaveat:
             digest_spy_calls.append(
                 {"user_query": user_query, "loop_messages_len": len(loop_messages)}
             )
-            # Short caveated reply — what the real digest pass would return.
-            return "(Heads up, I couldn't finish this one) Based on what I "\
-                   "gathered so far, I don't have a complete answer."
-
-        # Force evaluator to always ask for continuation.
-        def _always_continue(*_args, **_kwargs):
-            return EvaluatorResult(
-                terminal=False, nudge="please try a tool", reason="forced-continue"
+            return (
+                "(Heads up, I couldn't finish this one) Based on what I "
+                "gathered so far, I don't have a complete answer."
             )
+
+        # Force the chat model into an infinite tool-call loop: every turn
+        # returns a structured tool_call instead of natural-language content,
+        # so the loop never sees a terminal text reply and runs out of turns.
+        def _always_tool_call(*_args, **_kwargs):
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "getWeather",
+                                "arguments": {"location": "London"},
+                            }
+                        }
+                    ],
+                }
+            }
 
         with patch("jarvis.reply.engine.select_tools", side_effect=router), \
              patch("jarvis.reply.engine.run_tool_with_retries", side_effect=runner), \
@@ -446,7 +464,7 @@ class TestMaxTurnDigestCaveat:
                  "jarvis.reply.engine.get_location_context_with_timezone",
                  return_value=("Location: London, UK", None),
              ), \
-             patch("jarvis.reply.engine.evaluate_turn", side_effect=_always_continue), \
+             patch("jarvis.reply.engine.chat_with_messages", side_effect=_always_tool_call), \
              patch("jarvis.reply.engine.digest_loop_for_max_turns", side_effect=_spy_digest):
             reply = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
@@ -460,8 +478,8 @@ class TestMaxTurnDigestCaveat:
         print(f"   reply: {(reply or '')[:240]}...")
 
         assert digest_spy_calls, (
-            "digest_loop_for_max_turns should have been called when the "
-            "evaluator kept saying continue until agentic_max_turns."
+            "digest_loop_for_max_turns must fire when the loop exhausts "
+            "agentic_max_turns without producing a text reply."
         )
         assert digest_spy_calls[0]["loop_messages_len"] > 0, (
             "Digest must receive the loop's accumulated messages, not an empty "
