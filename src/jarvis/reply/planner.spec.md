@@ -9,25 +9,25 @@ entirely and confabulate from training. The planner fixes this by
 running a single cheap classification-shaped LLM pass **at the very
 front of the reply flow** that emits a short ordered list of sub-tasks.
 
-The planner runs **before** memory search and tool routing, and it
-**gates** both: every preparatory step the reply flow might take
-(pulling past-conversation memory, narrowing the tool allow-list,
-direct-executing tool calls) is decided by the plan.
+The planner runs **after the tool router** and **before memory
+search**. The router narrows the catalogue first so the planner's
+tool steps reference concrete chosen names; the planner then **gates
+memory enrichment** and **drives direct execution** for small models.
 
 The engine uses the plan for three things:
 1. **Gate memory enrichment** — the planner emits an explicit
    `searchMemory topic='<topic>'` directive on queries that need past
    user context; we skip the keyword-extraction LLM call, the diary
    / graph lookup, and the memory-digest LLM call otherwise.
-2. **Augment the tool router** — the tool names the planner references
-   are unioned into the router-selected allow-list, so a tool the
-   planner named but the router missed is still callable. The router
-   (`select_tools`) remains the authoritative picker; an earlier
-   variant let the planner replace it to save one LLM call, but
-   measurable tool-picking quality dropped (gemma4:e2b class models
-   default to the most universal tool they know — typically
-   `webSearch` — when they should pick a dedicated one like
-   `getWeather`). The dedicated router is tuned for that classification.
+2. **Confirm the tool allow-list** — the router's picks are
+   authoritative; the tool names the planner references are unioned
+   in as a safety net. Feeding the planner the narrowed catalogue
+   (instead of the full 30+ list) stops small planners from
+   paraphrasing ("get the weather") and from defaulting to
+   `webSearch` when a more specific tool exists. An earlier variant
+   let the planner replace the router to save one LLM call, but
+   measurable tool-picking quality dropped — the dedicated router
+   stays the authoritative picker.
 3. **Drive direct execution** for small models, as before — each
    planned step is resolved to a concrete tool call without
    round-tripping the chat model for intermediate turns.
@@ -41,12 +41,13 @@ integration in `src/jarvis/reply/engine.py`.
 
 ### When the planner runs
 
-- **First**, immediately after the dialogue context is assembled and
-  MCP tools are loaded. Memory search and tool routing run *after* the
-  planner so that both can be gated on its output.
-- The planner sees the full builtin + MCP tool catalog (name +
-  one-line description). It does not see memory content — it decides
-  whether memory is needed, via the `searchMemory` directive.
+- After the dialogue context is assembled, MCP tools are loaded, and
+  the tool router has produced a narrowed catalogue. Memory search
+  runs *after* the planner so it can be gated on its output.
+- The planner sees the **router-narrowed** tool catalogue (name +
+  one-line description), not the full 30+ list. It does not see memory
+  content — it decides whether memory is needed, via the
+  `searchMemory` directive.
 - Only when the query is at least `MIN_QUERY_CHARS` long (default 4).
   Pure noise like "hi" / "ok" still short-circuits.
 - Only when `cfg.planner_enabled` is True (default).

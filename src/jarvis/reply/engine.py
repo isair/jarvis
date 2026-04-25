@@ -748,16 +748,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _all_builtin_names = list(BUILTIN_TOOLS.keys())
     _all_mcp_names = list(mcp_tools.keys())
     _full_catalog_names = _all_builtin_names + _all_mcp_names
-    _full_tools_schema = generate_tools_json_schema(_full_catalog_names, mcp_tools)
-    _planner_tool_catalog: list[tuple[str, str]] = []
-    for _schema in (_full_tools_schema or []):
-        _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
-        if isinstance(_fn, dict):
-            _nm = _fn.get("name")
-            _desc = (_fn.get("description") or "").strip().splitlines()
-            _first = _desc[0] if _desc else ""
-            if _nm:
-                _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     _dialogue_lines: list[str] = []
     for _m in (recent_messages or [])[-6:]:
@@ -766,6 +756,43 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if _role in ("user", "assistant") and _content:
             _dialogue_lines.append(f"{_role}: {_content[:200]}")
     _dialogue_ctx = "\n".join(_dialogue_lines)
+
+    # Step 2a: Tool routing FIRST.
+    #
+    # The router runs before the planner so the planner sees a concrete,
+    # narrowed tool catalogue rather than the full 30+ list. Two gains:
+    # small planners stop paraphrasing tool names ("get the weather")
+    # because the relevant ones are already named for them; and the
+    # narrowed list keeps the planner's prompt tight, which matters for
+    # gemma-class chat models that lose accuracy fast as the prompt grows.
+    context_hint = _build_enrichment_context_hint(cfg, recent_messages)
+    try:
+        strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
+    except ValueError:
+        strategy = ToolSelectionStrategy.LLM
+    routed_tools = select_tools(
+        query=redacted,
+        builtin_tools=BUILTIN_TOOLS,
+        mcp_tools=mcp_tools,
+        strategy=strategy,
+        llm_base_url=cfg.ollama_base_url,
+        llm_model=resolve_tool_router_model(cfg),
+        llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+        embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+        embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+        context_hint=context_hint,
+    )
+    _selection_source = strategy.value
+    _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
+    _planner_tool_catalog: list[tuple[str, str]] = []
+    for _schema in (_planner_schema or []):
+        _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
+        if isinstance(_fn, dict):
+            _nm = _fn.get("name")
+            _desc = (_fn.get("description") or "").strip().splitlines()
+            _first = _desc[0] if _desc else ""
+            if _nm:
+                _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
     try:
@@ -854,7 +881,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     questions: list[str] = []
 
-    context_hint = _build_enrichment_context_hint(cfg, recent_messages)
     search_params: dict = {}
 
     # Extract keywords and implicit questions only when the planner asked
@@ -1034,37 +1060,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 6: Tool allow-list for this turn.
     #
-    # The tool router (`select_tools`) is the authoritative picker. The
-    # planner's tool references are advisory — unioned into the allow-list
-    # so a tool the planner named but the router missed is still callable,
-    # but the router's picks are never dropped. Small models (gemma4:e2b)
+    # The router already ran at the very top of the flow (Step 2a) so the
+    # planner could see a narrowed catalogue. We reuse that selection here
+    # rather than re-running select_tools — one router LLM call per turn,
+    # not two. The planner's tool references are advisory: unioned into
+    # the allow-list when the plan named concrete tools the router missed,
+    # but never replacing the router's picks. Small models (gemma4:e2b)
     # tend to default to the most universal tool they know (typically
     # `webSearch`) when they should pick a specific one (`getWeather`,
     # `getTime`); the dedicated router is tuned for that classification
     # and consistently outperforms the planner at it. An earlier variant
-    # of this step let the planner REPLACE the router to save one LLM
-    # call; that was reverted when measurable tool-picking quality dropped.
+    # let the planner REPLACE the router to save one LLM call; that was
+    # reverted when measurable tool-picking quality dropped.
     _plan_under_specified = bool(action_plan) and plan_has_unresolved_tool_steps(
         action_plan, _full_catalog_names
     )
-    try:
-        strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
-    except ValueError:
-        strategy = ToolSelectionStrategy.LLM
-
-    allowed_tools = select_tools(
-        query=redacted,
-        builtin_tools=BUILTIN_TOOLS,
-        mcp_tools=mcp_tools,
-        strategy=strategy,
-        llm_base_url=cfg.ollama_base_url,
-        llm_model=resolve_tool_router_model(cfg),
-        llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-        embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-        embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
-        context_hint=context_hint,
-    )
-    _selection_source = strategy.value
+    allowed_tools = list(routed_tools)
     if action_plan and not _plan_under_specified:
         for _plan_name in tool_names_in_plan(action_plan, _full_catalog_names):
             if _plan_name not in allowed_tools:

@@ -78,7 +78,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 7. Tool Router (pre-loop tool selection)
 
 - **File**: [src/jarvis/tools/selection.py](src/jarvis/tools/selection.py) — `select_tools_with_llm()` (~line 331).
-- **Trigger**: once per reply before the loop. Always runs — the router is the authoritative tool picker. When the pre-flight planner (#12) referenced tools, those names are unioned into the router's allow-list but never replace it; small models tend to default to `webSearch` where a dedicated tool like `getWeather` should win, and the router is tuned for that classification. `tool_selection_strategy == "llm"` is the default; other strategies (`all`, `keyword`, `embedding`) also run here.
+- **Trigger**: once per reply, **at the very front of the flow before the planner (#12)**. Always runs — the router is the authoritative tool picker, and its narrowed catalogue is what the planner sees. When the planner later references tools, those names are unioned into the router's allow-list but never replace it; small models tend to default to `webSearch` where a dedicated tool like `getWeather` should win, and the router is tuned for that classification. `tool_selection_strategy == "llm"` is the default; other strategies (`all`, `keyword`, `embedding`) also run here.
 - **Model / gating**: `resolve_tool_router_model(cfg)` chain — `tool_router_model → intent_judge_model → ollama_chat_model`.
 - **Inputs**: user query, tool catalogue (builtin + MCP with descriptions), optional narrow-down hint.
 - **System prompt**: inline (~lines 260-315). Teaches pick up-to-5 tools or `none`.
@@ -125,9 +125,9 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 12. Task-list Planner (pre-flight decomposition, gates the whole turn)
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
-- **Trigger**: once per reply, **at the very front of the reply flow** (before memory search, before tool routing). Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), or when no model / base URL is available.
+- **Trigger**: once per reply, **after the tool router and before memory search**. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), or when no model / base URL is available.
 - **Model / gating**: resolution chain `planner_model (override) → ollama_chat_model`. The planner tracks the chat model so upgrading the chat model (via setup wizard or config) automatically upgrades plan quality.
-- **Inputs**: user query, dialogue context, full builtin + MCP tool catalogue (names + one-line descriptions). **No** memory context — the planner decides *whether* memory is needed.
+- **Inputs**: user query, dialogue context, **router-narrowed** tool catalogue (names + one-line descriptions) — not the full 30+ list. **No** memory context — the planner decides *whether* memory is needed.
 - **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups, short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
 - **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
 - **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`.
@@ -191,10 +191,11 @@ Driven by `detect_model_size(model_name) → SMALL (≤7B) | LARGE (8B+)`:
 ```
 user input
   └─▶ [2] Intent Judge            (voice only, SMALL)
-        └─▶ [12] Planner (pre-flight — gates the rest of the turn)
-              ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)
-              ├─ plan empty (fail-open)      → [3] Enrichment extract → [4] Memory digest + [7] Tool router
-              └─ plan reply-only             → skip #3, #4, and #7 entirely
+        └─▶ [7] Tool router (narrows catalogue for the planner)
+              └─▶ [12] Planner (gates memory; advisory for the router allow-list)
+                    ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)
+                    ├─ plan empty (fail-open)      → [3] Enrichment extract → [4] Memory digest
+                    └─ plan reply-only             → skip #3 and #4 entirely
                     └─▶ AGENTIC LOOP  (≤ agentic_max_turns)
                                       ├─ [13] Plan step resolver (SMALL, direct-exec)
                                       ├─ [1] Main chat turn
