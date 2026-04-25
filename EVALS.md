@@ -1,16 +1,16 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-04-21 02:34:51
+**Generated:** 2026-04-25 01:09:33
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **286/304 passed (94.1%)** across all categories
+**Overall:** 🟢 **328/348 passed (94.3%)** across all categories
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
-| 🤖 Agent behaviour | `gemma4:e2b` | 116 | 10 | 4 | 🟢 92.1% |
-| 🤖 Agent behaviour | `gpt-oss:20b` | 128 | 6 | 0 | 🟢 95.5% |
-| 🎤 Intent judge | `gemma4:e2b` (fixed) | 42 | 2 | 0 | 🟢 95.5% |
+| 🤖 Agent behaviour | `gemma4:e2b` | 136 | 9 | 4 | 🟢 93.8% |
+| 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 11 | 0 | 🟢 92.9% |
+| 🎤 Intent judge | `gemma4:e2b` (fixed) | 47 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
 
@@ -28,46 +28,45 @@
 | Test Case | gemma4:e2b | gpt-oss:20b |
 |-----------|----------:|----------:|
 | 3-turn conversation with topic changes | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Adversarial: all three branches in one summary | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Adversarial: food preference (USER) vs list-length rule (DIRECTIVES) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent calls webSearch for info queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent chains search → fetch for details | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent uses memory + nutrition data | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Assistant checks memory before asking about interests | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Assistant does not deny having long-term memory | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: deflection without attempting answer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: empty acknowledgment | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: generic greeting ignores query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| calorie budget \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| DIRECTIVES: tone, length, forbidden phrases, address form | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Diet changed from bulking to cutting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Diet changed from bulking to cutting-gemma4:e2b | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
 | Diet changed from bulking to cutting-gpt-oss:20b | ⏭️ SKIPPED | ❌ 0/1 (0%) |
-| dietary check \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Enrichment results appear in system message | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Extraction with explicit quantities | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| find the invoice PDF on my computer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Follow-up references previous turn context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| food decision \u2192 fetchMeals | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
 | Good: brief but informative | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: complete weekly forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Graph-enriched facts surface in the reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Handles ambiguous portion descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Instruction: be more brief | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Instruction: use Celsius | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| jacket \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | LLM uses enrichment-surfaced interests for personalised search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live instruction: be more brief | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live instruction: use Celsius | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live unknown entity: Piranesi (book) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Live unknown entity: Possessor (film) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live unknown entity: have-you-heard-of (Piranesi) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Live unknown entity: permission-framed (Possessor) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live weather query with real LLM | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live: LLM checks memory before asking about interests | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live: assistant does not deny having long-term memory | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live: graph-enriched facts surface in reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Live: weather query triggers tools | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Location context flows to search queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
-| log that I just ate a banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| LogMealTool stores meals with macros | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| meal logging selects logMeal and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| meal recall (colloquial) \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| LogMealTool stores meals with macros | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: personalized news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: time-based recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: topic recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No deflection: tech news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| No deflection: time query | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| No deflection: time query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No deflection: tomorrow weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No deflection: weekly rain forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Novel knowledge: local business details and user location | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -79,64 +78,94 @@
 | Nutrition: oatmeal with banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Office days changed from Mon/Wed to Mon/Thu | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Office days changed from Mon/Wed to Mon/Thu-gemma4:e2b | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
-| Office days changed from Mon/Wed to Mon/Thu-gpt-oss:20b | ⏭️ SKIPPED | ✅ 1/1 (100%) |
+| Office days changed from Mon/Wed to Mon/Thu-gpt-oss:20b | ⏭️ SKIPPED | ❌ 0/1 (0%) |
 | Reframing: life events framed as facts with temporal context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: requests become knowledge, not interaction descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Reject: stale temporal snapshots (weather, time of day) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| research \u2192 webSearch + fetchWebPage | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| Reject: stale temporal snapshots (weather, time of day) | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | Returns NONE for non-food inputs | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Returns valid JSON with all required fields | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Simple meal baseline (2 boiled eggs) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Tool retry: explicit tool mention | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Tool retry: vague go ahead | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Tool retry: vague just try | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Topic switch: search → weather uses getWeather | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Topic switch: weather → store hours uses webSearch | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| USER: identity, location, pets, diet, job | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| WORLD: local business details, film attribution | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| calorie budget \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| cold-memory-short-query-how's the weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| cold-memory-week-forecast-what's the weather this week | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| dietary check \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| explicit-recall-then-search | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| find the invoice PDF on my computer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| food decision \u2192 fetchMeals | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
+| jacket \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| log that I just ate a banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| meal logging selects logMeal and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| meal recall (colloquial) \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| news-interesting-for-me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| news-of-interest-to-me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| news-that-would-interest-me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| recommend a book I'd like | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| research \u2192 webSearch + fetchWebPage | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | run forecast \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | search the web for flight deals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Simple meal baseline (2 boiled eggs) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| suggest something I'd enjoy watching ton | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | take a screenshot | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| tell me some news that might interest me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_active_hot_window_follow_up_accepted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_casual_statement_without_wake_word_rejected | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_chained_research_possessor_director | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| test_chained_research_possessor_director | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | test_correction_loop_accepts_single_or_retry | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_cross_turn_pronoun_resolution | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_date_query_with_date_in_context_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_digested_tool_result_produces_grounded_reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| test_digested_tool_result_produces_grounded_reply | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_director_then_filmography_requires_two_searches | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | test_enrichment_skips_questions_answered_by_context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_escape_hatch_then_follow_up_action | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
-| test_first_turn_calls_web_search_not_clarification | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_escape_hatch_then_follow_up_action | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_evaluator_emits_structured_tool_call_for_obvious_search | ✅ 1/1 (100%) | 🔸 1/1 XFAIL |
+| test_first_turn_calls_web_search_not_clarification | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | test_follow_up_after_correction_calls_web_search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_follow_up_resolves_pronoun_in_search_query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_followup_naming_place_routes_to_getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_honest_block_when_all_providers_fail | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_hot_window_query_is_directed_and_non_empty | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_identity_query_does_not_trigger_recommendation_engagement_rule | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_identity_query_surfaces_multiple_user_facts_when_present | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_identity_query_surfaces_user_stated_fact_over_past_qa | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_identity_query_with_only_past_qa_returns_none_or_no_false_facts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_judge_echo_claim_overridden_in_hot_window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_judge_empty_conversation_returns_empty | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_judge_mixed_summary_filters_noise | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_links_only_payload_produces_honest_cant_read_reply | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_judge_mixed_summary_filters_noise | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
+| test_links_only_payload_produces_honest_cant_read_reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | test_location_query_with_location_in_context_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_location_query_with_partial_hint_still_routes_sensibly | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_max_turn_triggers_digest | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_navigate_prose_gets_nudged_into_tool_call | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
+| test_max_turn_triggers_digest | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
+| test_navigate_prose_gets_nudged_into_tool_call | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | test_no_email_tool_declines_honestly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_no_hint_at_all_still_routes_sensibly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_no_wake_word_rejected_despite_judge | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_nudge_cap_stops_loop | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_omits_deflection_narration_for_unknown_entity | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_omits_deflection_when_topic_never_resolved | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
-| test_open_ended_prompt_grounds_in_graph_context_live | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| test_omits_deflection_when_topic_never_resolved | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| test_open_ended_prompt_grounds_in_graph_context_live | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
 | test_parallel_comparison_paris_vs_london | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | test_preserves_legitimate_user_preferences | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_raw_text_preserved_in_hot_window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_realistic_web_search_payload_is_not_deflected_to_links | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_recommendation_query_still_surfaces_engagement_when_user_facts_present | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_restaurant_recommendation_surfaces_past_cuisine_interest | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_single_weather_call_terminates | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_single_weather_call_terminates | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | test_speech_long_after_tts_requires_wake_word | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_stop_during_tts_interrupts_immediately | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_time_query_with_time_in_context_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_toolsearchtool_widens_then_navigate | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
+| test_tool_calls_literal_not_surfaced_after_web_search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_toolsearchtool_widens_then_navigate | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
 | test_tts_echo_segments_skipped_user_query_extracted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_turn1_possessor_then_turn2_weather | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| test_two_turn_celebrity_flow | 🔸 1/1 XFAIL | ❌ 0/1 (0%) |
 | test_unknown_entity_with_poisoned_diary_still_triggers_web_search_live | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_unrelated_domain_still_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_unrelated_topics_are_not_welded_into_one_clause | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -145,26 +174,20 @@
 | test_wake_word_query_after_echo_segments | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_wake_word_query_uses_judge_extraction | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_watch_recommendation_surfaces_recently_discussed_films | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_weather_query_calls_tool_without_asking_for_location | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_weather_query_still_picks_getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| test_wikipedia_payload_produces_grounded_reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | test_wikipedia_rescues_when_ddg_blocks | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Tool retry: explicit tool mention | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Tool retry: vague go ahead | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Tool retry: vague just try | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Topic switch: search → weather uses getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Topic switch: weather → store hours uses webSearch | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| Unknown entity: have-you-heard-of (Piranesi) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Unknown entity: permission-framed (Possessor) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Unknown entity: Piranesi (book) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Unknown entity: Possessor (film) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| warm-memory-short-query-how's the weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | weather + meals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Weather query is answered with current conditions | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | weather query selects getWeather and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Weather query still triggers tools after a greeting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | web search query selects webSearch and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | weekly weather keeps getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| what is the capital of France | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| what should I cook for dinner | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| what's 2 plus 2 | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | what's on my screen right now? | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | what's the weather like? | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| who is Britney Spears | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 
 ---
 
@@ -186,7 +209,7 @@
 | cross_segment_answer_that_with_noise | 1/1 (100%) | ✅ |
 | cross_segment_answered_that_whisper_variant | 1/1 (100%) | ✅ |
 | cross_segment_dinosaur_opinion | 1/1 (100%) | ✅ |
-| cross_segment_go_ahead_and_answer | 0/1 (0%) | ❌ |
+| cross_segment_go_ahead_and_answer | 1/1 (100%) | ✅ |
 | cross_segment_hot_window_followup | 1/1 (100%) | ✅ |
 | cross_segment_imperative_superseded_by_new_question | 1/1 (100%) | ✅ |
 | echo_plus_followup_extracted | 1/1 (100%) | ✅ |
@@ -195,7 +218,7 @@
 | hot_window_simple_followup | 1/1 (100%) | ✅ |
 | mentioned_in_narrative_past_tense | 1/1 (100%) | ✅ |
 | multi_person_vague_reference | 1/1 (100%) | ✅ |
-| multi_person_weather_discussion | 0/1 (0%) | ❌ |
+| multi_person_weather_discussion | 1/1 (100%) | ✅ |
 | multiple_echoes_then_interrupt | 1/1 (100%) | ✅ |
 | no_wake_word_casual_speech | 1/1 (100%) | ✅ |
 | no_wake_word_in_buffer | 1/1 (100%) | ✅ |
@@ -215,6 +238,9 @@
 | wake_word_open_imperative_surprise_me | 1/1 (100%) | ✅ |
 | wake_word_open_imperative_tell_me_a_joke | 1/1 (100%) | ✅ |
 | wake_word_open_imperative_tell_me_anything | 1/1 (100%) | ✅ |
+| wake_word_share_statement_burger | 1/1 (100%) | ✅ |
+| wake_word_share_statement_feeling | 1/1 (100%) | ✅ |
+| wake_word_share_statement_trailing | 1/1 (100%) | ✅ |
 | wake_word_simple_question | 1/1 (100%) | ✅ |
 | wake_word_statement_remember | 1/1 (100%) | ✅ |
 | wake_word_trailing_after_named_entity | 1/1 (100%) | ✅ |
