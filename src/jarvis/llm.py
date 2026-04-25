@@ -13,24 +13,33 @@ class ToolsNotSupportedError(Exception):
     pass
 
 
-def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False, num_ctx: int = 4096) -> Optional[str]:
+def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False, num_ctx: int = 4096, temperature: Optional[float] = None) -> Optional[str]:
     """Direct LLM call without temporal context, location, or other ask_coach features.
 
     ``num_ctx`` controls Ollama's context window for this call. Default 4096 is
     fine for small classification-shaped passes; callers that assemble richer
     prompts (planner with dialogue + memory + tool catalogue) should pass a
     larger value to avoid silent truncation.
+
+    ``temperature`` is forwarded to Ollama when set. Pass ``0.0`` for
+    classification / extraction calls where determinism beats creativity —
+    Ollama defaults to ~0.8 otherwise, which can flake small models on
+    rule-following tasks (e.g. the knowledge extractor's banned-form list).
     """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
 
+    options: Dict[str, Any] = {"num_ctx": num_ctx}
+    if temperature is not None:
+        options["temperature"] = temperature
+
     payload: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
         "stream": False,
-        "options": {"num_ctx": num_ctx},
+        "options": options,
         "think": thinking,
     }
     
