@@ -100,9 +100,9 @@ TEST_DESCRIPTIONS = {
     "test_enrichment_extracts_correct_keywords": "Enrichment extracts personalization keywords",
     "test_enrichment_provides_context_to_llm": "Enrichment results appear in system message",
     "test_llm_uses_enrichment_for_personalised_queries": "LLM uses enrichment-surfaced interests for personalised search",
-    "test_weather_query_live": "Live weather query with real LLM",
-    "test_personalized_query_recalls_memory_live": "Live: LLM checks memory before asking about interests",
-    "test_interest_flavoured_query_live": "Live: interest-flavoured phrasings surface seeded interests into the reply",
+    "test_weather_query_live": "Weather query is answered with current conditions",
+    "test_personalized_query_recalls_memory_live": "Assistant checks memory before asking about interests",
+    "test_interest_flavoured_query_live": "Interest-flavoured phrasings surface seeded interests in the reply",
     # Nutrition extraction tests
     "test_meal_extraction_accuracy": "Extracts accurate macros for common meals",
     "test_extraction_returns_valid_json_structure": "Returns valid JSON with all required fields",
@@ -119,15 +119,15 @@ TEST_DESCRIPTIONS = {
     "test_three_turn_topic_changes": "3-turn conversation with topic changes",
     "test_rapid_topic_switching": "Rapid back-and-forth topic switching",
     # Greeting no-tools live tests
-    "test_greeting_no_tools_live": "Live: greeting should not trigger tool calls",
-    "test_user_instructions_no_tools_live": "Live: user instructions don't trigger tool calls",
-    "test_weather_still_triggers_tools_live": "Live: weather query triggers tools",
+    "test_greeting_no_tools_live": "Greetings do not trigger tool calls",
+    "test_user_instructions_no_tools_live": "User instructions do not trigger tool calls",
+    "test_weather_still_triggers_tools_live": "Weather query still triggers tools after a greeting",
     # Helpfulness / anti-deflection tests
-    "test_no_deflection_for_weather_forecast_live": "Live: no deflection for weather forecasts",
-    "test_no_deflection_for_answerable_queries_live": "Live: no deflection for answerable queries",
-    "test_tool_retry_after_failure_live": "Live: tool retry after initial failure",
-    "test_graph_knowledge_surfaced_in_reply_live": "Live: graph-enriched facts surface in reply, no denial",
-    "test_does_not_deny_long_term_memory_live": "Live: assistant does not deny having long-term memory",
+    "test_no_deflection_for_weather_forecast_live": "No deflection on weather forecast questions",
+    "test_no_deflection_for_answerable_queries_live": "No deflection on answerable questions",
+    "test_tool_retry_after_failure_live": "Assistant retries a tool after the first attempt fails",
+    "test_graph_knowledge_surfaced_in_reply_live": "Graph-enriched facts surface in the reply, no denial",
+    "test_does_not_deny_long_term_memory_live": "Assistant does not deny having long-term memory",
 }
 
 

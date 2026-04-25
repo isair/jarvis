@@ -53,8 +53,8 @@ class TestGreetingNoToolsLive:
     @pytest.mark.eval
     @requires_judge_llm
     @pytest.mark.parametrize("query,should_use_tools", [
-        pytest.param("hello", False, id="Live greeting: hello"),
-        pytest.param("ni hao", False, id="Live greeting: ni hao (Chinese)"),
+        pytest.param("hello", False, id="Greeting: hello"),
+        pytest.param("ni hao", False, id="Greeting: ni hao (Chinese)"),
     ])
     def test_greeting_no_tools_live(
         self,
@@ -98,8 +98,8 @@ class TestGreetingNoToolsLive:
     @pytest.mark.eval
     @requires_judge_llm
     @pytest.mark.parametrize("query,should_use_tools", [
-        pytest.param("always use Celsius when telling me temperatures", False, id="Live instruction: use Celsius"),
-        pytest.param("be more brief in your responses", False, id="Live instruction: be more brief"),
+        pytest.param("always use Celsius when telling me temperatures", False, id="Instruction: use Celsius"),
+        pytest.param("be more brief in your responses", False, id="Instruction: be more brief"),
     ])
     def test_user_instructions_no_tools_live(
         self,
@@ -138,14 +138,14 @@ class TestGreetingNoToolsLive:
     @pytest.mark.eval
     @requires_judge_llm
     @pytest.mark.parametrize("query", [
-        pytest.param("what do you know about the Possessor movie", id="Live unknown entity: Possessor (film)"),
-        pytest.param("tell me about the book Piranesi", id="Live unknown entity: Piranesi (book)"),
+        pytest.param("what do you know about the Possessor movie", id="Unknown entity: Possessor (film)"),
+        pytest.param("tell me about the book Piranesi", id="Unknown entity: Piranesi (book)"),
         # Permission-framed phrasing. Regression: the small model previously
         # read "what can you tell me" as "tell me what you can do" and deflected
         # with "I can search the web if you'd like" instead of calling webSearch.
-        pytest.param("what can you tell me about the movie Possessor", id="Live unknown entity: permission-framed (Possessor)"),
+        pytest.param("what can you tell me about the movie Possessor", id="Unknown entity: permission-framed (Possessor)"),
         # "Have you heard of" is another common permission-framed variant.
-        pytest.param("have you heard of the film Piranesi", id="Live unknown entity: have-you-heard-of (Piranesi)"),
+        pytest.param("have you heard of the film Piranesi", id="Unknown entity: have-you-heard-of (Piranesi)"),
     ])
     def test_unknown_named_entity_triggers_web_search_live(
         self,

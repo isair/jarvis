@@ -31,34 +31,38 @@
 | Agent calls webSearch for info queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent chains search → fetch for details | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent uses memory + nutrition data | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Assistant checks memory before asking about interests | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Assistant does not deny having long-term memory | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: deflection without attempting answer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: empty acknowledgment | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: generic greeting ignores query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| calorie budget \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Diet changed from bulking to cutting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Diet changed from bulking to cutting-gemma4:e2b | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
 | Diet changed from bulking to cutting-gpt-oss:20b | ⏭️ SKIPPED | ❌ 0/1 (0%) |
+| dietary check \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Enrichment results appear in system message | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Extraction with explicit quantities | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| find the invoice PDF on my computer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Follow-up references previous turn context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| food decision \u2192 fetchMeals | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
 | Good: brief but informative | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: complete weekly forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Graph-enriched facts surface in the reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Handles ambiguous portion descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Instruction: be more brief | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Instruction: use Celsius | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| jacket \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | LLM uses enrichment-surfaced interests for personalised search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live instruction: be more brief | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live instruction: use Celsius | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live unknown entity: Piranesi (book) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live unknown entity: Possessor (film) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live unknown entity: have-you-heard-of (Piranesi) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live unknown entity: permission-framed (Possessor) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live weather query with real LLM | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| Live: LLM checks memory before asking about interests | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: assistant does not deny having long-term memory | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: graph-enriched facts surface in reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: weather query triggers tools | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Location context flows to search queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| log that I just ate a banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | LogMealTool stores meals with macros | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| meal logging selects logMeal and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| meal recall (colloquial) \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: personalized news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: time-based recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: topic recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -80,27 +84,12 @@
 | Reframing: requests become knowledge, not interaction descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reject: stale temporal snapshots (weather, time of day) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| research \u2192 webSearch + fetchWebPage | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Returns NONE for non-food inputs | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Returns valid JSON with all required fields | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| Simple meal baseline (2 boiled eggs) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Tool retry: explicit tool mention | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Tool retry: vague go ahead | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Tool retry: vague just try | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Topic switch: search → weather uses getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Topic switch: weather → store hours uses webSearch | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| calorie budget \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| dietary check \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| find the invoice PDF on my computer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| food decision \u2192 fetchMeals | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
-| jacket \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
-| log that I just ate a banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| meal logging selects logMeal and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| meal recall (colloquial) \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| research \u2192 webSearch + fetchWebPage | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | run forecast \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | search the web for flight deals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Simple meal baseline (2 boiled eggs) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | take a screenshot | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_active_hot_window_follow_up_accepted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_casual_statement_without_wake_word_rejected | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -159,8 +148,19 @@
 | test_weather_query_calls_tool_without_asking_for_location | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_weather_query_still_picks_getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | test_wikipedia_rescues_when_ddg_blocks | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Tool retry: explicit tool mention | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Tool retry: vague go ahead | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Tool retry: vague just try | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Topic switch: search → weather uses getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Topic switch: weather → store hours uses webSearch | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Unknown entity: have-you-heard-of (Piranesi) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Unknown entity: permission-framed (Possessor) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Unknown entity: Piranesi (book) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Unknown entity: Possessor (film) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | weather + meals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Weather query is answered with current conditions | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | weather query selects getWeather and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Weather query still triggers tools after a greeting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | web search query selects webSearch and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | weekly weather keeps getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | what's on my screen right now? | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
