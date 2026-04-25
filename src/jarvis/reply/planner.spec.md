@@ -84,6 +84,12 @@ The planner prompt instructs the model to emit:
   omitted, not fabricated from unrelated words.
 - Angle-bracket placeholders (e.g. `<director name from step 1>`) for
   entities the lookup will reveal at runtime.
+- Pronouns and demonstratives in the user query ("he", "his", "her",
+  "their", "it", "that film") must be resolved against the dialogue
+  context before emitting the step. Tools never see prior turns, so
+  the named entity has to appear literally inside the tool argument
+  string — `webSearch query='Harry Styles most famous songs'`, not
+  `webSearch query='his most famous songs'`.
 - A final synthesis/reply step when any `searchMemory` or tool step
   was planned.
 - Steps in the same language the user wrote the query in.
