@@ -1,15 +1,15 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-04-25 01:09:33
+**Generated:** 2026-04-26 00:48:32
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **328/348 passed (94.3%)** across all categories
+**Overall:** 🟢 **321/339 passed (94.7%)** across all categories
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
-| 🤖 Agent behaviour | `gemma4:e2b` | 136 | 9 | 4 | 🟢 93.8% |
-| 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 11 | 0 | 🟢 92.9% |
+| 🤖 Agent behaviour | `gemma4:e2b` | 129 | 11 | 2 | 🟢 92.1% |
+| 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 7 | 0 | 🟢 95.4% |
 | 🎤 Intent judge | `gemma4:e2b` (fixed) | 47 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
@@ -28,86 +28,143 @@
 | Test Case | gemma4:e2b | gpt-oss:20b |
 |-----------|----------:|----------:|
 | 3-turn conversation with topic changes | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Active hot window follow up accepted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Adversarial: all three branches in one summary | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Adversarial: food preference (USER) vs list-length rule (DIRECTIVES) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent calls webSearch for info queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent chains search → fetch for details | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Agent uses memory + nutrition data | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Assistant checks memory before asking about interests | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Assistant does not deny having long-term memory | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: deflection without attempting answer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: empty acknowledgment | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: generic greeting ignores query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Casual statement without wake word rejected | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Chained research: who directed Possessor and what else have they made | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Correction loop accepts single or retry | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Cross turn pronoun resolution | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | DIRECTIVES: tone, length, forbidden phrases, address form | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Diet changed from bulking to cutting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Diet changed from bulking to cutting-gemma4:e2b | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
-| Diet changed from bulking to cutting-gpt-oss:20b | ⏭️ SKIPPED | ❌ 0/1 (0%) |
+| Date query with date in context returns none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Diet changed from bulking to cutting | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
+| Digested tool result produces grounded reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Director-then-filmography needs two searches | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | Enrichment results appear in system message | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Enrichment skips questions answered by context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Escape hatch then follow up action | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Evaluator emits structured tool call for obvious search | ✅ 1/1 (100%) | 🔸 1/1 XFAIL |
 | Extraction with explicit quantities | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| First turn calls web search not clarification | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Follow up after correction calls web search | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Follow up resolves pronoun in search query | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | Follow-up references previous turn context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Followup naming place routes to getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: brief but informative | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: complete weekly forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Graph-enriched facts surface in the reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Handles ambiguous portion descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Honest block when all providers fail | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Hot window query is directed and non empty | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Identity query does not trigger recommendation engagement rule | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Identity query surfaces multiple user facts when present | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Identity query surfaces user stated fact over past qa | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Identity query with only past qa returns none or no false facts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Instruction: be more brief | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Instruction: use Celsius | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Judge echo claim overridden in hot window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | LLM uses enrichment-surfaced interests for personalised search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live instruction: be more brief | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live instruction: use Celsius | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live unknown entity: Piranesi (book) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Live unknown entity: Possessor (film) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live unknown entity: have-you-heard-of (Piranesi) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Live unknown entity: permission-framed (Possessor) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live weather query with real LLM | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: LLM checks memory before asking about interests | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: assistant does not deny having long-term memory | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: graph-enriched facts surface in reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Live: weather query triggers tools | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Links only payload produces honest cant read reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | Location context flows to search queries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Location query with location in context returns none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Location query with partial hint still routes sensibly | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | LogMealTool stores meals with macros | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Max-turn cap delivers a digest reply, never silence | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: personalized news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: time-based recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Memory enrichment: topic recall | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Mixed summary: keep novel facts, drop stale weather/recommendations | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Navigate prose gets nudged into tool call | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | No deflection: tech news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| No deflection: time query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| No deflection: time query | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | No deflection: tomorrow weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No deflection: weekly rain forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| No email tool declines honestly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| No hint at all still routes sensibly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| No wake word rejected despite judge | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Novel knowledge: local business details and user location | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Novel knowledge: non-English summary (Turkish) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Novel knowledge: relocation plans and employment | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Novel knowledge: user diet plan and preferred recipe | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Nudge cap stops loop | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: cheeseburger with fries | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: chicken with broccoli | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Nutrition: oatmeal with banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Office days changed from Mon/Wed to Mon/Thu | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Office days changed from Mon/Wed to Mon/Thu-gemma4:e2b | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
-| Office days changed from Mon/Wed to Mon/Thu-gpt-oss:20b | ⏭️ SKIPPED | ❌ 0/1 (0%) |
+| Office days changed from Mon/Wed to Mon/Thu | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
+| Omits deflection narration for unknown entity | ✅ 1/1 (100%) | 🔸 1/1 XFAIL |
+| Omits deflection when topic never resolved | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Open-ended prompt grounds in stored knowledge | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Parallel weather lookup: compare Paris and London | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Preserves legitimate user preferences | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Realistic web search payload is not deflected to links | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Recommendation query still surfaces engagement when user facts present | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: life events framed as facts with temporal context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Reframing: requests become knowledge, not interaction descriptions | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
-| Reject: stale temporal snapshots (weather, time of day) | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| Reject: assistant self-references (recommendations are not knowledge) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Reject: stale temporal snapshots (weather, time of day) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Restaurant recommendation surfaces past cuisine interest | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Returns NONE for non-food inputs | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Returns valid JSON with all required fields | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | Simple meal baseline (2 boiled eggs) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Single weather query ends after one tool call | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
+| Speech long after tts requires wake word | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Stop during tts interrupts immediately | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Time query with time in context returns none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Tool calls literal not surfaced after web search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Tool retry: explicit tool mention | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Tool retry: vague go ahead | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Tool retry: vague just try | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Toolsearchtool widens then navigate | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
 | Topic switch: search → weather uses getWeather | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
 | Topic switch: weather → store hours uses webSearch | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Trivial conversations produce no extracted facts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Tts echo segments skipped user query extracted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Turn1 possessor then turn2 weather | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Two-turn celebrity flow: identity then pronoun follow-up | 🔸 1/1 XFAIL | ❌ 0/1 (0%) |
 | USER: identity, location, pets, diet, job | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Unknown entity with poisoned diary still triggers web search live | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Unknown entity: Piranesi (book) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Unknown entity: Possessor (film) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Unknown entity: have-you-heard-of (Piranesi) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Unknown entity: permission-framed (Possessor) | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
+| Unrelated domain still returns none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Unrelated topics are not welded into one clause | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| User query not confused with echo after tts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Utterance started during tts treated as hot window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | WORLD: local business details, film attribution | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Wake word query after echo segments | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Wake word query uses judge extraction | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Watch recommendation surfaces recently discussed films | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Weather query is answered with current conditions | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Weather query still picks getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Weather query still triggers tools after a greeting | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Wikipedia payload produces grounded reply | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Wikipedia rescues when ddg blocks | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | calorie budget \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | cold-memory-short-query-how's the weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| cold-memory-week-forecast-what's the weather this week | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| cold-memory-week-forecast-what's the weather this week | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | dietary check \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | explicit-recall-then-search | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | find the invoice PDF on my computer | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| food decision \u2192 fetchMeals | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
+| food decision \u2192 fetchMeals | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | jacket \u2192 getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| location weather query selects getWeather and few others | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | log that I just ate a banana | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | meal logging selects logMeal and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | meal recall (colloquial) \u2192 fetchMeals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | meal recall selects fetchMeals and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | news-interesting-for-me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| news-of-interest-to-me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| news-of-interest-to-me | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | news-that-would-interest-me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | recommend a book I'd like | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | research \u2192 webSearch + fetchWebPage | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -115,68 +172,7 @@
 | search the web for flight deals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | suggest something I'd enjoy watching ton | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | take a screenshot | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| tell me some news that might interest me | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_active_hot_window_follow_up_accepted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_casual_statement_without_wake_word_rejected | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_chained_research_possessor_director | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
-| test_correction_loop_accepts_single_or_retry | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_cross_turn_pronoun_resolution | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_date_query_with_date_in_context_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_digested_tool_result_produces_grounded_reply | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_director_then_filmography_requires_two_searches | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| test_enrichment_skips_questions_answered_by_context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_escape_hatch_then_follow_up_action | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_evaluator_emits_structured_tool_call_for_obvious_search | ✅ 1/1 (100%) | 🔸 1/1 XFAIL |
-| test_first_turn_calls_web_search_not_clarification | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_follow_up_after_correction_calls_web_search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_follow_up_resolves_pronoun_in_search_query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_followup_naming_place_routes_to_getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_honest_block_when_all_providers_fail | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_hot_window_query_is_directed_and_non_empty | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_identity_query_does_not_trigger_recommendation_engagement_rule | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_identity_query_surfaces_multiple_user_facts_when_present | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_identity_query_surfaces_user_stated_fact_over_past_qa | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_identity_query_with_only_past_qa_returns_none_or_no_false_facts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_judge_echo_claim_overridden_in_hot_window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_judge_empty_conversation_returns_empty | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_judge_mixed_summary_filters_noise | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
-| test_links_only_payload_produces_honest_cant_read_reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_location_query_with_location_in_context_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_location_query_with_partial_hint_still_routes_sensibly | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_max_turn_triggers_digest | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
-| test_navigate_prose_gets_nudged_into_tool_call | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_no_email_tool_declines_honestly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_no_hint_at_all_still_routes_sensibly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_no_wake_word_rejected_despite_judge | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_nudge_cap_stops_loop | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_omits_deflection_narration_for_unknown_entity | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_omits_deflection_when_topic_never_resolved | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_open_ended_prompt_grounds_in_graph_context_live | ❌ 0/1 (0%) | ❌ 0/1 (0%) |
-| test_parallel_comparison_paris_vs_london | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
-| test_preserves_legitimate_user_preferences | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_realistic_web_search_payload_is_not_deflected_to_links | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_recommendation_query_still_surfaces_engagement_when_user_facts_present | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_restaurant_recommendation_surfaces_past_cuisine_interest | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_single_weather_call_terminates | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
-| test_speech_long_after_tts_requires_wake_word | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_stop_during_tts_interrupts_immediately | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_time_query_with_time_in_context_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_tool_calls_literal_not_surfaced_after_web_search | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_toolsearchtool_widens_then_navigate | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
-| test_tts_echo_segments_skipped_user_query_extracted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_turn1_possessor_then_turn2_weather | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_two_turn_celebrity_flow | 🔸 1/1 XFAIL | ❌ 0/1 (0%) |
-| test_unknown_entity_with_poisoned_diary_still_triggers_web_search_live | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_unrelated_domain_still_returns_none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_unrelated_topics_are_not_welded_into_one_clause | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_user_query_not_confused_with_echo_after_tts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_utterance_started_during_tts_treated_as_hot_window | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_wake_word_query_after_echo_segments | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_wake_word_query_uses_judge_extraction | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_watch_recommendation_surfaces_recently_discussed_films | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_weather_query_still_picks_getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| test_wikipedia_payload_produces_grounded_reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| test_wikipedia_rescues_when_ddg_blocks | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| tell me some news that might interest me | ✅ 1/1 (100%) | ❌ 0/1 (0%) |
 | warm-memory-short-query-how's the weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | weather + meals | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | weather query selects getWeather and few others | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -197,6 +193,12 @@
 
 | Test Case | Pass Rate | Status |
 |-----------|-----------|:------:|
+| Hot window mode indicated in prompt | 1/1 (100%) | ✅ |
+| Old query not re extracted | 1/1 (100%) | ✅ |
+| Processed segment not reextracted | 1/1 (100%) | ✅ |
+| Returns none when ollama unavailable | 1/1 (100%) | ✅ |
+| System prompt has echo guidance | 1/1 (100%) | ✅ |
+| Tts text included for echo detection | 1/1 (100%) | ✅ |
 | alias_after_narrative_context | 1/1 (100%) | ✅ |
 | alias_treated_as_wake_word | 1/1 (100%) | ✅ |
 | buffer_echo_then_followup_hot_window | 1/1 (100%) | ✅ |
@@ -223,12 +225,6 @@
 | no_wake_word_casual_speech | 1/1 (100%) | ✅ |
 | no_wake_word_in_buffer | 1/1 (100%) | ✅ |
 | stop_command_during_tts | 1/1 (100%) | ✅ |
-| test_hot_window_mode_indicated_in_prompt | 1/1 (100%) | ✅ |
-| test_old_query_not_re_extracted | 1/1 (100%) | ✅ |
-| test_processed_segment_not_reextracted | 1/1 (100%) | ✅ |
-| test_returns_none_when_ollama_unavailable | 1/1 (100%) | ✅ |
-| test_system_prompt_has_echo_guidance | 1/1 (100%) | ✅ |
-| test_tts_text_included_for_echo_detection | 1/1 (100%) | ✅ |
 | user_followup_statement_after_question_nihilism | 1/1 (100%) | ✅ |
 | wake_word_after_narrative_addresses_assistant | 1/1 (100%) | ✅ |
 | wake_word_command_timer | 1/1 (100%) | ✅ |
