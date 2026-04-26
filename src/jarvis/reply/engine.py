@@ -659,6 +659,10 @@ _HINT_MESSAGE_CHAR_LIMIT = 200
 _DIGEST_SKIP_TOOLS = frozenset({
     "getWeather",
     "getTime",
+    # Timer responses are short structured payloads where the timer ids
+    # and etas are needed verbatim for follow-up cancel-by-id calls;
+    # digesting them would discard those fields.
+    "timer",
 })
 
 
