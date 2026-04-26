@@ -577,6 +577,69 @@ def graph_import_diary() -> Response:
     )
 
 
+@app.route("/api/graph/consolidate-all", methods=["POST"])
+def graph_consolidate_all() -> Response:
+    """Run the merge prompt's consolidation rules over every populated node.
+
+    Migration path for nodes that accumulated contradictions before
+    merge-on-write landed: under merge-on-write, a node only gets
+    cleaned when a new related fact arrives, so backlog stays dirty
+    until something nudges it. This endpoint nudges everything at
+    once via `consolidate_all_populated_nodes`, streaming NDJSON
+    progress so the UI can show per-node line-count deltas.
+    """
+    from jarvis.config import load_settings
+    from jarvis.memory.graph_ops import consolidate_all_populated_nodes
+    from jarvis.reply.engine import resolve_tool_router_model
+
+    def generate():
+        try:
+            settings = load_settings()
+            picker_model = resolve_tool_router_model(settings)
+            store = get_graph_store()
+
+            yield json.dumps({"type": "start"}) + "\n"
+
+            results = consolidate_all_populated_nodes(
+                store=store,
+                ollama_base_url=settings.ollama_base_url,
+                ollama_chat_model=settings.ollama_chat_model,
+                timeout_sec=20.0,
+                thinking=getattr(settings, 'llm_thinking_enabled', False),
+                picker_model=picker_model,
+            )
+
+            total_before = 0
+            total_after = 0
+            for name, before, after in results:
+                total_before += before
+                total_after += after
+                yield json.dumps({
+                    "type": "progress",
+                    "node": name,
+                    "before": before,
+                    "after": after,
+                    "delta": after - before,
+                }) + "\n"
+
+            yield json.dumps({
+                "type": "complete",
+                "nodes": len(results),
+                "total_before": total_before,
+                "total_after": total_after,
+                "total_delta": total_after - total_before,
+            }) + "\n"
+        except Exception as e:
+            debug_log(f"consolidate-all failed: {e}", "memory")
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return Response(
+        generate(),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Frontend
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1856,6 +1919,7 @@ def index() -> str:
                             <button class="graph-btn" id="btn-fit" title="Fit to view">📐</button>
                             <button class="graph-btn" id="btn-add-node" title="Add node">✨</button>
                             <button class="graph-btn" id="btn-import-diary" title="Import from Diary">📥</button>
+                            <button class="graph-btn" id="btn-consolidate-all" title="Consolidate every populated node (dedupe / merge contradictions / prune common knowledge)">🧹</button>
                         </div>
                         <canvas id="graph-canvas"></canvas>
                     </div>
@@ -2651,6 +2715,50 @@ def index() -> str:
 
             document.getElementById('btn-import-diary').addEventListener('click', () => {
                 showImportDiaryModal();
+            });
+
+            document.getElementById('btn-consolidate-all').addEventListener('click', async () => {
+                if (!confirm('Re-run the merge prompt over every populated node? This dedupes, merges contradictions, and prunes common knowledge across the whole graph. Cannot be undone.')) {
+                    return;
+                }
+                const btn = document.getElementById('btn-consolidate-all');
+                const originalText = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = '⏳';
+                try {
+                    const resp = await fetch('/api/graph/consolidate-all', { method: 'POST' });
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let nodes = 0;
+                    let totalDelta = 0;
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\\n');
+                        buffer = lines.pop();
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            const evt = JSON.parse(line);
+                            if (evt.type === 'progress') {
+                                nodes++;
+                                totalDelta += evt.delta;
+                            } else if (evt.type === 'complete') {
+                                alert('🧹 Consolidated ' + evt.nodes + ' nodes (' + evt.total_before + ' → ' + evt.total_after + ' lines, delta ' + evt.total_delta + ').');
+                            } else if (evt.type === 'error') {
+                                alert('Consolidation failed: ' + evt.message);
+                            }
+                        }
+                    }
+                    // Refresh the graph view so consolidated data is visible.
+                    if (typeof loadGraph === 'function') loadGraph();
+                } catch (e) {
+                    alert('Consolidation failed: ' + e.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                }
             });
 
             // Resize observer

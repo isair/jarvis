@@ -36,6 +36,7 @@ from helpers import (
 
 from jarvis.memory.db import Database
 from jarvis.memory.graph import GraphMemoryStore
+from jarvis.memory.graph_ops import merge_node_data
 
 
 # =============================================================================
@@ -223,6 +224,70 @@ class TestGraphRecencySuperseding:
         assert case.new_date in updated.data, (
             f"[{case.description}] Newer fact should include date prefix '{case.new_date}' "
             f"for temporal reasoning"
+        )
+
+
+# =============================================================================
+# Tests: Merge supersession (LLM rewrite drops the old contradicting line)
+# =============================================================================
+
+@pytest.mark.eval
+class TestMergeSupersession:
+    """Exercises `merge_node_data` against a real picker model. When a new
+    fact contradicts an existing line on the same node, the rewrite should
+    drop the older line — not just append both. This is the behaviour the
+    User node accumulates contradictions without."""
+
+    @requires_judge_llm
+    @pytest.mark.parametrize("case", SUPERSEDING_CASES)
+    def test_merge_drops_contradicting_old_line(self, case):
+        case = case.values[0] if hasattr(case, 'values') else case
+
+        tmp = tempfile.mkdtemp()
+        store = GraphMemoryStore(os.path.join(tmp, "test.db"))
+
+        old_line = (
+            f"[{case.old_date}] "
+            + (case.old_entry.split("] ", 1)[-1] if "] " in case.old_entry else case.old_entry)
+        )
+        new_line = (
+            f"[{case.new_date}] "
+            + (case.new_entry.split("] ", 1)[-1] if "] " in case.new_entry else case.new_entry)
+        )
+
+        node = store.create_node(
+            name="Test Node",
+            description=case.description,
+            data=old_line,
+            parent_id="root",
+        )
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=[new_line],
+            ollama_base_url=JUDGE_BASE_URL,
+            ollama_chat_model=JUDGE_MODEL,
+            timeout_sec=30.0,
+        )
+
+        updated = store.get_node(node.id)
+        assert updated is not None
+        data_lower = updated.data.lower()
+
+        has_new = any(kw.lower() in data_lower for kw in case.newer_value_keywords)
+        has_old = any(kw.lower() in data_lower for kw in case.older_value_keywords)
+
+        print(f"\n  📝 merged data for '{case.description}':\n     {updated.data[:300]}")
+        print(f"     success={result.success} incorporated={result.incorporated_indices}")
+
+        assert has_new, (
+            f"[{case.description}] Merged data should retain newer info "
+            f"({case.newer_value_keywords}).\n{updated.data}"
+        )
+        assert not has_old, (
+            f"[{case.description}] Merged data should DROP older contradicting info "
+            f"({case.older_value_keywords}). Supersession failed.\n{updated.data}"
         )
 
 
