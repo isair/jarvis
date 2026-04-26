@@ -539,7 +539,7 @@ def update_graph_from_dialogue(
     The return shape is a list rather than a bare int so the CLI can show
     *what* was learned, not just how many.
     """
-    # Step 1: Extract discrete facts from the conversation summary
+    # Step 1: Extract discrete branch-tagged facts from the summary
     facts = extract_graph_memories(
         summary=summary,
         ollama_base_url=ollama_base_url,
@@ -558,7 +558,7 @@ def update_graph_from_dialogue(
     stored: "list[tuple[str, str]]" = []
     for branch_id, fact in facts:
         try:
-            # Step 2: Find the best node for this fact within its branch.
+            # Step 2: Place — find the best node for this fact within its branch.
             # The branch tag comes from the extractor's classification pass
             # (USER / DIRECTIVES / WORLD) — traversal stays inside that
             # subtree so the purpose-shaped top-level taxonomy is preserved.
@@ -573,7 +573,27 @@ def update_graph_from_dialogue(
                 branch_root_id=branch_id,
             )
 
-            # Step 3: Append the fact to the chosen node
+            # Step 3: Dedupe — skip if this fact is already stored on the
+            # chosen node. The daily summary is cumulative, so every diary
+            # flush re-extracts the same facts; without this check, each
+            # flush appends them again. We only check the picker's chosen
+            # node — a stale picker could route a repeat fact to a different
+            # node within the same branch on a later flush and leak a
+            # duplicate, but that's rare compared to the same-node case we're
+            # fixing here. We also deliberately skip ``touch_node``: a re-
+            # extraction isn't fresh learning and shouldn't reinforce the
+            # node's access score. (Mirrors step 4 in graph.spec.md.)
+            if store.node_contains_fact(node_id, fact):
+                target = store.get_node(node_id)
+                target_name = target.name if target else node_id[:8]
+                debug_log(
+                    f"graph update: skipped duplicate '{fact[:50]}...' → "
+                    f"'{target_name}' [{branch_id}]",
+                    "memory",
+                )
+                continue
+
+            # Step 4: Append the fact to the chosen node
             threshold_exceeded = store.append_to_node(node_id, fact)
             store.touch_node(node_id)
 
@@ -582,7 +602,7 @@ def update_graph_from_dialogue(
             stored.append((fact, node_name))
             debug_log(f"graph update: stored '{fact[:50]}...' → '{node_name}' [{branch_id}]", "memory")
 
-            # Step 4: Auto-split if the node has grown too large
+            # Step 5: Auto-split if the node has grown too large
             if threshold_exceeded:
                 debug_log(f"graph update: node '{node_name}' exceeded threshold, splitting", "memory")
                 auto_split_node(

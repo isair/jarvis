@@ -154,8 +154,9 @@ Piggybacks on the existing diary update flow in `conversation.py`:
    - **Top nodes** — checked second; matches frequently accessed knowledge domains
    - **Root traversal** — greedy top-down descent; LLM picks the best child at each level, or stops at the current node if none fit
    - **Picker model**: `update_graph_from_dialogue` / `find_best_node` / `_llm_pick_best_child` accept an optional `picker_model` override. Callers (daemon, memory viewer's diary-import endpoint) resolve it via `resolve_tool_router_model(cfg)` so the best-child classification runs on the small warm router model instead of the big chat model. When `picker_model` is `None` the picker falls back to `ollama_chat_model`.
-4. **Append**: The fact is appended to the chosen node's data
-5. **Split**: If the node now exceeds `SPLIT_THRESHOLD`, auto-split is triggered
+4. **Dedupe**: Before writing, `GraphMemoryStore.node_contains_fact` compares the fact against each line of the chosen node's data under Unicode-aware folding (`unicodedata.NFKC` + `str.casefold` + whitespace collapse), so ASCII casing, locale quirks (Turkish `İ`/`ı`, German `ß`/`ss`), and incidental whitespace don't cause false negatives. Matches are skipped, are **not** reported to the user as newly learned, and do **not** touch the node's access score (a re-extraction isn't fresh reinforcement). This stops the cumulative daily summary from re-seeding the same facts on every diary flush. The check only covers the picker's chosen node, so a later flush that routes the same fact to a different node within the branch can still leak a duplicate — an accepted trade-off versus scanning the whole subtree per fact.
+5. **Append**: The fact is appended to the chosen node's data
+6. **Split**: If the node now exceeds `SPLIT_THRESHOLD`, auto-split is triggered
 
 Cold start: each fact lands directly on its tagged branch root (User / Directives / World) until enough data accumulates there for the first auto-split. The tree structure emerges organically under each branch.
 
