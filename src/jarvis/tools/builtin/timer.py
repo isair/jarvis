@@ -12,7 +12,9 @@ sent to any external service.
 
 from __future__ import annotations
 
+import json
 import secrets
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -31,6 +33,17 @@ _MAX_DURATION_SEC = 24 * 60 * 60  # 24 hours
 # Cap on the number of concurrent timers. Prevents a runaway loop from
 # spawning thousands of timers in-process.
 _MAX_ACTIVE_TIMERS = 32
+
+# Hard cap for how long an unattended alarm can keep ringing. The
+# desktop dialogue and the daemon-side fallback both honour this so a
+# missed alarm never loops forever.
+_ALARM_AUTO_STOP_SEC = 30
+
+# IPC prefix used to signal the desktop app that a timer alarm should
+# start or stop. Mirrors the diary IPC pattern in `daemon.py` so the
+# desktop app can intercept these on stdout. Single source of truth so
+# the desktop receiver imports the same constant.
+TIMER_ALARM_IPC_PREFIX = "__TIMER_ALARM__:"
 
 
 def _sanitise_label(label: Optional[str]) -> Optional[str]:
@@ -178,6 +191,14 @@ class TimerManager:
             entry.timer = t
             self._timers[timer_id] = entry
 
+        # Setting a new timer dismisses any currently-ringing alarms; the
+        # user is clearly engaged with the timer tool, so the spec treats
+        # this as an implicit "stop" for the noise.
+        try:
+            get_alarm_registry().stop_all()
+        except Exception:
+            pass
+
         # Spawn the OS thread for the countdown OUTSIDE the manager lock.
         # threading.Timer.start() is fast in practice but it's still I/O
         # we don't need to serialise; the spec promises expensive work
@@ -199,7 +220,14 @@ class TimerManager:
                     entry.timer.cancel()
                 except Exception:
                     pass
-            return entry
+        # Cancelling a timer also silences its alarm if it had already
+        # elapsed; the dismiss-via-cancel path documented in the spec.
+        if entry is not None:
+            try:
+                get_alarm_registry().stop(entry.id)
+            except Exception:
+                pass
+        return entry
 
     def cancel_by_label(self, label: str) -> List[TimerEntry]:
         if not label or not label.strip():
@@ -219,7 +247,12 @@ class TimerManager:
                     except Exception:
                         pass
                 cancelled.append(entry)
-            return cancelled
+        for entry in cancelled:
+            try:
+                get_alarm_registry().stop(entry.id)
+            except Exception:
+                pass
+        return cancelled
 
     def cancel_all(self) -> List[TimerEntry]:
         with self._lock:
@@ -231,6 +264,11 @@ class TimerManager:
                     entry.timer.cancel()
                 except Exception:
                     pass
+        # Silence any alarms that already elapsed before we got here.
+        try:
+            get_alarm_registry().stop_all()
+        except Exception:
+            pass
         return entries
 
     def list(self) -> List[TimerEntry]:
@@ -379,6 +417,164 @@ def _default_announcer(entry: TimerEntry) -> None:
         # No TTS playback ⇒ the completion callback will never fire.
         # Restore IDLE inline so the face doesn't stay on SPEAKING.
         _restore_idle()
+
+    # Audible alarm: trigger the looping desktop alarm dialogue (if the
+    # desktop app is listening) and the headless fallback (if there is
+    # no UI). The registry handles the auto-stop cap so a missed alarm
+    # never rings forever.
+    try:
+        get_alarm_registry().start(entry)
+    except Exception as e:
+        debug_log(f"timer alarm start failed: {e}", "tools")
+
+
+def _emit_alarm_event(event_type: str, payload: Dict[str, Any]) -> None:
+    """Emit a TIMER_ALARM IPC event over stdout.
+
+    Mirrors the diary IPC pattern so the desktop app can intercept the
+    same stdout stream it already reads for log lines. Best-effort: a
+    failed write must never crash the announcer.
+    """
+    try:
+        line = f"{TIMER_ALARM_IPC_PREFIX}{json.dumps({'type': event_type, 'data': payload})}"
+        print(line, flush=True)
+    except Exception as e:
+        debug_log(f"alarm IPC emit failed: {e}", "tools")
+
+
+@dataclass
+class _ActiveAlarm:
+    timer_id: str
+    label: Optional[str]
+    duration_human: str
+    started_at: datetime
+    auto_stop: threading.Timer
+    fallback_stop: threading.Event
+
+
+class AlarmRegistry:
+    """Tracks active timer alarms and their dismissal paths.
+
+    The desktop dialogue handles its own QSoundEffect playback; this
+    registry's job is to:
+
+    - Keep a record of which timer ids currently have an alarm ringing
+      so cancel/cancel_by_label/cancel_all (and the stop tool) can
+      silence them by emitting an IPC ``stop`` event.
+    - Drive a headless fallback: if the daemon is running with no
+      desktop app, repeatedly print the BEL character so a CLI user
+      still gets an audible cue.
+    - Auto-cap each alarm at :data:`_ALARM_AUTO_STOP_SEC` so a missed
+      alarm never loops forever.
+    """
+
+    def __init__(self) -> None:
+        self._alarms: Dict[str, _ActiveAlarm] = {}
+        self._lock = threading.Lock()
+
+    def start(self, entry: TimerEntry) -> None:
+        # Emit IPC start so the desktop dialogue (if any) opens and its
+        # QSoundEffect begins looping. Even when there is no listener
+        # the line is harmless: just one extra log line on stdout.
+        payload = {
+            "id": entry.id,
+            "label": entry.label,
+            "duration_human": _format_duration(entry.duration_sec),
+            "auto_stop_sec": _ALARM_AUTO_STOP_SEC,
+        }
+        _emit_alarm_event("start", payload)
+
+        fallback_stop = threading.Event()
+        # Headless fallback: short BEL loop on a daemon thread. Quietly
+        # exits when the registry stops the alarm or when the auto-cap
+        # fires. Not visible when desktop_app is consuming stdout (the
+        # BEL bytes get logged but not rendered).
+        def _fallback_loop() -> None:
+            ticks = 0
+            while not fallback_stop.is_set() and ticks < _ALARM_AUTO_STOP_SEC:
+                try:
+                    sys.stdout.write("\a")
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+                fallback_stop.wait(1.0)
+                ticks += 1
+
+        threading.Thread(target=_fallback_loop, daemon=True).start()
+
+        # Auto-cap so an unattended alarm (no dialogue, no stop tool, no
+        # cancel) eventually goes quiet on its own. The cap honours the
+        # same 30s contract that the desktop dialogue advertises.
+        auto_stop = threading.Timer(_ALARM_AUTO_STOP_SEC, lambda: self.stop(entry.id))
+        auto_stop.daemon = True
+        auto_stop.start()
+
+        with self._lock:
+            self._alarms[entry.id] = _ActiveAlarm(
+                timer_id=entry.id,
+                label=entry.label,
+                duration_human=payload["duration_human"],
+                started_at=datetime.now(timezone.utc),
+                auto_stop=auto_stop,
+                fallback_stop=fallback_stop,
+            )
+        debug_log(
+            f"🔔 alarm started id={entry.id} label={entry.label!r}",
+            "tools",
+        )
+
+    def stop(self, timer_id: str) -> bool:
+        """Stop a single alarm by timer id. Idempotent."""
+        with self._lock:
+            alarm = self._alarms.pop(timer_id, None)
+        if alarm is None:
+            return False
+        alarm.fallback_stop.set()
+        try:
+            alarm.auto_stop.cancel()
+        except Exception:
+            pass
+        _emit_alarm_event("stop", {"id": timer_id})
+        debug_log(f"🔕 alarm stopped id={timer_id}", "tools")
+        return True
+
+    def stop_all(self) -> int:
+        """Stop every active alarm. Returns count stopped."""
+        with self._lock:
+            alarms = list(self._alarms.values())
+            self._alarms.clear()
+        for alarm in alarms:
+            alarm.fallback_stop.set()
+            try:
+                alarm.auto_stop.cancel()
+            except Exception:
+                pass
+        if alarms:
+            _emit_alarm_event("stop", {"all": True})
+            debug_log(f"🔕 stopped {len(alarms)} alarm(s)", "tools")
+        return len(alarms)
+
+    def active_ids(self) -> List[str]:
+        with self._lock:
+            return list(self._alarms.keys())
+
+
+_alarm_registry_instance: Optional[AlarmRegistry] = None
+_alarm_registry_lock = threading.Lock()
+
+
+def get_alarm_registry() -> AlarmRegistry:
+    """Return the process-wide AlarmRegistry singleton."""
+    global _alarm_registry_instance
+    with _alarm_registry_lock:
+        if _alarm_registry_instance is None:
+            _alarm_registry_instance = AlarmRegistry()
+        return _alarm_registry_instance
+
+
+def stop_all_alarms() -> int:
+    """Public helper for the stop tool: silence every ringing alarm."""
+    return get_alarm_registry().stop_all()
 
 
 class TimerTool(Tool):
