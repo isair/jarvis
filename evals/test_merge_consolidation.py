@@ -232,11 +232,11 @@ def _line_count(data: str) -> int:
 def store(tmp_path):
     """Graph store backed by a temp SQLite DB, closed on teardown.
 
-    Closing matters for `tmp_path` cleanup on Windows — POSIX would
+    Closing matters for `tmp_path` cleanup on Windows. POSIX would
     tolerate a still-open SQLite handle when pytest unlinks the
-    file, but Windows would not. The merge evals all touch the
-    store the same way, so a shared fixture keeps the teardown
-    contract uniform.
+    file, Windows would not. The merge evals all touch the store
+    the same way, so a shared fixture keeps the teardown contract
+    uniform.
     """
     s = GraphMemoryStore(str(tmp_path / "test.db"))
     try:

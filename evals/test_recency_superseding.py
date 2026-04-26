@@ -14,7 +14,6 @@ Run:
 """
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -170,24 +169,25 @@ class TestDiaryRecencyOrder:
 # Tests: Graph Superseding
 # =============================================================================
 
+@pytest.fixture
+def graph_store(tmp_path):
+    """Graph store backed by a temp SQLite DB, closed on teardown.
+
+    Closes the SQLite connection so `tmp_path`'s cleanup can unlink
+    the file on Windows. POSIX would tolerate a still-open handle,
+    Windows would not.
+    """
+    store = GraphMemoryStore(str(tmp_path / "test.db"))
+    try:
+        yield store
+    finally:
+        store.close()
+
+
 @pytest.mark.eval
 class TestGraphRecencySuperseding:
     """Tests that knowledge graph handles contradicting facts across dates
     by preserving temporal context that allows newer facts to take precedence."""
-
-    @pytest.fixture
-    def graph_store(self, tmp_path):
-        """Create a graph store backed by a temp SQLite DB.
-
-        Closes the SQLite connection in teardown so `tmp_path`'s
-        cleanup can unlink the file on Windows (POSIX would tolerate
-        a still-open handle; Windows would not).
-        """
-        store = GraphMemoryStore(str(tmp_path / "test.db"))
-        try:
-            yield store
-        finally:
-            store.close()
 
     @pytest.mark.parametrize("case", SUPERSEDING_CASES)
     def test_newer_fact_appended_with_date_context(self, graph_store, case):
@@ -243,10 +243,10 @@ class TestMergeSupersession:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", SUPERSEDING_CASES)
-    def test_merge_drops_contradicting_old_line(self, case, tmp_path):
+    def test_merge_drops_contradicting_old_line(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(str(tmp_path / "test.db"))
+        store = graph_store
 
         old_line = (
             f"[{case.old_date}] "
