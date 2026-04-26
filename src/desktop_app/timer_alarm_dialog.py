@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 # QtMultimedia ships separately from QtWidgets in some PyQt6 builds (and
@@ -41,14 +41,11 @@ from .themes import JARVIS_THEME_STYLESHEET
 # `jarvis.tools.builtin.timer.TIMER_ALARM_IPC_PREFIX`.
 TIMER_ALARM_IPC_PREFIX = "__TIMER_ALARM__:"
 
-# Local hard cap in case the daemon never emits a stop event (e.g. the
-# daemon crashed). Mirrors the daemon-side `_ALARM_AUTO_STOP_SEC`.
-_ALARM_AUTO_STOP_MS = 30 * 1000
-
-
-class TimerAlarmSignals(QObject):
-    start_requested = pyqtSignal(dict)
-    stop_requested = pyqtSignal(dict)
+# Fallback hard cap (ms) used only when the daemon's IPC payload
+# omits ``auto_stop_sec``. The authoritative value is the one the
+# daemon emits, so the two sides cannot drift even if the daemon
+# constant changes.
+_FALLBACK_AUTO_STOP_MS = 30 * 1000
 
 
 class TimerAlarmDialog(QDialog):
@@ -61,7 +58,10 @@ class TimerAlarmDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._active_ids: set[str] = set()
+        # Preserve insertion order so the title reliably reports the
+        # most recently fired alarm; iterating gives a deterministic
+        # multi-alarm summary.
+        self._active: dict[str, str] = {}
         self._auto_stop = QTimer(self)
         self._auto_stop.setSingleShot(True)
         self._auto_stop.timeout.connect(self._dismiss)
@@ -114,21 +114,31 @@ class TimerAlarmDialog(QDialog):
 
     def handle_start(self, payload: dict) -> None:
         timer_id = str(payload.get("id") or "")
-        label = payload.get("label")
+        label = payload.get("label") or ""
         duration_human = payload.get("duration_human") or ""
         if timer_id:
-            self._active_ids.add(timer_id)
+            # Re-insert so this id is the most recent in iteration order.
+            self._active.pop(timer_id, None)
+            self._active[timer_id] = label
 
-        title = "⏰ Timer done"
-        if label:
-            title = f"⏰ Timer '{label}' done"
-        self.title_label.setText(title)
-        body_bits = []
-        if duration_human:
-            body_bits.append(f"{duration_human} elapsed.")
-        if len(self._active_ids) > 1:
-            body_bits.append(f"{len(self._active_ids)} alarms ringing.")
-        self.body_label.setText(" ".join(body_bits) or "Timer elapsed.")
+        if len(self._active) > 1:
+            self.title_label.setText("⏰ Multiple timers done")
+            named = [f"'{lbl}'" for lbl in self._active.values() if lbl]
+            if named:
+                summary = ", ".join(named)
+                self.body_label.setText(
+                    f"{len(self._active)} alarms ringing: {summary}."
+                )
+            else:
+                self.body_label.setText(
+                    f"{len(self._active)} alarms ringing."
+                )
+        else:
+            title = f"⏰ Timer '{label}' done" if label else "⏰ Timer done"
+            self.title_label.setText(title)
+            self.body_label.setText(
+                f"{duration_human} elapsed." if duration_human else "Timer elapsed."
+            )
 
         if self._sound is not None:
             try:
@@ -137,9 +147,15 @@ class TimerAlarmDialog(QDialog):
             except Exception:
                 pass
 
-        # Restart the local auto-cap each time a fresh alarm arrives so
-        # the dialogue stays open at least 30s after the latest one.
-        self._auto_stop.start(_ALARM_AUTO_STOP_MS)
+        # Use the daemon-supplied cap so the two sides cannot drift; the
+        # restart happens on every fresh alarm so the dialogue stays
+        # open at least one full window after the latest one.
+        auto_stop_sec = payload.get("auto_stop_sec")
+        try:
+            cap_ms = int(auto_stop_sec) * 1000 if auto_stop_sec else _FALLBACK_AUTO_STOP_MS
+        except (TypeError, ValueError):
+            cap_ms = _FALLBACK_AUTO_STOP_MS
+        self._auto_stop.start(cap_ms)
 
         if not self.isVisible():
             self.show()
@@ -148,16 +164,16 @@ class TimerAlarmDialog(QDialog):
 
     def handle_stop(self, payload: dict) -> None:
         if payload.get("all"):
-            self._active_ids.clear()
+            self._active.clear()
         else:
             timer_id = str(payload.get("id") or "")
             if timer_id:
-                self._active_ids.discard(timer_id)
-        if not self._active_ids:
+                self._active.pop(timer_id, None)
+        if not self._active:
             self._dismiss()
 
     def _dismiss(self) -> None:
-        self._active_ids.clear()
+        self._active.clear()
         if self._sound is not None:
             try:
                 if self._sound.isPlaying():
