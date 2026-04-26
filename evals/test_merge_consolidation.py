@@ -19,7 +19,6 @@ Run:
     EVAL_JUDGE_MODEL=gemma4:e2b ./scripts/run_evals.sh merge_consolidation
 """
 
-import os
 from dataclasses import dataclass
 from typing import List
 
@@ -229,6 +228,23 @@ def _line_count(data: str) -> int:
     return len([l for l in data.split("\n") if l.strip()])
 
 
+@pytest.fixture
+def store(tmp_path):
+    """Graph store backed by a temp SQLite DB, closed on teardown.
+
+    Closing matters for `tmp_path` cleanup on Windows — POSIX would
+    tolerate a still-open SQLite handle when pytest unlinks the
+    file, but Windows would not. The merge evals all touch the
+    store the same way, so a shared fixture keeps the teardown
+    contract uniform.
+    """
+    s = GraphMemoryStore(str(tmp_path / "test.db"))
+    try:
+        yield s
+    finally:
+        s.close()
+
+
 # =============================================================================
 # Tests
 # =============================================================================
@@ -239,10 +255,9 @@ class TestNearDuplicateDedupe:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", DEDUPE_CASES)
-    def test_near_duplicates_collapse(self, case, tmp_path):
+    def test_near_duplicates_collapse(self, case, store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
         node = store.create_node(
             name="T",
             description=case.description,
@@ -287,10 +302,9 @@ class TestPatternConsolidation:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", PATTERN_CASES)
-    def test_repeated_activities_consolidate(self, case, tmp_path):
+    def test_repeated_activities_consolidate(self, case, store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
         node = store.create_node(
             name="T",
             description=case.description,
@@ -336,10 +350,9 @@ class TestPatternBoundary:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", PATTERN_BOUNDARY_CASES)
-    def test_distinct_one_offs_stay_distinct(self, case, tmp_path):
+    def test_distinct_one_offs_stay_distinct(self, case, store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
         node = store.create_node(
             name="T",
             description=case.description,
@@ -378,10 +391,9 @@ class TestIndependenceOfUnrelatedFacts:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", INDEPENDENCE_CASES)
-    def test_independent_facts_coexist(self, case, tmp_path):
+    def test_independent_facts_coexist(self, case, store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
         node = store.create_node(
             name="T",
             description=case.description,
@@ -422,10 +434,9 @@ class TestBatchedMerge:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", BATCHED_CASES)
-    def test_all_batched_facts_land(self, case, tmp_path):
+    def test_all_batched_facts_land(self, case, store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
         node = store.create_node(
             name="T",
             description=case.description,

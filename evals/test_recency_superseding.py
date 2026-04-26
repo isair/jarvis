@@ -116,8 +116,7 @@ class TestDiaryRecencyOrder:
         """Create a temporary DB with old and new diary entries."""
         case: SupersedingCase = request.param
 
-        db_path = os.path.join(str(tmp_path), "test.db")
-        db = Database(db_path)
+        db = Database(str(tmp_path / "test.db"))
 
         # Store old entry first
         db.upsert_conversation_summary(
@@ -178,10 +177,17 @@ class TestGraphRecencySuperseding:
 
     @pytest.fixture
     def graph_store(self, tmp_path):
-        """Create an in-memory graph store."""
-        db_path = os.path.join(str(tmp_path), "test.db")
-        store = GraphMemoryStore(db_path)
-        yield store
+        """Create a graph store backed by a temp SQLite DB.
+
+        Closes the SQLite connection in teardown so `tmp_path`'s
+        cleanup can unlink the file on Windows (POSIX would tolerate
+        a still-open handle; Windows would not).
+        """
+        store = GraphMemoryStore(str(tmp_path / "test.db"))
+        try:
+            yield store
+        finally:
+            store.close()
 
     @pytest.mark.parametrize("case", SUPERSEDING_CASES)
     def test_newer_fact_appended_with_date_context(self, graph_store, case):
@@ -240,7 +246,7 @@ class TestMergeSupersession:
     def test_merge_drops_contradicting_old_line(self, case, tmp_path):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
+        store = GraphMemoryStore(str(tmp_path / "test.db"))
 
         old_line = (
             f"[{case.old_date}] "
