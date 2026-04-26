@@ -17,7 +17,7 @@ from flask import Flask, jsonify, request, Response
 
 from jarvis.config import load_settings
 from jarvis.debug import debug_log
-from jarvis.memory.graph import GraphMemoryStore
+from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
 
 
 app = Flask(__name__)
@@ -425,6 +425,8 @@ def graph_delete_node(node_id: str) -> Response:
     try:
         if node_id == "root":
             return jsonify({"error": "Cannot delete root node"}), 400
+        if node_id in FIXED_BRANCH_IDS:
+            return jsonify({"error": "Cannot delete preset branch"}), 400
 
         deleted = store.delete_node(node_id)
         if deleted:
@@ -432,6 +434,17 @@ def graph_delete_node(node_id: str) -> Response:
         return jsonify({"error": "Node not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/graph/presets")
+def graph_presets() -> Response:
+    """IDs of non-deletable preset nodes (root + FIXED_BRANCH_IDS).
+
+    Single source of truth for the UI: avoids duplicating the branch list
+    on the JS side, so adding a new fixed branch only requires editing
+    ``FIXED_BRANCHES`` in graph.py.
+    """
+    return jsonify({"ids": ["root", *sorted(FIXED_BRANCH_IDS)]})
 
 
 @app.route("/api/graph/recent")
@@ -1881,6 +1894,12 @@ def index() -> str:
         let toDate = '';
         let searchDebounce = null;
 
+        // Non-deletable preset node IDs. Loaded from /api/graph/presets on
+        // boot so the JS side never drifts from FIXED_BRANCHES in graph.py.
+        // Seeded with 'root' so the delete button stays hidden if the fetch
+        // hasn't completed yet (fail-closed).
+        let PRESET_NODE_IDS = new Set(['root']);
+
         // DOM Elements
         const searchInput = document.getElementById('search-input');
         const fromDateInput = document.getElementById('from-date');
@@ -2257,12 +2276,26 @@ def index() -> str:
         const canvas = document.getElementById('graph-canvas');
         const ctx = canvas.getContext('2d');
 
-        function initGraph() {
+        async function loadPresetNodeIds() {
+            try {
+                const resp = await fetch('/api/graph/presets');
+                const data = await resp.json();
+                if (Array.isArray(data.ids)) {
+                    PRESET_NODE_IDS = new Set(data.ids);
+                }
+            } catch (e) {
+                // Fail-closed: leave the seeded {'root'} set in place.
+                console.warn('Failed to load preset node IDs; falling back to root-only.', e);
+            }
+        }
+
+        async function initGraph() {
             if (!graphInitialised) {
                 setupCanvasEvents();
                 graphInitialised = true;
             }
             resizeCanvas();
+            await loadPresetNodeIds();
             loadGraphData();
             loadTreeData();
         }
@@ -2718,7 +2751,7 @@ def index() -> str:
                 <div class="detail-actions">
                     <button class="detail-action-btn" onclick="editNode('${node.id}')">✏️ Edit</button>
                     <button class="detail-action-btn" onclick="showCreateNodeModal('${node.id}')">➕ Add child</button>
-                    ${node.id !== 'root' ? `<button class="detail-action-btn delete" onclick="deleteNode('${node.id}')">🗑️ Delete</button>` : ''}
+                    ${!PRESET_NODE_IDS.has(node.id) ? `<button class="detail-action-btn delete" onclick="deleteNode('${node.id}')">🗑️ Delete</button>` : ''}
                 </div>
             `;
         }

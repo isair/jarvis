@@ -227,6 +227,15 @@ class TestNodeCRUD:
         assert store.delete_node("root") is False
         assert store.get_root() is not None
 
+    def test_cannot_delete_fixed_branches(self, store):
+        """The seeded preset branches (user / directives / world) are
+        non-deletable per graph.spec.md."""
+        for branch_id, _name, _desc in FIXED_BRANCHES:
+            assert store.delete_node(branch_id) is False, (
+                f"Fixed branch {branch_id!r} must not be deletable"
+            )
+            assert store.get_node(branch_id) is not None
+
 
 @pytest.mark.unit
 class TestNodeRelationships:

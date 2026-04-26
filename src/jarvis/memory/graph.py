@@ -105,6 +105,8 @@ FIXED_BRANCHES: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+FIXED_BRANCH_IDS: frozenset[str] = frozenset(bid for bid, _, _ in FIXED_BRANCHES)
+
 
 # ── SQL helpers ────────────────────────────────────────────────────────────
 
@@ -286,7 +288,7 @@ class GraphMemoryStore:
         Returns True if a wipe happened, False if the graph was already
         in the expected shape.
         """
-        expected_ids = {bid for bid, _, _ in FIXED_BRANCHES}
+        expected_ids = FIXED_BRANCH_IDS
         with self._lock:
             root_row = self.conn.execute(
                 "SELECT data FROM memory_nodes WHERE id = 'root'"
@@ -441,8 +443,13 @@ class GraphMemoryStore:
         return node
 
     def delete_node(self, node_id: str) -> bool:
-        """Delete a node. Children are orphaned (parent_id set to NULL by FK)."""
-        if node_id == "root":
+        """Delete a node. Children are orphaned (parent_id set to NULL by FK).
+
+        Root and the seeded fixed branches (see ``FIXED_BRANCHES``) are
+        non-deletable — the warm profile and extractor routing rely on
+        their stable presence (graph.spec.md §"Fixed Top-Level Branches").
+        """
+        if node_id == "root" or node_id in FIXED_BRANCH_IDS:
             return False
         with self._lock:
             cur = self.conn.execute(
