@@ -1,4 +1,4 @@
-"""Timer tool; schedule countdowns that announce when they elapse.
+"""Timer tool: schedule countdowns that announce when they elapse.
 
 The tool returns raw structured data (timer ids, labels, etas, durations).
 The system prompt is responsible for phrasing the confirmation back to the
@@ -118,7 +118,7 @@ class TimerEntry:
 class TimerManager:
     """In-process registry of active countdown timers.
 
-    Singleton; see :func:`get_timer_manager`. The announcement hook is
+    Singleton: see :func:`get_timer_manager`. The announcement hook is
     pluggable so tests can substitute a fake instead of speaking aloud /
     poking the desktop face widget.
     """
@@ -256,7 +256,7 @@ _manager_instance: Optional[TimerManager] = None
 _manager_lock = threading.Lock()
 
 
-# Pluggable TTS provider; a zero-arg callable returning the TTS engine
+# Pluggable TTS provider: a zero-arg callable returning the TTS engine
 # (or None). Defaults to "look up the daemon's global engine if the
 # daemon module is already loaded". Tests override this to avoid pulling
 # the heavy daemon import chain.
@@ -400,7 +400,7 @@ class TimerTool(Tool):
             "the user's label (e.g. 'pasta', 'laundry') in the label field "
             "when they name one. For action='set', ALSO pass an "
             "'announcement' string written in the SAME LANGUAGE the user is "
-            "currently speaking; this is what Jarvis will literally speak "
+            "currently speaking: this is what Jarvis will literally speak "
             "aloud when the timer elapses, so phrase it naturally (e.g. "
             "'Your pasta timer is up' / 'El temporizador de la pasta ha "
             "terminado' / 'Makarna zamanlayıcısı doldu'). Multiple timers "
