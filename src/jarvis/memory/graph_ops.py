@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import NamedTuple, Optional
+from dataclasses import dataclass, field
+from typing import Iterator, NamedTuple, Optional
 
 from ..debug import debug_log
 from ..llm import call_llm_direct
@@ -26,6 +27,7 @@ from .graph import (
     MAX_TRAVERSAL_DEPTH,
     MemoryNode,
     SPLIT_THRESHOLD,
+    normalise_fact,
 )
 
 
@@ -400,6 +402,277 @@ def find_best_node(
     return current_id
 
 
+# ── Merge (combine existing node data + new fact via LLM rewrite) ─────
+
+
+_MERGE_SYSTEM_PROMPT = (
+    "You curate a knowledge store. You are given the CURRENT facts on "
+    "a node and a NEW fact to incorporate. Produce the REVISED set of "
+    "facts that should replace the node's contents.\n\n"
+    "Apply these rules in order:\n"
+    "1. CONTRADICTION / REVERSAL: if the new fact contradicts, negates, "
+    "or updates the current value of the same attribute as an existing "
+    "fact, drop the old version. Examples: 'User dislikes coffee' "
+    "replaces 'User likes coffee'. 'User lives in Berlin' replaces "
+    "'User lives in Hackney'. 'User does not need a daily check-in' "
+    "replaces 'User has a need for a daily check-in' AND any line that "
+    "lists that same need as an interest.\n"
+    "2. DUPLICATION: drop existing lines that say the same thing as the "
+    "new fact, even with different wording, casing, or punctuation. "
+    "Keep one canonical phrasing.\n"
+    "3. CONSOLIDATION: when several existing facts describe the same "
+    "repeated activity across different days (e.g. 'ate sushi on "
+    "Monday', 'ate sushi on Thursday'), merge them into a pattern "
+    "('regularly eats sushi'). Preserve dates only for significant "
+    "one-off events (a job change, a move).\n"
+    "4. INDEPENDENCE: keep existing facts that describe a different "
+    "attribute, even if related. 'User ate a Big Mac' does NOT replace "
+    "'User is vegetarian' — leave both visible so the inconsistency "
+    "stays inspectable. Past-tense historical events ('Visited Paris "
+    "in 2023') coexist with current-state facts.\n"
+    "5. PRUNING: drop facts that are common knowledge already in your "
+    "training data (general nutrition trivia, well-known places, "
+    "public-figure basics). Only keep what is novel to you: user-"
+    "specific details, local / niche information, recent events after "
+    "your cutoff, corrections to default assumptions.\n"
+    "6. ORDER: keep the most enduring, identity-defining facts near "
+    "the top; transient / specific facts below.\n\n"
+    "Respond with ONLY a JSON object of shape `{\"facts\": [\"fact 1\", "
+    "\"fact 2\", ...]}`. Each fact is a self-contained sentence. No "
+    "prose outside the JSON, no explanations, no markdown fences."
+)
+
+
+def _split_data_lines(data: Optional[str]) -> list[str]:
+    """Split node data into non-empty, stripped lines.
+
+    Single source of truth for how the merge pipeline tokenises a
+    node's `data` blob into facts — the merge body, the
+    consolidate-all walk, and the boundary test all use this so a
+    future change to the parsing rule (e.g. `splitlines()`,
+    blank-line handling) propagates atomically.
+    """
+    return [l for l in (data or "").split("\n") if l.strip()]
+
+
+def is_populated_node(node: MemoryNode) -> bool:
+    """A node worth visiting in a consolidate-all sweep.
+
+    Shared predicate so the streaming endpoint can pre-count nodes
+    using the same definition the generator walks with — drift here
+    would silently desynchronise the UI's progress bar from reality.
+    """
+    return node.id != "root" and bool((node.data or "").strip())
+
+
+# Slack added to the hallucination-guard cap. Consolidation should
+# only ever shrink or hold, but we allow a small overrun (e.g. the
+# model splitting a clumsy two-clause fact into two cleaner lines)
+# before treating the rewrite as runaway invention.
+_MERGE_GROWTH_SLACK = 2
+
+
+@dataclass
+class MergeResult:
+    """Outcome of a `merge_node_data` call.
+
+    `success` — True when the rewrite passed all guards and was
+    persisted. False means the caller should fall back to plain
+    append for any non-incorporated facts.
+
+    `incorporated_indices` — for each input position in `new_facts`,
+    True if the cleaned output contains that fact under
+    `normalise_fact` folding (so it's safe to consider it landed in
+    the node). A fact whose index is missing was either consolidated
+    out, dropped as common knowledge, or silently lost — caller
+    decides whether to append it as a fallback or skip.
+    """
+
+    success: bool
+    incorporated_indices: list[int] = field(default_factory=list)
+
+
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _extract_facts_object(response: str) -> Optional[dict]:
+    """Pull a `{"facts": [...]}` object out of an LLM response.
+
+    Tries direct `json.loads` first (the strict prompt + T=0 should
+    produce clean JSON in the common case). Otherwise scans every `{`
+    and uses ``json.JSONDecoder.raw_decode`` to consume a balanced
+    object starting there. ``raw_decode`` handles nested braces, so a
+    fact string containing ``{`` or ``}`` parses correctly — unlike a
+    `[^{}]`-scoped regex which would refuse to match the outer
+    object. Returns the first parsed object that has a list-valued
+    ``facts`` key.
+    """
+    stripped = response.strip()
+    if stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("facts"), list):
+            return parsed
+    # O(n) over the response: at most one `{` per character. Picker
+    # responses are bounded (single rewrite, T=0), so this stays cheap.
+    for match in re.finditer(r"\{", response):
+        try:
+            parsed, _ = _JSON_DECODER.raw_decode(response, match.start())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("facts"), list):
+            return parsed
+    return None
+
+
+def merge_node_data(
+    store: GraphMemoryStore,
+    node_id: str,
+    new_facts: list[str],
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    timeout_sec: float = 20.0,
+    thinking: bool = False,
+    picker_model: Optional[str] = None,
+    node: Optional[MemoryNode] = None,
+) -> MergeResult:
+    """Merge ``new_facts`` into ``node_id``'s data via one LLM rewrite.
+
+    Combines the existing node data and the queued new facts, asks the
+    model to produce a clean, consolidated, contradiction-free fact
+    list, and writes that back as the node's full data. This subsumes
+    dedupe, supersession, and per-write consolidation in a single
+    pass — the latest prompt always rewrites the node, so updated
+    conventions propagate to existing data without a separate
+    migration step.
+
+    Pass an empty ``new_facts`` list to run a self-consolidation pass
+    on the node's existing data alone (dedupe / consolidate / prune
+    only — no fact incorporation). The merge prompt's rules apply
+    equally to the existing data, so the same LLM call serves both
+    "incorporate new facts" and "tidy existing facts".
+
+    Hallucination guard: the cleaned rewrite is rejected if it grows
+    beyond ``len(existing_lines) + len(new_facts) + 2`` entries.
+    Consolidation should only ever shrink or hold; runaway growth
+    means the model invented content.
+
+    Fail-open on any error (LLM failure, parse failure, empty
+    rewrite, oversized rewrite). Caller's append path then writes the
+    fact directly. We never let a flaky LLM erase data — a
+    contradiction is recoverable, a silent wipe is not.
+
+    Pass ``node`` if the caller has already fetched it; saves a
+    redundant SQLite read on the orchestrator's hot path.
+    """
+    if node is None:
+        node = store.get_node(node_id)
+    if node is None:
+        return MergeResult(success=False)
+
+    existing_lines = _split_data_lines(node.data)
+    # Re-join from the parsed lines so the prompt body and the line
+    # count agree byte-for-byte — `existing` was previously a separate
+    # `.strip()` of the raw blob, which could disagree with the parsed
+    # list on edge whitespace.
+    existing = "\n".join(existing_lines)
+    sanitised_new: list[str] = [f.strip() for f in new_facts if f and f.strip()]
+
+    if not existing_lines and not sanitised_new:
+        # Nothing to do.
+        return MergeResult(success=False)
+
+    if not existing_lines:
+        # Cold start: no existing data to merge against. Caller's
+        # append path will write each new fact verbatim. Skipping the
+        # LLM call keeps cold-start writes cheap.
+        return MergeResult(success=False)
+
+    if sanitised_new:
+        new_facts_block = "\n".join(f"- {f}" for f in sanitised_new)
+        user_content = (
+            f"CURRENT facts on the node:\n{existing}\n\n"
+            f"NEW facts to incorporate:\n{new_facts_block}"
+        )
+    else:
+        user_content = (
+            f"CURRENT facts on the node (no new facts to add — "
+            f"consolidate / dedupe / prune only):\n{existing}"
+        )
+
+    effective_model = picker_model or ollama_chat_model
+    response = call_llm_direct(
+        base_url=ollama_base_url,
+        chat_model=effective_model,
+        system_prompt=_MERGE_SYSTEM_PROMPT,
+        user_content=user_content,
+        timeout_sec=timeout_sec,
+        thinking=thinking,
+        temperature=0.0,
+    )
+
+    if not response:
+        return MergeResult(success=False)
+
+    parsed = _extract_facts_object(response)
+    if parsed is None:
+        return MergeResult(success=False)
+
+    cleaned: list[str] = []
+    for item in parsed["facts"]:
+        if not isinstance(item, str):
+            continue
+        line = item.strip()
+        if line:
+            cleaned.append(line)
+
+    # Empty rewrite is suspicious — a non-empty `existing` plus
+    # (optional) new facts should never collapse to nothing. Treat as
+    # failure and let the caller's append path run.
+    if not cleaned:
+        return MergeResult(success=False)
+
+    # Hallucination guard: bound the output relative to the input.
+    # Consolidation rules can shrink or hold but should never grow
+    # beyond `existing + new + small slack` — anything larger means
+    # the model invented content not present in either input.
+    max_kept = len(existing_lines) + len(sanitised_new) + _MERGE_GROWTH_SLACK
+    if len(cleaned) > max_kept:
+        debug_log(
+            f"merge: rejected rewrite — {len(cleaned)} lines exceeds "
+            f"guard cap of {max_kept}",
+            "memory",
+        )
+        return MergeResult(success=False)
+
+    # Identify which of the new facts actually survived the rewrite.
+    # Uses the dedupe primitive's Unicode folding plus a tolerant
+    # trailing-punctuation strip — picker models routinely rephrase
+    # facts by dropping the trailing full stop ("X." → "X"), and a
+    # strict `normalise_fact` match would then under-report every
+    # batched flush as "0 stored". A new fact missing from the
+    # cleaned set was consolidated out, treated as a duplicate, or
+    # silently dropped — caller can then decide whether to skip
+    # reporting or append-fallback.
+    def _match_key(text: str) -> str:
+        return normalise_fact(text).rstrip(".,;:!?")
+
+    cleaned_keys = {_match_key(line) for line in cleaned if line.strip()}
+    incorporated_indices: list[int] = []
+    for idx, fact in enumerate(new_facts):
+        if not fact or not fact.strip():
+            continue
+        key = _match_key(fact)
+        if key and key in cleaned_keys:
+            incorporated_indices.append(idx)
+
+    new_data = "\n".join(cleaned)
+    store.update_node(node_id, data=new_data)
+    return MergeResult(success=True, incorporated_indices=incorporated_indices)
+
+
 # ── Auto-split ─────────────────────────────────────────────────────────
 
 
@@ -571,14 +844,18 @@ def update_graph_from_dialogue(
 
     debug_log(f"graph update: placing {len(facts)} facts into knowledge graph", "memory")
 
-    stored: "list[tuple[str, str]]" = []
+    # Step 2: Place — resolve the destination node for every fact up
+    # front, applying the cheap exact-match dedupe fast-path along the
+    # way. Then group surviving facts by node so the merge step below
+    # rewrites each node at most once per flush instead of once per
+    # fact. Without batching, a 5-fact flush against a populated User
+    # node fires 5 small-model rewrites of the same `data`; with
+    # batching, it's one rewrite that incorporates all five.
+    pending: list[tuple[str, str, str]] = []  # (branch_id, fact, node_id)
+    seen_keys_per_node: dict[str, set[str]] = {}
     skipped = 0
     for branch_id, fact in facts:
         try:
-            # Step 2: Place — find the best node for this fact within its branch.
-            # The branch tag comes from the extractor's classification pass
-            # (USER / DIRECTIVES / WORLD) — traversal stays inside that
-            # subtree so the purpose-shaped top-level taxonomy is preserved.
             node_id = find_best_node(
                 store=store,
                 fragment=fact,
@@ -589,40 +866,134 @@ def update_graph_from_dialogue(
                 picker_model=picker_model,
                 branch_root_id=branch_id,
             )
+        except Exception as e:
+            debug_log(f"graph update: traversal failed for '{fact[:50]}...' — {e}", "memory")
+            continue
 
-            # Step 3: Dedupe — skip if this fact is already stored on the
-            # chosen node. The daily summary is cumulative, so every diary
-            # flush re-extracts the same facts; without this check, each
-            # flush appends them again. We only check the picker's chosen
-            # node — a stale picker could route a repeat fact to a different
-            # node within the same branch on a later flush and leak a
-            # duplicate, but that's rare compared to the same-node case we're
-            # fixing here. We also deliberately skip ``touch_node``: a re-
-            # extraction isn't fresh learning and shouldn't reinforce the
-            # node's access score. (Mirrors step 4 in graph.spec.md.)
-            if store.node_contains_fact(node_id, fact):
-                target = store.get_node(node_id)
-                target_name = target.name if target else node_id[:8]
-                skipped += 1
+        # Exact-match dedupe (fast-path, no LLM): skip facts already
+        # stored verbatim on the chosen node. Cumulative daily summaries
+        # re-extract the same facts on every flush; the SQL-only check
+        # short-circuits the merge LLM call for the most common no-op
+        # case. Re-extractions are not fresh learning — we don't report
+        # them as newly stored and we don't touch the access score.
+        # Skips are still counted so callers can log "nothing new (N
+        # duplicates skipped)" on all-duplicate flushes.
+        if store.node_contains_fact(node_id, fact):
+            target = store.get_node(node_id)
+            target_name = target.name if target else node_id[:8]
+            skipped += 1
+            debug_log(
+                f"graph update: skipped duplicate '{fact[:50]}...' → "
+                f"'{target_name}' [{branch_id}]",
+                "memory",
+            )
+            continue
+
+        # Within a single flush, two extractor outputs that fold to the
+        # same key should also dedupe against each other before reaching
+        # the merge step.
+        key = normalise_fact(fact)
+        node_keys = seen_keys_per_node.setdefault(node_id, set())
+        if key and key in node_keys:
+            debug_log(
+                f"graph update: skipped intra-flush duplicate '{fact[:50]}...'",
+                "memory",
+            )
+            continue
+        if key:
+            node_keys.add(key)
+
+        pending.append((branch_id, fact, node_id))
+
+    if not pending:
+        debug_log("graph update: nothing to merge after dedupe", "memory")
+        return GraphUpdateResult(stored=[], skipped=skipped)
+
+    # Group by destination node so each node gets a single merge call.
+    by_node: dict[str, list[tuple[str, str]]] = {}
+    for branch_id, fact, node_id in pending:
+        by_node.setdefault(node_id, []).append((branch_id, fact))
+
+    stored: "list[tuple[str, str]]" = []
+    for node_id, items in by_node.items():
+        node_facts = [fact for _, fact in items]
+        node = store.get_node(node_id)
+        node_name = node.name if node else node_id[:8]
+
+        # Step 3: Merge — combine the existing node data with all
+        # queued new facts in a single LLM rewrite. Subsumes
+        # supersession (contradictions drop the old line),
+        # near-duplicate dedupe (different wordings collapse), and
+        # ongoing consolidation (repeated activities fold into
+        # patterns). The latest prompt always rewrites the whole
+        # node, so updated conventions propagate to old data without
+        # a separate migration step.
+        #
+        # Fail-open: if the merge returns success=False (empty node,
+        # LLM failure, parse failure, empty rewrite, or rewrite that
+        # tripped the hallucination guard), each fact falls back to
+        # plain append below. We never let a flaky LLM erase data —
+        # a contradiction is recoverable, a silent wipe is not.
+        merge_result = MergeResult(success=False)
+        try:
+            merge_result = merge_node_data(
+                store=store,
+                node_id=node_id,
+                new_facts=node_facts,
+                ollama_base_url=ollama_base_url,
+                ollama_chat_model=ollama_chat_model,
+                timeout_sec=20.0,
+                thinking=thinking,
+                picker_model=picker_model,
+                node=node,
+            )
+        except Exception as e:
+            debug_log(f"graph update: merge failed for node '{node_name}' — {e}", "memory")
+
+        if merge_result.success:
+            # Merge wrote the consolidated data. Only the facts the
+            # rewrite actually retained get reported as stored — a
+            # fact that was consolidated out (e.g. folded into a
+            # pattern, or treated as a near-duplicate) was not
+            # newly learned and shouldn't be claimed as such.
+            incorporated = set(merge_result.incorporated_indices)
+            for idx, (branch_id, fact) in enumerate(items):
+                if idx in incorporated:
+                    stored.append((fact, node_name))
+                    debug_log(
+                        f"graph update: merged '{fact[:50]}...' → "
+                        f"'{node_name}' [{branch_id}]",
+                        "memory",
+                    )
+                else:
+                    debug_log(
+                        f"graph update: '{fact[:50]}...' consolidated "
+                        f"out by merge on '{node_name}' — not reported",
+                        "memory",
+                    )
+        else:
+            # Cold start, merge failure, or guard rejection — fall
+            # back to plain append for every queued fact so nothing
+            # is lost.
+            for branch_id, fact in items:
+                store.append_to_node(node_id, fact)
+                stored.append((fact, node_name))
                 debug_log(
-                    f"graph update: skipped duplicate '{fact[:50]}...' → "
-                    f"'{target_name}' [{branch_id}]",
+                    f"graph update: appended '{fact[:50]}...' → "
+                    f"'{node_name}' [{branch_id}] (merge skipped)",
                     "memory",
                 )
-                continue
 
-            # Step 4: Append the fact to the chosen node
-            threshold_exceeded = store.append_to_node(node_id, fact)
-            store.touch_node(node_id)
+        store.touch_node(node_id)
 
-            node = store.get_node(node_id)
-            node_name = node.name if node else node_id[:8]
-            stored.append((fact, node_name))
-            debug_log(f"graph update: stored '{fact[:50]}...' → '{node_name}' [{branch_id}]", "memory")
-
-            # Step 5: Auto-split if the node has grown too large
-            if threshold_exceeded:
-                debug_log(f"graph update: node '{node_name}' exceeded threshold, splitting", "memory")
+        # Step 4: Auto-split if the node has grown too large.
+        refreshed = store.get_node(node_id)
+        if refreshed is not None and refreshed.data_token_count > SPLIT_THRESHOLD:
+            debug_log(
+                f"graph update: node '{node_name}' exceeded threshold, splitting",
+                "memory",
+            )
+            try:
                 auto_split_node(
                     store=store,
                     node_id=node_id,
@@ -631,10 +1002,8 @@ def update_graph_from_dialogue(
                     timeout_sec=45.0,
                     thinking=thinking,
                 )
-
-        except Exception as e:
-            debug_log(f"graph update: failed to store fact — {e}", "memory")
-            continue
+            except Exception as e:
+                debug_log(f"graph update: auto-split failed for '{node_name}' — {e}", "memory")
 
     debug_log(
         f"graph update: stored {len(stored)}/{len(facts)} facts "
@@ -642,6 +1011,65 @@ def update_graph_from_dialogue(
         "memory",
     )
     return GraphUpdateResult(stored=stored, skipped=skipped)
+
+
+def consolidate_all_populated_nodes(
+    store: GraphMemoryStore,
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    timeout_sec: float = 20.0,
+    thinking: bool = False,
+    picker_model: Optional[str] = None,
+) -> "Iterator[tuple[str, int, int]]":
+    """One-shot self-consolidation across every populated node.
+
+    Walks every node with non-empty `data` and runs `merge_node_data`
+    with an empty new-facts list, so the merge prompt's rules
+    (contradiction handling, near-duplicate collapse, consolidation,
+    pruning) tidy the existing data in place. This is the migration
+    path for nodes that accumulated contradictions before the
+    merge-on-write step landed: under merge-on-write, a node only
+    gets cleaned when a new related fact arrives, so backlog stays
+    dirty until something nudges it. Calling this op nudges
+    everything at once.
+
+    Yields ``(node_name, lines_before, lines_after)`` per node as the
+    walk progresses, so a streaming caller (e.g. an NDJSON endpoint)
+    can surface per-node feedback in real time on graphs with many
+    nodes. Fail-open: a node that fails to merge is left untouched
+    and reported with ``lines_after == lines_before``.
+    """
+    # Snapshot all nodes up front so a rewrite mid-walk doesn't
+    # cause us to revisit or skip nodes.
+    all_nodes = store.get_all_nodes()
+    for node in all_nodes:
+        if not is_populated_node(node):
+            continue
+        before = len(_split_data_lines(node.data))
+        try:
+            result = merge_node_data(
+                store=store,
+                node_id=node.id,
+                new_facts=[],
+                ollama_base_url=ollama_base_url,
+                ollama_chat_model=ollama_chat_model,
+                timeout_sec=timeout_sec,
+                thinking=thinking,
+                picker_model=picker_model,
+                node=node,
+            )
+        except Exception as e:
+            debug_log(f"consolidate-all: failed for '{node.name}' — {e}", "memory")
+            result = MergeResult(success=False)
+
+        refreshed = store.get_node(node.id)
+        after = len(_split_data_lines(refreshed.data)) if refreshed else before
+        debug_log(
+            f"consolidate-all: '{node.name}' {before} → {after} lines "
+            f"(success={result.success})",
+            "memory",
+        )
+        yield (node.name, before, after)
 
 
 # ── Warm profile (User + Directives) ─────────────────────────────────

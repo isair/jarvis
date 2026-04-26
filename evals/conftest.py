@@ -698,3 +698,19 @@ def eval_dialogue_memory():
     from jarvis.memory.conversation import DialogueMemory
     return DialogueMemory(inactivity_timeout=300, max_interactions=20)
 
+
+@pytest.fixture
+def graph_store(tmp_path):
+    """Graph store backed by a temp SQLite DB, closed on teardown.
+
+    Closes the SQLite connection so `tmp_path`'s cleanup can unlink
+    the file on Windows. POSIX would tolerate a still-open handle,
+    Windows would not.
+    """
+    from jarvis.memory.graph import GraphMemoryStore
+    store = GraphMemoryStore(str(tmp_path / "test.db"))
+    try:
+        yield store
+    finally:
+        store.close()
+

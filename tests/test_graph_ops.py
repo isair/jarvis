@@ -27,6 +27,9 @@ from src.jarvis.memory.graph_ops import (
     update_graph_from_dialogue,
     build_warm_profile,
     format_warm_profile_block,
+    merge_node_data,
+    consolidate_all_populated_nodes,
+    MergeResult,
 )
 
 
@@ -712,6 +715,520 @@ class TestUpdateGraphFromDialogue:
         assert result.skipped == 1
         refreshed = store.get_node(child.id)
         assert refreshed.data.count("Justin Bieber is a Canadian singer.") == 1
+
+
+# ── Merge (rewrite-on-write consolidation) ────────────────────────────
+
+
+@pytest.mark.unit
+class TestMergeNodeData:
+    """merge_node_data rewrites a node's data via an LLM consolidation pass."""
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_rewrites_node_with_consolidated_facts(self, mock_llm, store):
+        node = store.create_node(
+            name="Test",
+            description="d",
+            data="User likes coffee.\nUser is from Hackney.\nUser drives a Tesla.",
+            parent_id="user",
+        )
+        new_fact = "User dislikes coffee and prefers cycling over driving."
+        mock_llm.return_value = (
+            '{"facts": ["' + new_fact + '", "User is from Hackney."]}'
+        )
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=[new_fact],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert result.incorporated_indices == [0]
+        refreshed = store.get_node(node.id)
+        assert "User dislikes coffee" in refreshed.data
+        assert "User likes coffee." not in refreshed.data
+        assert "User is from Hackney." in refreshed.data
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_empty_node_skips_llm(self, mock_llm, store):
+        node = store.create_node(name="T", description="d", data="", parent_id="user")
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["any"],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is False
+        mock_llm.assert_not_called()
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_llm_failure_leaves_node_untouched(self, mock_llm, store):
+        node = store.create_node(
+            name="T", description="d", data="Existing fact.", parent_id="user",
+        )
+        mock_llm.return_value = None
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["any"],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is False
+        assert store.get_node(node.id).data == "Existing fact."
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_unparseable_response_leaves_node_untouched(self, mock_llm, store):
+        node = store.create_node(
+            name="T", description="d", data="Existing fact.", parent_id="user",
+        )
+        mock_llm.return_value = "no json here"
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["any"],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is False
+        assert store.get_node(node.id).data == "Existing fact."
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_empty_rewrite_treated_as_failure(self, mock_llm, store):
+        """A non-empty existing payload should never collapse to nothing.
+        Treat empty-list rewrites as suspect and refuse to wipe the node."""
+        node = store.create_node(
+            name="T", description="d", data="A.\nB.", parent_id="user",
+        )
+        mock_llm.return_value = '{"facts": []}'
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["C"],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is False
+        assert store.get_node(node.id).data == "A.\nB."
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_non_string_facts_filtered(self, mock_llm, store):
+        node = store.create_node(
+            name="T", description="d", data="A.", parent_id="user",
+        )
+        mock_llm.return_value = (
+            '{"facts": ["Kept fact.", 42, null, "  ", "Another kept."]}'
+        )
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["x"],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert store.get_node(node.id).data == "Kept fact.\nAnother kept."
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_hallucination_guard_rejects_oversized_rewrite(self, mock_llm, store):
+        """Consolidation rules can shrink or hold but should never grow
+        the node beyond `existing + new + small slack`. Reject rewrites
+        that explode in size — they mean the model invented content."""
+        node = store.create_node(
+            name="T", description="d", data="One existing fact.", parent_id="user",
+        )
+        # 1 existing + 1 new + slack(2) = cap of 4. Return 8 facts.
+        bogus = '{"facts": [' + ", ".join(f'"Invented {i}."' for i in range(8)) + "]}"
+        mock_llm.return_value = bogus
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["A new fact."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is False
+        assert store.get_node(node.id).data == "One existing fact."
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_incorporated_indices_track_each_new_fact(self, mock_llm, store):
+        """When a batch contains multiple new facts and the rewrite
+        consolidates one of them out, the result should list only the
+        indices that survived. Caller uses this to avoid reporting
+        merged-out facts as 'newly stored'."""
+        node = store.create_node(
+            name="T", description="d", data="Old A.", parent_id="user",
+        )
+        # New facts at indices 0 and 1. Rewrite keeps only the first.
+        mock_llm.return_value = '{"facts": ["Fresh One.", "Old A."]}'
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["Fresh One.", "Fresh Two."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert result.incorporated_indices == [0]
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_empty_new_facts_runs_self_consolidation(self, mock_llm, store):
+        """Calling with new_facts=[] should still hit the LLM and run a
+        consolidation pass over the existing data alone — the migration
+        path for nodes that accumulated contradictions before merge-on-
+        write landed."""
+        node = store.create_node(
+            name="T",
+            description="d",
+            data="User has a need for X.\nUser does not have a need for X.",
+            parent_id="user",
+        )
+        mock_llm.return_value = '{"facts": ["User does not have a need for X."]}'
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=[],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert result.incorporated_indices == []
+        assert store.get_node(node.id).data == "User does not have a need for X."
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_extracts_facts_object_from_markdown_fenced_response(self, mock_llm, store):
+        """Tighter regex must still pull the object out when the model
+        wraps it in a markdown code fence."""
+        node = store.create_node(
+            name="T", description="d", data="Old.", parent_id="user",
+        )
+        mock_llm.return_value = (
+            '```json\n{"facts": ["New."]}\n```'
+        )
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["New."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert "New." in store.get_node(node.id).data
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_hallucination_guard_boundary_pins_to_slack_constant(self, mock_llm, store):
+        """The guard's cap is `existing + new + _MERGE_GROWTH_SLACK`.
+        Pin both sides of the boundary against the named constant so a
+        future tweak to the slack can't silently drift the guard."""
+        from src.jarvis.memory.graph_ops import (
+            _MERGE_GROWTH_SLACK,
+            _split_data_lines,
+        )
+
+        existing_data = "E1.\nE2."
+        node = store.create_node(
+            name="T", description="d", data=existing_data, parent_id="user",
+        )
+        # Derive `existing_count` via the same helper production uses
+        # so the boundary math can't drift if the parsing rule changes.
+        existing_count = len(_split_data_lines(existing_data))
+        new_facts = ["N1."]
+        cap = existing_count + len(new_facts) + _MERGE_GROWTH_SLACK
+
+        # At the cap → accepted.
+        at_cap = '{"facts": [' + ", ".join(f'"L{i}."' for i in range(cap)) + "]}"
+        mock_llm.return_value = at_cap
+        result = merge_node_data(
+            store=store, node_id=node.id, new_facts=new_facts,
+            ollama_base_url="http://localhost", ollama_chat_model="model",
+        )
+        assert result.success is True
+
+        # One over the cap → rejected.
+        node2 = store.create_node(
+            name="T2", description="d", data="E1.\nE2.", parent_id="user",
+        )
+        over_cap = '{"facts": [' + ", ".join(f'"L{i}."' for i in range(cap + 1)) + "]}"
+        mock_llm.return_value = over_cap
+        result = merge_node_data(
+            store=store, node_id=node2.id, new_facts=new_facts,
+            ollama_base_url="http://localhost", ollama_chat_model="model",
+        )
+        assert result.success is False
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_incorporated_indices_tolerant_to_trailing_punctuation(self, mock_llm, store):
+        """Picker models routinely drop the trailing full stop when
+        rewriting facts ("X." → "X"). A strict normalise_fact match
+        would then return `incorporated_indices=[]` even when the
+        fact clearly landed, and the orchestrator would silently
+        under-report every batched flush as '0 stored'. Pin the
+        tolerant match against this exact rephrasing."""
+        node = store.create_node(
+            name="T", description="d", data="Old.", parent_id="user",
+        )
+        # Picker drops the trailing period from the new fact.
+        mock_llm.return_value = '{"facts": ["The user has a dog"]}'
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["The user has a dog."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert result.incorporated_indices == [0], (
+            "Trailing-period rephrasing must still count as incorporation."
+        )
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_prompt_body_matches_parsed_line_count(self, mock_llm, store):
+        """The CURRENT facts block sent to the picker must contain
+        exactly the lines `_split_data_lines` produced — blank lines
+        and whitespace-only lines stripped from both signals
+        consistently. Locks the round-6 consolidation that made the
+        helper the sole parser."""
+        node = store.create_node(
+            name="T",
+            description="d",
+            # Mid-blob blank line + a whitespace-only line. The old
+            # `node.data.strip()` path would have left these in the
+            # prompt body while the parsed list dropped them.
+            data="A.\n\n  \nB.",
+            parent_id="user",
+        )
+        mock_llm.return_value = '{"facts": ["A.", "B."]}'
+
+        merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=[],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        sent_user_content = mock_llm.call_args.kwargs["user_content"]
+        assert "CURRENT facts on the node" in sent_user_content
+        assert "A.\nB." in sent_user_content
+        # The dropped blank/whitespace lines must not survive into the prompt.
+        assert "A.\n\n" not in sent_user_content
+        assert "  \n" not in sent_user_content
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_extracts_object_with_braces_inside_fact_strings(self, mock_llm, store):
+        """A fact whose text contains literal `{` or `}` must still
+        parse — `raw_decode` handles balanced nesting that a
+        `[^{}]`-scoped regex would have refused to match."""
+        node = store.create_node(
+            name="T", description="d", data="Old.", parent_id="user",
+        )
+        mock_llm.return_value = (
+            'preamble {"facts": ["User uses {placeholder} syntax in templates."]} trailing'
+        )
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["User uses {placeholder} syntax in templates."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert "{placeholder}" in store.get_node(node.id).data
+
+
+@pytest.mark.unit
+class TestConsolidateAllPopulatedNodes:
+    """consolidate_all_populated_nodes runs a self-merge pass on every
+    populated node. Migration path for the contradiction backlog."""
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_walks_only_populated_nodes(self, mock_llm, store):
+        # Two populated nodes + one empty node + the seeded branch roots.
+        store.create_node(
+            name="A", description="d",
+            data="Line 1.\nContradicts line 1.", parent_id="user",
+        )
+        store.create_node(
+            name="B", description="d",
+            data="Line X.\nDuplicate of line X.", parent_id="world",
+        )
+        store.create_node(name="Empty", description="d", data="", parent_id="user")
+
+        # Two LLM calls expected (one per populated node).
+        mock_llm.side_effect = [
+            '{"facts": ["Line 1."]}',
+            '{"facts": ["Line X."]}',
+        ]
+
+        results = list(consolidate_all_populated_nodes(
+            store=store,
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        ))
+
+        names = {n for n, _, _ in results}
+        assert "A" in names and "B" in names
+        assert "Empty" not in names
+        assert mock_llm.call_count == 2
+        # Each consolidated node shrank from 2 lines to 1.
+        for _, before, after in results:
+            assert before == 2
+            assert after == 1
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_failure_per_node_does_not_abort_the_rest(self, mock_llm, store):
+        store.create_node(name="A", description="d", data="X.", parent_id="user")
+        store.create_node(name="B", description="d", data="Y.", parent_id="world")
+
+        # First node's LLM returns junk → fail-open. Second succeeds.
+        mock_llm.side_effect = ["garbage", '{"facts": ["Y."]}']
+
+        results = list(consolidate_all_populated_nodes(
+            store=store,
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        ))
+
+        assert len(results) == 2
+        # Both nodes still have their data — fail-open leaves untouched.
+        names = {n for n, _, _ in results}
+        assert names == {"A", "B"}
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_yields_per_node_for_streaming(self, mock_llm, store):
+        """The op must be a generator that yields each result as the
+        walk progresses — buffering the whole sweep before yielding
+        defeats the streaming NDJSON endpoint that wraps it."""
+        store.create_node(name="A", description="d", data="A.", parent_id="user")
+        store.create_node(name="B", description="d", data="B.", parent_id="world")
+        mock_llm.side_effect = ['{"facts": ["A."]}', '{"facts": ["B."]}']
+
+        gen = consolidate_all_populated_nodes(
+            store=store,
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        # First call only triggers one LLM hit (the first node), which
+        # proves the second node hasn't been processed yet.
+        first = next(gen)
+        assert mock_llm.call_count == 1
+        assert first[0] in {"A", "B"}
+
+        # Draining the generator runs the rest.
+        rest = list(gen)
+        assert len(rest) == 1
+        assert mock_llm.call_count == 2
+
+
+@pytest.mark.unit
+class TestUpdateGraphMerge:
+    """update_graph_from_dialogue runs the merge pass on populated nodes."""
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_contradiction_replaces_old_fact_via_merge(self, mock_llm, store):
+        """Regression: 'user does not need a daily check-in' should
+        replace the prior 'user has a need for a daily check-in' line
+        on the User branch root via the merge rewrite, not coexist."""
+        store.update_node(
+            "user",
+            data="The user has a need for a simple daily check-in system.",
+        )
+
+        # Two LLM calls: extraction then merge.
+        mock_llm.side_effect = [
+            '[{"branch": "USER", "fact": "The user does not need a daily check-in system."}]',
+            '{"facts": ["The user does not need a daily check-in system."]}',
+        ]
+
+        result = update_graph_from_dialogue(
+            store=store,
+            summary="User clarified they do not need a check-in.",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        stored = result.stored
+        assert len(stored) == 1
+        user_data = store.get_node("user").data
+        assert "does not need" in user_data
+        assert "has a need for" not in user_data
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_merge_failure_falls_back_to_append(self, mock_llm, store):
+        """A flaky merge LLM must not block the write — the fact still
+        lands via plain append so we never lose data on transient
+        failures."""
+        store.update_node("user", data="Existing line.")
+
+        mock_llm.side_effect = [
+            '[{"branch": "USER", "fact": "Brand new fact."}]',
+            "garbage with no json",
+        ]
+
+        result = update_graph_from_dialogue(
+            store=store,
+            summary="s",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        stored = result.stored
+        assert len(stored) == 1
+        data = store.get_node("user").data
+        assert "Existing line." in data
+        assert "Brand new fact." in data
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_cold_start_skips_merge_llm_call(self, mock_llm, store):
+        """When the chosen node has no data, the merge pass should
+        short-circuit (no LLM call) and the fact lands via plain
+        append — keeps cold-start writes cheap."""
+        # Only the extraction call should hit the LLM.
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "Acme Corp is based in London."}]'
+        )
+
+        result = update_graph_from_dialogue(
+            store=store,
+            summary="s",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        stored = result.stored
+        assert len(stored) == 1
+        assert "Acme Corp" in store.get_node("world").data
+        # Exactly one LLM call: extraction. Empty branch root means the
+        # picker is skipped (no children) and the merge step short-
+        # circuits before hitting the LLM.
+        assert mock_llm.call_count == 1
 
 
 # ── Warm profile helpers ──────────────────────────────────────────────
