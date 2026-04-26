@@ -33,6 +33,33 @@ _MAX_DURATION_SEC = 24 * 60 * 60  # 24 hours
 _MAX_ACTIVE_TIMERS = 32
 
 
+def _sanitise_label(label: Optional[str]) -> Optional[str]:
+    """Trim a label and collapse internal whitespace.
+
+    Labels flow into stdout banners, the LLM-consumed render payload, and
+    TTS. Newlines or repeated whitespace inside a label would let the
+    model (or a malformed call) break our line-based payload format and
+    spoof fake fields. Collapse them at the entry point so every
+    downstream consumer sees a single-line string.
+    """
+    if not isinstance(label, str):
+        return None
+    cleaned = " ".join(label.split())
+    return cleaned or None
+
+
+def _sanitise_announcement(text: Optional[str]) -> Optional[str]:
+    """Trim a pre-localised announcement string.
+
+    Same reasoning as :func:`_sanitise_label` — TTS handles single lines
+    better, and the stdout banner is line-based.
+    """
+    if not isinstance(text, str):
+        return None
+    cleaned = " ".join(text.split())
+    return cleaned or None
+
+
 def _format_duration(total_seconds: int) -> str:
     """Render a duration as a compact human-readable string.
 
@@ -64,6 +91,11 @@ class TimerEntry:
     duration_sec: int
     started_at: datetime
     eta: datetime
+    # Pre-localised announcement text passed in by the caller (the reply
+    # LLM, which knows the user's current language). Empty / None falls
+    # back to the English default — that fallback only fires when the
+    # caller forgot to localise, never as the primary path.
+    announcement: Optional[str] = None
     timer: Optional[threading.Timer] = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -74,6 +106,7 @@ class TimerEntry:
             "duration_human": _format_duration(self.duration_sec),
             "started_at": self.started_at.isoformat(),
             "eta": self.eta.isoformat(),
+            "announcement": self.announcement,
         }
 
 
@@ -94,7 +127,12 @@ class TimerManager:
         with self._lock:
             self._announcer = announcer
 
-    def start(self, duration_sec: int, label: Optional[str]) -> TimerEntry:
+    def start(
+        self,
+        duration_sec: int,
+        label: Optional[str],
+        announcement: Optional[str] = None,
+    ) -> TimerEntry:
         if duration_sec <= 0:
             raise ValueError("duration must be positive")
         if duration_sec > _MAX_DURATION_SEC:
@@ -116,10 +154,11 @@ class TimerManager:
 
             entry = TimerEntry(
                 id=timer_id,
-                label=(label.strip() if isinstance(label, str) and label.strip() else None),
+                label=_sanitise_label(label),
                 duration_sec=int(duration_sec),
                 started_at=now,
                 eta=now + timedelta(seconds=int(duration_sec)),
+                announcement=_sanitise_announcement(announcement),
             )
 
             t = threading.Timer(float(duration_sec), self._on_elapsed, args=(timer_id,))
@@ -200,6 +239,47 @@ _manager_instance: Optional[TimerManager] = None
 _manager_lock = threading.Lock()
 
 
+# Pluggable TTS provider — a zero-arg callable returning the TTS engine
+# (or None). Defaults to "look up the daemon's global engine if the
+# daemon module is already loaded". Tests override this to avoid pulling
+# the heavy daemon import chain.
+_tts_provider: Callable[[], Optional[Any]] = lambda: _resolve_daemon_tts()
+
+
+def _resolve_daemon_tts() -> Optional[Any]:
+    """Probe ``sys.modules`` for an already-loaded daemon and read its TTS engine.
+
+    Lazy by design: importing :mod:`jarvis.daemon` from a tool would
+    eagerly pull faster_whisper / ctranslate2 / transformers, which is
+    fine in production but explodes in unit tests where those heavy
+    modules may be in a half-initialised state. When the daemon hasn't
+    been imported (e.g. eval runs, CLI scripts, tests), this returns
+    ``None`` and the announcer falls back to its non-TTS path.
+    """
+    import sys
+    daemon_mod = (
+        sys.modules.get("src.jarvis.daemon")
+        or sys.modules.get("jarvis.daemon")
+    )
+    if daemon_mod is None:
+        return None
+    try:
+        return daemon_mod.get_tts_engine()
+    except Exception:
+        return None
+
+
+def set_tts_provider(provider: Callable[[], Optional[Any]]) -> None:
+    """Override the TTS lookup used by the default announcer.
+
+    Tests use this to inject a fake engine without importing the daemon.
+    Production code never calls this — the default already does the
+    right thing.
+    """
+    global _tts_provider
+    _tts_provider = provider
+
+
 def get_timer_manager() -> TimerManager:
     """Return the process-wide TimerManager singleton."""
     global _manager_instance
@@ -212,14 +292,29 @@ def get_timer_manager() -> TimerManager:
 def _default_announcer(entry: TimerEntry) -> None:
     """Default announcement: face → SPEAKING + TTS + stdout banner.
 
-    Each side-effect is best-effort — the daemon may not be running (e.g.
+    Each side-effect is best-effort: the daemon may not be running (e.g.
     in tests, evals, or when the tool is exercised standalone) and the
-    desktop face widget is optional. Failing one side-effect should not
+    desktop face widget is optional. Failing one side-effect must not
     suppress the others.
+
+    Language note: the spoken text is taken from ``entry.announcement``,
+    which the reply LLM is expected to pre-localise into the user's
+    current language when calling the tool. We only fall back to the
+    English default when the caller forgot to provide one (older models,
+    evals, direct test calls). This keeps the language-handling
+    responsibility on the LLM rather than hardcoding patterns here.
+
+    Face-state note: TTS engines flip the face into SPEAKING themselves
+    when ``speak()`` runs, but they intentionally don't restore IDLE on
+    completion — the daemon does that as part of its turn loop. A timer
+    fire happens *outside* a turn, so we'd leave the face stuck on
+    SPEAKING. Pass a completion callback that restores IDLE once playback
+    finishes (or the synthesis fails), keeping the face in sync with
+    actual audio state.
     """
     label_part = f" '{entry.label}'" if entry.label else ""
     duration = _format_duration(entry.duration_sec)
-    spoken = f"Timer{label_part} is up. {duration} have elapsed."
+    spoken = entry.announcement or f"Timer{label_part} is up. {duration} have elapsed."
     banner = f"⏰ Timer{label_part} done ({duration} elapsed)"
 
     # Visible side: stdout banner so headless / CLI users still see it.
@@ -228,23 +323,45 @@ def _default_announcer(entry: TimerEntry) -> None:
     except Exception:
         pass
 
-    # Visible side: poke the desktop face into SPEAKING so the user gets a
-    # visual cue alongside the spoken announcement.
+    # Resolve the desktop face manager once so we can both flip it to
+    # SPEAKING now and restore IDLE from the TTS completion callback.
+    state_manager = None
     try:
         from desktop_app.face_widget import JarvisState, get_jarvis_state
-        get_jarvis_state().set_state(JarvisState.SPEAKING)
+        state_manager = get_jarvis_state()
+        state_manager.set_state(JarvisState.SPEAKING)
     except Exception:
         # Desktop app not running (CLI, eval, tests) — silently skip.
-        pass
+        state_manager = None
 
-    # Audible side: speak via the daemon's global TTS engine.
+    def _restore_idle() -> None:
+        if state_manager is None:
+            return
+        try:
+            from desktop_app.face_widget import JarvisState as _JS
+            state_manager.set_state(_JS.IDLE)
+        except Exception:
+            pass
+
+    # Audible side: speak via the daemon's global TTS engine, looked up
+    # through the pluggable provider so tests don't have to import the
+    # heavy daemon module. The completion callback restores the face to
+    # IDLE; we also schedule a safety-net restore so a missed callback
+    # (TTS disabled, exception during synthesis) can't leave the face
+    # stuck on SPEAKING.
+    spoken_via_tts = False
     try:
-        from ...daemon import get_tts_engine
-        tts = get_tts_engine()
+        tts = _tts_provider()
         if tts is not None and getattr(tts, "enabled", True):
-            tts.speak(spoken)
+            tts.speak(spoken, completion_callback=_restore_idle)
+            spoken_via_tts = True
     except Exception as e:
         debug_log(f"timer TTS announce failed: {e}", "tools")
+
+    if not spoken_via_tts and state_manager is not None:
+        # No TTS playback ⇒ the completion callback will never fire.
+        # Restore IDLE inline so the face doesn't stay on SPEAKING.
+        _restore_idle()
 
 
 class TimerTool(Tool):
@@ -261,10 +378,16 @@ class TimerTool(Tool):
             "count down a duration ('set a timer for 10 minutes', 'remind me "
             "in 2 hours', 'cancel the pasta timer', 'what timers are running?'). "
             "When the timer elapses Jarvis announces it audibly and visibly. "
-            "Provide the duration as integer hours/minutes/seconds — convert "
+            "Provide the duration as integer hours/minutes/seconds; convert "
             "natural-language durations yourself before calling. Always pass "
             "the user's label (e.g. 'pasta', 'laundry') in the label field "
-            "when they name one. Multiple timers can run concurrently."
+            "when they name one. For action='set', ALSO pass an "
+            "'announcement' string written in the SAME LANGUAGE the user is "
+            "currently speaking — this is what Jarvis will literally speak "
+            "aloud when the timer elapses, so phrase it naturally (e.g. "
+            "'Your pasta timer is up' / 'El temporizador de la pasta ha "
+            "terminado' / 'Makarna zamanlayıcısı doldu'). Multiple timers "
+            "can run concurrently."
         )
 
     @property
@@ -291,7 +414,11 @@ class TimerTool(Tool):
                 },
                 "label": {
                     "type": "string",
-                    "description": "Optional human label (e.g. 'pasta'). For action='set' it tags the new timer; for action='cancel' it cancels every running timer with that label.",
+                    "description": "Optional human label (e.g. 'pasta'). For action='set' it tags the new timer; for action='cancel' it cancels every running timer with that label (case-insensitive).",
+                },
+                "announcement": {
+                    "type": "string",
+                    "description": "For action='set': the exact phrase Jarvis will speak when the timer elapses, written in the user's current language. Keep it short and natural (e.g. 'Your pasta timer is up'). If omitted, an English default is used.",
                 },
                 "timer_id": {
                     "type": "string",
@@ -330,20 +457,25 @@ class TimerTool(Tool):
         context: ToolContext,
         manager: TimerManager,
     ) -> ToolExecutionResult:
-        def _to_int(value: Any) -> int:
+        def _to_float(value: Any) -> float:
+            # Schema declares integer, but small models routinely pass
+            # decimals ("minutes": 0.5) or numeric strings ("30"). Sum
+            # everything in floats and round once at the end so a
+            # half-minute doesn't silently collapse to zero.
             if value is None or value == "":
-                return 0
+                return 0.0
+            if isinstance(value, bool):
+                # Bool is a subclass of int; treat as "no value" so that
+                # `True`/`False` doesn't sneak in as 1/0 seconds.
+                return 0.0
             try:
-                return int(value)
+                return float(value)
             except (TypeError, ValueError):
-                try:
-                    return int(float(value))
-                except (TypeError, ValueError):
-                    return 0
+                return 0.0
 
-        hours = _to_int(args.get("hours"))
-        minutes = _to_int(args.get("minutes"))
-        seconds = _to_int(args.get("seconds"))
+        hours = _to_float(args.get("hours"))
+        minutes = _to_float(args.get("minutes"))
+        seconds = _to_float(args.get("seconds"))
         if hours < 0 or minutes < 0 or seconds < 0:
             return ToolExecutionResult(
                 success=False,
@@ -351,7 +483,7 @@ class TimerTool(Tool):
                 error_message="Duration components must be non-negative.",
             )
 
-        total_sec = hours * 3600 + minutes * 60 + seconds
+        total_sec = int(round(hours * 3600 + minutes * 60 + seconds))
         if total_sec <= 0:
             return ToolExecutionResult(
                 success=False,
@@ -360,8 +492,13 @@ class TimerTool(Tool):
             )
 
         label = args.get("label")
+        announcement = args.get("announcement")
         try:
-            entry = manager.start(total_sec, label if isinstance(label, str) else None)
+            entry = manager.start(
+                total_sec,
+                label if isinstance(label, str) else None,
+                announcement=announcement if isinstance(announcement, str) else None,
+            )
         except (ValueError, RuntimeError) as e:
             return ToolExecutionResult(
                 success=False,
