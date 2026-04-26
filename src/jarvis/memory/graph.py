@@ -441,8 +441,15 @@ class GraphMemoryStore:
         return node
 
     def delete_node(self, node_id: str) -> bool:
-        """Delete a node. Children are orphaned (parent_id set to NULL by FK)."""
+        """Delete a node. Children are orphaned (parent_id set to NULL by FK).
+
+        Root and the seeded fixed branches (see ``FIXED_BRANCHES``) are
+        non-deletable — the warm profile and extractor routing rely on
+        their stable presence (graph.spec.md §"Fixed Top-Level Branches").
+        """
         if node_id == "root":
+            return False
+        if node_id in {bid for bid, _, _ in FIXED_BRANCHES}:
             return False
         with self._lock:
             cur = self.conn.execute(

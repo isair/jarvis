@@ -17,7 +17,9 @@ from flask import Flask, jsonify, request, Response
 
 from jarvis.config import load_settings
 from jarvis.debug import debug_log
-from jarvis.memory.graph import GraphMemoryStore
+from jarvis.memory.graph import FIXED_BRANCHES, GraphMemoryStore
+
+_PRESET_BRANCH_IDS = frozenset(bid for bid, _, _ in FIXED_BRANCHES)
 
 
 app = Flask(__name__)
@@ -425,6 +427,10 @@ def graph_delete_node(node_id: str) -> Response:
     try:
         if node_id == "root":
             return jsonify({"error": "Cannot delete root node"}), 400
+        if node_id in _PRESET_BRANCH_IDS:
+            return jsonify(
+                {"error": "Cannot delete preset branch"}
+            ), 400
 
         deleted = store.delete_node(node_id)
         if deleted:
@@ -1881,6 +1887,10 @@ def index() -> str:
         let toDate = '';
         let searchDebounce = null;
 
+        // Preset branches seeded under root — kept in sync with FIXED_BRANCHES
+        // in src/jarvis/memory/graph.py. Backend rejects deletion of these too.
+        const PRESET_NODE_IDS = new Set(['root', 'user', 'directives', 'world']);
+
         // DOM Elements
         const searchInput = document.getElementById('search-input');
         const fromDateInput = document.getElementById('from-date');
@@ -2718,7 +2728,7 @@ def index() -> str:
                 <div class="detail-actions">
                     <button class="detail-action-btn" onclick="editNode('${node.id}')">✏️ Edit</button>
                     <button class="detail-action-btn" onclick="showCreateNodeModal('${node.id}')">➕ Add child</button>
-                    ${node.id !== 'root' ? `<button class="detail-action-btn delete" onclick="deleteNode('${node.id}')">🗑️ Delete</button>` : ''}
+                    ${!PRESET_NODE_IDS.has(node.id) ? `<button class="detail-action-btn delete" onclick="deleteNode('${node.id}')">🗑️ Delete</button>` : ''}
                 </div>
             `;
         }
