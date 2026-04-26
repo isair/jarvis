@@ -540,15 +540,16 @@ class TestUpdateGraphFromDialogue:
             ' {"branch": "WORLD", "fact": "Acme Corp is based in London"}]'
         )
 
-        stored = update_graph_from_dialogue(
+        result = update_graph_from_dialogue(
             store=store,
             summary="User likes jazz; Acme Corp is in London",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
 
-        assert len(stored) == 2
-        for fact, node_name in stored:
+        assert len(result.stored) == 2
+        assert result.skipped == 0
+        for fact, node_name in result.stored:
             assert isinstance(fact, str) and fact
             assert isinstance(node_name, str) and node_name
 
@@ -567,28 +568,30 @@ class TestUpdateGraphFromDialogue:
 
         mock_llm.return_value = "[]"
 
-        stored = update_graph_from_dialogue(
+        result = update_graph_from_dialogue(
             store=store,
             summary="User said hello and asked about the weather",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
 
-        assert stored == []
+        assert result.stored == []
+        assert result.skipped == 0
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_extraction_failure_returns_zero(self, mock_llm, store):
 
         mock_llm.return_value = None
 
-        stored = update_graph_from_dialogue(
+        result = update_graph_from_dialogue(
             store=store,
             summary="summary",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
 
-        assert stored == []
+        assert result.stored == []
+        assert result.skipped == 0
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_skips_duplicate_facts_on_second_flush(self, mock_llm, store):
@@ -604,25 +607,27 @@ class TestUpdateGraphFromDialogue:
         mock_llm.return_value = (
             '[{"branch": "WORLD", "fact": "Justin Bieber is a Canadian singer."}]'
         )
-        stored1 = update_graph_from_dialogue(
+        result1 = update_graph_from_dialogue(
             store=store,
             summary="User asked about Justin Bieber.",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
-        assert len(stored1) == 1
+        assert len(result1.stored) == 1
+        assert result1.skipped == 0
 
         # Second flush: same fact re-extracted, should be deduped.
         mock_llm.return_value = (
             '[{"branch": "WORLD", "fact": "Justin Bieber is a Canadian singer."}]'
         )
-        stored2 = update_graph_from_dialogue(
+        result2 = update_graph_from_dialogue(
             store=store,
             summary="User asked about Justin Bieber.",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
-        assert stored2 == [], "duplicate fact should not be reported as learned"
+        assert result2.stored == [], "duplicate fact should not be reported as learned"
+        assert result2.skipped == 1, "duplicate must be counted so the CLI can still log it"
 
         world = store.get_node("world")
         assert world.data.count("Justin Bieber") == 1
@@ -645,13 +650,14 @@ class TestUpdateGraphFromDialogue:
         mock_llm.return_value = (
             '[{"branch": "WORLD", "fact": "i̇stanbul is the largest city in turkey."}]'
         )
-        stored = update_graph_from_dialogue(
+        result = update_graph_from_dialogue(
             store=store,
             summary="s",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
-        assert stored == [], "Turkish İ/i̇ variants should dedupe"
+        assert result.stored == [], "Turkish İ/i̇ variants should dedupe"
+        assert result.skipped == 1
 
         mock_llm.return_value = (
             '[{"branch": "WORLD", "fact": "Straße names are ordered alphabetically."}]'
@@ -666,13 +672,14 @@ class TestUpdateGraphFromDialogue:
         mock_llm.return_value = (
             '[{"branch": "WORLD", "fact": "strasse names are ordered alphabetically."}]'
         )
-        stored = update_graph_from_dialogue(
+        result = update_graph_from_dialogue(
             store=store,
             summary="s",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
-        assert stored == [], "German ß should casefold to ss for dedupe"
+        assert result.stored == [], "German ß should casefold to ss for dedupe"
+        assert result.skipped == 1
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
@@ -694,14 +701,15 @@ class TestUpdateGraphFromDialogue:
         mock_llm.return_value = (
             '[{"branch": "WORLD", "fact": "Justin Bieber is a Canadian singer."}]'
         )
-        stored = update_graph_from_dialogue(
+        result = update_graph_from_dialogue(
             store=store,
             summary="User asked about Justin Bieber.",
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
         )
 
-        assert stored == [], "duplicate on a child node should still dedupe"
+        assert result.stored == [], "duplicate on a child node should still dedupe"
+        assert result.skipped == 1
         refreshed = store.get_node(child.id)
         assert refreshed.data.count("Justin Bieber is a Canadian singer.") == 1
 

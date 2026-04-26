@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from ..debug import debug_log
 from ..llm import call_llm_direct
@@ -517,6 +517,21 @@ def auto_split_node(
 # ── Orchestrator ───────────────────────────────────────────────────────
 
 
+class GraphUpdateResult(NamedTuple):
+    """Result of a graph update pass.
+
+    ``stored`` lists newly-appended facts so the CLI can show *what* was
+    learned. ``skipped`` counts facts the picker routed to a node that
+    already contained them — surfacing this lets callers print a status
+    line on every flush, even when the cumulative diary re-extraction
+    produces only duplicates (#282 dedupe would otherwise silence the
+    "knowledge graph: learned N facts" log).
+    """
+
+    stored: "list[tuple[str, str]]"
+    skipped: int
+
+
 def update_graph_from_dialogue(
     store: GraphMemoryStore,
     summary: str,
@@ -526,7 +541,7 @@ def update_graph_from_dialogue(
     thinking: bool = False,
     date_utc: Optional[str] = None,
     picker_model: Optional[str] = None,
-) -> "list[tuple[str, str]]":
+) -> GraphUpdateResult:
     """End-to-end: extract memories from a summary, place each in the best
     node, and trigger auto-split if needed.
 
@@ -534,10 +549,11 @@ def update_graph_from_dialogue(
         date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
             Passed to extraction to help distinguish daily events from enduring facts.
 
-    Returns a list of ``(fact, node_name)`` tuples for each fact successfully
-    stored. Callers that only want the count can use ``len(result)``.
-    The return shape is a list rather than a bare int so the CLI can show
-    *what* was learned, not just how many.
+    Returns a ``GraphUpdateResult`` with a ``stored`` list of
+    ``(fact, node_name)`` tuples for each newly-appended fact and a
+    ``skipped`` count of duplicates the picker landed on. The result
+    behaves like its ``stored`` list under ``len()``, iteration, and
+    equality with a list, so existing callers keep working.
     """
     # Step 1: Extract discrete branch-tagged facts from the summary
     facts = extract_graph_memories(
@@ -551,11 +567,12 @@ def update_graph_from_dialogue(
 
     if not facts:
         debug_log("graph update: no facts extracted from summary", "memory")
-        return []
+        return GraphUpdateResult(stored=[], skipped=0)
 
     debug_log(f"graph update: placing {len(facts)} facts into knowledge graph", "memory")
 
     stored: "list[tuple[str, str]]" = []
+    skipped = 0
     for branch_id, fact in facts:
         try:
             # Step 2: Place — find the best node for this fact within its branch.
@@ -586,6 +603,7 @@ def update_graph_from_dialogue(
             if store.node_contains_fact(node_id, fact):
                 target = store.get_node(node_id)
                 target_name = target.name if target else node_id[:8]
+                skipped += 1
                 debug_log(
                     f"graph update: skipped duplicate '{fact[:50]}...' → "
                     f"'{target_name}' [{branch_id}]",
@@ -618,8 +636,12 @@ def update_graph_from_dialogue(
             debug_log(f"graph update: failed to store fact — {e}", "memory")
             continue
 
-    debug_log(f"graph update: stored {len(stored)}/{len(facts)} facts", "memory")
-    return stored
+    debug_log(
+        f"graph update: stored {len(stored)}/{len(facts)} facts "
+        f"({skipped} duplicate{'s' if skipped != 1 else ''} skipped)",
+        "memory",
+    )
+    return GraphUpdateResult(stored=stored, skipped=skipped)
 
 
 # ── Warm profile (User + Directives) ─────────────────────────────────
