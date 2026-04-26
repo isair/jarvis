@@ -4,6 +4,7 @@ All LLM calls are mocked to test the logic independently.
 """
 
 import json
+import re
 import sys
 import types
 from unittest.mock import patch, MagicMock
@@ -1060,6 +1061,71 @@ class TestMergeNodeData:
 
         assert result.success is True
         assert "{placeholder}" in store.get_node(node.id).data
+
+
+@pytest.mark.unit
+class TestMergeSystemPromptInvariants:
+    """Pin the rule set the merge prompt must teach. Behaviour against a
+    real picker model is covered by the merge_consolidation evals; this
+    catches a future edit that silently drops a rule from the system
+    prompt's text. Each rule is referenced at least once below."""
+
+    def test_prompt_lists_supersession_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "CONTRADICTION" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_dedupe_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "DUPLICATION" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_consolidation_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "CONSOLIDATION" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_independence_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "INDEPENDENCE" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_pruning_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "PRUNING" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_meta_narrative_rule_with_assistant_examples(self):
+        """The META-NARRATIVE rule must be present and must give the
+        picker model concrete examples of the verb forms to drop. The
+        bug it exists to fix was a 'The assistant is unable to ...'
+        line surviving consolidate-all sweeps because no rule covered
+        capability denials. If the rule label or its trigger phrasings
+        get edited away, this test fails. Scoped to the rule's own
+        section (META-NARRATIVE up to the next numbered rule) so the
+        assertions can't be satisfied by unrelated text elsewhere in
+        the prompt."""
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "META-NARRATIVE" in _MERGE_SYSTEM_PROMPT
+        rule_start = _MERGE_SYSTEM_PROMPT.index("META-NARRATIVE")
+        # Bound the section by the next numbered rule (e.g. '\n7. ')
+        # OR the response-format trailer ('\nRespond with ...') that
+        # follows the rule list. The trailer fallback matters when
+        # META-NARRATIVE is the LAST numbered rule — without it the
+        # section would balloon to include the JSON schema text and
+        # the in-section keyword checks could pass on a future prompt
+        # that no longer mentions those keywords inside the rule
+        # itself.
+        end_pattern = re.search(
+            r"\n\d+\. |\nRespond with\b",
+            _MERGE_SYSTEM_PROMPT[rule_start:],
+        )
+        rule_end = rule_start + (
+            end_pattern.start() if end_pattern else len(_MERGE_SYSTEM_PROMPT) - rule_start
+        )
+        section = _MERGE_SYSTEM_PROMPT[rule_start:rule_end]
+        # The two shapes the bug report surfaced explicitly must be
+        # named in this rule's section, not just somewhere else.
+        assert "The assistant" in section
+        assert "unable to" in section
+        # Counter-protection: the rule must not over-prune real
+        # directives, so an exception clause is required in-section.
+        assert "directive" in section.lower()
 
 
 @pytest.mark.unit

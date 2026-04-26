@@ -1,17 +1,17 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-04-26 00:48:32 (ad-hoc update on this branch only — see "Memory merge consolidation" below; rest of report inherited from develop's last full regen)
+**Generated:** 2026-04-27 (ad-hoc update on this branch only — see "Memory merge consolidation" below; rest of report inherited from develop's last full regen)
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **327/345 passed (94.8%)** across all categories *(plus 1 xfail known limitation in merge consolidation)*
+**Overall:** 🟢 **331/349 passed (94.8%)** across all categories *(merge consolidation now also covers meta-narrative pruning; the previously xfail'd pattern-boundary case is a regular PASS)*
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
 | 🤖 Agent behaviour | `gemma4:e2b` | 129 | 11 | 2 | 🟢 92.1% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 7 | 0 | 🟢 95.4% |
 | 🎤 Intent judge | `gemma4:e2b` (fixed) | 47 | 0 | 0 | 🟢 100.0% |
-| 🧠 Memory merge consolidation | `gemma4:e2b` | 6 | 0 | 0 | 🟢 100.0% (1 xfail) |
+| 🧠 Memory merge consolidation | `gemma4:e2b` | 11 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
 
@@ -246,19 +246,23 @@
 
 ## 🧠 Memory merge consolidation
 
-> Exercises `merge_node_data` against a real picker model. Pins the rewrite-on-write merge against its four advertised behaviours: dedupe of near-duplicates, pattern consolidation of repeated activities, independence (unrelated facts coexist, no silent erasure), and end-to-end correctness of the batched signature. Run via `pytest evals/test_merge_consolidation.py`.
+> Exercises `merge_node_data` against a real picker model. Pins the rewrite-on-write merge against its five advertised behaviours: dedupe of near-duplicates, pattern consolidation of repeated activities, independence (unrelated facts coexist, no silent erasure), meta-narrative pruning (assistant-narrating extractor leftovers get scrubbed), and end-to-end correctness of the batched signature. Run via `pytest evals/test_merge_consolidation.py`.
 
 | Test Case | Pass Rate | Status |
 |-----------|-----------|:------:|
 | Dedupe — same fact, different wording (lives-in vs based-in London) | 1/1 (100%) | ✅ |
 | Dedupe — job title rephrased | 1/1 (100%) | ✅ |
 | Pattern — repeated sushi meals fold into "regularly eats sushi" | 1/1 (100%) | ✅ |
-| Pattern boundary — distinct one-off dated events stay distinct | 0/1 (0%) | 🔸 |
+| Pattern boundary — distinct one-off dated events stay distinct | 1/1 (100%) | ✅ |
 | Independence — peanut allergy + tea preference survive unrelated hiking fact | 1/1 (100%) | ✅ |
 | Independence — software-engineer job survives unrelated guitar fact | 1/1 (100%) | ✅ |
+| Meta-narrative — capability-denial line dropped, real directive kept | 1/1 (100%) | ✅ |
+| Meta-narrative — assistant-suggested line dropped, factual lookup survives | 1/1 (100%) | ✅ |
+| Meta-narrative — polluted node receiving new fact: drop + incorporate | 1/1 (100%) | ✅ |
+| Meta-narrative — clean directives node not over-pruned | 1/1 (100%) | ✅ |
 | Batched merge — three independent new facts in one call all land | 1/1 (100%) | ✅ |
 
-**Notes on the xfail:** the pattern-boundary case (distinct dated events about Edinburgh, Berlin, Manchester) currently fails on `gemma4:e2b` — the small picker silently drops the older two when given a new dated entry, even though the same model preserves independence on undated equivalents. Captured as `xfail(strict=False)` so it surfaces if a stronger picker or a tightened merge prompt fixes it (would flip to 🎉 XPASS).
+**Notes:** the pattern-boundary case was previously `xfail(strict=False)` because `gemma4:e2b` clustered dated entries and silently dropped older ones. After the META-NARRATIVE rule landed it now passes 3/3 reps; the causal link is unconfirmed but the eval is the right place to catch a regression, so the marker is dropped and the case stands as a regular PASS.
 
 ---
 
