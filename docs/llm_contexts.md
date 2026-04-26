@@ -13,7 +13,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Redacted user query
   - Recent dialogue (last 5 minutes), including in-loop tool-call + tool-role messages from prior replies within the hot window (tool carryover — `DialogueMemory.record_tool_turn` / `get_recent_turns_with_tools` in [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py); capped by `cfg.tool_carryover_max_turns` / `tool_carryover_per_entry_chars`; cleared on `stop` signal; UNTRUSTED WEB EXTRACT fence markers preserved on truncation)
   - Unified system prompt from [src/jarvis/system_prompt.py](src/jarvis/system_prompt.py) + ASR note + tool-protocol guidance
-  - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default)
+  - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default; result cached in `DialogueMemory._hot_cache` under key `warm_profile_block` so follow-up turns within one hot window skip the BFS — cleared on `stop` and hot-window expiry)
   - Digested memory enrichment (optional, see #4)
   - Time + location context (re-injected each turn)
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
@@ -44,6 +44,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: inline at [enrichment.py:35-63](src/jarvis/reply/enrichment.py:35).
 - **Output**: `{keywords, from?, to?, questions?}`. Consumed by memory search in the reply engine.
 - **Limits**: up to 2 retries; timeout from `llm_tools_timeout_sec`.
+- **Caching**: result cached in `DialogueMemory._hot_cache` under key `enrichment:{redacted_query[+topic_hint]}`. Identical follow-ups within one hot window reuse the dict and skip the LLM hop. Cleared on `clear_hot_cache()` (e.g. `stop` signal) and on hot-window expiry.
 
 ## 3b. Recall Gate (pre-enrichment short-circuit)
 
@@ -52,6 +53,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Model / gating**: NO LLM — deterministic keyword-coverage heuristic. Cheap.
 - **Inputs**: query, recent dialogue (incl. tool carryover rows).
 - **Output**: `False` only if hot-window contains a fresh tool result AND ≥50% of the query's content words appear in the hot-window transcript → skips diary, graph, and memory digest for this reply. Else `True`. Fail-open on any exception. Content-word extraction uses `\w{3,}` with `re.UNICODE`, so the gate works for Latin, Cyrillic, CJK, Arabic, Hebrew, etc. (per CLAUDE.md "no hardcoded language patterns"). Overlap words are run through `redact()` before being written to debug logs.
+- **Planner precedence**: when the planner explicitly emitted a `searchMemory` step, the gate is bypassed — the planner has more signal than coverage and overriding it would silently drop intent. The gate only short-circuits the fail-open empty-plan path.
 - **Rationale**: prevents re-running diary/graph lookups when the hot window already grounds the follow-up (e.g. "his most famous song" after a Bieber webSearch).
 
 ## 4. Memory Digest (optional, SMALL models)
@@ -93,6 +95,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: inline (~lines 260-315). Teaches pick up-to-5 tools or `none`.
 - **Output**: comma-separated tool names or `none`. Capped at `_LLM_MAX_SELECTED` (5). Always-included tools (`stop`, `toolSearchTool`) are unioned in regardless.
 - **Limits**: `llm_timeout_sec`. On failure → all tools.
+- **Caching**: `routed_tools` cached in `DialogueMemory._hot_cache` under key `router:{redacted_query}|{strategy}|{builtin-names}|{mcp-names}`. The catalogue signature lets a mid-window MCP refresh invalidate the cache; `context_hint` is intentionally excluded so time/location drift inside one hot window doesn't bust it. Cleared on `stop` signal and hot-window expiry.
 
 ## 8. Tool Searcher (mid-loop escape hatch)
 

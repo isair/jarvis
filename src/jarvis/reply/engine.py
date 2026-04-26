@@ -776,18 +776,40 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
-    routed_tools = select_tools(
-        query=redacted,
-        builtin_tools=BUILTIN_TOOLS,
-        mcp_tools=mcp_tools,
-        strategy=strategy,
-        llm_base_url=cfg.ollama_base_url,
-        llm_model=resolve_tool_router_model(cfg),
-        llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-        embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-        embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
-        context_hint=context_hint,
+    # Hot-window cache: router output for the same redacted query and
+    # tool catalogue is reused within one conversation. Catalogue
+    # signature includes builtin + MCP tool names so a mid-window MCP
+    # refresh invalidates the cache. context_hint is intentionally not
+    # part of the key — time/location drift inside one hot window
+    # rarely changes the tool pick.
+    _router_cache_key = (
+        f"router:{redacted}|"
+        f"{strategy.value}|"
+        f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
+        f"{','.join(sorted((mcp_tools or {}).keys()))}"
     )
+    _cached_routed = (
+        dialogue_memory.hot_cache_get(_router_cache_key)
+        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
+    )
+    if isinstance(_cached_routed, list):
+        routed_tools = list(_cached_routed)
+        debug_log("tool router served from hot-window cache", "planning")
+    else:
+        routed_tools = select_tools(
+            query=redacted,
+            builtin_tools=BUILTIN_TOOLS,
+            mcp_tools=mcp_tools,
+            strategy=strategy,
+            llm_base_url=cfg.ollama_base_url,
+            llm_model=resolve_tool_router_model(cfg),
+            llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+            embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+            embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+            context_hint=context_hint,
+        )
+        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+            dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
     _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
     _planner_tool_catalog: list[tuple[str, str]] = []
     for _schema in (_planner_schema or []):
@@ -825,12 +847,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # - Plan with `searchMemory` directive → run memory enrichment.
     # - Plan without it → skip memory work entirely (no keyword LLM,
     #   no diary search, no graph search, no digest LLM).
-    needs_memory = (not action_plan) or plan_requires_memory(action_plan)
+    plan_demands_memory = bool(action_plan) and plan_requires_memory(action_plan)
+    needs_memory = (not action_plan) or plan_demands_memory
 
     # Recall gate: if the hot-window already carries a fresh tool result
     # covering the query topic, skip diary/graph enrichment for this turn.
     # Cheap deterministic heuristic, no LLM. Fail-open on any error.
-    if needs_memory and recent_messages:
+    #
+    # Skip the gate when the planner explicitly emitted `searchMemory` —
+    # the planner has more signal than coverage heuristics, and overriding
+    # it would silently drop intent. The gate only short-circuits the
+    # fail-open empty-plan path.
+    if needs_memory and not plan_demands_memory and recent_messages:
         try:
             from ..memory.recall_gate import should_recall
             if not should_recall(redacted, recent_messages):
@@ -864,26 +892,40 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # interest me" can be answered directly when the model already sees
     # the user's interests in its system prompt.
     warm_profile_block = ""
-    try:
-        from ..memory.graph import GraphMemoryStore
-        from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
-        _graph_store_warm = GraphMemoryStore(cfg.db_path)
-        _warm_profile = build_warm_profile(_graph_store_warm)
-        warm_profile_block = format_warm_profile_block(_warm_profile)
-        if warm_profile_block:
-            _user_len = len(_warm_profile.get("user", ""))
-            _dir_len = len(_warm_profile.get("directives", ""))
-            print(
-                f"  🪴 Warm profile: {_user_len} user chars, "
-                f"{_dir_len} directive chars",
-                flush=True,
-            )
-            debug_log(
-                f"warm profile loaded: user={_user_len} directives={_dir_len}",
-                "memory",
-            )
-    except Exception as e:
-        debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+    # Hot-window cache: warm profile is query-agnostic and the User /
+    # Directives branches change rarely, so reusing the block within a
+    # single conversation saves the SQLite BFS on every follow-up turn.
+    # Cache is wiped on stop signal and on hot-window expiry.
+    _wp_cached = (
+        dialogue_memory.hot_cache_get("warm_profile_block")
+        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
+    )
+    if isinstance(_wp_cached, str):
+        warm_profile_block = _wp_cached
+        debug_log("warm profile served from hot-window cache", "memory")
+    else:
+        try:
+            from ..memory.graph import GraphMemoryStore
+            from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
+            _graph_store_warm = GraphMemoryStore(cfg.db_path)
+            _warm_profile = build_warm_profile(_graph_store_warm)
+            warm_profile_block = format_warm_profile_block(_warm_profile)
+            if warm_profile_block:
+                _user_len = len(_warm_profile.get("user", ""))
+                _dir_len = len(_warm_profile.get("directives", ""))
+                print(
+                    f"  🪴 Warm profile: {_user_len} user chars, "
+                    f"{_dir_len} directive chars",
+                    flush=True,
+                )
+                debug_log(
+                    f"warm profile loaded: user={_user_len} directives={_dir_len}",
+                    "memory",
+                )
+            if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+                dialogue_memory.hot_cache_put("warm_profile_block", warm_profile_block)
+        except Exception as e:
+            debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
@@ -916,12 +958,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # keyword selection tracks what the planner actually
                 # wanted to look up, not just the surface utterance.
                 _extractor_query = f"{redacted}\n[Memory topic: {_memory_topic_hint}]"
-            search_params = extract_search_params_for_memory(
-                _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
-                timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
-                thinking=getattr(cfg, 'llm_thinking_enabled', False),
-                context_hint=context_hint,
+            # Hot-window cache: extractor output is a pure function of
+            # the (query, topic-hint) pair, so identical follow-ups within
+            # one conversation reuse the keywords/questions/from/to dict
+            # and skip the LLM call entirely.
+            _extractor_cache_key = f"enrichment:{_extractor_query}"
+            _cached_params = (
+                dialogue_memory.hot_cache_get(_extractor_cache_key)
+                if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
             )
+            if isinstance(_cached_params, dict):
+                search_params = _cached_params
+                debug_log("memory extractor served from hot-window cache", "memory")
+            else:
+                search_params = extract_search_params_for_memory(
+                    _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
+                    timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+                    thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                    context_hint=context_hint,
+                )
+                if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+                    dialogue_memory.hot_cache_put(_extractor_cache_key, search_params)
             keywords = search_params.get('keywords', [])
             questions = search_params.get('questions', [])
             if keywords:
@@ -1304,13 +1361,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if not dialogue_memory or not hasattr(dialogue_memory, "record_tool_turn"):
             return
         try:
+            from ..memory.conversation import is_tool_message
             tool_msgs = [
-                m for m in messages[user_msg_index + 1:]
-                if (
-                    m.get("role") == "tool"
-                    or (m.get("role") == "assistant" and m.get("tool_calls"))
-                    or (m.get("role") == "user" and m.get("tool_name"))
-                )
+                m for m in messages[user_msg_index + 1:] if is_tool_message(m)
             ]
             if tool_msgs:
                 dialogue_memory.record_tool_turn(tool_msgs)
@@ -1885,6 +1938,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if dialogue_memory and hasattr(dialogue_memory, "clear_tool_carryover"):
                     try:
                         dialogue_memory.clear_tool_carryover()
+                    except Exception:
+                        pass
+                if dialogue_memory and hasattr(dialogue_memory, "clear_hot_cache"):
+                    try:
+                        dialogue_memory.clear_hot_cache()
                     except Exception:
                         pass
 

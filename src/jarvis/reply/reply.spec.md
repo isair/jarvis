@@ -31,7 +31,12 @@ Design principles enforced by the engine:
 2. Recent Dialogue Context
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
    - The fetch returns not only user/assistant prose but also **tool-call and tool-result messages** from in-loop work in prior replies within the hot window (capped by `cfg.tool_carryover_max_turns` and `cfg.tool_carryover_per_entry_chars`, fence markers of UNTRUSTED WEB EXTRACT blocks preserved on truncation, secrets scrubbed). This lets follow-up turns reuse a prior `webSearch` / MCP result instead of re-fetching it. The carryover is captured at the end of each reply (success or error), and is cleared when the user dismisses with the `stop` tool so the next wake-word turn starts clean.
-   - A **recall gate** (`src/jarvis/memory/recall_gate.py`, deterministic, no LLM) skips diary / graph / memory-digest enrichment when the hot window already covers the topic (≥50% content-word overlap with a fresh tool-result row). Language-agnostic via `\w{3,}` with `re.UNICODE`. Fail-open on any error.
+   - A **recall gate** (`src/jarvis/memory/recall_gate.py`, deterministic, no LLM) skips diary / graph / memory-digest enrichment when the hot window already covers the topic (≥50% content-word overlap with a fresh tool-result row). Language-agnostic via `\w{3,}` with `re.UNICODE`. Fail-open on any error. The gate is bypassed when the planner explicitly emitted a `searchMemory` step — planner intent always wins over coverage heuristics. See `src/jarvis/memory/recall_gate.spec.md`.
+   - **Hot-window scratch cache** (`DialogueMemory.hot_cache_get` / `hot_cache_put`): per-conversation, time-bounded (`RECENT_WINDOW_SEC`) cache used by the engine to memoise three idempotent per-turn computations within a single hot window:
+     - **Warm profile** (`warm_profile_block` key, query-agnostic): skips the SQLite traversal of the User + Directives branches on every follow-up turn.
+     - **Memory enrichment extractor** (`enrichment:{redacted_query[+topic_hint]}` key): skips the small-model LLM call that derives keywords / questions / time bounds when an identical query repeats.
+     - **Tool router** (`router:{redacted_query}|{strategy}|{builtin-names}|{mcp-names}` key): skips the router LLM call when the query and tool catalogue match. The catalogue signature lets a mid-window MCP refresh invalidate the cache.
+     - Cleared on the `stop` signal alongside tool carryover, and entries auto-expire with the hot window.
 
 3. Pre-flight Planner
    - The task-list planner (`plan_query` in `src/jarvis/reply/planner.py`) runs **first**, before any memory lookup or tool routing. It sees the query, a compact dialogue snippet, and the full builtin + MCP tool catalogue (names + one-line descriptions).

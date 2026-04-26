@@ -15,6 +15,27 @@ _UNTRUSTED_FENCE_BEGIN = "<<<BEGIN UNTRUSTED WEB EXTRACT>>>"
 _UNTRUSTED_FENCE_END = "<<<END UNTRUSTED WEB EXTRACT>>>"
 
 
+def is_tool_message(msg: dict) -> bool:
+    """True if a message is a tool-call request or a tool-result.
+
+    Covers both protocols Jarvis speaks:
+    - Native: ``role="tool"`` for results, or ``role="assistant"`` carrying
+      a non-empty ``tool_calls`` list for the outbound call.
+    - Text-tool fallback (small models): the tool result is appended as a
+      ``role="user"`` message tagged with ``tool_name``.
+    """
+    if not isinstance(msg, dict):
+        return False
+    role = msg.get("role")
+    if role == "tool":
+        return True
+    if role == "assistant" and msg.get("tool_calls"):
+        return True
+    if role == "user" and msg.get("tool_name"):
+        return True
+    return False
+
+
 def _filter_contexts_by_time(
     contexts: List[str],
     from_time: Optional[str],
@@ -96,6 +117,16 @@ class DialogueMemory:
         # tool-related messages. Excluded from `get_pending_chunks` so raw tool
         # payloads never reach the diary summariser.
         self._tool_turns: List[Tuple[float, List[dict]]] = []
+        # Hot-window scratch cache: per-key (timestamp, value) entries that
+        # auto-expire with the conversation. Lets the reply engine memoise
+        # idempotent per-turn work (warm profile, memory enrichment params,
+        # tool router output) within a single hot window without leaking
+        # state across conversations.
+        self._hot_cache: dict[str, Tuple[float, object]] = {}
+        # Hard ceiling on stored tool turns to bound memory in pathological
+        # sessions. The read path further filters by max_tool_turns and
+        # window expiry; this cap is a backstop against unbounded growth.
+        self._tool_turns_max_storage = 16
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
         # Unified window: context retention = forced diary update interval
@@ -147,24 +178,69 @@ class DialogueMemory:
         """
         if not tool_msgs:
             return
+        # Scrub outside the lock — pure function over message content.
+        scrubbed: List[dict] = []
+        for m in tool_msgs:
+            mm = dict(m)
+            c = mm.get("content")
+            if isinstance(c, str) and c:
+                # Tool outputs may contain PII or secrets (email bodies,
+                # API responses, scraped pages). Scrub before persisting
+                # so re-injection on the next turn can't leak them.
+                mm["content"] = scrub_secrets(c)
+            scrubbed.append(mm)
+        ts = time.time()
         with self._lock:
-            ts = time.time()
-            scrubbed: List[dict] = []
-            for m in tool_msgs:
-                mm = dict(m)
-                c = mm.get("content")
-                if isinstance(c, str) and c:
-                    # Tool outputs may contain PII or secrets (email bodies,
-                    # API responses, scraped pages). Scrub before persisting
-                    # so re-injection on the next turn can't leak them.
-                    mm["content"] = scrub_secrets(c)
-                scrubbed.append(mm)
             self._tool_turns.append((ts, scrubbed))
+            # Bound storage: drop entries older than the window, then cap
+            # to the most recent `_tool_turns_max_storage`. Backstop against
+            # unbounded growth in long sessions.
+            cutoff = ts - self.RECENT_WINDOW_SEC
+            self._tool_turns = [
+                (t, m) for t, m in self._tool_turns if t >= cutoff
+            ]
+            if len(self._tool_turns) > self._tool_turns_max_storage:
+                self._tool_turns = self._tool_turns[-self._tool_turns_max_storage:]
 
     def clear_tool_carryover(self) -> None:
         """Drop all stored tool-turn messages. Text messages are untouched."""
         with self._lock:
             self._tool_turns = []
+
+    # ------------------------------------------------------------------
+    # Hot-window cache
+    # ------------------------------------------------------------------
+    # Small primitive used by the reply engine to memoise expensive
+    # per-turn work that's idempotent within a single conversation: warm
+    # profile (SQLite reads), memory enrichment extractor (LLM call),
+    # tool router (LLM call). Entries auto-expire with RECENT_WINDOW_SEC
+    # and are wiped on `clear_hot_cache()` (e.g. on the stop signal).
+    #
+    # Callers pick a key that captures the invalidation contract —
+    # typically the redacted query for query-dependent values, or a
+    # constant for query-agnostic values.
+
+    def hot_cache_get(self, key: str) -> Optional[object]:
+        """Return cached value if present and within the hot window."""
+        with self._lock:
+            entry = self._hot_cache.get(key)
+            if not entry:
+                return None
+            ts, value = entry
+            if ts < time.time() - self.RECENT_WINDOW_SEC:
+                self._hot_cache.pop(key, None)
+                return None
+            return value
+
+    def hot_cache_put(self, key: str, value: object) -> None:
+        """Store value under key with current timestamp."""
+        with self._lock:
+            self._hot_cache[key] = (time.time(), value)
+
+    def clear_hot_cache(self) -> None:
+        """Drop all hot-window cache entries."""
+        with self._lock:
+            self._hot_cache = {}
 
     def get_recent_turns_with_tools(
         self,

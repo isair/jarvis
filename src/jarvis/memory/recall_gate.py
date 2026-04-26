@@ -41,16 +41,8 @@ def _content_words(text: str) -> set[str]:
 
 
 def _has_fresh_tool_result(recent_messages: List[dict]) -> bool:
-    for m in recent_messages:
-        role = m.get("role")
-        if role == "tool":
-            return True
-        if role == "assistant" and m.get("tool_calls"):
-            return True
-        # Text-tool fallback format: role=user carrying a tool_name tag.
-        if role == "user" and m.get("tool_name"):
-            return True
-    return False
+    from .conversation import is_tool_message
+    return any(is_tool_message(m) for m in recent_messages)
 
 
 def should_recall(
