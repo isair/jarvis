@@ -937,6 +937,29 @@ class TestMergeNodeData:
         assert result.success is True
         assert "New." in store.get_node(node.id).data
 
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_extracts_object_with_braces_inside_fact_strings(self, mock_llm, store):
+        """A fact whose text contains literal `{` or `}` must still
+        parse — `raw_decode` handles balanced nesting that a
+        `[^{}]`-scoped regex would have refused to match."""
+        node = store.create_node(
+            name="T", description="d", data="Old.", parent_id="user",
+        )
+        mock_llm.return_value = (
+            'preamble {"facts": ["User uses {placeholder} syntax in templates."]} trailing'
+        )
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["User uses {placeholder} syntax in templates."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert "{placeholder}" in store.get_node(node.id).data
+
 
 @pytest.mark.unit
 class TestConsolidateAllPopulatedNodes:
@@ -962,11 +985,11 @@ class TestConsolidateAllPopulatedNodes:
             '{"facts": ["Line X."]}',
         ]
 
-        results = consolidate_all_populated_nodes(
+        results = list(consolidate_all_populated_nodes(
             store=store,
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
-        )
+        ))
 
         names = {n for n, _, _ in results}
         assert "A" in names and "B" in names
@@ -985,16 +1008,42 @@ class TestConsolidateAllPopulatedNodes:
         # First node's LLM returns junk → fail-open. Second succeeds.
         mock_llm.side_effect = ["garbage", '{"facts": ["Y."]}']
 
-        results = consolidate_all_populated_nodes(
+        results = list(consolidate_all_populated_nodes(
             store=store,
             ollama_base_url="http://localhost",
             ollama_chat_model="model",
-        )
+        ))
 
         assert len(results) == 2
         # Both nodes still have their data — fail-open leaves untouched.
         names = {n for n, _, _ in results}
         assert names == {"A", "B"}
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_yields_per_node_for_streaming(self, mock_llm, store):
+        """The op must be a generator that yields each result as the
+        walk progresses — buffering the whole sweep before yielding
+        defeats the streaming NDJSON endpoint that wraps it."""
+        store.create_node(name="A", description="d", data="A.", parent_id="user")
+        store.create_node(name="B", description="d", data="B.", parent_id="world")
+        mock_llm.side_effect = ['{"facts": ["A."]}', '{"facts": ["B."]}']
+
+        gen = consolidate_all_populated_nodes(
+            store=store,
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        # First call only triggers one LLM hit (the first node), which
+        # proves the second node hasn't been processed yet.
+        first = next(gen)
+        assert mock_llm.call_count == 1
+        assert first[0] in {"A", "B"}
+
+        # Draining the generator runs the rest.
+        rest = list(gen)
+        assert len(rest) == 1
+        assert mock_llm.call_count == 2
 
 
 @pytest.mark.unit

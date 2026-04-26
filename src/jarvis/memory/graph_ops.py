@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import NamedTuple, Optional
+from typing import Iterator, NamedTuple, Optional
 
 from ..debug import debug_log
 from ..llm import call_llm_direct
@@ -443,6 +443,13 @@ _MERGE_SYSTEM_PROMPT = (
 )
 
 
+# Slack added to the hallucination-guard cap. Consolidation should
+# only ever shrink or hold, but we allow a small overrun (e.g. the
+# model splitting a clumsy two-clause fact into two cleaner lines)
+# before treating the rewrite as runaway invention.
+_MERGE_GROWTH_SLACK = 2
+
+
 @dataclass
 class MergeResult:
     """Outcome of a `merge_node_data` call.
@@ -463,27 +470,32 @@ class MergeResult:
     incorporated_indices: list[int] = field(default_factory=list)
 
 
+_JSON_DECODER = json.JSONDecoder()
+
+
 def _extract_facts_object(response: str) -> Optional[dict]:
     """Pull a `{"facts": [...]}` object out of an LLM response.
 
     Tries direct `json.loads` first (the strict prompt + T=0 should
-    produce clean JSON in the common case), then falls back to a
-    regex scoped to objects that mention the `"facts"` key. Tighter
-    than a greedy `\\{.*\\}` match, which would over-grab if the
-    model wraps the object in a markdown fence with another `{`
-    elsewhere in the response.
+    produce clean JSON in the common case). Otherwise scans every `{`
+    and uses ``json.JSONDecoder.raw_decode`` to consume a balanced
+    object starting there. ``raw_decode`` handles nested braces, so a
+    fact string containing ``{`` or ``}`` parses correctly — unlike a
+    `[^{}]`-scoped regex which would refuse to match the outer
+    object. Returns the first parsed object that has a list-valued
+    ``facts`` key.
     """
     stripped = response.strip()
-    candidates: list[str] = []
     if stripped.startswith("{"):
-        candidates.append(stripped)
-    # `[^{}]` keeps the match scoped to a single non-nested object —
-    # safe because the facts list uses `[...]`, not `{...}`.
-    for m in re.finditer(r'\{[^{}]*"facts"[^{}]*\}', response, re.DOTALL):
-        candidates.append(m.group())
-    for candidate in candidates:
         try:
-            parsed = json.loads(candidate)
+            parsed = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("facts"), list):
+            return parsed
+    for match in re.finditer(r"\{", response):
+        try:
+            parsed, _ = _JSON_DECODER.raw_decode(response, match.start())
         except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(parsed, dict) and isinstance(parsed.get("facts"), list):
@@ -500,6 +512,7 @@ def merge_node_data(
     timeout_sec: float = 20.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
+    node: Optional[MemoryNode] = None,
 ) -> MergeResult:
     """Merge ``new_facts`` into ``node_id``'s data via one LLM rewrite.
 
@@ -526,8 +539,12 @@ def merge_node_data(
     rewrite, oversized rewrite). Caller's append path then writes the
     fact directly. We never let a flaky LLM erase data — a
     contradiction is recoverable, a silent wipe is not.
+
+    Pass ``node`` if the caller has already fetched it; saves a
+    redundant SQLite read on the orchestrator's hot path.
     """
-    node = store.get_node(node_id)
+    if node is None:
+        node = store.get_node(node_id)
     if node is None:
         return MergeResult(success=False)
 
@@ -593,7 +610,7 @@ def merge_node_data(
     # Consolidation rules can shrink or hold but should never grow
     # beyond `existing + new + small slack` — anything larger means
     # the model invented content not present in either input.
-    max_kept = len(existing_lines) + len(sanitised_new) + 2
+    max_kept = len(existing_lines) + len(sanitised_new) + _MERGE_GROWTH_SLACK
     if len(cleaned) > max_kept:
         debug_log(
             f"merge: rejected rewrite — {len(cleaned)} lines exceeds "
@@ -893,6 +910,7 @@ def update_graph_from_dialogue(
                 timeout_sec=20.0,
                 thinking=thinking,
                 picker_model=picker_model,
+                node=node,
             )
         except Exception as e:
             debug_log(f"graph update: merge failed for node '{node_name}' — {e}", "memory")
@@ -967,7 +985,7 @@ def consolidate_all_populated_nodes(
     timeout_sec: float = 20.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
-) -> "list[tuple[str, int, int]]":
+) -> "Iterator[tuple[str, int, int]]":
     """One-shot self-consolidation across every populated node.
 
     Walks every node with non-empty `data` and runs `merge_node_data`
@@ -980,13 +998,13 @@ def consolidate_all_populated_nodes(
     dirty until something nudges it. Calling this op nudges
     everything at once.
 
-    Yields ``(node_name, lines_before, lines_after)`` tuples — useful
-    for streaming progress to a UI. Fail-open: a node that fails to
-    merge is left untouched and reported with ``lines_after ==
-    lines_before`` so the caller can surface zero-change rows.
+    Yields ``(node_name, lines_before, lines_after)`` per node as the
+    walk progresses, so a streaming caller (e.g. an NDJSON endpoint)
+    can surface per-node feedback in real time on graphs with many
+    nodes. Fail-open: a node that fails to merge is left untouched
+    and reported with ``lines_after == lines_before``.
     """
-    summaries: "list[tuple[str, int, int]]" = []
-    # Snapshot all node ids up front so a rewrite mid-walk doesn't
+    # Snapshot all nodes up front so a rewrite mid-walk doesn't
     # cause us to revisit or skip nodes.
     all_nodes = store.get_all_nodes()
     for node in all_nodes:
@@ -1003,6 +1021,7 @@ def consolidate_all_populated_nodes(
                 timeout_sec=timeout_sec,
                 thinking=thinking,
                 picker_model=picker_model,
+                node=node,
             )
         except Exception as e:
             debug_log(f"consolidate-all: failed for '{node.name}' — {e}", "memory")
@@ -1014,13 +1033,12 @@ def consolidate_all_populated_nodes(
             if refreshed
             else before
         )
-        summaries.append((node.name, before, after))
         debug_log(
             f"consolidate-all: '{node.name}' {before} → {after} lines "
             f"(success={result.success})",
             "memory",
         )
-    return summaries
+        yield (node.name, before, after)
 
 
 # ── Warm profile (User + Directives) ─────────────────────────────────

@@ -600,18 +600,21 @@ def graph_consolidate_all() -> Response:
 
             yield json.dumps({"type": "start"}) + "\n"
 
-            results = consolidate_all_populated_nodes(
+            total_before = 0
+            total_after = 0
+            node_count = 0
+            # Stream per-node deltas as the generator yields them so
+            # the UI gets real-time feedback on graphs with many
+            # nodes — buffering the full sweep would defeat NDJSON.
+            for name, before, after in consolidate_all_populated_nodes(
                 store=store,
                 ollama_base_url=settings.ollama_base_url,
                 ollama_chat_model=settings.ollama_chat_model,
                 timeout_sec=20.0,
                 thinking=getattr(settings, 'llm_thinking_enabled', False),
                 picker_model=picker_model,
-            )
-
-            total_before = 0
-            total_after = 0
-            for name, before, after in results:
+            ):
+                node_count += 1
                 total_before += before
                 total_after += after
                 yield json.dumps({
@@ -624,7 +627,7 @@ def graph_consolidate_all() -> Response:
 
             yield json.dumps({
                 "type": "complete",
-                "nodes": len(results),
+                "nodes": node_count,
                 "total_before": total_before,
                 "total_after": total_after,
                 "total_delta": total_after - total_before,
@@ -2717,48 +2720,8 @@ def index() -> str:
                 showImportDiaryModal();
             });
 
-            document.getElementById('btn-consolidate-all').addEventListener('click', async () => {
-                if (!confirm('Re-run the merge prompt over every populated node? This dedupes, merges contradictions, and prunes common knowledge across the whole graph. Cannot be undone.')) {
-                    return;
-                }
-                const btn = document.getElementById('btn-consolidate-all');
-                const originalText = btn.textContent;
-                btn.disabled = true;
-                btn.textContent = '⏳';
-                try {
-                    const resp = await fetch('/api/graph/consolidate-all', { method: 'POST' });
-                    const reader = resp.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
-                    let nodes = 0;
-                    let totalDelta = 0;
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\\n');
-                        buffer = lines.pop();
-                        for (const line of lines) {
-                            if (!line.trim()) continue;
-                            const evt = JSON.parse(line);
-                            if (evt.type === 'progress') {
-                                nodes++;
-                                totalDelta += evt.delta;
-                            } else if (evt.type === 'complete') {
-                                alert('🧹 Consolidated ' + evt.nodes + ' nodes (' + evt.total_before + ' → ' + evt.total_after + ' lines, delta ' + evt.total_delta + ').');
-                            } else if (evt.type === 'error') {
-                                alert('Consolidation failed: ' + evt.message);
-                            }
-                        }
-                    }
-                    // Refresh the graph view so consolidated data is visible.
-                    if (typeof loadGraph === 'function') loadGraph();
-                } catch (e) {
-                    alert('Consolidation failed: ' + e.message);
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = originalText;
-                }
+            document.getElementById('btn-consolidate-all').addEventListener('click', () => {
+                showConsolidateAllModal();
             });
 
             // Resize observer
@@ -3103,6 +3066,110 @@ def index() -> str:
                     `;
                     delete overlay.dataset.importing;
                     showToast('Import failed', 'error');
+                }
+            });
+        }
+
+        function showConsolidateAllModal() {
+            const existing = document.querySelector('.modal-overlay');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.innerHTML = `
+                <div class="modal">
+                    <h3>🧹 Consolidate All Nodes</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+                        Re-run the merge prompt over every populated node. Dedupes near-duplicate lines, drops contradictions, folds repeated activities into patterns, and prunes common knowledge. Useful after a prompt change to back-fill the new rules across historical data. Cannot be undone.
+                    </p>
+                    <div id="consolidate-progress" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span id="consolidate-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
+                            <span id="consolidate-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0 nodes</span>
+                        </div>
+                        <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
+                            <div id="consolidate-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
+                        </div>
+                        <div id="consolidate-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                    </div>
+                    <div class="modal-actions" id="consolidate-actions">
+                        <button class="modal-btn secondary" id="btn-cancel-consolidate">Cancel</button>
+                        <button class="modal-btn primary" id="btn-start-consolidate">Start</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            const dismiss = () => overlay.remove();
+            document.getElementById('btn-cancel-consolidate').addEventListener('click', dismiss);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay && !overlay.dataset.consolidating) dismiss();
+            });
+
+            document.getElementById('btn-start-consolidate').addEventListener('click', async () => {
+                overlay.dataset.consolidating = 'true';
+                document.getElementById('consolidate-progress').style.display = 'block';
+                document.getElementById('btn-start-consolidate').disabled = true;
+                document.getElementById('btn-start-consolidate').textContent = 'Consolidating…';
+
+                try {
+                    const resp = await fetch('/api/graph/consolidate-all', { method: 'POST' });
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let nodeCount = 0;
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            try {
+                                const msg = JSON.parse(line);
+                                if (msg.type === 'progress') {
+                                    nodeCount++;
+                                    document.getElementById('consolidate-count').textContent = `${nodeCount} node${nodeCount !== 1 ? 's' : ''}`;
+                                    document.getElementById('consolidate-status').textContent = `Consolidating ${msg.node}…`;
+                                    const log = document.getElementById('consolidate-log');
+                                    const arrow = msg.delta < 0 ? '⬇️' : (msg.delta > 0 ? '⬆️' : '➖');
+                                    log.innerHTML += `<div>${arrow} ${msg.node} — ${msg.before} → ${msg.after} lines (Δ${msg.delta})</div>`;
+                                    log.scrollTop = log.scrollHeight;
+                                    // Pulse the progress bar so users see motion.
+                                    document.getElementById('consolidate-bar').style.width = (50 + (nodeCount % 2) * 50) + '%';
+                                } else if (msg.type === 'complete') {
+                                    document.getElementById('consolidate-bar').style.width = '100%';
+                                    document.getElementById('consolidate-status').textContent = `Done — ${msg.nodes} node${msg.nodes !== 1 ? 's' : ''}, ${msg.total_before} → ${msg.total_after} lines (Δ${msg.total_delta})`;
+                                    document.getElementById('consolidate-actions').innerHTML = `
+                                        <button class="modal-btn primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
+                                    `;
+                                    delete overlay.dataset.consolidating;
+                                    loadGraphData();
+                                    loadTreeData();
+                                    loadStats();
+                                    showToast('Graph consolidated', 'success');
+                                } else if (msg.type === 'error') {
+                                    document.getElementById('consolidate-status').textContent = 'Error: ' + msg.message;
+                                    document.getElementById('consolidate-actions').innerHTML = `
+                                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                                    `;
+                                    delete overlay.dataset.consolidating;
+                                    showToast('Consolidation failed', 'error');
+                                }
+                            } catch (e) { /* skip malformed lines */ }
+                        }
+                    }
+                } catch (e) {
+                    document.getElementById('consolidate-status').textContent = 'Connection error: ' + e.message;
+                    document.getElementById('consolidate-actions').innerHTML = `
+                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                    `;
+                    delete overlay.dataset.consolidating;
+                    showToast('Consolidation failed', 'error');
                 }
             });
         }
