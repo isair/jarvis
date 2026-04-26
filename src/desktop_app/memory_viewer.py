@@ -17,9 +17,7 @@ from flask import Flask, jsonify, request, Response
 
 from jarvis.config import load_settings
 from jarvis.debug import debug_log
-from jarvis.memory.graph import FIXED_BRANCHES, GraphMemoryStore
-
-_PRESET_BRANCH_IDS = frozenset(bid for bid, _, _ in FIXED_BRANCHES)
+from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
 
 
 app = Flask(__name__)
@@ -427,10 +425,8 @@ def graph_delete_node(node_id: str) -> Response:
     try:
         if node_id == "root":
             return jsonify({"error": "Cannot delete root node"}), 400
-        if node_id in _PRESET_BRANCH_IDS:
-            return jsonify(
-                {"error": "Cannot delete preset branch"}
-            ), 400
+        if node_id in FIXED_BRANCH_IDS:
+            return jsonify({"error": "Cannot delete preset branch"}), 400
 
         deleted = store.delete_node(node_id)
         if deleted:
@@ -438,6 +434,17 @@ def graph_delete_node(node_id: str) -> Response:
         return jsonify({"error": "Node not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/graph/presets")
+def graph_presets() -> Response:
+    """IDs of non-deletable preset nodes (root + FIXED_BRANCH_IDS).
+
+    Single source of truth for the UI: avoids duplicating the branch list
+    on the JS side, so adding a new fixed branch only requires editing
+    ``FIXED_BRANCHES`` in graph.py.
+    """
+    return jsonify({"ids": ["root", *sorted(FIXED_BRANCH_IDS)]})
 
 
 @app.route("/api/graph/recent")
@@ -1887,9 +1894,11 @@ def index() -> str:
         let toDate = '';
         let searchDebounce = null;
 
-        // Preset branches seeded under root — kept in sync with FIXED_BRANCHES
-        // in src/jarvis/memory/graph.py. Backend rejects deletion of these too.
-        const PRESET_NODE_IDS = new Set(['root', 'user', 'directives', 'world']);
+        // Non-deletable preset node IDs. Loaded from /api/graph/presets on
+        // boot so the JS side never drifts from FIXED_BRANCHES in graph.py.
+        // Seeded with 'root' so the delete button stays hidden if the fetch
+        // hasn't completed yet (fail-closed).
+        let PRESET_NODE_IDS = new Set(['root']);
 
         // DOM Elements
         const searchInput = document.getElementById('search-input');
@@ -2267,12 +2276,25 @@ def index() -> str:
         const canvas = document.getElementById('graph-canvas');
         const ctx = canvas.getContext('2d');
 
+        async function loadPresetNodeIds() {
+            try {
+                const resp = await fetch('/api/graph/presets');
+                const data = await resp.json();
+                if (Array.isArray(data.ids)) {
+                    PRESET_NODE_IDS = new Set(data.ids);
+                }
+            } catch (e) {
+                // Fail-closed: leave the seeded {'root'} set in place.
+            }
+        }
+
         function initGraph() {
             if (!graphInitialised) {
                 setupCanvasEvents();
                 graphInitialised = true;
             }
             resizeCanvas();
+            loadPresetNodeIds();
             loadGraphData();
             loadTreeData();
         }
