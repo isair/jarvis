@@ -41,10 +41,15 @@ def _sanitise_label(label: Optional[str]) -> Optional[str]:
     model (or a malformed call) break our line-based payload format and
     spoof fake fields. Collapse them at the entry point so every
     downstream consumer sees a single-line string.
+
+    Also strip ``,`` and ``=`` because the render payload uses those
+    characters as field delimiters (``id=…, label=…, duration=…``).
+    A label like ``foo, label=evil`` would otherwise smuggle in a
+    second ``label=`` token that the reply LLM might parse as real.
     """
     if not isinstance(label, str):
         return None
-    cleaned = " ".join(label.split())
+    cleaned = " ".join(label.replace(",", " ").replace("=", " ").split())
     return cleaned or None
 
 
@@ -129,16 +134,23 @@ class TimerManager:
 
     def start(
         self,
-        duration_sec: int,
+        duration_sec: float,
         label: Optional[str],
         announcement: Optional[str] = None,
     ) -> TimerEntry:
-        if duration_sec <= 0:
+        # Validate against the raw float so a sub-second duration (used
+        # by tests to keep wall-clock fast) survives, but expose a
+        # rounded whole-second value through the stored entry so
+        # downstream consumers (render payload, ETA) don't carry weird
+        # fractional state.
+        actual = float(duration_sec)
+        if actual <= 0:
             raise ValueError("duration must be positive")
-        if duration_sec > _MAX_DURATION_SEC:
+        if actual > _MAX_DURATION_SEC:
             raise ValueError(
                 f"duration too long (max {_MAX_DURATION_SEC // 3600} hours)"
             )
+        rounded = max(1, int(round(actual))) if actual >= 1 else 0
 
         with self._lock:
             if len(self._timers) >= _MAX_ACTIVE_TIMERS:
@@ -155,24 +167,29 @@ class TimerManager:
             entry = TimerEntry(
                 id=timer_id,
                 label=_sanitise_label(label),
-                duration_sec=int(duration_sec),
+                duration_sec=rounded,
                 started_at=now,
-                eta=now + timedelta(seconds=int(duration_sec)),
+                eta=now + timedelta(seconds=actual),
                 announcement=_sanitise_announcement(announcement),
             )
 
-            t = threading.Timer(float(duration_sec), self._on_elapsed, args=(timer_id,))
+            t = threading.Timer(actual, self._on_elapsed, args=(timer_id,))
             t.daemon = True
             entry.timer = t
             self._timers[timer_id] = entry
-            t.start()
 
-            debug_log(
-                f"⏲️ timer started id={timer_id} label={entry.label!r} "
-                f"duration={duration_sec}s eta={entry.eta.isoformat()}",
-                "tools",
-            )
-            return entry
+        # Spawn the OS thread for the countdown OUTSIDE the manager lock.
+        # threading.Timer.start() is fast in practice but it's still I/O
+        # we don't need to serialise — the spec promises expensive work
+        # runs unlocked, so honour that here too.
+        t.start()
+
+        debug_log(
+            f"⏲️ timer started id={timer_id} label={entry.label!r} "
+            f"duration={actual}s eta={entry.eta.isoformat()}",
+            "tools",
+        )
+        return entry
 
     def cancel(self, timer_id: str) -> Optional[TimerEntry]:
         with self._lock:

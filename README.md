@@ -113,6 +113,21 @@ Here's a quick snapshot of today's headlines...
 How about the Fermi Paradox? Given the vast number of stars...
 ```
 
+**Hands-free timers** (audibly + visibly announced when they elapse):
+```
+  📝 Heard: "Jarvis, set a 10-minute pasta timer."
+  🧠 Intent (wake word): directed → "set a 10-minute pasta timer"
+
+✨ Working on it: set a 10-minute pasta timer
+  🧰 Tool: timer…
+  💬 Generating response...
+
+🤖 Jarvis
+Done — your pasta timer's running for 10 minutes.
+
+⏰ Timer 'pasta' done (10 minutes elapsed)   ← spoken aloud when it fires
+```
+
 **Echo detection** (Jarvis ignores its own speech):
 ```
 🤖 Jarvis
