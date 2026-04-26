@@ -4,6 +4,7 @@ All LLM calls are mocked to test the logic independently.
 """
 
 import json
+import re
 import sys
 import types
 from unittest.mock import patch, MagicMock
@@ -1102,10 +1103,21 @@ class TestMergeSystemPromptInvariants:
         from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "META-NARRATIVE" in _MERGE_SYSTEM_PROMPT
         rule_start = _MERGE_SYSTEM_PROMPT.index("META-NARRATIVE")
-        # Find the next numbered rule (e.g. '7. ') to bound the section.
-        import re
-        next_rule = re.search(r"\n\d+\. ", _MERGE_SYSTEM_PROMPT[rule_start:])
-        rule_end = rule_start + (next_rule.start() if next_rule else len(_MERGE_SYSTEM_PROMPT) - rule_start)
+        # Bound the section by the next numbered rule (e.g. '\n7. ')
+        # OR the response-format trailer ('\nRespond with ...') that
+        # follows the rule list. The trailer fallback matters when
+        # META-NARRATIVE is the LAST numbered rule — without it the
+        # section would balloon to include the JSON schema text and
+        # the in-section keyword checks could pass on a future prompt
+        # that no longer mentions those keywords inside the rule
+        # itself.
+        end_pattern = re.search(
+            r"\n\d+\. |\nRespond with\b",
+            _MERGE_SYSTEM_PROMPT[rule_start:],
+        )
+        rule_end = rule_start + (
+            end_pattern.start() if end_pattern else len(_MERGE_SYSTEM_PROMPT) - rule_start
+        )
         section = _MERGE_SYSTEM_PROMPT[rule_start:rule_end]
         # The two shapes the bug report surfaced explicitly must be
         # named in this rule's section, not just somewhere else.

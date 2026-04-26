@@ -267,6 +267,7 @@ META_NARRATIVE_CASES = [
             new_facts=["Keep replies under three sentences."],
             must_drop_substrings=[
                 "unable to navigate",
+                "the assistant is unable",
             ],
             must_keep_substrings=[
                 "british english",
