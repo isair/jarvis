@@ -27,7 +27,6 @@ import pytest
 from conftest import requires_judge_llm
 from helpers import JUDGE_MODEL, JUDGE_BASE_URL
 
-from jarvis.memory.graph import GraphMemoryStore
 from jarvis.memory.graph_ops import merge_node_data
 
 
@@ -228,23 +227,6 @@ def _line_count(data: str) -> int:
     return len([l for l in data.split("\n") if l.strip()])
 
 
-@pytest.fixture
-def store(tmp_path):
-    """Graph store backed by a temp SQLite DB, closed on teardown.
-
-    Closing matters for `tmp_path` cleanup on Windows. POSIX would
-    tolerate a still-open SQLite handle when pytest unlinks the
-    file, Windows would not. The merge evals all touch the store
-    the same way, so a shared fixture keeps the teardown contract
-    uniform.
-    """
-    s = GraphMemoryStore(str(tmp_path / "test.db"))
-    try:
-        yield s
-    finally:
-        s.close()
-
-
 # =============================================================================
 # Tests
 # =============================================================================
@@ -255,10 +237,10 @@ class TestNearDuplicateDedupe:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", DEDUPE_CASES)
-    def test_near_duplicates_collapse(self, case, store):
+    def test_near_duplicates_collapse(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        node = store.create_node(
+        node = graph_store.create_node(
             name="T",
             description=case.description,
             data=case.existing_data,
@@ -266,7 +248,7 @@ class TestNearDuplicateDedupe:
         )
 
         result = merge_node_data(
-            store=store,
+            store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
             ollama_base_url=JUDGE_BASE_URL,
@@ -274,7 +256,7 @@ class TestNearDuplicateDedupe:
             timeout_sec=30.0,
         )
 
-        merged = store.get_node(node.id).data
+        merged = graph_store.get_node(node.id).data
         merged_lower = merged.lower()
         line_count = _line_count(merged)
 
@@ -302,10 +284,10 @@ class TestPatternConsolidation:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", PATTERN_CASES)
-    def test_repeated_activities_consolidate(self, case, store):
+    def test_repeated_activities_consolidate(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        node = store.create_node(
+        node = graph_store.create_node(
             name="T",
             description=case.description,
             data=case.existing_data,
@@ -313,7 +295,7 @@ class TestPatternConsolidation:
         )
 
         result = merge_node_data(
-            store=store,
+            store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
             ollama_base_url=JUDGE_BASE_URL,
@@ -321,7 +303,7 @@ class TestPatternConsolidation:
             timeout_sec=30.0,
         )
 
-        merged = store.get_node(node.id).data
+        merged = graph_store.get_node(node.id).data
         merged_lower = merged.lower()
         line_count = _line_count(merged)
 
@@ -350,10 +332,10 @@ class TestPatternBoundary:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", PATTERN_BOUNDARY_CASES)
-    def test_distinct_one_offs_stay_distinct(self, case, store):
+    def test_distinct_one_offs_stay_distinct(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        node = store.create_node(
+        node = graph_store.create_node(
             name="T",
             description=case.description,
             data=case.existing_data,
@@ -361,7 +343,7 @@ class TestPatternBoundary:
         )
 
         result = merge_node_data(
-            store=store,
+            store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
             ollama_base_url=JUDGE_BASE_URL,
@@ -369,7 +351,7 @@ class TestPatternBoundary:
             timeout_sec=30.0,
         )
 
-        merged = store.get_node(node.id).data
+        merged = graph_store.get_node(node.id).data
         merged_lower = merged.lower()
 
         print(f"\n  📝 pattern-boundary '{case.description}':\n     {merged[:300]}")
@@ -391,10 +373,10 @@ class TestIndependenceOfUnrelatedFacts:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", INDEPENDENCE_CASES)
-    def test_independent_facts_coexist(self, case, store):
+    def test_independent_facts_coexist(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        node = store.create_node(
+        node = graph_store.create_node(
             name="T",
             description=case.description,
             data=case.existing_data,
@@ -402,7 +384,7 @@ class TestIndependenceOfUnrelatedFacts:
         )
 
         result = merge_node_data(
-            store=store,
+            store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
             ollama_base_url=JUDGE_BASE_URL,
@@ -410,7 +392,7 @@ class TestIndependenceOfUnrelatedFacts:
             timeout_sec=30.0,
         )
 
-        merged = store.get_node(node.id).data
+        merged = graph_store.get_node(node.id).data
         merged_lower = merged.lower()
 
         print(f"\n  📝 independence '{case.description}':\n     {merged[:300]}")
@@ -434,10 +416,10 @@ class TestBatchedMerge:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", BATCHED_CASES)
-    def test_all_batched_facts_land(self, case, store):
+    def test_all_batched_facts_land(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        node = store.create_node(
+        node = graph_store.create_node(
             name="T",
             description=case.description,
             data=case.existing_data,
@@ -445,7 +427,7 @@ class TestBatchedMerge:
         )
 
         result = merge_node_data(
-            store=store,
+            store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
             ollama_base_url=JUDGE_BASE_URL,
@@ -453,7 +435,7 @@ class TestBatchedMerge:
             timeout_sec=30.0,
         )
 
-        merged = store.get_node(node.id).data
+        merged = graph_store.get_node(node.id).data
         merged_lower = merged.lower()
         line_count = _line_count(merged)
 

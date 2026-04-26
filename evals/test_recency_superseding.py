@@ -33,7 +33,6 @@ from helpers import (
 )
 
 from jarvis.memory.db import Database
-from jarvis.memory.graph import GraphMemoryStore
 from jarvis.memory.graph_ops import merge_node_data
 
 
@@ -169,21 +168,6 @@ class TestDiaryRecencyOrder:
 # Tests: Graph Superseding
 # =============================================================================
 
-@pytest.fixture
-def graph_store(tmp_path):
-    """Graph store backed by a temp SQLite DB, closed on teardown.
-
-    Closes the SQLite connection so `tmp_path`'s cleanup can unlink
-    the file on Windows. POSIX would tolerate a still-open handle,
-    Windows would not.
-    """
-    store = GraphMemoryStore(str(tmp_path / "test.db"))
-    try:
-        yield store
-    finally:
-        store.close()
-
-
 @pytest.mark.eval
 class TestGraphRecencySuperseding:
     """Tests that knowledge graph handles contradicting facts across dates
@@ -246,8 +230,6 @@ class TestMergeSupersession:
     def test_merge_drops_contradicting_old_line(self, case, graph_store):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        store = graph_store
-
         old_line = (
             f"[{case.old_date}] "
             + (case.old_entry.split("] ", 1)[-1] if "] " in case.old_entry else case.old_entry)
@@ -257,7 +239,7 @@ class TestMergeSupersession:
             + (case.new_entry.split("] ", 1)[-1] if "] " in case.new_entry else case.new_entry)
         )
 
-        node = store.create_node(
+        node = graph_store.create_node(
             name="Test Node",
             description=case.description,
             data=old_line,
@@ -265,7 +247,7 @@ class TestMergeSupersession:
         )
 
         result = merge_node_data(
-            store=store,
+            store=graph_store,
             node_id=node.id,
             new_facts=[new_line],
             ollama_base_url=JUDGE_BASE_URL,
@@ -273,7 +255,7 @@ class TestMergeSupersession:
             timeout_sec=30.0,
         )
 
-        updated = store.get_node(node.id)
+        updated = graph_store.get_node(node.id)
         assert updated is not None
         data_lower = updated.data.lower()
 
