@@ -829,7 +829,7 @@ def update_diary_from_dialogue_memory(
                     # placement (15s/fact), and split (45s) each have their own budgets
                     # inside update_graph_from_dialogue.
                     graph_timeout = min(timeout_sec, 30.0)
-                    stored = update_graph_from_dialogue(
+                    result = update_graph_from_dialogue(
                         store=graph_store,
                         summary=summary_text,
                         ollama_base_url=ollama_base_url,
@@ -839,20 +839,47 @@ def update_diary_from_dialogue_memory(
                         date_utc=today,
                         picker_model=graph_picker_model,
                     )
-                    if stored:
-                        print(f"  🧠 Knowledge graph: learned {len(stored)} new facts", flush=True)
-                        # Show each new fact with the node it landed in so the
-                        # user can eyeball whether the extraction and placement
-                        # are working. Cap preview length per fact so a long
-                        # extracted fact doesn't blow up the console line.
-                        for fact, node_name in stored[:6]:
-                            preview = fact.replace("\n", " ").strip()
-                            if len(preview) > 90:
-                                preview = preview[:90].rstrip() + "…"
-                            print(f"     · {preview} → {node_name}", flush=True)
-                        if len(stored) > 6:
-                            print(f"     · …and {len(stored) - 6} more", flush=True)
-                    debug_log(f"graph memory: stored {len(stored)} facts from dialogue", "memory")
+                    stored = result.stored
+                    skipped = result.skipped
+                    # Print whenever extraction produced anything — including
+                    # all-duplicate flushes. Without the skipped count this
+                    # line went silent after #282's dedupe (cumulative diary
+                    # re-extracts the same facts on every flush), making it
+                    # look like the memory pipeline had stopped working.
+                    if stored or skipped:
+                        dup_suffix = (
+                            f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
+                        )
+                        if stored:
+                            fact_count = (
+                                f"{len(stored)} new fact"
+                                f"{'' if len(stored) == 1 else 's'}"
+                            )
+                            tail = f" ({dup_suffix})" if skipped else ""
+                            print(
+                                f"  🧠 Knowledge graph: learned {fact_count}{tail}",
+                                flush=True,
+                            )
+                            # Show each new fact with the node it landed in so
+                            # the user can eyeball extraction/placement. Cap
+                            # preview length per fact.
+                            for fact, node_name in stored[:6]:
+                                preview = fact.replace("\n", " ").strip()
+                                if len(preview) > 90:
+                                    preview = preview[:90].rstrip() + "…"
+                                print(f"     · {preview} → {node_name}", flush=True)
+                            if len(stored) > 6:
+                                print(f"     · …and {len(stored) - 6} more", flush=True)
+                        else:
+                            print(
+                                f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
+                                flush=True,
+                            )
+                    debug_log(
+                        f"graph memory: stored {len(stored)} facts, "
+                        f"{skipped} duplicates skipped",
+                        "memory",
+                    )
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
 

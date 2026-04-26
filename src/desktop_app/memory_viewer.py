@@ -514,7 +514,7 @@ def graph_import_diary() -> Response:
 
                 try:
                     debug_log(f"graph import: processing {date_utc} ({len(summary_text)} chars)", "memory")
-                    stored_facts = update_graph_from_dialogue(
+                    result = update_graph_from_dialogue(
                         store=store,
                         summary=summary_text,
                         ollama_base_url=settings.ollama_base_url,
@@ -524,7 +524,7 @@ def graph_import_diary() -> Response:
                         date_utc=date_utc,
                         picker_model=picker_model,
                     )
-                    facts_stored = len(stored_facts)
+                    facts_stored = len(result.stored)
                     total_facts += facts_stored
                 except Exception as e:
                     debug_log(f"graph import: failed for {date_utc} — {e}", "memory")
