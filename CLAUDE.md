@@ -19,6 +19,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/reply/evaluator.spec.md` | **Deprecated** — evaluator no longer runs in the reply engine; preserved for reference | Replaced by the planner; see planner.spec.md |
 | `src/jarvis/reply/planner.spec.md` | Task-list planner: pre-loop query decomposition + direct-exec step resolver for small models | Fail-open; rides warm small model chain; advisory for large models, direct-exec for small |
 | `src/jarvis/tools/builtin/tool_search.spec.md` | toolSearchTool escape hatch for mid-loop tool routing | Re-runs the same router; never removes stop/self; capped per reply |
+| `src/jarvis/tools/builtin/timer.spec.md` | Countdown timer tool: set/list/cancel, concurrent timers, expiry announcement via TTS + face + stdout | Pre-localised announcement (LLM passes language); face restored via TTS completion callback; in-process state only |
 | `src/jarvis/reply/prompts/prompts.spec.md` | System/user prompt templates | — |
 | `src/jarvis/tools/builtin/web_search.spec.md` | webSearch tool: cascade fetch, SSRF guard, prompt-injection fence, links-only envelope | Untrusted web content is fenced as data, not instructions; rank preference over speed; honest failure over confabulation |
 | `src/jarvis/utils/location.spec.md` | GeoIP location detection | Privacy-first; local GeoLite2 DB only |

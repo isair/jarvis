@@ -2060,6 +2060,7 @@ class VoiceListener(threading.Thread):
             print(f"\n{'─' * 50}\n🎙️  Listening! Try:", flush=True)
             print(f"      \"How's the weather, {wake_title}?\"", flush=True)
             print(f"      \"I just ate a Big Mac, {wake_title}.\"", flush=True)
+            print(f"      \"Set a 10-minute pasta timer, {wake_title}.\"", flush=True)
             print(f"      \"What are you thinking, {wake_title}?\"", flush=True)
             print(f"      \"What do you know about me, {wake_title}?\"", flush=True)
 
