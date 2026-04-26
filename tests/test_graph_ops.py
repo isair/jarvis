@@ -674,6 +674,37 @@ class TestUpdateGraphFromDialogue:
         )
         assert stored == [], "German ß should casefold to ss for dedupe"
 
+    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_dedupe_on_child_after_split(self, mock_llm, mock_pick, store):
+        """Dedupe must trigger on whichever node traversal lands on, not
+        only on the branch root. Pre-populate a child of ``world`` with a
+        fact, force the picker to descend into it, then re-extract the
+        same fact and assert no duplicate append."""
+        child = store.create_node(
+            name="Music",
+            description="Musicians, bands, songs.",
+            data="Justin Bieber is a Canadian singer.",
+            parent_id="world",
+        )
+
+        # Force the picker to descend into the Music child on every call.
+        mock_pick.return_value = child.id
+
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "Justin Bieber is a Canadian singer."}]'
+        )
+        stored = update_graph_from_dialogue(
+            store=store,
+            summary="User asked about Justin Bieber.",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert stored == [], "duplicate on a child node should still dedupe"
+        refreshed = store.get_node(child.id)
+        assert refreshed.data.count("Justin Bieber is a Canadian singer.") == 1
+
 
 # ── Warm profile helpers ──────────────────────────────────────────────
 

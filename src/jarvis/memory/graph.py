@@ -35,7 +35,11 @@ _WS_RE = re.compile(r"\s+")
 
 
 def normalise_fact(text: str) -> str:
-    """Lowercase (Unicode-aware) + collapse whitespace for fuzzy equality."""
+    """Lowercase (Unicode-aware) + collapse all whitespace, including
+    newlines, into single spaces for fuzzy equality. ``_WS_RE`` matches
+    ``\\s+``, so any newline embedded in an extracted fact collapses to
+    a space on the candidate side, keeping the dedupe key well-formed
+    even if the extractor accidentally emits a multi-line statement."""
     folded = unicodedata.normalize("NFKC", text).casefold()
     return _WS_RE.sub(" ", folded.strip())
 
