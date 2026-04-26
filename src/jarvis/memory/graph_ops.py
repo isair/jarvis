@@ -572,8 +572,12 @@ def merge_node_data(
     if node is None:
         return MergeResult(success=False)
 
-    existing = (node.data or "").strip()
     existing_lines = _split_data_lines(node.data)
+    # Re-join from the parsed lines so the prompt body and the line
+    # count agree byte-for-byte — `existing` was previously a separate
+    # `.strip()` of the raw blob, which could disagree with the parsed
+    # list on edge whitespace.
+    existing = "\n".join(existing_lines)
     sanitised_new: list[str] = [f.strip() for f in new_facts if f and f.strip()]
 
     if not existing_lines and not sanitised_new:
