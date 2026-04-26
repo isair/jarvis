@@ -58,10 +58,11 @@ class TimerAlarmDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        # Preserve insertion order so the title reliably reports the
-        # most recently fired alarm; iterating gives a deterministic
-        # multi-alarm summary.
-        self._active: dict[str, str] = {}
+        # Per-alarm metadata keyed by timer id. dict insertion order is
+        # preserved so the most recently fired alarm shows up last in
+        # the summary, giving the user a deterministic read on which
+        # one just rang.
+        self._active: dict[str, dict[str, str]] = {}
         self._auto_stop = QTimer(self)
         self._auto_stop.setSingleShot(True)
         self._auto_stop.timeout.connect(self._dismiss)
@@ -119,26 +120,12 @@ class TimerAlarmDialog(QDialog):
         if timer_id:
             # Re-insert so this id is the most recent in iteration order.
             self._active.pop(timer_id, None)
-            self._active[timer_id] = label
+            self._active[timer_id] = {
+                "label": label,
+                "duration_human": duration_human,
+            }
 
-        if len(self._active) > 1:
-            self.title_label.setText("⏰ Multiple timers done")
-            named = [f"'{lbl}'" for lbl in self._active.values() if lbl]
-            if named:
-                summary = ", ".join(named)
-                self.body_label.setText(
-                    f"{len(self._active)} alarms ringing: {summary}."
-                )
-            else:
-                self.body_label.setText(
-                    f"{len(self._active)} alarms ringing."
-                )
-        else:
-            title = f"⏰ Timer '{label}' done" if label else "⏰ Timer done"
-            self.title_label.setText(title)
-            self.body_label.setText(
-                f"{duration_human} elapsed." if duration_human else "Timer elapsed."
-            )
+        self._render_labels()
 
         if self._sound is not None:
             try:
@@ -171,6 +158,43 @@ class TimerAlarmDialog(QDialog):
                 self._active.pop(timer_id, None)
         if not self._active:
             self._dismiss()
+        else:
+            # Some alarms still ringing; refresh the title/body so the
+            # user doesn't see stale "3 alarms ringing" text after one
+            # was dismissed.
+            self._render_labels()
+
+    def _render_labels(self) -> None:
+        """Repaint title + body from the current `_active` dict."""
+        if not self._active:
+            return
+        if len(self._active) > 1:
+            self.title_label.setText("⏰ Multiple timers done")
+            named = [
+                f"'{meta['label']}'"
+                for meta in self._active.values()
+                if meta.get("label")
+            ]
+            if named:
+                summary = ", ".join(named)
+                self.body_label.setText(
+                    f"{len(self._active)} alarms ringing: {summary}."
+                )
+            else:
+                self.body_label.setText(
+                    f"{len(self._active)} alarms ringing."
+                )
+            return
+
+        # Exactly one alarm: show its label and duration.
+        meta = next(iter(self._active.values()))
+        label = meta.get("label") or ""
+        duration_human = meta.get("duration_human") or ""
+        title = f"⏰ Timer '{label}' done" if label else "⏰ Timer done"
+        self.title_label.setText(title)
+        self.body_label.setText(
+            f"{duration_human} elapsed." if duration_human else "Timer elapsed."
+        )
 
     def _dismiss(self) -> None:
         self._active.clear()
