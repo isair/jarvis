@@ -471,6 +471,29 @@ class AlarmRegistry:
     def __init__(self) -> None:
         self._alarms: Dict[str, _ActiveAlarm] = {}
         self._lock = threading.Lock()
+        # Pluggable writer for the BEL fallback. Defaults to stdout but
+        # tests inject a fake to assert the loop exits cleanly without
+        # hijacking the global stream.
+        self._fallback_writer: Callable[[str], None] = self._default_fallback_writer
+
+    @staticmethod
+    def _default_fallback_writer(ch: str) -> None:
+        try:
+            sys.stdout.write(ch)
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    def set_fallback_writer(self, writer: Callable[[str], None]) -> None:
+        """Inject a custom BEL writer (used by tests)."""
+        self._fallback_writer = writer
+
+    @staticmethod
+    def _stdout_is_tty() -> bool:
+        try:
+            return bool(sys.stdout.isatty())
+        except Exception:
+            return False
 
     def start(self, entry: TimerEntry) -> None:
         # Emit IPC start so the desktop dialogue (if any) opens and its
@@ -485,22 +508,25 @@ class AlarmRegistry:
         _emit_alarm_event("start", payload)
 
         fallback_stop = threading.Event()
-        # Headless fallback: short BEL loop on a daemon thread. Quietly
-        # exits when the registry stops the alarm or when the auto-cap
-        # fires. Not visible when desktop_app is consuming stdout (the
-        # BEL bytes get logged but not rendered).
-        def _fallback_loop() -> None:
-            ticks = 0
-            while not fallback_stop.is_set() and ticks < _ALARM_AUTO_STOP_SEC:
-                try:
-                    sys.stdout.write("\a")
-                    sys.stdout.flush()
-                except Exception:
-                    pass
-                fallback_stop.wait(1.0)
-                ticks += 1
+        # Headless fallback: short BEL loop on a daemon thread. Only
+        # spawned when stdout is a real terminal: when the desktop_app
+        # captures stdout via a subprocess pipe, isatty() is False and
+        # the BEL bytes would just get logged silently with no audible
+        # cue, so there's no point running the loop at all.
+        if self._stdout_is_tty():
+            writer = self._fallback_writer
 
-        threading.Thread(target=_fallback_loop, daemon=True).start()
+            def _fallback_loop() -> None:
+                ticks = 0
+                while not fallback_stop.is_set() and ticks < _ALARM_AUTO_STOP_SEC:
+                    try:
+                        writer("\a")
+                    except Exception:
+                        pass
+                    fallback_stop.wait(1.0)
+                    ticks += 1
+
+            threading.Thread(target=_fallback_loop, daemon=True).start()
 
         # Auto-cap so an unattended alarm (no dialogue, no stop tool, no
         # cancel) eventually goes quiet on its own. The cap honours the

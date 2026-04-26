@@ -46,7 +46,10 @@ default announcer fires three best-effort side-effects:
    `TimerAlarmDialog`, and starts a looping `QSoundEffect` playing
    [`alarm.wav`](../../../desktop_app/desktop_assets/alarm.wav). When
    no desktop UI is listening, the registry falls back to a short BEL
-   loop on a daemon thread so CLI users still get an audible cue.
+   loop on a daemon thread so CLI users still get an audible cue. The
+   BEL loop only spawns when `sys.stdout.isatty()` is true; in bundled
+   mode the desktop app captures stdout via a subprocess pipe (no
+   TTY), so the BEL would just go to the log without making a sound.
 
 ## Alarm dismissal paths
 
