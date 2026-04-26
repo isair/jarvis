@@ -703,7 +703,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     is_new_conversation = True
 
     if dialogue_memory and dialogue_memory.has_recent_messages():
-        recent_messages = dialogue_memory.get_recent_messages()
+        if hasattr(dialogue_memory, "get_recent_turns_with_tools"):
+            recent_messages = dialogue_memory.get_recent_turns_with_tools(
+                max_tool_turns=getattr(cfg, "tool_carryover_max_turns", 2),
+                per_entry_chars=getattr(cfg, "tool_carryover_per_entry_chars", 1200),
+            )
+        else:
+            recent_messages = dialogue_memory.get_recent_messages()
         is_new_conversation = False
 
     # Refresh MCP tools on new conversation (memory expired)
@@ -820,6 +826,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # - Plan without it → skip memory work entirely (no keyword LLM,
     #   no diary search, no graph search, no digest LLM).
     needs_memory = (not action_plan) or plan_requires_memory(action_plan)
+
+    # Recall gate: if the hot-window already carries a fresh tool result
+    # covering the query topic, skip diary/graph enrichment for this turn.
+    # Cheap deterministic heuristic, no LLM. Fail-open on any error.
+    if needs_memory and recent_messages:
+        try:
+            from ..memory.recall_gate import should_recall
+            if not should_recall(redacted, recent_messages):
+                debug_log(
+                    "recall gate: hot-window covers topic, skipping enrichment",
+                    "memory",
+                )
+                needs_memory = False
+        except Exception as exc:  # noqa: BLE001
+            debug_log(f"recall gate failed (fail-open): {exc}", "memory")
     # Topic hint from the directive (if any) — passed to the memory
     # extractor so keyword selection is anchored on what the planner
     # actually wanted to look up, instead of re-deriving from the raw
@@ -1270,6 +1291,31 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Current user message
     user_msg_index = len(messages)
     messages.append({"role": "user", "content": redacted})
+
+    # Idempotent flag — once carryover capture runs (success, error, or stop),
+    # don't run it again. Lets us call _maybe_record_tool_carryover from any
+    # exit path safely.
+    _carryover_state = {"recorded": False}
+
+    def _maybe_record_tool_carryover() -> None:
+        if _carryover_state["recorded"]:
+            return
+        _carryover_state["recorded"] = True
+        if not dialogue_memory or not hasattr(dialogue_memory, "record_tool_turn"):
+            return
+        try:
+            tool_msgs = [
+                m for m in messages[user_msg_index + 1:]
+                if (
+                    m.get("role") == "tool"
+                    or (m.get("role") == "assistant" and m.get("tool_calls"))
+                    or (m.get("role") == "user" and m.get("tool_name"))
+                )
+            ]
+            if tool_msgs:
+                dialogue_memory.record_tool_turn(tool_msgs)
+        except Exception as exc:  # noqa: BLE001
+            debug_log(f"tool-carryover record failed: {exc}", "reply")
 
     def _extract_structured_tool_call(resp: dict):
         try:
@@ -1831,6 +1877,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 except Exception:
                     pass
 
+                # Stop is a dismissal — clear any tool carryover from the
+                # prior turn so the next wake-word turn starts fresh, and
+                # mark carryover as "recorded" so we don't re-inject this
+                # turn's stop call into future turns.
+                _carryover_state["recorded"] = True
+                if dialogue_memory and hasattr(dialogue_memory, "clear_tool_carryover"):
+                    try:
+                        dialogue_memory.clear_tool_carryover()
+                    except Exception:
+                        pass
+
                 # Return None to signal no response should be generated
                 # Don't add to dialogue memory - this is a dismissal, not a conversation
                 return None
@@ -2076,6 +2133,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if dialogue_memory is not None:
             try:
                 dialogue_memory.add_message("user", redacted)
+                _maybe_record_tool_carryover()
                 dialogue_memory.add_message("assistant", reply)
                 debug_log("error interaction added to dialogue memory", "memory")
             except Exception as e:
@@ -2107,6 +2165,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         try:
             # Add user message
             dialogue_memory.add_message("user", redacted)
+
+            # Capture this turn's tool-call + tool-result messages so the next
+            # reply within the hot window can reuse them instead of re-fetching.
+            _maybe_record_tool_carryover()
 
             # Add assistant reply if we have one
             if reply and reply.strip():

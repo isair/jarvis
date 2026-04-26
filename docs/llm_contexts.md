@@ -11,7 +11,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Model / gating**: `cfg.ollama_chat_model` (the big model). Not optional. No size branching on the loop itself — size branching affects the digests/evaluator around it.
 - **Inputs**:
   - Redacted user query
-  - Recent dialogue (last 5 minutes)
+  - Recent dialogue (last 5 minutes), including in-loop tool-call + tool-role messages from prior replies within the hot window (tool carryover — `DialogueMemory.record_tool_turn` / `get_recent_turns_with_tools` in [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py); capped by `cfg.tool_carryover_max_turns` / `tool_carryover_per_entry_chars`; cleared on `stop` signal; UNTRUSTED WEB EXTRACT fence markers preserved on truncation)
   - Unified system prompt from [src/jarvis/system_prompt.py](src/jarvis/system_prompt.py) + ASR note + tool-protocol guidance
   - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default)
   - Digested memory enrichment (optional, see #4)
@@ -44,6 +44,15 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: inline at [enrichment.py:35-63](src/jarvis/reply/enrichment.py:35).
 - **Output**: `{keywords, from?, to?, questions?}`. Consumed by memory search in the reply engine.
 - **Limits**: up to 2 retries; timeout from `llm_tools_timeout_sec`.
+
+## 3b. Recall Gate (pre-enrichment short-circuit)
+
+- **File**: [src/jarvis/memory/recall_gate.py](src/jarvis/memory/recall_gate.py) — `should_recall()`.
+- **Trigger**: once per reply, before diary/graph/digest enrichment runs (after the planner has decided memory is potentially needed).
+- **Model / gating**: NO LLM — deterministic keyword-coverage heuristic. Cheap.
+- **Inputs**: query, recent dialogue (incl. tool carryover rows).
+- **Output**: `False` only if hot-window contains a fresh tool result AND ≥50% of the query's content words appear in the hot-window transcript → skips diary, graph, and memory digest for this reply. Else `True`. Fail-open on any exception. Content-word extraction uses `\w{3,}` with `re.UNICODE`, so the gate works for Latin, Cyrillic, CJK, Arabic, Hebrew, etc. (per CLAUDE.md "no hardcoded language patterns"). Overlap words are run through `redact()` before being written to debug logs.
+- **Rationale**: prevents re-running diary/graph lookups when the hot window already grounds the follow-up (e.g. "his most famous song" after a Bieber webSearch).
 
 ## 4. Memory Digest (optional, SMALL models)
 

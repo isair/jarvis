@@ -30,6 +30,8 @@ Design principles enforced by the engine:
 
 2. Recent Dialogue Context
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
+   - The fetch returns not only user/assistant prose but also **tool-call and tool-result messages** from in-loop work in prior replies within the hot window (capped by `cfg.tool_carryover_max_turns` and `cfg.tool_carryover_per_entry_chars`, fence markers of UNTRUSTED WEB EXTRACT blocks preserved on truncation, secrets scrubbed). This lets follow-up turns reuse a prior `webSearch` / MCP result instead of re-fetching it. The carryover is captured at the end of each reply (success or error), and is cleared when the user dismisses with the `stop` tool so the next wake-word turn starts clean.
+   - A **recall gate** (`src/jarvis/memory/recall_gate.py`, deterministic, no LLM) skips diary / graph / memory-digest enrichment when the hot window already covers the topic (≥50% content-word overlap with a fresh tool-result row). Language-agnostic via `\w{3,}` with `re.UNICODE`. Fail-open on any error.
 
 3. Pre-flight Planner
    - The task-list planner (`plan_query` in `src/jarvis/reply/planner.py`) runs **first**, before any memory lookup or tool routing. It sees the query, a compact dialogue snippet, and the full builtin + MCP tool catalogue (names + one-line descriptions).

@@ -21,3 +21,15 @@ def redact(text: str, max_len: int = 8000) -> str:
     if len(scrubbed) > max_len:
         scrubbed = scrubbed[:max_len]
     return scrubbed
+
+
+def scrub_secrets(text: str) -> str:
+    """Apply the structural scrub rules without whitespace collapse or length cap.
+
+    Use for structured content (tool output, multi-line payloads) where
+    preserving newlines matters but tokens/emails/etc. must still be masked.
+    """
+    scrubbed = text
+    for pattern, repl in _REDACTION_RULES:
+        scrubbed = pattern.sub(repl, scrubbed)
+    return scrubbed

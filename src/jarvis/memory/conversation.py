@@ -8,6 +8,11 @@ from .db import Database
 from ..llm import call_llm_direct
 from .embeddings import get_embedding
 from ..debug import debug_log
+from ..utils.redact import redact, scrub_secrets
+
+
+_UNTRUSTED_FENCE_BEGIN = "<<<BEGIN UNTRUSTED WEB EXTRACT>>>"
+_UNTRUSTED_FENCE_END = "<<<END UNTRUSTED WEB EXTRACT>>>"
 
 
 def _filter_contexts_by_time(
@@ -84,6 +89,13 @@ class DialogueMemory:
           a diary update (same as the window, since enrichment covers older context)
         """
         self._messages: List[Tuple[float, str, str]] = []  # (timestamp, role, content)
+        # Tool carryover: in-loop assistant-with-tool_calls + tool-role messages
+        # from prior replies, so follow-up turns within the hot window can reuse
+        # the prior tool output instead of re-fetching. Stored as a list of
+        # (timestamp, [msg_dict, ...]) where each entry is one reply's worth of
+        # tool-related messages. Excluded from `get_pending_chunks` so raw tool
+        # payloads never reach the diary summariser.
+        self._tool_turns: List[Tuple[float, List[dict]]] = []
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
         # Unified window: context retention = forced diary update interval
@@ -124,6 +136,85 @@ class DialogueMemory:
             recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
 
             return [{"role": role, "content": content} for _, role, content in recent_messages]
+
+    def record_tool_turn(self, tool_msgs: List[dict]) -> None:
+        """Store in-loop tool-call/tool-role messages from a just-finished reply.
+
+        Called once per reply with the tool-related messages extracted from the
+        engine's messages array. These interleave with text messages on
+        subsequent `get_recent_turns_with_tools` calls so follow-ups can see
+        the prior tool output.
+        """
+        if not tool_msgs:
+            return
+        with self._lock:
+            ts = time.time()
+            scrubbed: List[dict] = []
+            for m in tool_msgs:
+                mm = dict(m)
+                c = mm.get("content")
+                if isinstance(c, str) and c:
+                    # Tool outputs may contain PII or secrets (email bodies,
+                    # API responses, scraped pages). Scrub before persisting
+                    # so re-injection on the next turn can't leak them.
+                    mm["content"] = scrub_secrets(c)
+                scrubbed.append(mm)
+            self._tool_turns.append((ts, scrubbed))
+
+    def clear_tool_carryover(self) -> None:
+        """Drop all stored tool-turn messages. Text messages are untouched."""
+        with self._lock:
+            self._tool_turns = []
+
+    def get_recent_turns_with_tools(
+        self,
+        max_tool_turns: int = 2,
+        per_entry_chars: int = 1200,
+    ) -> List[dict]:
+        """Like `get_recent_messages`, but interleaves stored tool turns in
+        timestamp order. Only the most recent `max_tool_turns` tool groups
+        survive; older ones are dropped wholesale (avoids orphan
+        assistant-with-tool_calls without a matching tool result, which would
+        break native tool calling).
+        """
+        with self._lock:
+            if not self._messages and not self._tool_turns:
+                return []
+            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            # Build timeline of (ts, payload) where payload is either a single
+            # text message dict or a list of tool messages.
+            timeline: list = []
+            for ts, role, content in self._messages:
+                if ts >= cutoff:
+                    timeline.append((ts, "msg", {"role": role, "content": content}))
+            # Keep only the last N tool turns within the window.
+            live_tool_turns = [(ts, msgs) for ts, msgs in self._tool_turns if ts >= cutoff]
+            for ts, msgs in live_tool_turns[-max_tool_turns:]:
+                truncated: list[dict] = []
+                for m in msgs:
+                    mm = dict(m)
+                    c = mm.get("content")
+                    if isinstance(c, str) and len(c) > per_entry_chars:
+                        cut = c[:per_entry_chars].rstrip() + "…"
+                        # If truncation sliced away the closing marker of an
+                        # UNTRUSTED WEB EXTRACT fence, re-append it so the
+                        # injection-defence fence stays intact downstream.
+                        if (
+                            _UNTRUSTED_FENCE_BEGIN in cut
+                            and _UNTRUSTED_FENCE_END not in cut
+                        ):
+                            cut = cut + "\n" + _UNTRUSTED_FENCE_END
+                        mm["content"] = cut
+                    truncated.append(mm)
+                timeline.append((ts, "group", truncated))
+            timeline.sort(key=lambda t: t[0])
+            flat: List[dict] = []
+            for _, kind, payload in timeline:
+                if kind == "msg":
+                    flat.append(payload)
+                else:
+                    flat.extend(payload)
+            return flat
 
     def has_recent_messages(self) -> bool:
         """Check if there are any messages in the last 5 minutes."""
