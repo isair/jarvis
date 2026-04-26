@@ -2302,7 +2302,8 @@ def main() -> int:
             from desktop_app.setup_wizard import (
                 should_show_setup_wizard, SetupWizard,
                 check_ollama_server, check_ollama_cli,
-                get_required_models, check_installed_models
+                get_required_models, check_installed_models,
+                resolve_ollama_path,
             )
             print("  Setup wizard module loaded successfully", flush=True)
         except Exception as e:
@@ -2498,7 +2499,7 @@ def main() -> int:
         app.processEvents()
 
         required_models = get_required_models()
-        installed_models = check_installed_models()
+        installed_models = check_installed_models(resolve_ollama_path())
 
         # Normalize model names for comparison (remove :latest suffix)
         def normalize_model(name: str) -> str:

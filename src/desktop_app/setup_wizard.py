@@ -216,13 +216,28 @@ def get_required_models() -> List[str]:
         return defaults
 
 
+def resolve_ollama_path() -> str:
+    """Resolve the ollama CLI path for subprocess invocation.
+
+    PATH first, then platform-specific install locations via check_ollama_cli,
+    then a literal "ollama" as last resort. Frozen .app launches on macOS get
+    a sanitised PATH that excludes /usr/local/bin and /opt/homebrew/bin, so
+    shutil.which alone is not enough.
+    """
+    path = shutil.which("ollama")
+    if path:
+        return path
+    _, resolved = check_ollama_cli()
+    return resolved or "ollama"
+
+
 def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
     """
     Get list of installed Ollama models.
     Returns list of model names.
     """
     if ollama_path is None:
-        ollama_path = shutil.which("ollama") or "ollama"
+        ollama_path = resolve_ollama_path()
 
     try:
         # Hide console window on Windows
