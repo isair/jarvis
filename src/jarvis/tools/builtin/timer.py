@@ -596,6 +596,18 @@ def _render_payload(payload: Dict[str, Any]) -> str:
             f"New timer: id={timer['id']}, label={timer.get('label') or 'none'}, "
             f"duration={timer['duration_human']}, eta={timer['eta']}"
         )
+        # Anchor small models against confabulating completion. Without
+        # this hint, gemma-class models often append "the N minutes are
+        # up" right after setting a timer, because their language prior
+        # links "timer for N minutes" with "N minutes have elapsed".
+        # Spell out the state explicitly so the reply LLM only confirms
+        # the SET event.
+        lines.append(
+            "Note: this timer is now COUNTING DOWN. It has NOT elapsed. "
+            "Confirm to the user only that the timer has been set; do "
+            "not claim it is up, complete, or finished. Jarvis will "
+            "announce the elapse automatically when the duration ends."
+        )
 
     cancelled = payload.get("cancelled") or []
     if cancelled:

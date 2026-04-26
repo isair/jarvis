@@ -198,6 +198,22 @@ class TestTimerSet:
         entry = mgr.list()[0]
         assert entry.announcement == "Makarna zamanlayıcısı doldu."
 
+    def test_set_payload_warns_against_claiming_elapsed(self, fresh_manager):
+        # Gemma-class small models routinely append "the N minutes are
+        # up" right after setting a timer. The set payload must contain
+        # an explicit, unmistakable instruction that the timer is still
+        # counting down, otherwise small models confabulate completion.
+        tool = TimerTool()
+        result = tool.run(
+            {"action": "set", "minutes": 1, "label": "foo"},
+            make_context(),
+        )
+        assert result.success is True
+        text = result.reply_text.lower()
+        assert "counting down" in text
+        assert "has not elapsed" in text or "not elapsed" in text
+        assert "do not claim" in text
+
     def test_set_sanitises_label_newlines(self, fresh_manager):
         mgr, _ = fresh_manager
         tool = TimerTool()
