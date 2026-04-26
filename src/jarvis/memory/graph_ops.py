@@ -443,6 +443,16 @@ _MERGE_SYSTEM_PROMPT = (
 )
 
 
+def is_populated_node(node: MemoryNode) -> bool:
+    """A node worth visiting in a consolidate-all sweep.
+
+    Shared predicate so the streaming endpoint can pre-count nodes
+    using the same definition the generator walks with — drift here
+    would silently desynchronise the UI's progress bar from reality.
+    """
+    return node.id != "root" and bool((node.data or "").strip())
+
+
 # Slack added to the hallucination-guard cap. Consolidation should
 # only ever shrink or hold, but we allow a small overrun (e.g. the
 # model splitting a clumsy two-clause fact into two cleaner lines)
@@ -1010,7 +1020,7 @@ def consolidate_all_populated_nodes(
     # cause us to revisit or skip nodes.
     all_nodes = store.get_all_nodes()
     for node in all_nodes:
-        if node.id == "root" or not (node.data or "").strip():
+        if not is_populated_node(node):
             continue
         before = len([l for l in node.data.split("\n") if l.strip()])
         try:

@@ -589,7 +589,10 @@ def graph_consolidate_all() -> Response:
     progress so the UI can show per-node line-count deltas.
     """
     from jarvis.config import load_settings
-    from jarvis.memory.graph_ops import consolidate_all_populated_nodes
+    from jarvis.memory.graph_ops import (
+        consolidate_all_populated_nodes,
+        is_populated_node,
+    )
     from jarvis.reply.engine import resolve_tool_router_model
 
     def generate():
@@ -599,11 +602,14 @@ def graph_consolidate_all() -> Response:
             store = get_graph_store()
 
             # Count populated nodes upfront so the UI can render a
-            # real progress bar. Mirrors the populated-node filter in
-            # `consolidate_all_populated_nodes` to stay accurate.
+            # real progress bar. Reuses the shared predicate from
+            # `graph_ops` so the count can never drift from the set
+            # the generator actually walks. The double scan is
+            # acceptable here — `get_all_nodes` is one cheap SQLite
+            # read and the bar's accuracy is worth more than the saved
+            # walk on the rarely-pressed maintenance op.
             total_nodes = sum(
-                1 for n in store.get_all_nodes()
-                if n.id != "root" and (n.data or "").strip()
+                1 for n in store.get_all_nodes() if is_populated_node(n)
             )
             yield json.dumps({"type": "start", "total": total_nodes}) + "\n"
 

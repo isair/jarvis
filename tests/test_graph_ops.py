@@ -944,10 +944,13 @@ class TestMergeNodeData:
         future tweak to the slack can't silently drift the guard."""
         from src.jarvis.memory.graph_ops import _MERGE_GROWTH_SLACK
 
+        existing_data = "E1.\nE2."
         node = store.create_node(
-            name="T", description="d", data="E1.\nE2.", parent_id="user",
+            name="T", description="d", data=existing_data, parent_id="user",
         )
-        existing_count = 2
+        # Derive `existing_count` from the live data so the boundary
+        # math can't drift if the literal is later edited.
+        existing_count = len([l for l in existing_data.split("\n") if l.strip()])
         new_facts = ["N1."]
         cap = existing_count + len(new_facts) + _MERGE_GROWTH_SLACK
 
