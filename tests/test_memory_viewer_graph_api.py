@@ -38,7 +38,6 @@ class TestGraphPresetProtection:
         memory_viewer.app.config["TESTING"] = True
         self.client = memory_viewer.app.test_client()
         self.store = store
-        self.module = memory_viewer
 
         yield
 

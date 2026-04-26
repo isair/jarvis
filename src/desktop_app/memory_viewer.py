@@ -2285,16 +2285,17 @@ def index() -> str:
                 }
             } catch (e) {
                 // Fail-closed: leave the seeded {'root'} set in place.
+                console.warn('Failed to load preset node IDs; falling back to root-only.', e);
             }
         }
 
-        function initGraph() {
+        async function initGraph() {
             if (!graphInitialised) {
                 setupCanvasEvents();
                 graphInitialised = true;
             }
             resizeCanvas();
-            loadPresetNodeIds();
+            await loadPresetNodeIds();
             loadGraphData();
             loadTreeData();
         }
