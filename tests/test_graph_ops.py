@@ -465,6 +465,58 @@ class TestAppendToNode:
         assert exceeded is False
 
 
+@pytest.mark.unit
+class TestNodeContainsFact:
+    """Tests for GraphMemoryStore.node_contains_fact (dedupe primitive)."""
+
+    def test_returns_false_for_empty_node(self, store):
+        node = store.create_node(name="T", description="T", data="", parent_id="root")
+        assert store.node_contains_fact(node.id, "anything") is False
+
+    def test_returns_false_for_nonexistent_node(self, store):
+        assert store.node_contains_fact("nope", "anything") is False
+
+    def test_returns_false_for_empty_fact(self, store):
+        node = store.create_node(name="T", description="T", data="hello", parent_id="root")
+        assert store.node_contains_fact(node.id, "   ") is False
+
+    def test_exact_line_match(self, store):
+        node = store.create_node(
+            name="T", description="T", data="Line A\nLine B", parent_id="root"
+        )
+        assert store.node_contains_fact(node.id, "Line A") is True
+        assert store.node_contains_fact(node.id, "Line B") is True
+        assert store.node_contains_fact(node.id, "Line C") is False
+
+    def test_case_and_whitespace_insensitive(self, store):
+        node = store.create_node(
+            name="T", description="T", data="Justin Bieber is Canadian.", parent_id="root"
+        )
+        assert store.node_contains_fact(node.id, "justin bieber is canadian.") is True
+        assert store.node_contains_fact(node.id, "  Justin   Bieber  is Canadian.  ") is True
+
+    def test_turkish_dotted_i_folds(self, store):
+        """Locale-naive .lower() returns the wrong key for Turkish İ; the
+        store must use casefold + NFKC so İstanbul / i̇stanbul collide."""
+        node = store.create_node(
+            name="T", description="T", data="İstanbul is large.", parent_id="root"
+        )
+        assert store.node_contains_fact(node.id, "i̇stanbul is large.") is True
+
+    def test_german_sharp_s_folds_to_ss(self, store):
+        node = store.create_node(
+            name="T", description="T", data="Straße", parent_id="root"
+        )
+        assert store.node_contains_fact(node.id, "strasse") is True
+
+    def test_substring_is_not_a_match(self, store):
+        """Dedupe is line-equality, not substring — avoid false positives."""
+        node = store.create_node(
+            name="T", description="T", data="Justin Bieber is Canadian.", parent_id="root"
+        )
+        assert store.node_contains_fact(node.id, "Justin Bieber") is False
+
+
 # ── update_graph_from_dialogue (end-to-end) ────────────────────────────
 
 
@@ -537,6 +589,90 @@ class TestUpdateGraphFromDialogue:
         )
 
         assert stored == []
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_skips_duplicate_facts_on_second_flush(self, mock_llm, store):
+        """Re-extracting the same fact from a growing daily summary must
+        not duplicate it in the graph.
+
+        Mirrors production: two diary flushes in quick succession both
+        extract the same fact from the cumulative summary. The second
+        flush should be a no-op for the graph, not a duplicate append.
+        """
+        # First flush: branch root has no children, so extraction is the
+        # only LLM call needed.
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "Justin Bieber is a Canadian singer."}]'
+        )
+        stored1 = update_graph_from_dialogue(
+            store=store,
+            summary="User asked about Justin Bieber.",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+        assert len(stored1) == 1
+
+        # Second flush: same fact re-extracted, should be deduped.
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "Justin Bieber is a Canadian singer."}]'
+        )
+        stored2 = update_graph_from_dialogue(
+            store=store,
+            summary="User asked about Justin Bieber.",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+        assert stored2 == [], "duplicate fact should not be reported as learned"
+
+        world = store.get_node("world")
+        assert world.data.count("Justin Bieber") == 1
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_dedupe_handles_non_latin_case_folding(self, mock_llm, store):
+        """Locale-safe folding: Turkish İ/i̇ and German ß/ss collapse to the
+        same dedupe key. Python's ``str.lower`` would miss these cases —
+        the store uses ``casefold`` + NFKC instead."""
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "İstanbul is the largest city in Turkey."}]'
+        )
+        update_graph_from_dialogue(
+            store=store,
+            summary="s",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "i̇stanbul is the largest city in turkey."}]'
+        )
+        stored = update_graph_from_dialogue(
+            store=store,
+            summary="s",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+        assert stored == [], "Turkish İ/i̇ variants should dedupe"
+
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "Straße names are ordered alphabetically."}]'
+        )
+        update_graph_from_dialogue(
+            store=store,
+            summary="s",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        mock_llm.return_value = (
+            '[{"branch": "WORLD", "fact": "strasse names are ordered alphabetically."}]'
+        )
+        stored = update_graph_from_dialogue(
+            store=store,
+            summary="s",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+        assert stored == [], "German ß should casefold to ss for dedupe"
 
 
 # ── Warm profile helpers ──────────────────────────────────────────────

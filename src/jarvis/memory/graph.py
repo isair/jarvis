@@ -11,14 +11,33 @@ See graph.spec.md for the full specification.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
 from ..debug import debug_log
+
+
+# ── Fact normalisation ─────────────────────────────────────────────────────
+#
+# Used for dedupe comparisons. Locale-safe — the user base includes
+# non-Latin scripts (e.g. Turkish, where ``"İ".lower()`` returns ``"i"``
+# but Turkish lowercase is ``"ı"``), so we use ``unicodedata.NFKC`` plus
+# ``str.casefold`` rather than ``str.lower``. ``casefold`` also folds
+# German ß to ss, and NFKC collapses visually identical code points.
+
+_WS_RE = re.compile(r"\s+")
+
+
+def normalise_fact(text: str) -> str:
+    """Lowercase (Unicode-aware) + collapse whitespace for fuzzy equality."""
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    return _WS_RE.sub(" ", folded.strip())
 
 
 # ── Configuration defaults ──────────────────────────────────────────────────
@@ -427,6 +446,22 @@ class GraphMemoryStore:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    def node_contains_fact(self, node_id: str, fact: str) -> bool:
+        """True if ``fact`` matches any line of the node's data after
+        ``normalise_fact`` folding. Used to dedupe graph appends when the
+        cumulative daily summary re-seeds the same facts across diary flushes.
+        """
+        node = self.get_node(node_id)
+        if node is None or not node.data:
+            return False
+        target = normalise_fact(fact)
+        if not target:
+            return False
+        for line in node.data.split("\n"):
+            if normalise_fact(line) == target:
+                return True
+        return False
 
     def append_to_node(self, node_id: str, text: str) -> bool:
         """Append text to a node's data field.

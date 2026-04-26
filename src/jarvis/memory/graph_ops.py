@@ -573,6 +573,26 @@ def update_graph_from_dialogue(
                 branch_root_id=branch_id,
             )
 
+            # Step 2b: Dedupe — skip if this fact is already stored on the
+            # chosen node. The daily summary is cumulative, so every diary
+            # flush re-extracts the same facts; without this check, each
+            # flush appends them again. We only check the picker's chosen
+            # node — a stale picker could route a repeat fact to a different
+            # node within the same branch on a later flush and leak a
+            # duplicate, but that's rare compared to the same-node case we're
+            # fixing here. We also deliberately skip ``touch_node``: a re-
+            # extraction isn't fresh learning and shouldn't reinforce the
+            # node's access score.
+            if store.node_contains_fact(node_id, fact):
+                target = store.get_node(node_id)
+                target_name = target.name if target else node_id[:8]
+                debug_log(
+                    f"graph update: skipped duplicate '{fact[:50]}...' → "
+                    f"'{target_name}' [{branch_id}]",
+                    "memory",
+                )
+                continue
+
             # Step 3: Append the fact to the chosen node
             threshold_exceeded = store.append_to_node(node_id, fact)
             store.touch_node(node_id)
