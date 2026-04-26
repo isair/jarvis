@@ -598,7 +598,14 @@ def graph_consolidate_all() -> Response:
             picker_model = resolve_tool_router_model(settings)
             store = get_graph_store()
 
-            yield json.dumps({"type": "start"}) + "\n"
+            # Count populated nodes upfront so the UI can render a
+            # real progress bar. Mirrors the populated-node filter in
+            # `consolidate_all_populated_nodes` to stay accurate.
+            total_nodes = sum(
+                1 for n in store.get_all_nodes()
+                if n.id != "root" and (n.data or "").strip()
+            )
+            yield json.dumps({"type": "start", "total": total_nodes}) + "\n"
 
             total_before = 0
             total_after = 0
@@ -3118,6 +3125,7 @@ def index() -> str:
                     const decoder = new TextDecoder();
                     let buffer = '';
                     let nodeCount = 0;
+                    let totalNodes = 0;
 
                     while (true) {
                         const { done, value } = await reader.read();
@@ -3131,16 +3139,25 @@ def index() -> str:
                             if (!line.trim()) continue;
                             try {
                                 const msg = JSON.parse(line);
-                                if (msg.type === 'progress') {
+                                if (msg.type === 'start') {
+                                    totalNodes = msg.total || 0;
+                                    document.getElementById('consolidate-count').textContent = `0 / ${totalNodes} node${totalNodes !== 1 ? 's' : ''}`;
+                                } else if (msg.type === 'progress') {
                                     nodeCount++;
-                                    document.getElementById('consolidate-count').textContent = `${nodeCount} node${nodeCount !== 1 ? 's' : ''}`;
+                                    const countLabel = totalNodes
+                                        ? `${nodeCount} / ${totalNodes} node${totalNodes !== 1 ? 's' : ''}`
+                                        : `${nodeCount} node${nodeCount !== 1 ? 's' : ''}`;
+                                    document.getElementById('consolidate-count').textContent = countLabel;
                                     document.getElementById('consolidate-status').textContent = `Consolidating ${msg.node}…`;
                                     const log = document.getElementById('consolidate-log');
                                     const arrow = msg.delta < 0 ? '⬇️' : (msg.delta > 0 ? '⬆️' : '➖');
                                     log.innerHTML += `<div>${arrow} ${msg.node} — ${msg.before} → ${msg.after} lines (Δ${msg.delta})</div>`;
                                     log.scrollTop = log.scrollHeight;
-                                    // Pulse the progress bar so users see motion.
-                                    document.getElementById('consolidate-bar').style.width = (50 + (nodeCount % 2) * 50) + '%';
+                                    // Real progress when the total is known; fall back to indeterminate pulse otherwise.
+                                    const pct = totalNodes
+                                        ? Math.min(100, Math.round((nodeCount / totalNodes) * 100))
+                                        : 50 + (nodeCount % 2) * 50;
+                                    document.getElementById('consolidate-bar').style.width = pct + '%';
                                 } else if (msg.type === 'complete') {
                                     document.getElementById('consolidate-bar').style.width = '100%';
                                     document.getElementById('consolidate-status').textContent = `Done — ${msg.nodes} node${msg.nodes !== 1 ? 's' : ''}, ${msg.total_before} → ${msg.total_after} lines (Δ${msg.total_delta})`;
@@ -3154,6 +3171,7 @@ def index() -> str:
                                     showToast('Graph consolidated', 'success');
                                 } else if (msg.type === 'error') {
                                     document.getElementById('consolidate-status').textContent = 'Error: ' + msg.message;
+                                    document.getElementById('consolidate-bar').style.width = '0%';
                                     document.getElementById('consolidate-actions').innerHTML = `
                                         <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
                                     `;
@@ -3165,6 +3183,8 @@ def index() -> str:
                     }
                 } catch (e) {
                     document.getElementById('consolidate-status').textContent = 'Connection error: ' + e.message;
+                    // Reset the bar so a half-filled UI doesn't linger next to an error message.
+                    document.getElementById('consolidate-bar').style.width = '0%';
                     document.getElementById('consolidate-actions').innerHTML = `
                         <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
                     `;

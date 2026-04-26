@@ -493,6 +493,8 @@ def _extract_facts_object(response: str) -> Optional[dict]:
             parsed = None
         if isinstance(parsed, dict) and isinstance(parsed.get("facts"), list):
             return parsed
+    # O(n) over the response: at most one `{` per character. Picker
+    # responses are bounded (single rewrite, T=0), so this stays cheap.
     for match in re.finditer(r"\{", response):
         try:
             parsed, _ = _JSON_DECODER.raw_decode(response, match.start())

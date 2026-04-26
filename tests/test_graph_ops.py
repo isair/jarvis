@@ -938,6 +938,41 @@ class TestMergeNodeData:
         assert "New." in store.get_node(node.id).data
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_hallucination_guard_boundary_pins_to_slack_constant(self, mock_llm, store):
+        """The guard's cap is `existing + new + _MERGE_GROWTH_SLACK`.
+        Pin both sides of the boundary against the named constant so a
+        future tweak to the slack can't silently drift the guard."""
+        from src.jarvis.memory.graph_ops import _MERGE_GROWTH_SLACK
+
+        node = store.create_node(
+            name="T", description="d", data="E1.\nE2.", parent_id="user",
+        )
+        existing_count = 2
+        new_facts = ["N1."]
+        cap = existing_count + len(new_facts) + _MERGE_GROWTH_SLACK
+
+        # At the cap → accepted.
+        at_cap = '{"facts": [' + ", ".join(f'"L{i}."' for i in range(cap)) + "]}"
+        mock_llm.return_value = at_cap
+        result = merge_node_data(
+            store=store, node_id=node.id, new_facts=new_facts,
+            ollama_base_url="http://localhost", ollama_chat_model="model",
+        )
+        assert result.success is True
+
+        # One over the cap → rejected.
+        node2 = store.create_node(
+            name="T2", description="d", data="E1.\nE2.", parent_id="user",
+        )
+        over_cap = '{"facts": [' + ", ".join(f'"L{i}."' for i in range(cap + 1)) + "]}"
+        mock_llm.return_value = over_cap
+        result = merge_node_data(
+            store=store, node_id=node2.id, new_facts=new_facts,
+            ollama_base_url="http://localhost", ollama_chat_model="model",
+        )
+        assert result.success is False
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_extracts_object_with_braces_inside_fact_strings(self, mock_llm, store):
         """A fact whose text contains literal `{` or `}` must still
         parse — `raw_decode` handles balanced nesting that a
