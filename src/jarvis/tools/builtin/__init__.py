@@ -13,6 +13,7 @@ from .nutrition.log_meal import LogMealTool
 from .nutrition.fetch_meals import FetchMealsTool
 from .nutrition.delete_meal import DeleteMealTool
 from .weather import WeatherTool
+from .timer import TimerTool
 from .stop import StopTool
 
 # Import supporting functions that may still be used elsewhere
@@ -27,5 +28,6 @@ __all__ = [
     'FetchMealsTool',
     'DeleteMealTool',
     'WeatherTool',
+    'TimerTool',
     'StopTool',
 ]
