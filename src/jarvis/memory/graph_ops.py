@@ -647,17 +647,24 @@ def merge_node_data(
         )
         return MergeResult(success=False)
 
-    # Identify which of the new facts actually survived the rewrite,
-    # under the same Unicode-aware folding the dedupe primitive uses.
-    # A new fact missing from the cleaned set was consolidated out,
-    # treated as a duplicate, or silently dropped — caller can then
-    # decide whether to skip reporting or append-fallback.
-    cleaned_keys = {normalise_fact(line) for line in cleaned if line.strip()}
+    # Identify which of the new facts actually survived the rewrite.
+    # Uses the dedupe primitive's Unicode folding plus a tolerant
+    # trailing-punctuation strip — picker models routinely rephrase
+    # facts by dropping the trailing full stop ("X." → "X"), and a
+    # strict `normalise_fact` match would then under-report every
+    # batched flush as "0 stored". A new fact missing from the
+    # cleaned set was consolidated out, treated as a duplicate, or
+    # silently dropped — caller can then decide whether to skip
+    # reporting or append-fallback.
+    def _match_key(text: str) -> str:
+        return normalise_fact(text).rstrip(".,;:!?")
+
+    cleaned_keys = {_match_key(line) for line in cleaned if line.strip()}
     incorporated_indices: list[int] = []
     for idx, fact in enumerate(new_facts):
         if not fact or not fact.strip():
             continue
-        key = normalise_fact(fact)
+        key = _match_key(fact)
         if key and key in cleaned_keys:
             incorporated_indices.append(idx)
 

@@ -979,6 +979,33 @@ class TestMergeNodeData:
         assert result.success is False
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_incorporated_indices_tolerant_to_trailing_punctuation(self, mock_llm, store):
+        """Picker models routinely drop the trailing full stop when
+        rewriting facts ("X." → "X"). A strict normalise_fact match
+        would then return `incorporated_indices=[]` even when the
+        fact clearly landed, and the orchestrator would silently
+        under-report every batched flush as '0 stored'. Pin the
+        tolerant match against this exact rephrasing."""
+        node = store.create_node(
+            name="T", description="d", data="Old.", parent_id="user",
+        )
+        # Picker drops the trailing period from the new fact.
+        mock_llm.return_value = '{"facts": ["The user has a dog"]}'
+
+        result = merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=["The user has a dog."],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        assert result.success is True
+        assert result.incorporated_indices == [0], (
+            "Trailing-period rephrasing must still count as incorporation."
+        )
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_prompt_body_matches_parsed_line_count(self, mock_llm, store):
         """The CURRENT facts block sent to the picker must contain
         exactly the lines `_split_data_lines` produced — blank lines
