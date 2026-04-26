@@ -1095,15 +1095,25 @@ class TestMergeSystemPromptInvariants:
         bug it exists to fix was a 'The assistant is unable to ...'
         line surviving consolidate-all sweeps because no rule covered
         capability denials. If the rule label or its trigger phrasings
-        get edited away, this test fails."""
+        get edited away, this test fails. Scoped to the rule's own
+        section (META-NARRATIVE up to the next numbered rule) so the
+        assertions can't be satisfied by unrelated text elsewhere in
+        the prompt."""
         from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "META-NARRATIVE" in _MERGE_SYSTEM_PROMPT
-        # The two shapes the bug report surfaced explicitly.
-        assert "The assistant" in _MERGE_SYSTEM_PROMPT
-        assert "unable to" in _MERGE_SYSTEM_PROMPT
+        rule_start = _MERGE_SYSTEM_PROMPT.index("META-NARRATIVE")
+        # Find the next numbered rule (e.g. '7. ') to bound the section.
+        import re
+        next_rule = re.search(r"\n\d+\. ", _MERGE_SYSTEM_PROMPT[rule_start:])
+        rule_end = rule_start + (next_rule.start() if next_rule else len(_MERGE_SYSTEM_PROMPT) - rule_start)
+        section = _MERGE_SYSTEM_PROMPT[rule_start:rule_end]
+        # The two shapes the bug report surfaced explicitly must be
+        # named in this rule's section, not just somewhere else.
+        assert "The assistant" in section
+        assert "unable to" in section
         # Counter-protection: the rule must not over-prune real
-        # directives, so an exception clause is required.
-        assert "directive" in _MERGE_SYSTEM_PROMPT.lower()
+        # directives, so an exception clause is required in-section.
+        assert "directive" in section.lower()
 
 
 @pytest.mark.unit

@@ -4,14 +4,14 @@
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **330/348 passed (94.8%)** across all categories *(merge consolidation now also covers meta-narrative pruning; the previous xfail flipped to XPASS on the strengthened prompt)*
+**Overall:** 🟢 **331/349 passed (94.8%)** across all categories *(merge consolidation now also covers meta-narrative pruning; the previously xfail'd pattern-boundary case is a regular PASS)*
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
 | 🤖 Agent behaviour | `gemma4:e2b` | 129 | 11 | 2 | 🟢 92.1% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 7 | 0 | 🟢 95.4% |
 | 🎤 Intent judge | `gemma4:e2b` (fixed) | 47 | 0 | 0 | 🟢 100.0% |
-| 🧠 Memory merge consolidation | `gemma4:e2b` | 9 | 0 | 0 | 🟢 100.0% (1 xpass) |
+| 🧠 Memory merge consolidation | `gemma4:e2b` | 11 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
 
@@ -253,15 +253,16 @@
 | Dedupe — same fact, different wording (lives-in vs based-in London) | 1/1 (100%) | ✅ |
 | Dedupe — job title rephrased | 1/1 (100%) | ✅ |
 | Pattern — repeated sushi meals fold into "regularly eats sushi" | 1/1 (100%) | ✅ |
-| Pattern boundary — distinct one-off dated events stay distinct | 1/1 (100%) | 🎉 |
+| Pattern boundary — distinct one-off dated events stay distinct | 1/1 (100%) | ✅ |
 | Independence — peanut allergy + tea preference survive unrelated hiking fact | 1/1 (100%) | ✅ |
 | Independence — software-engineer job survives unrelated guitar fact | 1/1 (100%) | ✅ |
 | Meta-narrative — capability-denial line dropped, real directive kept | 1/1 (100%) | ✅ |
 | Meta-narrative — assistant-suggested line dropped, factual lookup survives | 1/1 (100%) | ✅ |
+| Meta-narrative — polluted node receiving new fact: drop + incorporate | 1/1 (100%) | ✅ |
 | Meta-narrative — clean directives node not over-pruned | 1/1 (100%) | ✅ |
 | Batched merge — three independent new facts in one call all land | 1/1 (100%) | ✅ |
 
-**Notes:** the pattern-boundary case is still marked `xfail(strict=False)` in source — the upstream small-model regression it captured is not formally fixed, but the strengthened META-NARRATIVE rule appears to have indirectly tightened the picker's general independence handling and the case now XPASSes (3/3 reps on `gemma4:e2b`). Left as xfail until a more targeted fix lands so the marker still surfaces a regression if the side-effect goes away.
+**Notes:** the pattern-boundary case was previously `xfail(strict=False)` because `gemma4:e2b` clustered dated entries and silently dropped older ones. After the META-NARRATIVE rule landed it now passes 3/3 reps; the causal link is unconfirmed but the eval is the right place to catch a regression, so the marker is dropped and the case stands as a regular PASS.
 
 ---
 

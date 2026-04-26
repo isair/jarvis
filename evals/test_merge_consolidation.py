@@ -113,17 +113,14 @@ PATTERN_BOUNDARY_CASES = [
             must_keep_distinct=["edinburgh", "berlin", "manchester"],
         ),
         id="distinct one-off events",
-        # Known limitation: small picker models (gemma4:e2b at the
-        # default eval setting) cluster date-prefixed entries with a
-        # new dated entry and silently drop the older two, even
-        # though independence is preserved on undated equivalents
-        # (see TestIndependenceOfUnrelatedFacts). Captures the
-        # regression bound — the test will XPASS once we either
-        # tighten the merge prompt or move to a stronger picker.
-        marks=pytest.mark.xfail(
-            reason="small picker conflates dated independent events; tracked",
-            strict=False,
-        ),
+        # Originally xfail(strict=False) — captured a regression where
+        # `gemma4:e2b` clustered date-prefixed entries with a new
+        # dated entry and silently dropped the older two. The case
+        # now passes 3/3 reps on the small model after the
+        # META-NARRATIVE rule landed. The causal link is not
+        # verified, but the eval is the right place to catch a
+        # regression so the marker is dropped and the case stands as
+        # a regular PASS.
     ),
 ]
 
@@ -251,6 +248,32 @@ META_NARRATIVE_CASES = [
             must_keep_substrings=["possessor", "cronenberg"],
         ),
         id="assistant-suggested line dropped, lookup survives",
+    ),
+    pytest.param(
+        MetaNarrativeCase(
+            description=(
+                "Polluted node receiving a new fact: meta-narrative "
+                "drops AND the new fact lands"
+            ),
+            # Production path: a diary flush routes one new fact to a
+            # node that already holds an older capability-denial line.
+            # The merge must drop the denial AND incorporate the new
+            # fact — capturing the worst case where the META rule
+            # could steal attention from incorporation tracking.
+            existing_data=(
+                "Always reply in British English.\n"
+                "The assistant is unable to navigate to a web page."
+            ),
+            new_facts=["Keep replies under three sentences."],
+            must_drop_substrings=[
+                "unable to navigate",
+            ],
+            must_keep_substrings=[
+                "british english",
+                "three sentences",
+            ],
+        ),
+        id="polluted node + new fact: drop and incorporate",
     ),
     pytest.param(
         MetaNarrativeCase(
@@ -539,6 +562,20 @@ class TestMetaNarrativePruning:
             assert kw.lower() in merged_lower, (
                 f"[{case.description}] genuine fact containing '{kw}' was "
                 f"over-pruned — the rule is too aggressive.\n{merged}"
+            )
+
+        # When new_facts is non-empty the merge must report at least
+        # one incorporation. A regression where the META rule steals
+        # attention from incorporation tracking would surface here as
+        # `incorporated_indices == []` despite the fact landing in
+        # the merged data — exactly the failure mode `_match_key`'s
+        # tolerant punctuation strip was added to prevent.
+        if case.new_facts:
+            assert len(result.incorporated_indices) >= 1, (
+                f"[{case.description}] new fact landed in merged data "
+                f"but incorporated_indices is empty — orchestrator "
+                f"would under-report the flush.\n"
+                f"merged={merged}\nresult={result}"
             )
 
 
