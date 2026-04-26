@@ -40,6 +40,37 @@ default announcer fires three best-effort side-effects:
    missing, the state restore happens inline so the face never sticks
    on `SPEAKING`.
 3. **TTS** — speaks via the daemon's global TTS engine.
+4. **Looping alarm + dialogue** — the `AlarmRegistry` emits a
+   `__TIMER_ALARM__:` IPC line over stdout. The desktop app intercepts
+   this on the same channel it already reads for diary IPC, opens
+   `TimerAlarmDialog`, and starts a looping `QSoundEffect` playing
+   [`alarm.wav`](../../../desktop_app/desktop_assets/alarm.wav). When
+   no desktop UI is listening, the registry falls back to a short BEL
+   loop on a daemon thread so CLI users still get an audible cue.
+
+## Alarm dismissal paths
+
+The looping alarm stops, and the dialogue closes, on **any** of:
+
+- The user clicking **Dismiss** in the dialogue.
+- The user closing the dialogue window (X button or `Esc`).
+- The user saying "stop" — handled by the
+  [`stop` tool](stop.py), which calls `stop_all_alarms()` before
+  emitting the conversation-stop signal.
+- The user setting another timer via the `timer` tool — `start()`
+  calls `AlarmRegistry.stop_all()` first, since the user is clearly
+  re-engaged with the tool.
+- The user cancelling timers via the `timer` tool (`timer_id`,
+  `label`, or `all=true`) — every cancel path silences the matching
+  alarms.
+- The 30-second hard cap (`_ALARM_AUTO_STOP_SEC`), enforced by both
+  the daemon-side registry and the dialogue's local `QTimer`. The
+  caps are independent so the alarm goes quiet even if the daemon or
+  the desktop app crashes between start and stop.
+
+The audio is owned by the dialogue, not by the daemon, so dismissal
+silences the noise immediately regardless of which path closed the
+dialogue.
 
 The spoken text is **`entry.announcement`**, which the reply LLM is
 expected to pre-localise into the user's current language when calling

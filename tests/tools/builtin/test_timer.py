@@ -8,6 +8,7 @@ import pytest
 
 from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.builtin.timer import (
+    AlarmRegistry,
     TimerEntry,
     TimerManager,
     TimerTool,
@@ -15,8 +16,10 @@ from src.jarvis.tools.builtin.timer import (
     _format_duration,
     _sanitise_announcement,
     _sanitise_label,
+    get_alarm_registry,
     get_timer_manager,
     set_tts_provider,
+    stop_all_alarms,
 )
 from src.jarvis.tools.builtin import timer as timer_mod
 from src.jarvis.tools.types import ToolExecutionResult
@@ -527,3 +530,159 @@ class TestRegistry:
         a = get_timer_manager()
         b = get_timer_manager()
         assert a is b
+
+
+class TestAlarmRegistry:
+    """Behavioural tests for the looping-alarm registry.
+
+    These tests run with a tiny auto-stop so the threading.Timer-based
+    cap doesn't keep the test process alive, and they assert against
+    observable IPC events rather than internal flags.
+    """
+
+    @pytest.fixture
+    def registry(self, monkeypatch):
+        # Shrink the auto-stop to a tick so a missed stop doesn't
+        # leave a 30-second daemon thread running past the test.
+        monkeypatch.setattr(timer_mod, "_ALARM_AUTO_STOP_SEC", 1)
+        # Reset the module-level singleton so each test starts fresh.
+        monkeypatch.setattr(timer_mod, "_alarm_registry_instance", None)
+        # Capture every IPC event so tests assert on the wire format.
+        events: list = []
+        monkeypatch.setattr(
+            timer_mod,
+            "_emit_alarm_event",
+            lambda etype, payload: events.append((etype, payload)),
+        )
+        return get_alarm_registry(), events
+
+    def _entry(self, timer_id: str = "abc123", label: str = "pasta") -> TimerEntry:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        return TimerEntry(
+            id=timer_id,
+            label=label,
+            duration_sec=60,
+            started_at=now,
+            eta=now,
+            announcement=None,
+        )
+
+    def test_start_emits_ipc_and_records_alarm(self, registry):
+        reg, events = registry
+        reg.start(self._entry())
+        assert ("start", {
+            "id": "abc123",
+            "label": "pasta",
+            "duration_human": "1 minute",
+            "auto_stop_sec": 1,
+        }) in events
+        assert "abc123" in reg.active_ids()
+
+    def test_stop_clears_alarm_and_emits_stop(self, registry):
+        reg, events = registry
+        reg.start(self._entry())
+        assert reg.stop("abc123") is True
+        assert reg.active_ids() == []
+        assert ("stop", {"id": "abc123"}) in events
+        # Idempotent.
+        assert reg.stop("abc123") is False
+
+    def test_stop_all_emits_single_bulk_event(self, registry):
+        reg, events = registry
+        reg.start(self._entry("a", "one"))
+        reg.start(self._entry("b", "two"))
+        events.clear()
+        n = reg.stop_all()
+        assert n == 2
+        assert reg.active_ids() == []
+        # One bulk stop, not per-id.
+        stop_events = [e for e in events if e[0] == "stop"]
+        assert stop_events == [("stop", {"all": True})]
+
+    def test_auto_cap_silences_alarm(self, registry):
+        reg, events = registry
+        reg.start(self._entry())
+        # Auto-cap is 1 second in the fixture; wait it out.
+        deadline = time.time() + 3.0
+        while reg.active_ids() and time.time() < deadline:
+            time.sleep(0.05)
+        assert reg.active_ids() == []
+        assert any(etype == "stop" for etype, _ in events)
+
+    def test_cancel_silences_matching_alarm(self, registry, monkeypatch):
+        reg, events = registry
+        # Build a fresh manager that uses the real default announcer, but
+        # stub out everything except the alarm registry hook.
+        mgr = TimerManager()
+        monkeypatch.setattr(timer_mod, "_manager_instance", mgr)
+
+        entry = self._entry("xyz", "soup")
+        reg.start(entry)
+        assert "xyz" in reg.active_ids()
+
+        # Manually inject the entry into the manager so cancel() finds it.
+        with mgr._lock:
+            mgr._timers[entry.id] = entry
+        mgr.cancel(entry.id)
+
+        assert "xyz" not in reg.active_ids()
+
+    def test_cancel_by_label_silences_matching_alarms(self, registry, monkeypatch):
+        reg, _events = registry
+        mgr = TimerManager()
+        monkeypatch.setattr(timer_mod, "_manager_instance", mgr)
+
+        e1 = self._entry("id1", "tea")
+        e2 = self._entry("id2", "tea")
+        reg.start(e1)
+        reg.start(e2)
+        with mgr._lock:
+            mgr._timers[e1.id] = e1
+            mgr._timers[e2.id] = e2
+        mgr.cancel_by_label("tea")
+        assert reg.active_ids() == []
+
+    def test_cancel_all_silences_alarms(self, registry, monkeypatch):
+        reg, _events = registry
+        mgr = TimerManager()
+        monkeypatch.setattr(timer_mod, "_manager_instance", mgr)
+        reg.start(self._entry("a", "x"))
+        reg.start(self._entry("b", "y"))
+        mgr.cancel_all()
+        assert reg.active_ids() == []
+
+    def test_setting_new_timer_silences_active_alarms(self, registry, monkeypatch):
+        reg, _events = registry
+        mgr = TimerManager(announcer=lambda e: None)
+        monkeypatch.setattr(timer_mod, "_manager_instance", mgr)
+        reg.start(self._entry("a", "old"))
+        assert reg.active_ids() == ["a"]
+        # Starting a fresh timer dismisses any ringing alarms.
+        mgr.start(60, label="new")
+        assert reg.active_ids() == []
+
+    def test_stop_tool_silences_alarms(self, registry):
+        reg, _events = registry
+        reg.start(self._entry("a", "x"))
+        assert stop_all_alarms() == 1
+        assert reg.active_ids() == []
+
+    def test_headless_fallback_does_not_crash_on_broken_stdout(
+        self, registry, monkeypatch
+    ):
+        # Simulate stdout.write blowing up (e.g. closed pipe). The
+        # fallback thread must swallow the error and exit cleanly.
+        class BrokenStdout:
+            def write(self, _):
+                raise OSError("pipe closed")
+
+            def flush(self):
+                raise OSError("pipe closed")
+
+        monkeypatch.setattr(timer_mod.sys, "stdout", BrokenStdout())
+        reg, _events = registry
+        reg.start(self._entry())
+        # Stopping should still work.
+        reg.stop("abc123")
+        assert reg.active_ids() == []

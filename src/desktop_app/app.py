@@ -71,6 +71,11 @@ from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
+from desktop_app.timer_alarm_dialog import (
+    TIMER_ALARM_IPC_PREFIX,
+    TimerAlarmDialog,
+    parse_alarm_event,
+)
 
 
 _LOG_SEPARATOR = "─" * 50
@@ -1816,6 +1821,12 @@ class JarvisSystemTray:
         self.log_signals.new_log.connect(self.log_viewer.append_log)
         self.log_signals.voice_status.connect(self._on_voice_pause_status)
 
+        # Timer-alarm dialogue (singleton, created lazily on the GUI
+        # thread). Driven by `__TIMER_ALARM__:` IPC events that the
+        # daemon emits over stdout when a timer elapses.
+        self.timer_alarm_dialog: Optional[TimerAlarmDialog] = None
+        self.log_signals.new_log.connect(self._handle_timer_alarm_line)
+
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
@@ -2809,6 +2820,27 @@ class JarvisSystemTray:
             self.update_icon()
             self._set_chat_daemon_status("crashed")
             self._set_face_asleep()
+
+    def _handle_timer_alarm_line(self, line: str) -> None:
+        """Intercept TIMER_ALARM IPC lines from the daemon stdout stream.
+
+        Cheap fast-path check before touching the JSON parser; the
+        signal fires for every log line so the prefix test must stay
+        a single substring comparison.
+        """
+        if TIMER_ALARM_IPC_PREFIX not in line:
+            return
+        event = parse_alarm_event(line)
+        if not event:
+            return
+        event_type = event.get("type")
+        data = event.get("data") or {}
+        if event_type == "start":
+            if self.timer_alarm_dialog is None:
+                self.timer_alarm_dialog = TimerAlarmDialog()
+            self.timer_alarm_dialog.handle_start(data)
+        elif event_type == "stop" and self.timer_alarm_dialog is not None:
+            self.timer_alarm_dialog.handle_stop(data)
 
     def _read_daemon_logs(self) -> None:
         """Read logs from daemon subprocess in a background thread."""
