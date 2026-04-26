@@ -4,18 +4,20 @@
 After #282 added duplicate-skip on the cumulative-summary re-flush path,
 the `🧠 Knowledge graph: learned N new facts` line in
 ``update_diary_from_dialogue_memory`` went silent on every flush past the
-first — every re-extraction routed to a node that already contained the
+first: every re-extraction routed to a node that already contained the
 fact, ``stored`` came back empty, and the print was gated on a non-empty
 list. From the user's perspective the memory pipeline looked dead.
 
-These tests lock in the three CLI states (some new, all duplicates,
-mixed) so the regression can't slip back in unnoticed.
+These tests lock in all four CLI states (mixed, only-new, all-duplicate,
+silent-empty) plus singular pluralisation, so the regression can't slip
+back in unnoticed.
 """
 
-import time
 from unittest.mock import patch
 
 import pytest
+
+from jarvis.memory.graph_ops import GraphUpdateResult
 
 
 @pytest.mark.unit
@@ -53,8 +55,6 @@ class TestKnowledgeGraphConsoleLogging:
 
     def test_logs_count_when_new_facts_stored(self, db, dialogue_memory, capsys):
         """Mixed flush: 2 new + 1 duplicate prints the count and per-fact preview."""
-        from jarvis.memory.graph_ops import GraphUpdateResult
-
         result = GraphUpdateResult(
             stored=[
                 ("Bats use echolocation.", "world"),
@@ -73,8 +73,6 @@ class TestKnowledgeGraphConsoleLogging:
 
     def test_logs_singular_when_one_new_fact(self, db, dialogue_memory, capsys):
         """Pluralisation: a single new fact uses singular wording."""
-        from jarvis.memory.graph_ops import GraphUpdateResult
-
         result = GraphUpdateResult(
             stored=[("Bats use echolocation.", "world")],
             skipped=0,
@@ -95,8 +93,6 @@ class TestKnowledgeGraphConsoleLogging:
         empty and the previous gate suppressed the print entirely. The
         user lost their only signal that the memory pipeline was alive.
         """
-        from jarvis.memory.graph_ops import GraphUpdateResult
-
         result = GraphUpdateResult(stored=[], skipped=3)
         self._run_flush(db, dialogue_memory, result)
 
@@ -106,8 +102,6 @@ class TestKnowledgeGraphConsoleLogging:
 
     def test_logs_singular_duplicate(self, db, dialogue_memory, capsys):
         """Pluralisation: a single duplicate uses singular wording."""
-        from jarvis.memory.graph_ops import GraphUpdateResult
-
         result = GraphUpdateResult(stored=[], skipped=1)
         self._run_flush(db, dialogue_memory, result)
 
@@ -122,8 +116,6 @@ class TestKnowledgeGraphConsoleLogging:
         to report, so we don't add console noise on every diary flush
         that didn't yield knowledge.
         """
-        from jarvis.memory.graph_ops import GraphUpdateResult
-
         result = GraphUpdateResult(stored=[], skipped=0)
         self._run_flush(db, dialogue_memory, result)
 

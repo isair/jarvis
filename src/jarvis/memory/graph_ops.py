@@ -638,7 +638,7 @@ def update_graph_from_dialogue(
 
     debug_log(
         f"graph update: stored {len(stored)}/{len(facts)} facts "
-        f"({skipped} duplicate{'s' if skipped != 1 else ''} skipped)",
+        f"({skipped} duplicate{'' if skipped == 1 else 's'} skipped)",
         "memory",
     )
     return GraphUpdateResult(stored=stored, skipped=skipped)
