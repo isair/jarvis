@@ -16,7 +16,6 @@ Run:
 import json
 import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,12 +112,11 @@ class TestDiaryRecencyOrder:
     when both match the same query."""
 
     @pytest.fixture
-    def db_with_entries(self, request):
+    def db_with_entries(self, request, tmp_path):
         """Create a temporary DB with old and new diary entries."""
         case: SupersedingCase = request.param
 
-        tmp = tempfile.mkdtemp()
-        db_path = os.path.join(tmp, "test.db")
+        db_path = os.path.join(str(tmp_path), "test.db")
         db = Database(db_path)
 
         # Store old entry first
@@ -179,10 +177,9 @@ class TestGraphRecencySuperseding:
     by preserving temporal context that allows newer facts to take precedence."""
 
     @pytest.fixture
-    def graph_store(self):
+    def graph_store(self, tmp_path):
         """Create an in-memory graph store."""
-        tmp = tempfile.mkdtemp()
-        db_path = os.path.join(tmp, "test.db")
+        db_path = os.path.join(str(tmp_path), "test.db")
         store = GraphMemoryStore(db_path)
         yield store
 
@@ -240,11 +237,10 @@ class TestMergeSupersession:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", SUPERSEDING_CASES)
-    def test_merge_drops_contradicting_old_line(self, case):
+    def test_merge_drops_contradicting_old_line(self, case, tmp_path):
         case = case.values[0] if hasattr(case, 'values') else case
 
-        tmp = tempfile.mkdtemp()
-        store = GraphMemoryStore(os.path.join(tmp, "test.db"))
+        store = GraphMemoryStore(os.path.join(str(tmp_path), "test.db"))
 
         old_line = (
             f"[{case.old_date}] "
