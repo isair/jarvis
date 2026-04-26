@@ -191,6 +191,91 @@ INDEPENDENCE_CASES = [
 
 
 @dataclass
+class MetaNarrativeCase:
+    description: str
+    existing_data: str
+    new_facts: List[str]
+    # Substrings that must NOT remain after the merge — these are
+    # extractor-artefact lines from earlier prompt versions
+    # (assistant-narrating, capability denials) and have no place
+    # in a knowledge node.
+    must_drop_substrings: List[str]
+    # Substrings that MUST remain — genuine knowledge or directives
+    # that should not get over-pruned by the meta-narrative rule.
+    must_keep_substrings: List[str]
+
+
+META_NARRATIVE_CASES = [
+    pytest.param(
+        MetaNarrativeCase(
+            description=(
+                "Capability-denial line in Directives is dropped, "
+                "real directive survives"
+            ),
+            # Mirrors the real bug report: a self-denial leaked into
+            # Directives via an older extractor prompt and persisted
+            # because no rewrite-on-write rule covered meta-narrative.
+            # Consolidate-all (empty new_facts) should now scrub it
+            # without touching the genuine British English directive.
+            existing_data=(
+                "Always reply in British English.\n"
+                "The assistant is unable to navigate to a web page."
+            ),
+            new_facts=[],
+            must_drop_substrings=[
+                "unable to navigate",
+                "the assistant is unable",
+            ],
+            must_keep_substrings=["british english"],
+        ),
+        id="capability denial dropped, directive kept",
+    ),
+    pytest.param(
+        MetaNarrativeCase(
+            description=(
+                "Assistant-narrating WORLD line is dropped during "
+                "self-consolidation"
+            ),
+            # The extractor's BANNED FACT FORMS list catches these at
+            # write-time now, but lines emitted before #291 landed
+            # still sit in nodes. Merge prompt must drop them too.
+            existing_data=(
+                "Possessor (2020) is directed by Brandon Cronenberg.\n"
+                "The assistant suggested grilled salmon for dinner."
+            ),
+            new_facts=[],
+            must_drop_substrings=[
+                "the assistant suggested",
+                "grilled salmon",
+            ],
+            must_keep_substrings=["possessor", "cronenberg"],
+        ),
+        id="assistant-suggested line dropped, lookup survives",
+    ),
+    pytest.param(
+        MetaNarrativeCase(
+            description=(
+                "No meta-narrative present — merge must not invent "
+                "drops (over-pruning guard)"
+            ),
+            # Counter-test for over-zealous interpretation of the new
+            # rule. A clean Directives node with two genuine
+            # imperatives must come through self-consolidation
+            # untouched. If this fails the rule is too aggressive.
+            existing_data=(
+                "Always reply in British English.\n"
+                "Keep replies under three sentences."
+            ),
+            new_facts=[],
+            must_drop_substrings=[],
+            must_keep_substrings=["british english", "three sentences"],
+        ),
+        id="genuine directives untouched",
+    ),
+]
+
+
+@dataclass
 class BatchedCase:
     description: str
     existing_data: str
@@ -406,6 +491,54 @@ class TestIndependenceOfUnrelatedFacts:
         for kw in case.must_add:
             assert kw.lower() in merged_lower, (
                 f"[{case.description}] new fact containing '{kw}' did not land.\n{merged}"
+            )
+
+
+@pytest.mark.eval
+class TestMetaNarrativePruning:
+    """Lines that narrate the assistant's own behaviour, capabilities,
+    or denials are extractor artefacts from earlier prompt versions,
+    not user knowledge. The merge step must drop them during normal
+    rewrite-on-write AND during the consolidate-all sweep. Counterpart
+    to the extractor's BANNED FACT FORMS list — that catches them at
+    write-time, this catches the historical leftovers."""
+
+    @requires_judge_llm
+    @pytest.mark.parametrize("case", META_NARRATIVE_CASES)
+    def test_meta_narrative_dropped_real_facts_kept(self, case, graph_store):
+        case = case.values[0] if hasattr(case, 'values') else case
+
+        node = graph_store.create_node(
+            name="T",
+            description=case.description,
+            data=case.existing_data,
+            parent_id="root",
+        )
+
+        result = merge_node_data(
+            store=graph_store,
+            node_id=node.id,
+            new_facts=case.new_facts,
+            ollama_base_url=JUDGE_BASE_URL,
+            ollama_chat_model=JUDGE_MODEL,
+            timeout_sec=30.0,
+        )
+
+        merged = graph_store.get_node(node.id).data
+        merged_lower = merged.lower()
+
+        print(f"\n  📝 meta-narrative '{case.description}':\n     {merged[:300]}")
+        print(f"     success={result.success}")
+
+        for kw in case.must_drop_substrings:
+            assert kw.lower() not in merged_lower, (
+                f"[{case.description}] meta-narrative line containing "
+                f"'{kw}' survived the merge — the rule did not fire.\n{merged}"
+            )
+        for kw in case.must_keep_substrings:
+            assert kw.lower() in merged_lower, (
+                f"[{case.description}] genuine fact containing '{kw}' was "
+                f"over-pruned — the rule is too aggressive.\n{merged}"
             )
 
 

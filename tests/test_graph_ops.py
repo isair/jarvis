@@ -1063,6 +1063,50 @@ class TestMergeNodeData:
 
 
 @pytest.mark.unit
+class TestMergeSystemPromptInvariants:
+    """Pin the rule set the merge prompt must teach. Behaviour against a
+    real picker model is covered by the merge_consolidation evals; this
+    catches a future edit that silently drops a rule from the system
+    prompt's text. Each rule is referenced at least once below."""
+
+    def test_prompt_lists_supersession_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "CONTRADICTION" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_dedupe_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "DUPLICATION" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_consolidation_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "CONSOLIDATION" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_independence_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "INDEPENDENCE" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_pruning_rule(self):
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "PRUNING" in _MERGE_SYSTEM_PROMPT
+
+    def test_prompt_lists_meta_narrative_rule_with_assistant_examples(self):
+        """The META-NARRATIVE rule must be present and must give the
+        picker model concrete examples of the verb forms to drop. The
+        bug it exists to fix was a 'The assistant is unable to ...'
+        line surviving consolidate-all sweeps because no rule covered
+        capability denials. If the rule label or its trigger phrasings
+        get edited away, this test fails."""
+        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        assert "META-NARRATIVE" in _MERGE_SYSTEM_PROMPT
+        # The two shapes the bug report surfaced explicitly.
+        assert "The assistant" in _MERGE_SYSTEM_PROMPT
+        assert "unable to" in _MERGE_SYSTEM_PROMPT
+        # Counter-protection: the rule must not over-prune real
+        # directives, so an exception clause is required.
+        assert "directive" in _MERGE_SYSTEM_PROMPT.lower()
+
+
+@pytest.mark.unit
 class TestConsolidateAllPopulatedNodes:
     """consolidate_all_populated_nodes runs a self-merge pass on every
     populated node. Migration path for the contradiction backlog."""
