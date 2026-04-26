@@ -443,6 +443,18 @@ _MERGE_SYSTEM_PROMPT = (
 )
 
 
+def _split_data_lines(data: Optional[str]) -> list[str]:
+    """Split node data into non-empty, stripped lines.
+
+    Single source of truth for how the merge pipeline tokenises a
+    node's `data` blob into facts — the merge body, the
+    consolidate-all walk, and the boundary test all use this so a
+    future change to the parsing rule (e.g. `splitlines()`,
+    blank-line handling) propagates atomically.
+    """
+    return [l for l in (data or "").split("\n") if l.strip()]
+
+
 def is_populated_node(node: MemoryNode) -> bool:
     """A node worth visiting in a consolidate-all sweep.
 
@@ -561,7 +573,7 @@ def merge_node_data(
         return MergeResult(success=False)
 
     existing = (node.data or "").strip()
-    existing_lines = [l for l in existing.split("\n") if l.strip()]
+    existing_lines = _split_data_lines(node.data)
     sanitised_new: list[str] = [f.strip() for f in new_facts if f and f.strip()]
 
     if not existing_lines and not sanitised_new:
@@ -1022,7 +1034,7 @@ def consolidate_all_populated_nodes(
     for node in all_nodes:
         if not is_populated_node(node):
             continue
-        before = len([l for l in node.data.split("\n") if l.strip()])
+        before = len(_split_data_lines(node.data))
         try:
             result = merge_node_data(
                 store=store,
@@ -1040,11 +1052,7 @@ def consolidate_all_populated_nodes(
             result = MergeResult(success=False)
 
         refreshed = store.get_node(node.id)
-        after = (
-            len([l for l in (refreshed.data or "").split("\n") if l.strip()])
-            if refreshed
-            else before
-        )
+        after = len(_split_data_lines(refreshed.data)) if refreshed else before
         debug_log(
             f"consolidate-all: '{node.name}' {before} → {after} lines "
             f"(success={result.success})",

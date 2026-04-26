@@ -942,15 +942,18 @@ class TestMergeNodeData:
         """The guard's cap is `existing + new + _MERGE_GROWTH_SLACK`.
         Pin both sides of the boundary against the named constant so a
         future tweak to the slack can't silently drift the guard."""
-        from src.jarvis.memory.graph_ops import _MERGE_GROWTH_SLACK
+        from src.jarvis.memory.graph_ops import (
+            _MERGE_GROWTH_SLACK,
+            _split_data_lines,
+        )
 
         existing_data = "E1.\nE2."
         node = store.create_node(
             name="T", description="d", data=existing_data, parent_id="user",
         )
-        # Derive `existing_count` from the live data so the boundary
-        # math can't drift if the literal is later edited.
-        existing_count = len([l for l in existing_data.split("\n") if l.strip()])
+        # Derive `existing_count` via the same helper production uses
+        # so the boundary math can't drift if the parsing rule changes.
+        existing_count = len(_split_data_lines(existing_data))
         new_facts = ["N1."]
         cap = existing_count + len(new_facts) + _MERGE_GROWTH_SLACK
 
