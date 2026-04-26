@@ -174,6 +174,26 @@ nomic-embed-text:latest    def456          274 MB    1 week ago
 
             assert models == []
 
+    def test_falls_back_to_check_ollama_cli_when_path_unset(self):
+        """When PATH does not contain ollama (e.g. frozen macOS .app launch),
+        falls back to check_ollama_cli() so the resolved binary is invoked
+        instead of plain "ollama" which would fail with FileNotFoundError."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "NAME    ID    SIZE    MODIFIED\nllama2:7b    abc    3.8 GB    1d\n"
+
+        with patch("desktop_app.setup_wizard.shutil.which", return_value=None):
+            with patch(
+                "desktop_app.setup_wizard.check_ollama_cli",
+                return_value=(True, "/usr/local/bin/ollama"),
+            ):
+                with patch("subprocess.run", return_value=mock_result) as run:
+                    models = check_installed_models()
+
+                    assert "llama2:7b" in models
+                    args, _ = run.call_args
+                    assert args[0][0] == "/usr/local/bin/ollama"
+
 
 class TestCheckOllamaStatus:
     """Tests for complete Ollama status check."""

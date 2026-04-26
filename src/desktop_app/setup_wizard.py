@@ -222,7 +222,15 @@ def check_installed_models(ollama_path: Optional[str] = None) -> List[str]:
     Returns list of model names.
     """
     if ollama_path is None:
-        ollama_path = shutil.which("ollama") or "ollama"
+        # Resolve via PATH first, then fall back to platform-specific install
+        # locations. Frozen .app launches on macOS get a sanitised PATH that
+        # excludes /usr/local/bin and /opt/homebrew/bin, so shutil.which alone
+        # is not enough — without this fallback, the model check fails and the
+        # setup wizard pops on every launch.
+        ollama_path = shutil.which("ollama")
+        if not ollama_path:
+            _, resolved = check_ollama_cli()
+            ollama_path = resolved or "ollama"
 
     try:
         # Hide console window on Windows
