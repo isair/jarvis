@@ -979,6 +979,39 @@ class TestMergeNodeData:
         assert result.success is False
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    def test_prompt_body_matches_parsed_line_count(self, mock_llm, store):
+        """The CURRENT facts block sent to the picker must contain
+        exactly the lines `_split_data_lines` produced — blank lines
+        and whitespace-only lines stripped from both signals
+        consistently. Locks the round-6 consolidation that made the
+        helper the sole parser."""
+        node = store.create_node(
+            name="T",
+            description="d",
+            # Mid-blob blank line + a whitespace-only line. The old
+            # `node.data.strip()` path would have left these in the
+            # prompt body while the parsed list dropped them.
+            data="A.\n\n  \nB.",
+            parent_id="user",
+        )
+        mock_llm.return_value = '{"facts": ["A.", "B."]}'
+
+        merge_node_data(
+            store=store,
+            node_id=node.id,
+            new_facts=[],
+            ollama_base_url="http://localhost",
+            ollama_chat_model="model",
+        )
+
+        sent_user_content = mock_llm.call_args.kwargs["user_content"]
+        assert "CURRENT facts on the node" in sent_user_content
+        assert "A.\nB." in sent_user_content
+        # The dropped blank/whitespace lines must not survive into the prompt.
+        assert "A.\n\n" not in sent_user_content
+        assert "  \n" not in sent_user_content
+
+    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
     def test_extracts_object_with_braces_inside_fact_strings(self, mock_llm, store):
         """A fact whose text contains literal `{` or `}` must still
         parse — `raw_decode` handles balanced nesting that a
