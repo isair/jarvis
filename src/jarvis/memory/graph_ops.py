@@ -551,9 +551,9 @@ def update_graph_from_dialogue(
 
     Returns a ``GraphUpdateResult`` with a ``stored`` list of
     ``(fact, node_name)`` tuples for each newly-appended fact and a
-    ``skipped`` count of duplicates the picker landed on. The result
-    behaves like its ``stored`` list under ``len()``, iteration, and
-    equality with a list, so existing callers keep working.
+    ``skipped`` count of duplicates the picker landed on. Callers must
+    unpack via ``result.stored`` / ``result.skipped`` (or tuple
+    destructuring) — the NamedTuple does not masquerade as the old list.
     """
     # Step 1: Extract discrete branch-tagged facts from the summary
     facts = extract_graph_memories(

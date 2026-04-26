@@ -847,15 +847,17 @@ def update_diary_from_dialogue_memory(
                     # re-extracts the same facts on every flush), making it
                     # look like the memory pipeline had stopped working.
                     if stored or skipped:
+                        dup_suffix = (
+                            f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
+                        )
                         if stored:
-                            tail = (
-                                f" ({skipped} duplicate{'s' if skipped != 1 else ''} skipped)"
-                                if skipped
-                                else ""
+                            fact_count = (
+                                f"{len(stored)} new fact"
+                                f"{'' if len(stored) == 1 else 's'}"
                             )
+                            tail = f" ({dup_suffix})" if skipped else ""
                             print(
-                                f"  🧠 Knowledge graph: learned {len(stored)} new fact"
-                                f"{'s' if len(stored) != 1 else ''}{tail}",
+                                f"  🧠 Knowledge graph: learned {fact_count}{tail}",
                                 flush=True,
                             )
                             # Show each new fact with the node it landed in so
@@ -870,8 +872,7 @@ def update_diary_from_dialogue_memory(
                                 print(f"     · …and {len(stored) - 6} more", flush=True)
                         else:
                             print(
-                                f"  🧠 Knowledge graph: nothing new "
-                                f"({skipped} duplicate{'s' if skipped != 1 else ''} skipped)",
+                                f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
                                 flush=True,
                             )
                     debug_log(
