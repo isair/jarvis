@@ -668,21 +668,37 @@ class TestAlarmRegistry:
         assert stop_all_alarms() == 1
         assert reg.active_ids() == []
 
-    def test_headless_fallback_does_not_crash_on_broken_stdout(
+    def test_headless_fallback_does_not_crash_on_broken_writer(
         self, registry, monkeypatch
     ):
-        # Simulate stdout.write blowing up (e.g. closed pipe). The
-        # fallback thread must swallow the error and exit cleanly.
-        class BrokenStdout:
-            def write(self, _):
-                raise OSError("pipe closed")
-
-            def flush(self):
-                raise OSError("pipe closed")
-
-        monkeypatch.setattr(timer_mod.sys, "stdout", BrokenStdout())
+        # Pretend we're on a real terminal so the fallback loop spawns.
+        monkeypatch.setattr(
+            timer_mod.AlarmRegistry, "_stdout_is_tty", staticmethod(lambda: True)
+        )
         reg, _events = registry
+        # Inject a writer that always blows up; the loop must swallow
+        # the error and the registry must still stop cleanly.
+        def boom(_ch: str) -> None:
+            raise OSError("pipe closed")
+
+        reg.set_fallback_writer(boom)
         reg.start(self._entry())
-        # Stopping should still work.
         reg.stop("abc123")
         assert reg.active_ids() == []
+
+    def test_fallback_loop_skipped_when_stdout_not_tty(
+        self, registry, monkeypatch
+    ):
+        # When the desktop app captures stdout via subprocess pipe,
+        # isatty() is False and the BEL loop must not spawn.
+        monkeypatch.setattr(
+            timer_mod.AlarmRegistry, "_stdout_is_tty", staticmethod(lambda: False)
+        )
+        reg, _events = registry
+        calls: list = []
+        reg.set_fallback_writer(lambda ch: calls.append(ch))
+        reg.start(self._entry())
+        # Give any (incorrectly) spawned thread a chance to write.
+        time.sleep(0.2)
+        assert calls == []
+        reg.stop("abc123")
