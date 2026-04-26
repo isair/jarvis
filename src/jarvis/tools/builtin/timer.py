@@ -1,4 +1,4 @@
-"""Timer tool — schedule countdowns that announce when they elapse.
+"""Timer tool; schedule countdowns that announce when they elapse.
 
 The tool returns raw structured data (timer ids, labels, etas, durations).
 The system prompt is responsible for phrasing the confirmation back to the
@@ -56,7 +56,7 @@ def _sanitise_label(label: Optional[str]) -> Optional[str]:
 def _sanitise_announcement(text: Optional[str]) -> Optional[str]:
     """Trim a pre-localised announcement string.
 
-    Same reasoning as :func:`_sanitise_label` — TTS handles single lines
+    Same reasoning as :func:`_sanitise_label`; TTS handles single lines
     better, and the stdout banner is line-based.
     """
     if not isinstance(text, str):
@@ -81,7 +81,7 @@ def _format_duration(total_seconds: int) -> str:
     if minutes:
         parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
     if seconds and not hours:
-        # Drop seconds when hours are present — "1 hour 5 minutes 12 seconds"
+        # Drop seconds when hours are present; "1 hour 5 minutes 12 seconds"
         # is noise; minute-level precision is enough for long timers.
         parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
     if not parts:
@@ -98,7 +98,7 @@ class TimerEntry:
     eta: datetime
     # Pre-localised announcement text passed in by the caller (the reply
     # LLM, which knows the user's current language). Empty / None falls
-    # back to the English default — that fallback only fires when the
+    # back to the English default; that fallback only fires when the
     # caller forgot to localise, never as the primary path.
     announcement: Optional[str] = None
     timer: Optional[threading.Timer] = field(default=None, repr=False)
@@ -118,7 +118,7 @@ class TimerEntry:
 class TimerManager:
     """In-process registry of active countdown timers.
 
-    Singleton — see :func:`get_timer_manager`. The announcement hook is
+    Singleton; see :func:`get_timer_manager`. The announcement hook is
     pluggable so tests can substitute a fake instead of speaking aloud /
     poking the desktop face widget.
     """
@@ -150,7 +150,7 @@ class TimerManager:
             raise ValueError(
                 f"duration too long (max {_MAX_DURATION_SEC // 3600} hours)"
             )
-        rounded = max(1, int(round(actual))) if actual >= 1 else 0
+        rounded = int(round(actual)) if actual >= 1 else 0
 
         with self._lock:
             if len(self._timers) >= _MAX_ACTIVE_TIMERS:
@@ -180,13 +180,13 @@ class TimerManager:
 
         # Spawn the OS thread for the countdown OUTSIDE the manager lock.
         # threading.Timer.start() is fast in practice but it's still I/O
-        # we don't need to serialise — the spec promises expensive work
+        # we don't need to serialise; the spec promises expensive work
         # runs unlocked, so honour that here too.
         t.start()
 
         debug_log(
             f"⏲️ timer started id={timer_id} label={entry.label!r} "
-            f"duration={actual}s eta={entry.eta.isoformat()}",
+            f"duration={rounded}s eta={entry.eta.isoformat()}",
             "tools",
         )
         return entry
@@ -256,7 +256,7 @@ _manager_instance: Optional[TimerManager] = None
 _manager_lock = threading.Lock()
 
 
-# Pluggable TTS provider — a zero-arg callable returning the TTS engine
+# Pluggable TTS provider; a zero-arg callable returning the TTS engine
 # (or None). Defaults to "look up the daemon's global engine if the
 # daemon module is already loaded". Tests override this to avoid pulling
 # the heavy daemon import chain.
@@ -290,7 +290,7 @@ def set_tts_provider(provider: Callable[[], Optional[Any]]) -> None:
     """Override the TTS lookup used by the default announcer.
 
     Tests use this to inject a fake engine without importing the daemon.
-    Production code never calls this — the default already does the
+    Production code never calls this; the default already does the
     right thing.
     """
     global _tts_provider
@@ -323,7 +323,7 @@ def _default_announcer(entry: TimerEntry) -> None:
 
     Face-state note: TTS engines flip the face into SPEAKING themselves
     when ``speak()`` runs, but they intentionally don't restore IDLE on
-    completion — the daemon does that as part of its turn loop. A timer
+    completion; the daemon does that as part of its turn loop. A timer
     fire happens *outside* a turn, so we'd leave the face stuck on
     SPEAKING. Pass a completion callback that restores IDLE once playback
     finishes (or the synthesis fails), keeping the face in sync with
@@ -348,7 +348,7 @@ def _default_announcer(entry: TimerEntry) -> None:
         state_manager = get_jarvis_state()
         state_manager.set_state(JarvisState.SPEAKING)
     except Exception:
-        # Desktop app not running (CLI, eval, tests) — silently skip.
+        # Desktop app not running (CLI, eval, tests); silently skip.
         state_manager = None
 
     def _restore_idle() -> None:
@@ -400,7 +400,7 @@ class TimerTool(Tool):
             "the user's label (e.g. 'pasta', 'laundry') in the label field "
             "when they name one. For action='set', ALSO pass an "
             "'announcement' string written in the SAME LANGUAGE the user is "
-            "currently speaking — this is what Jarvis will literally speak "
+            "currently speaking; this is what Jarvis will literally speak "
             "aloud when the timer elapses, so phrase it naturally (e.g. "
             "'Your pasta timer is up' / 'El temporizador de la pasta ha "
             "terminado' / 'Makarna zamanlayıcısı doldu'). Multiple timers "
