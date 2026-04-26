@@ -15,6 +15,7 @@ from desktop_app.setup_wizard import (
     get_required_models,
     check_installed_models,
     check_ollama_status,
+    resolve_ollama_path,
     should_show_setup_wizard,
     OllamaStatus,
     MCPPage,
@@ -193,6 +194,30 @@ nomic-embed-text:latest    def456          274 MB    1 week ago
                     assert "llama2:7b" in models
                     args, _ = run.call_args
                     assert args[0][0] == "/usr/local/bin/ollama"
+
+
+class TestResolveOllamaPath:
+    """Tests for the ollama CLI path resolver."""
+
+    def test_prefers_path_lookup(self):
+        with patch("desktop_app.setup_wizard.shutil.which", return_value="/opt/homebrew/bin/ollama"):
+            assert resolve_ollama_path() == "/opt/homebrew/bin/ollama"
+
+    def test_falls_back_to_check_ollama_cli(self):
+        with patch("desktop_app.setup_wizard.shutil.which", return_value=None):
+            with patch(
+                "desktop_app.setup_wizard.check_ollama_cli",
+                return_value=(True, "/usr/local/bin/ollama"),
+            ):
+                assert resolve_ollama_path() == "/usr/local/bin/ollama"
+
+    def test_returns_literal_when_nothing_resolves(self):
+        with patch("desktop_app.setup_wizard.shutil.which", return_value=None):
+            with patch(
+                "desktop_app.setup_wizard.check_ollama_cli",
+                return_value=(False, None),
+            ):
+                assert resolve_ollama_path() == "ollama"
 
 
 class TestCheckOllamaStatus:
