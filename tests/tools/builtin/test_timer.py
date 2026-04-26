@@ -97,6 +97,12 @@ class TestSanitisers:
             == "Your pasta is ready"
         )
 
+    def test_label_strips_render_delimiters(self):
+        # Labels show up in a `id=…, label=…, duration=…` line that the
+        # reply LLM parses. A label containing `,` or `=` could smuggle
+        # in a second `label=` token; the sanitiser must defuse that.
+        assert _sanitise_label("foo, label=evil") == "foo label evil"
+
 
 class TestTimerSet:
     def test_set_returns_id_and_records_active(self, fresh_manager):
@@ -304,6 +310,34 @@ class TestTimerCancel:
         )
         # No matching timer is not an error — it's a successful no-op.
         assert result.success is True
+
+
+class TestTimerHardLimits:
+    """Cover the spec's promised 24h / 32-timer caps as tool errors."""
+
+    def test_rejects_duration_over_24_hours(self, fresh_manager):
+        from src.jarvis.tools.builtin.timer import _MAX_DURATION_SEC
+        tool = TimerTool()
+        result = tool.run(
+            {"action": "set", "seconds": _MAX_DURATION_SEC + 1},
+            make_context(),
+        )
+        assert result.success is False
+        assert "too long" in (result.error_message or "").lower()
+
+    def test_rejects_more_than_max_active(self, fresh_manager, monkeypatch):
+        # Lower the cap so we don't have to spawn 32 real Timer threads.
+        monkeypatch.setattr(
+            "src.jarvis.tools.builtin.timer._MAX_ACTIVE_TIMERS", 2
+        )
+        tool = TimerTool()
+        # First two succeed.
+        assert tool.run({"action": "set", "minutes": 5}, make_context()).success
+        assert tool.run({"action": "set", "minutes": 5}, make_context()).success
+        # Third trips the cap and surfaces as a tool error.
+        result = tool.run({"action": "set", "minutes": 5}, make_context())
+        assert result.success is False
+        assert "too many" in (result.error_message or "").lower()
 
 
 class TestTimerExpiry:
