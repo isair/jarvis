@@ -18,9 +18,49 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from ..debug import debug_log
+
+
+# ── Mutation listeners ─────────────────────────────────────────────────────
+#
+# Lightweight observer registry so consumers (e.g. DialogueMemory's warm
+# profile cache) can invalidate derived state when a node is created,
+# updated, or deleted. The listener receives the action name, node id, and
+# the FIXED_BRANCH ancestor (e.g. ``"user"``, ``"directives"``, ``"world"``)
+# so it can scope its reaction. Failures in listeners are logged and
+# swallowed so they cannot break a write.
+
+_MUTATION_LISTENERS: "list[Callable[..., None]]" = []
+
+
+def register_graph_mutation_listener(cb: Callable[..., None]) -> None:
+    """Register a callback invoked after every node mutation.
+
+    The callback is invoked with keyword arguments ``action``, ``node_id``,
+    and ``branch`` where ``branch`` is the id of the FIXED_BRANCH ancestor
+    (or the node id itself when the node is a fixed branch), or ``None``
+    when the branch cannot be resolved (e.g. root mutations).
+    """
+    if cb not in _MUTATION_LISTENERS:
+        _MUTATION_LISTENERS.append(cb)
+
+
+def unregister_graph_mutation_listener(cb: Callable[..., None]) -> None:
+    """Remove a previously registered mutation listener (idempotent)."""
+    try:
+        _MUTATION_LISTENERS.remove(cb)
+    except ValueError:
+        pass
+
+
+def _notify_graph_mutation(action: str, node_id: str, branch: Optional[str]) -> None:
+    for cb in list(_MUTATION_LISTENERS):
+        try:
+            cb(action=action, node_id=node_id, branch=branch)
+        except Exception as exc:
+            debug_log(f"graph mutation listener failed (non-fatal): {exc}", "memory")
 
 
 # ── Fact normalisation ─────────────────────────────────────────────────────
@@ -352,6 +392,33 @@ class GraphMemoryStore:
             ).fetchone()
             return self._row_to_node(row)
 
+    def _resolve_branch(self, node_id: Optional[str]) -> Optional[str]:
+        """Walk parents from ``node_id`` up to find the FIXED_BRANCH id it
+        belongs to (or itself, if the node IS a fixed branch). Returns
+        ``None`` for the root or when the node cannot be located.
+
+        Capped at ``MAX_TRAVERSAL_DEPTH`` so a corrupt parent cycle cannot
+        spin the loop. SQLite reads only — safe to call from write paths.
+        """
+        if not node_id or node_id == "root":
+            return None
+        if node_id in FIXED_BRANCH_IDS:
+            return node_id
+        current = node_id
+        for _ in range(MAX_TRAVERSAL_DEPTH):
+            row = self.conn.execute(
+                "SELECT parent_id FROM memory_nodes WHERE id = ?", (current,)
+            ).fetchone()
+            if row is None:
+                return None
+            parent = row["parent_id"]
+            if parent is None or parent == "root":
+                return None
+            if parent in FIXED_BRANCH_IDS:
+                return parent
+            current = parent
+        return None
+
     def create_node(
         self,
         name: str,
@@ -388,6 +455,7 @@ class GraphMemoryStore:
             self.conn.commit()
 
         debug_log(f"Created memory node '{name}' ({node_id[:8]})", "memory")
+        _notify_graph_mutation("create", node_id, self._resolve_branch(parent_id))
         return MemoryNode(
             id=node_id,
             name=name,
@@ -440,6 +508,7 @@ class GraphMemoryStore:
             )
             self.conn.commit()
 
+        _notify_graph_mutation("update", node_id, self._resolve_branch(node_id))
         return node
 
     def delete_node(self, node_id: str) -> bool:
@@ -451,12 +520,18 @@ class GraphMemoryStore:
         """
         if node_id == "root" or node_id in FIXED_BRANCH_IDS:
             return False
+        # Resolve branch BEFORE the delete so listeners get a meaningful
+        # branch attribution even though the row is about to vanish.
+        branch = self._resolve_branch(node_id)
         with self._lock:
             cur = self.conn.execute(
                 "DELETE FROM memory_nodes WHERE id = ?", (node_id,)
             )
             self.conn.commit()
-            return cur.rowcount > 0
+            deleted = cur.rowcount > 0
+        if deleted:
+            _notify_graph_mutation("delete", node_id, branch)
+        return deleted
 
     def node_contains_fact(self, node_id: str, fact: str) -> bool:
         """True if ``fact`` matches any line of the node's data after

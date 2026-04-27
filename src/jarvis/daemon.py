@@ -44,6 +44,7 @@ from .utils.location import get_location_context, is_location_available
 # Global instances for coordination between modules
 _global_dialogue_memory: Optional[DialogueMemory] = None
 _global_stop_requested: bool = False
+_warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
 
@@ -348,6 +349,61 @@ def main() -> None:
     )
     print("✓ Dialogue memory initialized", flush=True)
 
+    # Wire the conversation-scoped warm-profile cache to graph mutations.
+    # When the User or Directives branch is mutated mid-conversation, the
+    # cached warm profile is dropped so the next reply rebuilds it from
+    # the current graph state. World-branch writes (typical webSearch
+    # extractions) do not touch warm profile, so they are ignored.
+    try:
+        from .memory.graph import (
+            BRANCH_DIRECTIVES,
+            BRANCH_USER,
+            register_graph_mutation_listener,
+        )
+
+        _wp_relevant_branches = {BRANCH_USER, BRANCH_DIRECTIVES}
+
+        # Read the DialogueMemory ref through the module global at fire
+        # time, not via closure capture, so a future singleton swap (tests
+        # or hot-reload) routes invalidation to the live instance instead
+        # of the freed one.
+        def _invalidate_wp_on_graph_mutation(*, action, node_id, branch):
+            del action, node_id  # Only the branch matters for warm-profile filtering.
+            if branch not in _wp_relevant_branches:
+                return
+            dm = _global_dialogue_memory
+            if dm is None:
+                return
+            try:
+                dm.invalidate_warm_profile()
+                debug_log(
+                    f"warm profile invalidated by {branch} graph mutation",
+                    "memory",
+                )
+            except Exception as exc:
+                debug_log(
+                    f"warm profile invalidation failed (non-fatal): {exc}",
+                    "memory",
+                )
+
+        global _warm_profile_graph_listener
+        # If a previous run left a listener registered (re-entry without
+        # full process restart), drop it before installing the new one so
+        # the registry never accumulates stale closures.
+        if _warm_profile_graph_listener is not None:
+            try:
+                from .memory.graph import unregister_graph_mutation_listener
+                unregister_graph_mutation_listener(_warm_profile_graph_listener)
+            except Exception:
+                pass
+        register_graph_mutation_listener(_invalidate_wp_on_graph_mutation)
+        _warm_profile_graph_listener = _invalidate_wp_on_graph_mutation
+    except Exception as exc:
+        debug_log(
+            f"warm profile mutation listener wiring failed (non-fatal): {exc}",
+            "memory",
+        )
+
     # Knowledge graph: wipe + re-seed if the on-disk shape predates the
     # User/Directives/World taxonomy. Non-destructive to the diary —
     # users can re-import via the memory viewer.
@@ -567,6 +623,20 @@ def main() -> None:
         if tts is not None:
             tts.stop()
         db.close()
+
+        # Drop the warm-profile graph listener so the module registry does
+        # not retain a closure pointing at this run's DialogueMemory after
+        # shutdown — relevant for tests and any embedder that re-runs the
+        # daemon in-process.
+        global _warm_profile_graph_listener
+        if _warm_profile_graph_listener is not None:
+            try:
+                from .memory.graph import unregister_graph_mutation_listener
+                unregister_graph_mutation_listener(_warm_profile_graph_listener)
+            except Exception:
+                pass
+            _warm_profile_graph_listener = None
+
         debug_log("daemon stopped", "jarvis")
         print("👋 Daemon stopped", flush=True)
 

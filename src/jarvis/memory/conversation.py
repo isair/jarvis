@@ -8,6 +8,69 @@ from .db import Database
 from ..llm import call_llm_direct
 from .embeddings import get_embedding
 from ..debug import debug_log
+from ..utils.redact import redact, scrub_secrets
+
+
+_UNTRUSTED_FENCE_BEGIN = "<<<BEGIN UNTRUSTED WEB EXTRACT>>>"
+_UNTRUSTED_FENCE_END = "<<<END UNTRUSTED WEB EXTRACT>>>"
+
+
+def _scrub_tool_call(tc: dict) -> dict:
+    """Return a copy of a tool-call entry with the function arguments
+    scrubbed of secrets. Handles both dict and string-encoded arguments
+    (some providers serialise arguments as a JSON string).
+    """
+    if not isinstance(tc, dict):
+        return tc
+    out = dict(tc)
+    fn = out.get("function")
+    if isinstance(fn, dict):
+        fn_out = dict(fn)
+        fn_out["arguments"] = _scrub_args(fn_out.get("arguments"))
+        out["function"] = fn_out
+    return out
+
+
+def _scrub_args(args):
+    """Scrub a tool-call ``arguments`` value of secrets.
+
+    Handles every shape we have seen across providers: JSON-encoded
+    strings, dict objects, and (rarely) lists/tuples of values. Anything
+    else passes through untouched — there is no safe way to scrub an
+    opaque scalar.
+    """
+    if isinstance(args, str) and args:
+        return scrub_secrets(args)
+    if isinstance(args, dict):
+        return {k: _scrub_args(v) for k, v in args.items()}
+    if isinstance(args, (list, tuple)):
+        scrubbed = [_scrub_args(v) for v in args]
+        return type(args)(scrubbed) if isinstance(args, tuple) else scrubbed
+    return args
+
+
+def is_tool_message(msg: dict) -> bool:
+    """True if a message is a tool-call request or a tool-result.
+
+    Covers both protocols Jarvis speaks:
+    - Native: ``role="tool"`` for results, or ``role="assistant"`` carrying
+      a non-empty ``tool_calls`` list for the outbound call.
+    - Text-tool fallback (small models): the tool result is appended as a
+      ``role="user"`` message tagged with ``tool_name``. The tagging is
+      done by the reply engine in `src/jarvis/reply/engine.py` (see the
+      text-tool branch where ``"tool_name": tool_name`` is attached to
+      the synthetic user message).
+    """
+    if not isinstance(msg, dict):
+        return False
+    role = msg.get("role")
+    if role == "tool":
+        return True
+    if role == "assistant" and msg.get("tool_calls"):
+        return True
+    if role == "user" and msg.get("tool_name"):
+        return True
+    return False
 
 
 def _filter_contexts_by_time(
@@ -84,6 +147,36 @@ class DialogueMemory:
           a diary update (same as the window, since enrichment covers older context)
         """
         self._messages: List[Tuple[float, str, str]] = []  # (timestamp, role, content)
+        # Tool carryover: in-loop assistant-with-tool_calls + tool-role messages
+        # from prior replies, so follow-up turns within the hot window can reuse
+        # the prior tool output instead of re-fetching. Stored as a list of
+        # (timestamp, [msg_dict, ...]) where each entry is one reply's worth of
+        # tool-related messages. Excluded from `get_pending_chunks` so raw tool
+        # payloads never reach the diary summariser.
+        self._tool_turns: List[Tuple[float, List[dict]]] = []
+        # Conversation-scoped scratch cache: per-key (timestamp, value)
+        # entries that survive for the lifetime of the active conversation.
+        # The reply engine wipes this on new-conversation entry (when
+        # ``has_recent_messages`` was False at turn start), and individual
+        # entries can be invalidated on demand (e.g. ``invalidate_warm_profile``
+        # on graph mutations). The timestamp is retained so callers may
+        # inspect entry age, but reads are NOT bounded by RECENT_WINDOW_SEC
+        # any more — long active conversations would otherwise see warm
+        # profile / router caches expire while the session is still going.
+        self._hot_cache: dict[str, Tuple[float, object]] = {}
+        # Hard ceiling on stored tool turns. With the default
+        # ``tool_carryover_max_turns=2`` re-injected per reply, 16 lets a
+        # session accumulate roughly 8x the visible budget before the
+        # oldest entries get evicted; well below the prompt-bloat
+        # threshold, well above any realistic single-conversation need.
+        self._tool_turns_max_storage = 16
+        # Monotonic high-water timestamp. ``time.time()`` has ~16ms
+        # granularity on Windows, so consecutive inserts can collide and
+        # break interleave ordering between text and tool messages. We
+        # bump the stored ts by a tiny epsilon so insertion order is
+        # always preserved, while keeping wall-clock semantics close
+        # enough for the RECENT_WINDOW_SEC cutoff.
+        self._last_ts: float = 0.0
         self._last_activity_time: float = time.time()
         self._inactivity_timeout = inactivity_timeout
         # Unified window: context retention = forced diary update interval
@@ -96,10 +189,28 @@ class DialogueMemory:
         # Track the last profile used for follow-up detection
         self._last_profile: Optional[str] = None
 
+    def _next_ts(self) -> float:
+        """Return a strictly-monotonic timestamp.
+
+        On Windows, ``time.time()`` has ~16ms granularity — consecutive
+        calls within the same tick return the identical float. That
+        breaks interleave ordering between text messages and tool turns
+        when both land in the same tick. We bump by a 1µs epsilon so
+        insertion order is always preserved while staying close enough
+        to wall-clock for ``RECENT_WINDOW_SEC`` filtering.
+
+        Caller MUST hold ``_lock`` — ``_last_ts`` is shared mutable state.
+        """
+        now = time.time()
+        if now <= self._last_ts:
+            now = self._last_ts + 1e-6
+        self._last_ts = now
+        return now
+
     def add_message(self, role: str, content: str) -> None:
         """Add a message to recent memory. Thread-safe."""
         with self._lock:
-            timestamp = time.time()
+            timestamp = self._next_ts()
             self._messages.append((timestamp, role.strip(), content.strip()))
             self._last_activity_time = timestamp
 
@@ -124,6 +235,160 @@ class DialogueMemory:
             recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
 
             return [{"role": role, "content": content} for _, role, content in recent_messages]
+
+    def record_tool_turn(self, tool_msgs: List[dict]) -> None:
+        """Store in-loop tool-call/tool-role messages from a just-finished reply.
+
+        Called once per reply with the tool-related messages extracted from the
+        engine's messages array. These interleave with text messages on
+        subsequent `get_recent_turns_with_tools` calls so follow-ups can see
+        the prior tool output.
+        """
+        if not tool_msgs:
+            return
+        # Scrub outside the lock, pure function over message content.
+        scrubbed: List[dict] = []
+        for m in tool_msgs:
+            mm = dict(m)
+            c = mm.get("content")
+            if isinstance(c, str) and c:
+                # Tool outputs may contain PII or secrets (email bodies,
+                # API responses, scraped pages). Scrub before persisting
+                # so re-injection on the next turn can't leak them.
+                mm["content"] = scrub_secrets(c)
+            # Native tool-call arguments can also carry sensitive query
+            # text (e.g. webSearch(query="my email is alice@example.com")).
+            # Scrub each argument value so re-injection of the assistant
+            # tool_calls row on the next turn cannot leak them.
+            tcalls = mm.get("tool_calls")
+            if isinstance(tcalls, list):
+                mm["tool_calls"] = [_scrub_tool_call(tc) for tc in tcalls]
+            scrubbed.append(mm)
+        with self._lock:
+            ts = self._next_ts()
+            self._tool_turns.append((ts, scrubbed))
+            # Bound storage to a hard ceiling. Tool turns are NOT pruned
+            # by RECENT_WINDOW_SEC age any more; the engine clears them
+            # on new-conversation entry so an active session keeps its
+            # carryover regardless of how long ago each tool fired.
+            if len(self._tool_turns) > self._tool_turns_max_storage:
+                self._tool_turns = self._tool_turns[-self._tool_turns_max_storage:]
+
+    def clear_tool_carryover(self) -> None:
+        """Drop all stored tool-turn messages. Text messages are untouched."""
+        with self._lock:
+            self._tool_turns = []
+
+    # ------------------------------------------------------------------
+    # Conversation-scoped scratch cache
+    # ------------------------------------------------------------------
+    # Primitive used by the reply engine to memoise expensive per-turn
+    # work that's idempotent within a single conversation: warm profile
+    # (SQLite reads), memory enrichment extractor (LLM call), tool
+    # router (LLM call).
+    #
+    # Lifetime contract:
+    # - Entries persist for the lifetime of the active conversation;
+    #   they are NOT bounded by RECENT_WINDOW_SEC age. A long active
+    #   chat keeps the warm profile / router cache hot for hours.
+    # - The reply engine wipes the cache when it detects a new
+    #   conversation (i.e. ``has_recent_messages()`` was False at turn
+    #   entry) and on the ``stop`` signal.
+    # - Granular invalidation hooks: ``invalidate_warm_profile()`` is
+    #   called from a graph-mutation listener so the User / Directives
+    #   branches stay fresh even mid-conversation.
+    #
+    # Callers pick a key that captures the invalidation contract —
+    # typically the redacted query for query-dependent values, or a
+    # constant for query-agnostic values.
+
+    # Cache key for the warm-profile block. Centralised so the engine
+    # and the graph-mutation invalidator agree on it.
+    WARM_PROFILE_CACHE_KEY = "warm_profile_block"
+
+    def hot_cache_get(self, key: str) -> Optional[object]:
+        """Return the cached value for ``key`` if present, else ``None``.
+
+        No age-based expiry: callers control invalidation via
+        ``clear_hot_cache``, ``invalidate_warm_profile``, or new-
+        conversation reset in the engine.
+        """
+        with self._lock:
+            entry = self._hot_cache.get(key)
+            if not entry:
+                return None
+            _ts, value = entry
+            return value
+
+    def hot_cache_put(self, key: str, value: object) -> None:
+        """Store value under key with current timestamp."""
+        with self._lock:
+            self._hot_cache[key] = (time.time(), value)
+
+    def clear_hot_cache(self) -> None:
+        """Drop all conversation-scoped cache entries."""
+        with self._lock:
+            self._hot_cache = {}
+
+    def invalidate_warm_profile(self) -> None:
+        """Drop the cached warm-profile block. Called from the graph
+        mutation listener so a mid-conversation User/Directives change
+        is reflected on the very next turn.
+        """
+        with self._lock:
+            self._hot_cache.pop(self.WARM_PROFILE_CACHE_KEY, None)
+
+    def get_recent_turns_with_tools(
+        self,
+        max_tool_turns: int = 2,
+        per_entry_chars: int = 1200,
+    ) -> List[dict]:
+        """Like `get_recent_messages`, but interleaves stored tool turns in
+        timestamp order. Only the most recent `max_tool_turns` tool groups
+        survive; older ones are dropped wholesale (avoids orphan
+        assistant-with-tool_calls without a matching tool result, which would
+        break native tool calling).
+        """
+        with self._lock:
+            if not self._messages and not self._tool_turns:
+                return []
+            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            # Build timeline of (ts, payload) where payload is either a single
+            # text message dict or a list of tool messages.
+            timeline: list = []
+            for ts, role, content in self._messages:
+                if ts >= cutoff:
+                    timeline.append((ts, "msg", {"role": role, "content": content}))
+            # Keep only the last N tool turns. Tool carryover lives for
+            # the conversation, not for RECENT_WINDOW_SEC: an active session
+            # past the window still benefits from the prior tool result.
+            # The engine clears ``_tool_turns`` on new-conversation entry.
+            for ts, msgs in self._tool_turns[-max_tool_turns:]:
+                truncated: list[dict] = []
+                for m in msgs:
+                    mm = dict(m)
+                    c = mm.get("content")
+                    if isinstance(c, str) and len(c) > per_entry_chars:
+                        cut = c[:per_entry_chars].rstrip() + "…"
+                        # If truncation sliced away the closing marker of an
+                        # UNTRUSTED WEB EXTRACT fence, re-append it so the
+                        # injection-defence fence stays intact downstream.
+                        if (
+                            _UNTRUSTED_FENCE_BEGIN in cut
+                            and _UNTRUSTED_FENCE_END not in cut
+                        ):
+                            cut = cut + "\n" + _UNTRUSTED_FENCE_END
+                        mm["content"] = cut
+                    truncated.append(mm)
+                timeline.append((ts, "group", truncated))
+            timeline.sort(key=lambda t: t[0])
+            flat: List[dict] = []
+            for _, kind, payload in timeline:
+                if kind == "msg":
+                    flat.append(payload)
+                else:
+                    flat.extend(payload)
+            return flat
 
     def has_recent_messages(self) -> bool:
         """Check if there are any messages in the last 5 minutes."""

@@ -169,6 +169,13 @@ class Settings:
     dialogue_memory_timeout: float
     memory_enrichment_max_results: int
     memory_enrichment_source: str  # "all", "diary", or "graph"
+    # Tool-call + tool-result messages from prior replies in the hot window
+    # are re-injected into the next turn so follow-ups can reuse them instead
+    # of re-fetching. These knobs cap how many prior tool turns survive and
+    # how much of each tool payload is retained (the fence markers of
+    # UNTRUSTED WEB EXTRACT blocks are preserved on truncation).
+    tool_carryover_max_turns: int
+    tool_carryover_per_entry_chars: int
     # Distil diary + graph into a short relevance-filtered note via a cheap
     # LLM pass before injecting into the reply system prompt. When None
     # (the default), it auto-enables for SMALL models (≤7B) and stays off
@@ -470,6 +477,9 @@ def get_default_config() -> Dict[str, Any]:
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 3,
         "memory_enrichment_source": "all",  # "all", "diary", or "graph"
+        # Tool carryover: cap re-injected prior tool turns + chars per entry.
+        "tool_carryover_max_turns": 2,
+        "tool_carryover_per_entry_chars": 1200,
         # None = auto (on for small models ≤7B, off for large). Set true/false to force.
         "memory_digest_enabled": None,
         # Distil raw tool results (e.g. webSearch extracts) into a short
@@ -658,6 +668,8 @@ def load_settings() -> Settings:
     memory_enrichment_source = str(merged.get("memory_enrichment_source", "all")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
         memory_enrichment_source = "all"
+    tool_carryover_max_turns = max(0, int(merged.get("tool_carryover_max_turns", 2)))
+    tool_carryover_per_entry_chars = max(200, int(merged.get("tool_carryover_per_entry_chars", 1200)))
     _digest_raw = merged.get("memory_digest_enabled", None)
     memory_digest_enabled: Optional[bool]
     if _digest_raw is None:
@@ -818,6 +830,8 @@ def load_settings() -> Settings:
         dialogue_memory_timeout=dialogue_memory_timeout,
         memory_enrichment_max_results=memory_enrichment_max_results,
         memory_enrichment_source=memory_enrichment_source,
+        tool_carryover_max_turns=tool_carryover_max_turns,
+        tool_carryover_per_entry_chars=tool_carryover_per_entry_chars,
         memory_digest_enabled=memory_digest_enabled,
         tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
