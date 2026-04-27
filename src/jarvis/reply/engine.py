@@ -712,6 +712,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             recent_messages = dialogue_memory.get_recent_messages()
         is_new_conversation = False
 
+    # New conversation reset: when the previous session lapsed past the
+    # inactivity window, drop the conversation-scoped cache and any
+    # tool-carryover from the previous session. This is what bounds the
+    # cache lifetime now that individual entries no longer expire by age.
+    if is_new_conversation and dialogue_memory is not None:
+        if hasattr(dialogue_memory, "clear_hot_cache"):
+            try:
+                dialogue_memory.clear_hot_cache()
+            except Exception:
+                pass
+        if hasattr(dialogue_memory, "clear_tool_carryover"):
+            try:
+                dialogue_memory.clear_tool_carryover()
+            except Exception:
+                pass
+
     # Refresh MCP tools on new conversation (memory expired)
     if is_new_conversation and getattr(cfg, "mcps", {}):
         try:
@@ -892,17 +908,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # interest me" can be answered directly when the model already sees
     # the user's interests in its system prompt.
     warm_profile_block = ""
-    # Hot-window cache: warm profile is query-agnostic and the User /
-    # Directives branches change rarely, so reusing the block within a
-    # single conversation saves the SQLite BFS on every follow-up turn.
-    # Cache is wiped on stop signal and on hot-window expiry.
+    # Conversation-scoped cache: warm profile is query-agnostic and the
+    # User / Directives branches change rarely, so reusing the block for
+    # the lifetime of the conversation saves the SQLite BFS on every
+    # follow-up turn. The cache is invalidated on:
+    #   - new conversation entry (cleared above with the full hot cache),
+    #   - the stop signal (also clears the full hot cache),
+    #   - any User/Directives graph mutation (via the listener registered
+    #     in daemon.py, which calls ``invalidate_warm_profile`` on the
+    #     active DialogueMemory).
+    _wp_cache_key = getattr(
+        type(dialogue_memory),
+        "WARM_PROFILE_CACHE_KEY",
+        "warm_profile_block",
+    ) if dialogue_memory else "warm_profile_block"
     _wp_cached = (
-        dialogue_memory.hot_cache_get("warm_profile_block")
+        dialogue_memory.hot_cache_get(_wp_cache_key)
         if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
     )
     if isinstance(_wp_cached, str):
         warm_profile_block = _wp_cached
-        debug_log("warm profile served from hot-window cache", "memory")
+        debug_log("warm profile served from conversation cache", "memory")
     else:
         try:
             from ..memory.graph import GraphMemoryStore
@@ -923,7 +949,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "memory",
                 )
             if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                dialogue_memory.hot_cache_put("warm_profile_block", warm_profile_block)
+                dialogue_memory.hot_cache_put(_wp_cache_key, warm_profile_block)
         except Exception as e:
             debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
 

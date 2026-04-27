@@ -111,7 +111,12 @@ class TestToolCarryover:
         # Tool rows gone, but user/assistant prose preserved
         assert roles == ["user", "assistant"]
 
-    def test_expired_tool_turns_are_pruned(self):
+    def test_tool_turns_survive_past_recent_window_age(self):
+        """Tool carryover is conversation-scoped, not RECENT_WINDOW_SEC-
+        bounded. An ongoing conversation must keep prior tool results
+        visible regardless of how long ago each tool fired; the engine
+        clears them on new-conversation entry and on ``stop``.
+        """
         dm = DialogueMemory(inactivity_timeout=300.0)
         dm.add_message("user", "q")
         dm.record_tool_turn([
@@ -121,7 +126,8 @@ class TestToolCarryover:
                                           "arguments": {"q": "x"}}}]},
             {"role": "tool", "tool_call_id": "c1", "content": "r"},
         ])
-        # Force all stored tool-turn timestamps beyond RECENT_WINDOW_SEC
+        # Even when we backdate the tool-turn timestamp past the window,
+        # the carryover survives until explicitly cleared.
         with dm._lock:
             dm._tool_turns = [
                 (ts - (dm.RECENT_WINDOW_SEC + 10), msgs)
@@ -129,8 +135,63 @@ class TestToolCarryover:
             ]
 
         out = dm.get_recent_turns_with_tools()
-        # No tool rows because they expired
-        assert not any(m.get("role") == "tool" for m in out)
+        assert any(m.get("role") == "tool" for m in out), (
+            "tool carryover must persist beyond RECENT_WINDOW_SEC age"
+        )
+
+        dm.clear_tool_carryover()
+        out_after_clear = dm.get_recent_turns_with_tools()
+        assert not any(m.get("role") == "tool" for m in out_after_clear)
+
+    def test_tool_call_arguments_are_scrubbed(self):
+        """Native tool-call arguments can carry secrets too (e.g. an
+        email or token in the search query). They must be scrubbed
+        on record so re-injection on the next turn cannot leak them.
+        """
+        dm = DialogueMemory()
+        dm.record_tool_turn([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "webSearch",
+                        "arguments": {
+                            "query": "look up alice@example.com please",
+                        },
+                    },
+                }],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ])
+        stored_call = dm._tool_turns[0][1][0]["tool_calls"][0]
+        stored_args = stored_call["function"]["arguments"]
+        assert "alice@example.com" not in stored_args["query"]
+        assert "[REDACTED_EMAIL]" in stored_args["query"]
+
+    def test_tool_call_arguments_string_form_is_scrubbed(self):
+        """Some providers serialise arguments as a JSON string, not a dict."""
+        dm = DialogueMemory()
+        dm.record_tool_turn([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "webSearch",
+                        "arguments": '{"query": "alice@example.com"}',
+                    },
+                }],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ])
+        stored_args = dm._tool_turns[0][1][0]["tool_calls"][0]["function"]["arguments"]
+        assert "alice@example.com" not in stored_args
+        assert "[REDACTED_EMAIL]" in stored_args
 
     def test_tool_payloads_are_scrubbed_of_secrets(self):
         """Tool results may contain emails, API tokens, JWTs. record_tool_turn

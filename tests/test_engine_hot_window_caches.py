@@ -206,3 +206,51 @@ def test_planner_search_memory_overrides_recall_gate(
         "extractor must run when planner emits searchMemory, "
         "regardless of recall-gate coverage"
     )
+
+
+@pytest.mark.unit
+@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
+@patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
+@patch("src.jarvis.memory.graph.GraphMemoryStore")
+@patch("src.jarvis.reply.engine.select_tools", return_value=[])
+@patch("src.jarvis.reply.engine.plan_query", return_value=[])
+@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("src.jarvis.reply.engine.extract_text_from_response")
+@patch("src.jarvis.reply.engine.chat_with_messages")
+def test_new_conversation_clears_cache_and_carryover(
+    mock_chat, mock_extract, _mock_extractor, _mock_plan, mock_select,
+    _mock_graph, _mock_warm, _mock_fmt,
+):
+    """When the previous conversation has lapsed past the inactivity
+    window, the engine must wipe the conversation-scoped cache and any
+    leftover tool carryover before running the new turn. Otherwise stale
+    state from a previous session would leak into a fresh one.
+    """
+    mock_chat.side_effect = [
+        {"message": {"content": "fresh"}},
+    ]
+    mock_extract.side_effect = ["fresh"]
+
+    db = Mock()
+    cfg = _mock_cfg()
+    dm = DialogueMemory()
+
+    # Plant cache + carryover from a prior (now-lapsed) session.
+    dm.hot_cache_put(dm.WARM_PROFILE_CACHE_KEY, "old-block")
+    dm.hot_cache_put("router:old", ["webSearch"])
+    dm.record_tool_turn([
+        {"role": "tool", "tool_call_id": "c1", "content": "ancient result"},
+    ])
+    assert dm._tool_turns
+    assert dm.hot_cache_get(dm.WARM_PROFILE_CACHE_KEY) == "old-block"
+
+    # No recent messages → engine treats this turn as a new conversation.
+    run_reply_engine(db=db, cfg=cfg, tts=None, text="hello", dialogue_memory=dm)
+
+    # Stale router entry must be gone (full hot-cache wipe), and the old
+    # tool carryover must not be visible to the new conversation.
+    assert dm.hot_cache_get("router:old") is None
+    # The tool carryover from before must have been cleared on entry; any
+    # tool turns recorded later in this turn would only come from THIS
+    # reply (mock chat returns a final reply with no tool calls).
+    assert dm._tool_turns == []

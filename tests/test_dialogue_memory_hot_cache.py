@@ -1,13 +1,12 @@
-"""Tests for the DialogueMemory hot-window scratch cache and the
+"""Tests for the DialogueMemory conversation-scoped scratch cache and the
 ``is_tool_message`` helper.
 
-The cache is a thin per-conversation primitive used by the reply engine to
+The cache is a per-conversation primitive used by the reply engine to
 memoise idempotent per-turn work (warm profile, memory extractor, tool
-router) within a single hot window. Entries auto-expire with
-``RECENT_WINDOW_SEC`` and are wiped on ``clear_hot_cache()``.
+router). Entries persist for the lifetime of the active conversation and
+are wiped on ``clear_hot_cache()``; the warm profile entry can also be
+invalidated on demand via ``invalidate_warm_profile()``.
 """
-
-import time
 
 import pytest
 
@@ -25,16 +24,27 @@ class TestHotCachePrimitives:
         dm.hot_cache_put("k", {"v": 1})
         assert dm.hot_cache_get("k") == {"v": 1}
 
-    def test_entries_expire_with_hot_window(self):
+    def test_entries_persist_past_recent_window_age(self):
+        """Cache entries are conversation-scoped, not bounded by
+        RECENT_WINDOW_SEC. A long active conversation must keep the
+        cache hot even when the original write is older than the window.
+        """
         dm = DialogueMemory(inactivity_timeout=300.0)
         dm.hot_cache_put("k", "v")
-        # Force the entry's timestamp past the window.
         with dm._lock:
             ts, value = dm._hot_cache["k"]
             dm._hot_cache["k"] = (ts - (dm.RECENT_WINDOW_SEC + 10), value)
-        assert dm.hot_cache_get("k") is None
-        # Expired entry must also be removed from storage.
-        assert "k" not in dm._hot_cache
+        # Age alone must NOT cause the value to disappear; only explicit
+        # invalidation should drop it.
+        assert dm.hot_cache_get("k") == "v"
+
+    def test_invalidate_warm_profile_drops_only_that_key(self):
+        dm = DialogueMemory()
+        dm.hot_cache_put(dm.WARM_PROFILE_CACHE_KEY, "warm-block")
+        dm.hot_cache_put("router:abc", ["webSearch"])
+        dm.invalidate_warm_profile()
+        assert dm.hot_cache_get(dm.WARM_PROFILE_CACHE_KEY) is None
+        assert dm.hot_cache_get("router:abc") == ["webSearch"]
 
     def test_clear_hot_cache_drops_all_entries(self):
         dm = DialogueMemory()

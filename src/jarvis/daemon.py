@@ -348,6 +348,42 @@ def main() -> None:
     )
     print("✓ Dialogue memory initialized", flush=True)
 
+    # Wire the conversation-scoped warm-profile cache to graph mutations.
+    # When the User or Directives branch is mutated mid-conversation, the
+    # cached warm profile is dropped so the next reply rebuilds it from
+    # the current graph state. World-branch writes (typical webSearch
+    # extractions) do not touch warm profile, so they are ignored.
+    try:
+        from .memory.graph import (
+            BRANCH_DIRECTIVES,
+            BRANCH_USER,
+            register_graph_mutation_listener,
+        )
+
+        _wp_relevant_branches = {BRANCH_USER, BRANCH_DIRECTIVES}
+
+        def _invalidate_wp_on_graph_mutation(*, action, node_id, branch):
+            del action, node_id  # Unused; only branch matters here.
+            if branch in _wp_relevant_branches and _global_dialogue_memory is not None:
+                try:
+                    _global_dialogue_memory.invalidate_warm_profile()
+                    debug_log(
+                        f"warm profile invalidated by {branch} graph mutation",
+                        "memory",
+                    )
+                except Exception as exc:
+                    debug_log(
+                        f"warm profile invalidation failed (non-fatal): {exc}",
+                        "memory",
+                    )
+
+        register_graph_mutation_listener(_invalidate_wp_on_graph_mutation)
+    except Exception as exc:
+        debug_log(
+            f"warm profile mutation listener wiring failed (non-fatal): {exc}",
+            "memory",
+        )
+
     # Knowledge graph: wipe + re-seed if the on-disk shape predates the
     # User/Directives/World taxonomy. Non-destructive to the diary —
     # users can re-import via the memory viewer.
