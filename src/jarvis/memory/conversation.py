@@ -26,16 +26,27 @@ def _scrub_tool_call(tc: dict) -> dict:
     fn = out.get("function")
     if isinstance(fn, dict):
         fn_out = dict(fn)
-        args = fn_out.get("arguments")
-        if isinstance(args, str) and args:
-            fn_out["arguments"] = scrub_secrets(args)
-        elif isinstance(args, dict):
-            fn_out["arguments"] = {
-                k: (scrub_secrets(v) if isinstance(v, str) else v)
-                for k, v in args.items()
-            }
+        fn_out["arguments"] = _scrub_args(fn_out.get("arguments"))
         out["function"] = fn_out
     return out
+
+
+def _scrub_args(args):
+    """Scrub a tool-call ``arguments`` value of secrets.
+
+    Handles every shape we have seen across providers: JSON-encoded
+    strings, dict objects, and (rarely) lists/tuples of values. Anything
+    else passes through untouched — there is no safe way to scrub an
+    opaque scalar.
+    """
+    if isinstance(args, str) and args:
+        return scrub_secrets(args)
+    if isinstance(args, dict):
+        return {k: _scrub_args(v) for k, v in args.items()}
+    if isinstance(args, (list, tuple)):
+        scrubbed = [_scrub_args(v) for v in args]
+        return type(args)(scrubbed) if isinstance(args, tuple) else scrubbed
+    return args
 
 
 def is_tool_message(msg: dict) -> bool:
@@ -179,7 +190,17 @@ class DialogueMemory:
         self._last_profile: Optional[str] = None
 
     def _next_ts(self) -> float:
-        """Return a strictly-monotonic timestamp. Caller must hold ``_lock``."""
+        """Return a strictly-monotonic timestamp.
+
+        On Windows, ``time.time()`` has ~16ms granularity — consecutive
+        calls within the same tick return the identical float. That
+        breaks interleave ordering between text messages and tool turns
+        when both land in the same tick. We bump by a 1µs epsilon so
+        insertion order is always preserved while staying close enough
+        to wall-clock for ``RECENT_WINDOW_SEC`` filtering.
+
+        Caller MUST hold ``_lock`` — ``_last_ts`` is shared mutable state.
+        """
         now = time.time()
         if now <= self._last_ts:
             now = self._last_ts + 1e-6

@@ -8,6 +8,8 @@ are wiped on ``clear_hot_cache()``; the warm profile entry can also be
 invalidated on demand via ``invalidate_warm_profile()``.
 """
 
+import time
+
 import pytest
 
 from src.jarvis.memory.conversation import DialogueMemory, is_tool_message
@@ -59,6 +61,35 @@ class TestHotCachePrimitives:
         dm.hot_cache_put("k", "old")
         dm.hot_cache_put("k", "new")
         assert dm.hot_cache_get("k") == "new"
+
+
+@pytest.mark.unit
+class TestNextTsMonotonic:
+    """``_next_ts`` exists because ``time.time()`` has ~16ms granularity
+    on Windows and consecutive calls can return identical values. Without
+    the epsilon bump, text/tool messages recorded in the same tick would
+    collide and break interleave ordering downstream.
+    """
+
+    def test_consecutive_calls_strictly_increase(self):
+        dm = DialogueMemory()
+        with dm._lock:
+            t1 = dm._next_ts()
+            t2 = dm._next_ts()
+            t3 = dm._next_ts()
+        assert t1 < t2 < t3
+
+    def test_advances_past_artificially_high_last_ts(self):
+        """Even if ``_last_ts`` is ahead of the wall clock (clock skew,
+        manual seed), the next call must still advance.
+        """
+        dm = DialogueMemory()
+        future = time.time() + 100.0
+        with dm._lock:
+            dm._last_ts = future
+            nxt = dm._next_ts()
+        assert nxt > future
+        assert nxt - future < 0.01  # only an epsilon bump, not a wall jump
 
 
 @pytest.mark.unit

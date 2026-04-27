@@ -171,6 +171,36 @@ class TestToolCarryover:
         assert "alice@example.com" not in stored_args["query"]
         assert "[REDACTED_EMAIL]" in stored_args["query"]
 
+    def test_tool_call_arguments_list_form_is_scrubbed(self):
+        """Some providers / custom tools pass arguments as a list of
+        scalars or dicts. Each element must be scrubbed too — otherwise
+        a positional secret slips through.
+        """
+        dm = DialogueMemory()
+        dm.record_tool_turn([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": [
+                            "alice@example.com",
+                            {"note": "ping bob@example.com"},
+                        ],
+                    },
+                }],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ])
+        stored = dm._tool_turns[0][1][0]["tool_calls"][0]["function"]["arguments"]
+        flat = repr(stored)
+        assert "alice@example.com" not in flat
+        assert "bob@example.com" not in flat
+        assert flat.count("[REDACTED_EMAIL]") >= 2
+
     def test_tool_call_arguments_string_form_is_scrubbed(self):
         """Some providers serialise arguments as a JSON string, not a dict."""
         dm = DialogueMemory()

@@ -116,6 +116,52 @@ class TestMutationListenerRegistry:
         unregister_graph_mutation_listener(cb)
         unregister_graph_mutation_listener(cb)  # second remove must not raise
 
+    def test_resolve_branch_returns_none_past_depth_cap(self, graph_store):
+        """A chain longer than ``MAX_TRAVERSAL_DEPTH`` must terminate
+        rather than spin. Returns ``None`` — listener treats that as
+        "unknown branch" and skips invalidation.
+        """
+        from src.jarvis.memory.graph import MAX_TRAVERSAL_DEPTH
+
+        # Build a chain of MAX_TRAVERSAL_DEPTH + 2 nodes under user; the
+        # tail node should still resolve because the walk can finish
+        # before the cap. Then create one MORE level past the cap and
+        # confirm it returns None.
+        parent_id = BRANCH_USER
+        chain: list = []
+        for i in range(MAX_TRAVERSAL_DEPTH + 2):
+            n = graph_store.create_node(f"n{i}", "deep", parent_id=parent_id)
+            chain.append(n)
+            parent_id = n.id
+        # The deepest node is past the cap from BRANCH_USER.
+        assert graph_store._resolve_branch(chain[-1].id) is None
+
+    def test_resolve_branch_handles_unknown_node_id(self, graph_store):
+        """A node id that does not exist returns ``None`` rather than
+        raising — write paths must never crash on stale ids.
+        """
+        assert graph_store._resolve_branch("does-not-exist") is None
+
+    def test_listener_not_called_when_create_fails(self, graph_store):
+        """If ``create_node`` raises (e.g. unknown parent_id), no
+        mutation event should fire because no row was written.
+        """
+        events: list = []
+
+        def cb(*, action, node_id, branch):
+            events.append({"action": action, "node_id": node_id, "branch": branch})
+
+        register_graph_mutation_listener(cb)
+        try:
+            with pytest.raises(ValueError):
+                graph_store.create_node(
+                    "Orphan", "no parent", parent_id="missing-parent",
+                )
+        finally:
+            unregister_graph_mutation_listener(cb)
+
+        assert events == [], "no mutation should be reported for failed write"
+
     def test_deep_descendant_resolves_to_branch(self, graph_store):
         """A grandchild several levels deep under user must resolve to the
         ``user`` branch so the listener can scope correctly even for nested
