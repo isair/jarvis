@@ -295,6 +295,7 @@ def _check_and_update_diary(
 def main() -> None:
     """Main daemon entry point."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
+    global _warm_profile_graph_listener
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -386,7 +387,6 @@ def main() -> None:
                     "memory",
                 )
 
-        global _warm_profile_graph_listener
         # If a previous run left a listener registered (re-entry without
         # full process restart), drop it before installing the new one so
         # the registry never accumulates stale closures.
@@ -628,7 +628,6 @@ def main() -> None:
         # not retain a closure pointing at this run's DialogueMemory after
         # shutdown — relevant for tests and any embedder that re-runs the
         # daemon in-process.
-        global _warm_profile_graph_listener
         if _warm_profile_graph_listener is not None:
             try:
                 from .memory.graph import unregister_graph_mutation_listener
