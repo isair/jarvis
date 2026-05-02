@@ -112,7 +112,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Model / gating**: `ollama_chat_model`. Respects `llm_thinking_enabled`. Uses streaming when a token callback is provided, else direct.
 - **Inputs**: recent conversation chunks + prior same-day summary (for incremental update).
 - **System prompt**: inline (~lines 310-320). Hygiene rules per [src/jarvis/memory/summariser.spec.md](src/jarvis/memory/summariser.spec.md): no deflection narration, attribution preservation, topic separation. ≤200 words + 3-5 topic keywords.
-- **Output**: `(summary_text, topics_text)` → `conversation_summaries` table, embedded for vector search, feeds enrichment (#3) and graph extraction (#10).
+- **Output**: `(summary_text, topics_text)` → deterministic `scrub_deflection_sentences()` post-process (drops sentences that narrate assistant failures the prompt failed to suppress) → `conversation_summaries` table, embedded for vector search, feeds enrichment (#3) and graph extraction (#10). The scrub is also exposed as a one-shot bulk sweep `scrub_all_diary_summaries()` (`POST /api/diary/scrub-deflections`) for cleaning historical poisoning. Mirror of the graph's two-layer defence (extractor BANNED FACT FORMS at write-time, merge-time rewrite for historical data).
 - **Limits**: `timeout_sec` (30s default).
 
 ## 10. Knowledge Graph Fact Extraction + Branch Classification

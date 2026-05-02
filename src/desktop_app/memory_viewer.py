@@ -656,6 +656,81 @@ def graph_consolidate_all() -> Response:
     )
 
 
+@app.route("/api/diary/scrub-deflections", methods=["POST"])
+def diary_scrub_deflections() -> Response:
+    """Run the deterministic deflection scrub over every diary row.
+
+    The scrub drops sentences that narrate assistant failures
+    ("the assistant could not…", "offered to search…", etc.) from each
+    summary. Counterpart to the on-write scrub in
+    ``update_daily_conversation_summary`` — that one stops new poisoning,
+    this one cleans the historical backlog. Streams NDJSON progress so
+    the UI can render per-row deltas. Crucially, the event payload
+    contains *only* counts (sentences removed, char deltas) — never raw
+    summary text — so this endpoint cannot leak diary content to the UI.
+    """
+    from jarvis.memory.conversation import scrub_all_diary_summaries
+    from jarvis.memory.db import Database
+
+    def generate():
+        try:
+            db_path = _get_db_path()
+            db = Database(db_path, sqlite_vss_path=None)
+
+            total = len(db.get_all_conversation_summaries())
+            yield json.dumps({"type": "start", "total": total}) + "\n"
+
+            if total == 0:
+                yield json.dumps({
+                    "type": "complete",
+                    "rows": 0,
+                    "rows_changed": 0,
+                    "rows_kept_original": 0,
+                    "total_sentences_removed": 0,
+                }) + "\n"
+                db.close()
+                return
+
+            rows_changed = 0
+            rows_kept_original = 0
+            rows_seen = 0
+            total_sentences_removed = 0
+
+            for event in scrub_all_diary_summaries(db):
+                rows_seen += 1
+                removed = event["sentences_removed"]
+                total_sentences_removed += removed
+                if event.get("kept_original") and removed > 0 and "error" not in event:
+                    rows_kept_original += 1
+                elif removed > 0:
+                    rows_changed += 1
+                yield json.dumps({
+                    "type": "progress",
+                    "processed": rows_seen,
+                    "total": total,
+                    **event,
+                }) + "\n"
+
+            yield json.dumps({
+                "type": "complete",
+                "rows": rows_seen,
+                "rows_changed": rows_changed,
+                "rows_kept_original": rows_kept_original,
+                "total_sentences_removed": total_sentences_removed,
+            }) + "\n"
+
+            db.close()
+        except Exception as e:
+            debug_log(f"diary scrub failed: {e}", "memory")
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return Response(
+        generate(),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Frontend
 # ─────────────────────────────────────────────────────────────────────────────
@@ -896,6 +971,30 @@ def index() -> str:
             display: flex;
             align-items: center;
             gap: 0.5rem;
+        }
+
+        /* Diary maintenance button (sidebar Clean Up). Same visual weight
+           as the other sidebar widgets so it doesn't read as a destructive
+           action — the modal is what conveys what it actually does. */
+        .diary-maintenance-btn {
+            width: 100%;
+            padding: 0.6rem 0.85rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .diary-maintenance-btn:hover {
+            background: var(--bg-hover);
+            border-color: var(--accent-primary);
+        }
+        .diary-maintenance-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
         }
 
         /* Date filters */
@@ -1895,6 +1994,13 @@ def index() -> str:
                             <div class="loading"><div class="spinner"></div></div>
                         </div>
                     </div>
+
+                    <div class="sidebar-section" id="diary-maintenance-section">
+                        <div class="sidebar-title">🧹 Maintenance</div>
+                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Remove sentences that narrate assistant failures (e.g. 'the assistant could not…') from old diary entries. The rest of each entry stays. No entries are deleted.">
+                            Clean up deflection narration
+                        </button>
+                    </div>
                 </aside>
                 <div class="memory-list">
                     <div class="loading"><div class="spinner"></div></div>
@@ -2737,6 +2843,10 @@ def index() -> str:
                 showConsolidateAllModal();
             });
 
+            document.getElementById('btn-scrub-deflections').addEventListener('click', () => {
+                showScrubDeflectionsModal();
+            });
+
             // Resize observer
             new ResizeObserver(() => {
                 if (currentTab === 'graph') {
@@ -3196,6 +3306,150 @@ def index() -> str:
                     `;
                     delete overlay.dataset.consolidating;
                     showToast('Consolidation failed', 'error');
+                }
+            });
+        }
+
+        function showScrubDeflectionsModal() {
+            const existing = document.querySelector('.modal-overlay');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            // Body copy is intentionally explicit about *what stays* and
+            // *what is removed*. Users have correctly worried about
+            // "clean" buttons quietly destroying data — say exactly what
+            // happens so the action is unsurprising.
+            overlay.innerHTML = `
+                <div class="modal">
+                    <h3>🧹 Clean up deflection narration</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+                        Removes only sentences that narrate the assistant's failures
+                        (for example "the assistant could not…", "offered to search…",
+                        "did not have information") from old diary entries. The rest of each
+                        entry stays untouched.
+                    </p>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+                        If a summary is <em>entirely</em> deflection narration it is left as-is rather
+                        than emptied. No diary entries are deleted. Cannot be undone.
+                    </p>
+                    <div id="scrub-progress" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span id="scrub-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
+                            <span id="scrub-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0 entries</span>
+                        </div>
+                        <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
+                            <div id="scrub-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
+                        </div>
+                        <div id="scrub-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                    </div>
+                    <div class="modal-actions" id="scrub-actions">
+                        <button class="modal-btn secondary" id="btn-cancel-scrub">Cancel</button>
+                        <button class="modal-btn primary" id="btn-start-scrub">Start</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            const dismiss = () => overlay.remove();
+            document.getElementById('btn-cancel-scrub').addEventListener('click', dismiss);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay && !overlay.dataset.scrubbing) dismiss();
+            });
+
+            document.getElementById('btn-start-scrub').addEventListener('click', async () => {
+                overlay.dataset.scrubbing = 'true';
+                document.getElementById('scrub-progress').style.display = 'block';
+                document.getElementById('btn-start-scrub').disabled = true;
+                document.getElementById('btn-start-scrub').textContent = 'Cleaning…';
+
+                try {
+                    const resp = await fetch('/api/diary/scrub-deflections', { method: 'POST' });
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let processed = 0;
+                    let totalRows = 0;
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            try {
+                                const msg = JSON.parse(line);
+                                if (msg.type === 'start') {
+                                    totalRows = msg.total || 0;
+                                    document.getElementById('scrub-count').textContent =
+                                        `0 / ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'}`;
+                                } else if (msg.type === 'progress') {
+                                    processed = msg.processed;
+                                    const countLabel = totalRows
+                                        ? `${processed} / ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'}`
+                                        : `${processed} entr${processed === 1 ? 'y' : 'ies'}`;
+                                    document.getElementById('scrub-count').textContent = countLabel;
+                                    document.getElementById('scrub-status').textContent = `Cleaning ${msg.date_utc}…`;
+                                    const log = document.getElementById('scrub-log');
+                                    let icon, detail;
+                                    if (msg.error) {
+                                        icon = '❌';
+                                        detail = `error: ${msg.error}`;
+                                    } else if (msg.sentences_removed === 0) {
+                                        icon = '➖';
+                                        detail = 'clean';
+                                    } else if (msg.kept_original) {
+                                        // Defensive: would have emptied the row, kept original.
+                                        icon = '🛡️';
+                                        detail = `${msg.sentences_removed} flagged · kept original`;
+                                    } else {
+                                        icon = '🧹';
+                                        detail = `${msg.sentences_removed} sentence${msg.sentences_removed === 1 ? '' : 's'} removed`;
+                                    }
+                                    log.innerHTML += `<div>${icon} ${msg.date_utc} — ${detail}</div>`;
+                                    log.scrollTop = log.scrollHeight;
+                                    const pct = totalRows
+                                        ? Math.min(100, Math.round((processed / totalRows) * 100))
+                                        : 50 + (processed % 2) * 50;
+                                    document.getElementById('scrub-bar').style.width = pct + '%';
+                                } else if (msg.type === 'complete') {
+                                    document.getElementById('scrub-bar').style.width = '100%';
+                                    const summary = msg.rows === 0
+                                        ? 'No diary entries found.'
+                                        : `Done — ${msg.rows_changed} of ${msg.rows} entr${msg.rows === 1 ? 'y' : 'ies'} cleaned, ${msg.total_sentences_removed} sentence${msg.total_sentences_removed === 1 ? '' : 's'} removed`
+                                          + (msg.rows_kept_original ? ` (${msg.rows_kept_original} kept original to avoid emptying)` : '');
+                                    document.getElementById('scrub-status').textContent = summary;
+                                    document.getElementById('scrub-actions').innerHTML = `
+                                        <button class="modal-btn primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
+                                    `;
+                                    delete overlay.dataset.scrubbing;
+                                    loadStats();
+                                    loadMemories();
+                                    showToast('Diary cleaned', 'success');
+                                } else if (msg.type === 'error') {
+                                    document.getElementById('scrub-status').textContent = 'Error: ' + msg.message;
+                                    document.getElementById('scrub-bar').style.width = '0%';
+                                    document.getElementById('scrub-actions').innerHTML = `
+                                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                                    `;
+                                    delete overlay.dataset.scrubbing;
+                                    showToast('Diary clean failed', 'error');
+                                }
+                            } catch (e) { /* skip malformed lines */ }
+                        }
+                    }
+                } catch (e) {
+                    document.getElementById('scrub-status').textContent = 'Connection error: ' + e.message;
+                    document.getElementById('scrub-bar').style.width = '0%';
+                    document.getElementById('scrub-actions').innerHTML = `
+                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                    `;
+                    delete overlay.dataset.scrubbing;
+                    showToast('Diary clean failed', 'error');
                 }
             });
         }
