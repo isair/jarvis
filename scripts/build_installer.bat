@@ -9,10 +9,16 @@ setlocal
 
 cd /d "%~dp0\.."
 set "PROJECT_ROOT=%cd%"
+
+REM Resolve mamba env: prefer this checkout's own, fall back to the main
+REM repo's when running from a git worktree (worktrees share one env).
 set "MAMBA_ENV=%PROJECT_ROOT%\.mamba_env"
+if not exist "%MAMBA_ENV%\python.exe" call :resolve_mamba_from_worktree
 
 if not exist "%MAMBA_ENV%\python.exe" (
-    echo [build_installer] ERROR: Mamba environment not found at %MAMBA_ENV%
+    echo [build_installer] ERROR: Mamba environment not found.
+    echo                   Looked in: %PROJECT_ROOT%\.mamba_env
+    echo                   And the main repo's .mamba_env ^(if this is a git worktree^).
     echo                   Run the setup script first.
     exit /b 1
 )
@@ -85,3 +91,11 @@ echo                   "Download NVIDIA CUDA libraries" task ticked, then check
 echo                   "%%LOCALAPPDATA%%\Programs\Jarvis\cuda\install.log".
 
 endlocal
+goto :eof
+
+:resolve_mamba_from_worktree
+for /f "usebackq delims=" %%G in (`git -C "%PROJECT_ROOT%" rev-parse --git-common-dir 2^>nul`) do set "GIT_COMMON_DIR=%%G"
+if not defined GIT_COMMON_DIR goto :eof
+for %%I in ("%GIT_COMMON_DIR%\..") do set "MAIN_REPO=%%~fI"
+if exist "%MAIN_REPO%\.mamba_env\python.exe" set "MAMBA_ENV=%MAIN_REPO%\.mamba_env"
+goto :eof
