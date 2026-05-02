@@ -163,74 +163,32 @@ class LogMealTool(Tool):
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
+        # Single optional 'meal' parameter so the planner fast-path resolves
+        # `logMeal meal='Big Mac'` deterministically without an LLM resolver call.
+        # Nutrition fields are implementation details estimated internally via LLM.
         return {
             "type": "object",
             "properties": {
-                "description": {"type": "string", "description": "Description of the meal"},
-                "calories_kcal": {"type": "number", "description": "Calories in kcal"},
-                "protein_g": {"type": "number", "description": "Protein in grams"},
-                "carbs_g": {"type": "number", "description": "Carbohydrates in grams"},
-                "fat_g": {"type": "number", "description": "Fat in grams"},
-                "fiber_g": {"type": "number", "description": "Fiber in grams"},
-                "sugar_g": {"type": "number", "description": "Sugar in grams"},
-                "sodium_mg": {"type": "number", "description": "Sodium in mg"},
-                "potassium_mg": {"type": "number", "description": "Potassium in mg"},
-                "micros": {"type": "object", "description": "Micronutrients as key-value pairs"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in estimates (0-1)"}
+                "meal": {
+                    "type": "string",
+                    "description": "Natural language description of what was eaten or drunk (e.g. 'Big Mac', 'oat milk latte', 'scrambled eggs on toast')",
+                },
             },
-            "required": [
-                "description",
-                "calories_kcal",
-                "protein_g",
-                "carbs_g",
-                "fat_g",
-                "fiber_g",
-                "sugar_g",
-                "sodium_mg",
-                "potassium_mg",
-                "micros",
-                "confidence"
-            ]
         }
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the log meal tool."""
         context.user_print("🥗 Logging your meal…")
 
-        # First attempt: use provided args if they carry at least a description and a kcal estimate.
-        # Missing optional fields (micros, potassium, etc.) are stored as NULL by log_meal_from_args,
-        # which is still more useful than discarding the model's output and retrying from scratch.
-        def _has_min_fields(a: Dict[str, Any]) -> bool:
-            desc = a.get("description")
-            kcal = a.get("calories_kcal")
-            return bool(desc and isinstance(desc, str)) and isinstance(kcal, (int, float))
+        # Prefer the 'meal' argument if provided (direct planner dispatch);
+        # fall back to the full redacted utterance for the LLM extractor.
+        meal_arg = (args or {}).get("meal") if isinstance(args, dict) else None
+        extract_text = (meal_arg.strip() if isinstance(meal_arg, str) and meal_arg.strip() else None) or context.redacted_text
 
-        if args and isinstance(args, dict) and _has_min_fields(args):
-            debug_log("logMeal: using provided args", "nutrition")
-            meal_id = log_meal_from_args(context.db, args, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
-            if meal_id is not None:
-                # Build follow-ups conversationally
-                desc = str(args.get("description") or "meal")
-                approx_bits: List[str] = []
-                for k, label in (("calories_kcal", "kcal"), ("protein_g", "g protein"), ("carbs_g", "g carbs"), ("fat_g", "g fat"), ("fiber_g", "g fiber")):
-                    try:
-                        v = args.get(k)
-                        if isinstance(v, (int, float)):
-                            approx_bits.append(f"{int(round(float(v)))} {label}")
-                    except Exception:
-                        pass
-                approx = ", ".join(approx_bits) if approx_bits else "approximate macros logged"
-                follow_text = generate_followups_for_meal(context.cfg, desc, approx)
-                reply_text = f"Logged meal #{meal_id}: {desc} — {approx}.\nFollow-ups: {follow_text}"
-                debug_log(f"logMeal: logged meal_id={meal_id}", "nutrition")
-                context.user_print("✅ Meal saved.")
-                return ToolExecutionResult(success=True, reply_text=reply_text)
-
-        # Retry path: extract and log from redacted text using extractor
         for attempt in range(context.max_retries + 1):
             try:
                 debug_log(f"logMeal: extracting from text (attempt {attempt+1}/{context.max_retries+1})", "nutrition")
-                meal_summary = extract_and_log_meal(context.db, context.cfg, original_text=context.redacted_text, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
+                meal_summary = extract_and_log_meal(context.db, context.cfg, original_text=extract_text, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
                 if meal_summary:
                     debug_log("logMeal: extraction+log succeeded", "nutrition")
                     return ToolExecutionResult(success=True, reply_text=meal_summary)

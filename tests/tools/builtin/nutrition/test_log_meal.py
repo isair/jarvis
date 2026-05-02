@@ -2,11 +2,11 @@
 
 import pytest
 from unittest.mock import Mock, patch
-from datetime import datetime, timezone
 
 from src.jarvis.tools.builtin.nutrition.log_meal import LogMealTool
 from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.types import ToolExecutionResult
+from src.jarvis.reply.planner import _parse_plan_step_concrete
 
 
 class TestLogMealTool:
@@ -24,79 +24,87 @@ class TestLogMealTool:
         self.context.max_retries = 1
 
     def test_tool_properties(self):
-        """Test tool metadata properties."""
+        """Schema must expose a single 'meal' property so the planner's
+        fast-path parser (key='value') can dispatch without an LLM resolver call."""
         assert self.tool.name == "logMeal"
         assert "meal" in self.tool.description.lower()
-        assert self.tool.inputSchema["type"] == "object"
-        assert "description" in self.tool.inputSchema["required"]
-        assert "calories_kcal" in self.tool.inputSchema["required"]
-
-    @patch('src.jarvis.tools.builtin.nutrition.log_meal.log_meal_from_args')
-    @patch('src.jarvis.tools.builtin.nutrition.log_meal.generate_followups_for_meal')
-    def test_run_with_complete_args(self, mock_followups, mock_log_meal):
-        """Test successful meal logging with complete arguments."""
-        mock_log_meal.return_value = 123
-        mock_followups.return_value = "Drink water, eat vegetables"
-
-        args = {
-            "description": "Chicken sandwich",
-            "calories_kcal": 400,
-            "protein_g": 25,
-            "carbs_g": 35,
-            "fat_g": 15,
-            "fiber_g": 3,
-            "sugar_g": 5,
-            "sodium_mg": 800,
-            "potassium_mg": 300,
-            "micros": {"iron_mg": 2},
-            "confidence": 0.8
-        }
-
-        result = self.tool.run(args, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is True
-        assert "Logged meal #123" in result.reply_text
-        assert "Chicken sandwich" in result.reply_text
-        mock_log_meal.assert_called_once()
-        mock_followups.assert_called_once()
-
-    @patch('src.jarvis.tools.builtin.nutrition.log_meal.log_meal_from_args')
-    @patch('src.jarvis.tools.builtin.nutrition.log_meal.generate_followups_for_meal')
-    def test_run_with_partial_args_logs_without_retry(self, mock_followups, mock_log_meal):
-        """Partial args with description + kcal should still log directly, not fall to extractor."""
-        mock_log_meal.return_value = 789
-        mock_followups.return_value = "Hydrate."
-
-        args = {"description": "Big Mac", "calories_kcal": 540, "protein_g": 25}
-
-        result = self.tool.run(args, self.context)
-
-        assert result.success is True
-        assert "Logged meal #789" in result.reply_text
-        assert "Big Mac" in result.reply_text
-        mock_log_meal.assert_called_once()
+        schema = self.tool.inputSchema
+        assert schema["type"] == "object"
+        # Single 'meal' key — planner emits `logMeal meal='Big Mac'`
+        assert "meal" in schema["properties"], (
+            "'meal' must be a declared schema property so the fast-path parser accepts it"
+        )
+        # Numeric nutrition fields are implementation details resolved internally;
+        # they must NOT appear in the public schema (they bloat the planner's
+        # tool catalogue and cause the LLM resolver to attempt filling them in).
+        assert "description" not in schema["properties"], (
+            "'description' must not be a public schema key; use 'meal' instead"
+        )
+        assert "calories_kcal" not in schema.get("properties", {}), (
+            "Nutrition fields must not appear in the public schema"
+        )
 
     @patch('src.jarvis.tools.builtin.nutrition.log_meal.extract_and_log_meal')
-    def test_run_with_extraction_fallback(self, mock_extract):
-        """Test meal logging with text extraction fallback."""
+    def test_run_with_meal_arg_passes_meal_text_to_extractor(self, mock_extract):
+        """When the planner passes meal='Big Mac', the tool must pass that
+        text to the extractor rather than the full redacted utterance."""
+        mock_extract.return_value = "Logged meal #456: Big Mac - 550 kcal"
+
+        result = self.tool.run({"meal": "Big Mac"}, self.context)
+
+        assert result.success is True
+        assert "Logged meal #456" in result.reply_text
+        call_kwargs = mock_extract.call_args
+        original_text = (
+            call_kwargs.kwargs.get("original_text")
+            or call_kwargs.args[2]
+        )
+        assert "Big Mac" in original_text, (
+            "Extractor must use 'meal' arg as input text, not the full utterance"
+        )
+
+    @patch('src.jarvis.tools.builtin.nutrition.log_meal.extract_and_log_meal')
+    def test_run_without_meal_arg_falls_back_to_redacted_text(self, mock_extract):
+        """When no meal arg is provided, the extractor must use context.redacted_text."""
         mock_extract.return_value = "Logged meal #456: sandwich - 300 kcal"
 
-        # Incomplete args should trigger extraction
-        args = {"description": "sandwich"}
-
-        result = self.tool.run(args, self.context)
+        result = self.tool.run(None, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True
         assert "Logged meal #456" in result.reply_text
-        mock_extract.assert_called_once()
+        call_kwargs = mock_extract.call_args
+        original_text = (
+            call_kwargs.kwargs.get("original_text")
+            or call_kwargs.args[2]
+        )
+        assert original_text == self.context.redacted_text
 
     def test_run_failure(self):
-        """Test meal logging failure."""
-        # No args and no extraction success
+        """When extraction returns nothing on all retries, return failure."""
         result = self.tool.run(None, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
         assert result.reply_text == "Failed to log meal"
+
+
+def test_planner_fast_path_accepts_meal_key():
+    """The planner emits `logMeal meal='Big Mac'`. The fast-path parser must
+    accept this and return ('logMeal', {'meal': 'Big Mac'}) without any LLM
+    resolver call, so direct-exec works for small models."""
+    tool = LogMealTool()
+    allowed_names = ["logMeal"]
+    allowed_props = {"logMeal": set(tool.inputSchema.get("properties", {}).keys())}
+
+    result = _parse_plan_step_concrete(
+        "logMeal meal='Big Mac'",
+        allowed_names,
+        allowed_props,
+    )
+
+    assert result is not None, (
+        "Fast-path must accept 'logMeal meal=...' — 'meal' must be in the schema properties"
+    )
+    assert result[0] == "logMeal"
+    assert result[1] == {"meal": "Big Mac"}

@@ -18,6 +18,11 @@ from unittest.mock import patch
 import pytest
 
 
+def _make_tool_name_msg(name: str) -> dict:
+    """Return a message dict that looks like a tool-result message from a prior query."""
+    return {"role": "user", "content": f"[Tool result: {name}] some result", "tool_name": name}
+
+
 def _assistant_content(text: str):
     return {"message": {"role": "assistant", "content": text}}
 
@@ -446,4 +451,76 @@ def test_router_always_runs_and_plan_tools_are_unioned(
     # … and the planner's pick is unioned in, not dropped.
     assert "webSearch" in exposed, (
         "Planner's tool picks must be unioned into the allow-list"
+    )
+
+
+def test_direct_exec_fires_despite_prior_query_tool_carryover(
+    mock_config, db, dialogue_memory
+):
+    """Tool results carried over from a PREVIOUS query must NOT be counted
+    as 'already-executed steps of the current plan'.
+
+    Regression: _tool_results_so_far counted all tool_name messages in the
+    message list — including those from dialogue carryover — so a plan with
+    one tool step appeared 'already done' whenever the prior turn used any
+    tool, and direct-exec silently skipped the current query's tool call.
+    The LLM then produced an empty reply → 'Sorry, I had trouble processing
+    that'. This test verifies direct-exec fires correctly when carryover is
+    present.
+    """
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    # Simulate a prior query that used a tool — this is what happens after the
+    # "scientists similar to Einstein" query that ran webSearch successfully.
+    # We need both a text message (so has_recent_messages() returns True) AND
+    # a tool turn (the actual carryover messages that appear in messages list).
+    dialogue_memory.add_message("user", "what scientists are similar to Einstein?")
+    dialogue_memory.add_message("assistant", "Niels Bohr and Richard Feynman.")
+    dialogue_memory.record_tool_turn([
+        _make_tool_name_msg("webSearch"),
+    ])
+
+    invoked_tools: list[str] = []
+
+    def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
+        invoked_tools.append(tool_name)
+        return ToolExecutionResult(
+            success=True, reply_text="London: 17°C, overcast", error_message=None
+        )
+
+    def fake_chat(*args, **kwargs):
+        return _assistant_content("Tomorrow in London will be overcast, 17°C.")
+
+    def fake_resolve(*args, **kwargs):
+        return ("getWeather", {"location": "London"})
+
+    plan = [
+        "getWeather location='London'",
+        "Reply to the user with the combined findings.",
+    ]
+
+    with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
+         patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["getWeather", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", return_value=plan), \
+         patch.object(engine_mod, "_resolve_plan_step", side_effect=fake_resolve):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="tell me about the weather tomorrow",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert "getWeather" in invoked_tools, (
+        "direct-exec must fire for the current plan's getWeather step even when "
+        "prior-query tool results are present in dialogue carryover"
     )
