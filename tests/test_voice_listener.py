@@ -274,6 +274,10 @@ class TestWhisperComputeTypeFallback:
 class TestWindowsCudaDetection:
     """Tests for Windows CUDA detection logic."""
 
+    def setup_method(self):
+        from jarvis.listening import listener
+        listener._probe_cuda_available.cache_clear()
+
     def test_setup_nvidia_dll_path_adds_pip_package_dirs(self):
         """_setup_nvidia_dll_path adds NVIDIA pip package bin dirs to PATH."""
         import os

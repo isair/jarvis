@@ -5,6 +5,7 @@ Coordinates audio capture, speech recognition, echo detection, and state managem
 """
 
 from __future__ import annotations
+import functools
 import os
 import threading
 import time
@@ -158,24 +159,20 @@ def _setup_nvidia_dll_path() -> None:
             debug_log(f"added NVIDIA DLL path: {d}", "voice")
 
 
-def _probe_windows_cuda_libraries(device: str) -> tuple[str, list[str]]:
-    """Probe for cuBLAS + cuDNN at runtime and return (device, missing).
+@functools.lru_cache(maxsize=None)
+def _probe_cuda_available() -> tuple[bool, list[str]]:
+    """Probe cuBLAS + cuDNN availability once per process and cache the result.
 
-    Returns the device the caller should actually use (forced to "cpu" when
-    a required lib is missing) and the list of human-readable lib names that
-    weren't found. The caller is expected to surface those names to the user
-    along with a recovery hint.
+    The version ranges intentionally span more than the currently pinned
+    versions in `installer/windows/install_cuda.ps1` (`cublas64_12.dll`,
+    `cudnn_ops64_9.dll`) so a future installer bump doesn't silently fall
+    back to CPU until this probe is updated too. A bump outside the
+    existing range still requires widening these ranges — the relationship
+    is by convention, not enforced.
 
-    The version ranges below intentionally span more than the currently
-    pinned versions in `installer/windows/install_cuda.ps1`
-    (`cublas64_12.dll`, `cudnn_ops64_9.dll`) so a future bump in the
-    installer manifest doesn't silently fall back to CPU until the probe
-    is updated. A bump that exits the existing range still requires
-    widening it here — the relationship is by convention, not enforced.
+    Cached because DLLs don't appear or disappear while the process is
+    running, and the scan does up to 18 `LoadLibrary` calls on a miss.
     """
-    if sys.platform != "win32" or device not in ("auto", "cuda"):
-        return device, []
-
     _setup_nvidia_dll_path()
 
     missing_libs: list[str] = []
@@ -208,7 +205,21 @@ def _probe_windows_cuda_libraries(device: str) -> tuple[str, list[str]]:
     except Exception as e:
         debug_log(f"CUDA library probe failed: {e}", "voice")
 
-    if not (cublas_found and cudnn_found):
+    return cublas_found and cudnn_found, missing_libs
+
+
+def _probe_windows_cuda_libraries(device: str) -> tuple[str, list[str]]:
+    """Return the device to use and any missing CUDA lib names.
+
+    Short-circuits on non-Windows or non-CUDA device strings. Otherwise
+    delegates to the cached `_probe_cuda_available()` so the expensive DLL
+    scan only runs once per process lifetime.
+    """
+    if sys.platform != "win32" or device not in ("auto", "cuda"):
+        return device, []
+
+    available, missing_libs = _probe_cuda_available()
+    if not available:
         return "cpu", missing_libs
     return device, []
 

@@ -16,6 +16,7 @@ installer at all.
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 from dataclasses import dataclass
@@ -32,8 +33,12 @@ class CudaRecoveryAction:
     arguments: list[str]
 
 
+@functools.lru_cache(maxsize=None)
 def _has_nvidia_driver() -> bool:
-    """Match the Inno Setup HasNvidiaGPU check: nvcuda.dll in System32."""
+    """Match the Inno Setup HasNvidiaGPU check: nvcuda.dll in System32.
+
+    Cached because drivers don't appear or disappear during a process run.
+    """
     if sys.platform != "win32":
         return False
     system_root = os.environ.get("SystemRoot", r"C:\Windows")
