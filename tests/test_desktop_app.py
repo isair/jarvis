@@ -934,6 +934,31 @@ class TestCudaRecoveryAction:
         assert str(tmp_path / "cuda") in action.arguments
         assert "-LogPath" in action.arguments
 
+    def test_quote_arg_handles_trailing_backslash(self):
+        """Trailing backslashes inside quoted args must not eat the closing quote.
+
+        Windows argv parsing collapses 2n backslashes before a `"` into n
+        backslashes plus a string terminator, so a path like
+        `C:\\Program Files\\Jarvis\\` quoted naively becomes
+        `"C:\\Program Files\\Jarvis\\"` which CommandLineToArgvW reads as
+        `C:\\Program Files\\Jarvis"` — quote eaten, next arg fused on. The
+        canonical fix is to double trailing backslashes.
+        """
+        from desktop_app.cuda_recovery import _quote_arg
+
+        # Trailing backslash + space gets doubled inside the quotes.
+        result = _quote_arg(r"C:\Program Files\Jarvis\\")
+        assert result.endswith('\\\\\\\\"'), (
+            f"trailing backslashes must be doubled before the closing quote; got {result!r}"
+        )
+        # An embedded quote escapes correctly.
+        assert _quote_arg('a"b') == '"a\\"b"'
+        # Plain paths with spaces get the simple quoted form.
+        assert _quote_arg(r"C:\Users\me\file") == r"C:\Users\me\file"
+        assert _quote_arg(r"C:\Program Files\App") == r'"C:\Program Files\App"'
+        # Empty string round-trips to "" so ShellExecute doesn't drop the slot.
+        assert _quote_arg("") == '""'
+
     def test_run_uses_elevation_on_windows(self, tmp_path):
         """The script writes into Program Files; without elevation it silently
         no-ops. Make sure the run path requests UAC explicitly."""

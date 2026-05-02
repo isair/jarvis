@@ -101,9 +101,39 @@ def _shell_execute(hwnd: int, verb: str, file: str, params: str, directory: str,
 
 
 def _quote_arg(arg: str) -> str:
-    if not arg or any(ch in arg for ch in (" ", "\t", '"')):
-        return '"' + arg.replace('"', '\\"') + '"'
-    return arg
+    """Quote a single argument for ShellExecuteW's lpParameters string.
+
+    Windows argv parsing (CommandLineToArgvW) treats a backslash run only as
+    an escape when it precedes a quote: 2n backslashes + " emits n
+    backslashes and ends the quoted string; 2n+1 emits n + a literal ".
+    A trailing backslash inside `"..."` therefore swallows the closing
+    quote unless it is doubled. Doubling every trailing backslash is the
+    canonical fix and is what argv parsers expect.
+    """
+    if not arg:
+        return '""'
+    if not any(ch in arg for ch in (" ", "\t", '"')):
+        return arg
+
+    out: list[str] = ['"']
+    i = 0
+    while i < len(arg):
+        bs = 0
+        while i < len(arg) and arg[i] == "\\":
+            bs += 1
+            i += 1
+        if i == len(arg):
+            out.append("\\" * (bs * 2))
+            break
+        if arg[i] == '"':
+            out.append("\\" * (bs * 2 + 1))
+            out.append('"')
+        else:
+            out.append("\\" * bs)
+            out.append(arg[i])
+        i += 1
+    out.append('"')
+    return "".join(out)
 
 
 def run_action(action: CudaRecoveryAction) -> bool:

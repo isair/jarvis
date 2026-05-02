@@ -166,8 +166,12 @@ def _probe_windows_cuda_libraries(device: str) -> tuple[str, list[str]]:
     weren't found. The caller is expected to surface those names to the user
     along with a recovery hint.
 
-    Factored out of the inline check so it's unit-testable without standing
-    up the rest of the voice listener.
+    The version ranges below intentionally span more than the currently
+    pinned versions in `installer/windows/install_cuda.ps1`
+    (`cublas64_12.dll`, `cudnn_ops64_9.dll`) so a future bump in the
+    installer manifest doesn't silently fall back to CPU until the probe
+    is updated. A bump that exits the existing range still requires
+    widening it here — the relationship is by convention, not enforced.
     """
     if sys.platform != "win32" or device not in ("auto", "cuda"):
         return device, []

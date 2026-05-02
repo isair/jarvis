@@ -33,7 +33,10 @@ import atexit
 import webbrowser
 import urllib.parse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from desktop_app.cuda_recovery import CudaRecoveryAction
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
@@ -1447,7 +1450,7 @@ class JarvisSystemTray:
         )
         self.menu.addAction(self.cuda_recovery_action)
 
-    def _run_cuda_recovery(self, action_spec) -> None:
+    def _run_cuda_recovery(self, action_spec: "CudaRecoveryAction") -> None:
         """Confirm with the user, then launch the recovery script with UAC."""
         from desktop_app.cuda_recovery import run_action
         from PyQt6.QtWidgets import QMessageBox

@@ -45,6 +45,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Suppress the progress bar before any Invoke-WebRequest call. With the
+# default 'Continue' preference, PowerShell repaints the progress UI on
+# every byte, which slows large downloads by 5–10x; the 643 MB cuDNN
+# wheel goes from ~3 minutes to half an hour on common connections.
+$ProgressPreference = "SilentlyContinue"
 
 # ---------------------------------------------------------------------------
 # Package manifest
