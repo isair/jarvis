@@ -731,6 +731,108 @@ class TestWikipediaSummaryHelper:
         assert second_call.kwargs["params"]["list"] == "search"
 
     @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_fulltext_status_error_returns_none(self, mock_get):
+        """If `list=search` itself returns a non-200 status (Wikimedia hiccup,
+        rate limit, transient outage), the helper must return None and let the
+        envelope fall through to the honest-block path — not raise, not return
+        a half-resolved title that then 404s on the summary fetch."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        bad = Mock()
+        bad.status_code = 503
+        mock_get.side_effect = [self._mk_search([]), bad]
+        assert _wikipedia_summary("q", lang="en") is None
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_fulltext_hit_without_title_returns_none(self, mock_get):
+        """`list=search` is documented to return objects with a `title` key,
+        but a malformed mirror or future API change could ship hits with
+        missing/empty titles. The defensive guard must collapse to None
+        rather than feeding an empty string to `urllib.parse.quote` and
+        firing a doomed REST summary fetch on `…/page/summary/`."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        bad_hits = Mock()
+        bad_hits.status_code = 200
+        bad_hits.json.return_value = {"query": {"search": [{}]}}  # no "title"
+        mock_get.side_effect = [self._mk_search([]), bad_hits]
+        assert _wikipedia_summary("q", lang="en") is None
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_fulltext_search_not_a_list_treated_as_empty(self, mock_get):
+        """Defensive: `query.search` is documented as a list, but if the API
+        ever ships back a string/dict/null in that slot, the helper must
+        treat it as empty rather than indexing into it (which would, e.g.,
+        slice a string into a single-character title)."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        for malformed in (None, "broken", {"unexpected": "shape"}, 42):
+            mock_get.reset_mock()
+            weird = Mock()
+            weird.status_code = 200
+            weird.json.return_value = {"query": {"search": malformed}}
+            mock_get.side_effect = [self._mk_search([]), weird]
+            assert _wikipedia_summary("q", lang="en") is None, (
+                f"search={malformed!r} should resolve to None"
+            )
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_opensearch_titles_not_a_list_treated_as_empty(self, mock_get):
+        """`payload[1]` is documented as a list of strings. A malformed
+        response that hands us a string here would otherwise slice into
+        single characters (`titles[0]` becomes the first letter), producing
+        a phantom one-character title that flows all the way to the REST
+        summary fetch. Treat anything non-list as empty and cascade."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        weird = Mock()
+        weird.status_code = 200
+        weird.json.return_value = ["q", "broken-string-not-a-list", [], []]
+        mock_get.side_effect = [
+            weird,
+            self._mk_fulltext(["Real Title"]),
+            self._mk_summary("e", title="Real Title"),
+        ]
+        result = _wikipedia_summary("q", lang="en")
+        assert result is not None
+        assert result[0] == "Real Title"
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_deadline_in_past_short_circuits(self, mock_get):
+        """A deadline already in the past must collapse the helper to None
+        without firing any HTTP request — the chain budget is exhausted and
+        firing more requests can only make the latency situation worse."""
+        import time as _time
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        result = _wikipedia_summary(
+            "q", lang="en", deadline=_time.monotonic() - 1.0
+        )
+        assert result is None
+        assert mock_get.call_count == 0
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_deadline_shrinks_request_timeout(self, mock_get):
+        """A near-expiry deadline must shrink the per-request `timeout`
+        rather than fire the default 4s request that would happily blow the
+        chain budget. Verify the timeout argument is clamped below the
+        default for a deadline ~1s out."""
+        import time as _time
+        from src.jarvis.tools.builtin.web_search import (
+            _WIKIPEDIA_REQUEST_TIMEOUT_SEC,
+            _wikipedia_summary,
+        )
+        mock_get.side_effect = [
+            self._mk_search(["Thing"]),
+            self._mk_summary("e"),
+        ]
+        _wikipedia_summary(
+            "q", lang="en", deadline=_time.monotonic() + 1.0
+        )
+        # Both calls must have a timeout strictly below the default and
+        # strictly above zero — the clamp should produce something near 1s.
+        for call in mock_get.call_args_list:
+            t = call.kwargs.get("timeout")
+            assert t is not None and 0 < t < _WIKIPEDIA_REQUEST_TIMEOUT_SEC, (
+                f"expected clamped timeout, got {t!r}"
+            )
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
     def test_uses_language_subdomain(self, mock_get):
         from src.jarvis.tools.builtin.web_search import _wikipedia_summary
         mock_get.side_effect = [

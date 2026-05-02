@@ -159,6 +159,14 @@ answer, the tool walks a fallback chain before giving up:
    `srlimit=1`) to resolve a relevant title, then continues with the
    REST summary fetch. Without the full-text cascade the planner's
    typical phrasings produce zero hits and the fallback never fires.
+   Every Wikipedia request honours the chain-level deadline forwarded
+   by the caller: each request's timeout collapses to whatever budget
+   remains, and once the remaining budget falls below
+   `_WIKIPEDIA_MIN_TIMEOUT_SEC` the helper returns `None` rather than
+   firing a request that is doomed to time out. The localised-miss
+   retry against `en.wikipedia.org` is also gated on remaining budget,
+   so the worst case across the Wikipedia branch never breaches
+   `_TOTAL_WALL_CLOCK_SEC`.
 3. **Honest block envelope** — if every provider fails, the envelope
    admits it and forbids unverified facts (same framing as the
    links-only envelope).
@@ -219,6 +227,17 @@ Regression tests assert:
    `anomaly-modal` / `anomaly.js` in body) produces the rate-limited
    envelope, not a phantom result count and not a "use this information"
    envelope over empty payload.
+6. **Wikipedia title cascade**: when opensearch returns no titles for a
+   query, `_resolve_wikipedia_title` cascades to `list=search` (full-
+   text) before giving up. Tests cover the happy path, the "both empty
+   → `None`" path, and the defensive guards for non-200 fulltext
+   responses, hits whose `title` key is missing/empty, and malformed
+   `search` payloads (anything that is not a list).
+7. **Wikipedia deadline plumbing**: when a `deadline` is forwarded to
+   `_wikipedia_summary`, every internal request honours it — a deadline
+   already in the past causes the helper to short-circuit to `None`
+   without hitting the network, and a near-expiry deadline shrinks the
+   per-request timeout rather than firing a doomed full-timeout request.
 
 ### Non-goals
 

@@ -362,20 +362,144 @@ def _language_script_mismatches_query(lang: str, query: str) -> bool:
     return ascii_letters / len(letters) >= 0.8
 
 
-def _wikipedia_summary(query: str, lang: str = "en"
-                      ) -> Optional[Tuple[str, str, str]]:
+# Per-request timeout for Wikipedia API calls. Smaller than the generic
+# `_FETCH_TIMEOUT_SEC` because the helper makes up to three sequential calls
+# (opensearch + optional fulltext + REST summary) and the whole branch must
+# fit comfortably inside `_TOTAL_WALL_CLOCK_SEC`. The Wikimedia API typically
+# responds in well under a second, so 4s is plenty without burning the chain
+# budget on tail latency.
+_WIKIPEDIA_REQUEST_TIMEOUT_SEC = 4.0
+# Floor on the per-request timeout when a deadline shrinks the budget. Below
+# this we treat the budget as exhausted rather than firing a doomed-to-time-
+# out request that still costs round-trip overhead.
+_WIKIPEDIA_MIN_TIMEOUT_SEC = 0.5
+
+
+def _wikipedia_request_timeout(deadline: Optional[float]) -> Optional[float]:
+    """Return the timeout to use for a Wikipedia request, honouring `deadline`.
+
+    Returns the configured per-request timeout when no deadline is supplied,
+    a clamped remaining-budget value when a deadline is in the future, or
+    `None` when the deadline has already passed (caller must skip the call).
+    """
+    if deadline is None:
+        return _WIKIPEDIA_REQUEST_TIMEOUT_SEC
+    import time as _time
+    remaining = deadline - _time.monotonic()
+    if remaining < _WIKIPEDIA_MIN_TIMEOUT_SEC:
+        return None
+    return min(_WIKIPEDIA_REQUEST_TIMEOUT_SEC, remaining)
+
+
+def _resolve_wikipedia_title(
+    query: str,
+    search_url: str,
+    headers: Dict[str, str],
+    deadline: Optional[float] = None,
+) -> Optional[str]:
+    """Resolve a Wikipedia article title for `query`, or return None.
+
+    Cascade: opensearch first (cheap, exact-prefix match for entity queries),
+    then `list=search` (full-text relevance) when opensearch comes up empty.
+    Opensearch is a title-prefix matcher, so verbose conversational queries
+    like "modern scientists similar to Albert Einstein" return zero titles
+    from it; without the full-text cascade the Wikipedia fallback never
+    fires for the phrasings the planner produces from voice utterances.
+
+    `deadline` (monotonic timestamp) bounds total time spent here so the
+    helper cannot blow the chain-level wall-clock budget. Returns None when
+    the deadline expires or either endpoint refuses / yields nothing usable.
+    """
+    timeout = _wikipedia_request_timeout(deadline)
+    if timeout is None:
+        return None
+    search_resp = requests.get(
+        search_url,
+        params={
+            "action": "opensearch",
+            "search": query,
+            "limit": 1,
+            "namespace": 0,
+            "format": "json",
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    if search_resp.status_code != 200:
+        debug_log(
+            f"Wikipedia opensearch status {search_resp.status_code}",
+            "web",
+        )
+        return None
+    payload = search_resp.json()
+    # `payload[1]` is documented as a list of title strings, but defend
+    # against a malformed mirror or a future API change handing us a string
+    # (which would slice into single characters and produce a phantom
+    # one-letter title that flows all the way to the REST summary fetch).
+    raw_titles = payload[1] if len(payload) > 1 else []
+    titles: List[str] = raw_titles if isinstance(raw_titles, list) else []
+    if titles and isinstance(titles[0], str) and titles[0].strip():
+        return titles[0]
+
+    # Cascade to full-text search when opensearch found no prefix match.
+    timeout = _wikipedia_request_timeout(deadline)
+    if timeout is None:
+        return None
+    fulltext_resp = requests.get(
+        search_url,
+        params={
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": 1,
+            "srnamespace": 0,
+            "format": "json",
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    if fulltext_resp.status_code != 200:
+        debug_log(
+            f"Wikipedia fulltext status {fulltext_resp.status_code}",
+            "web",
+        )
+        return None
+    raw_search = ((fulltext_resp.json() or {}).get("query") or {}).get("search")
+    hits = raw_search if isinstance(raw_search, list) else []
+    if not hits:
+        return None
+    first = hits[0] if isinstance(hits[0], dict) else {}
+    title = first.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    debug_log(
+        f"Wikipedia fulltext resolved '{query}' → '{title}'",
+        "web",
+    )
+    return title
+
+
+def _wikipedia_summary(
+    query: str,
+    lang: str = "en",
+    deadline: Optional[float] = None,
+) -> Optional[Tuple[str, str, str]]:
     """Last-resort Wikipedia lookup.
 
     Returns `(title, url, extract)` for the best match, or None on miss.
-    Tries the REST summary endpoint directly first (works for exact-title
-    queries), then falls back to opensearch for fuzzy title resolution.
-    Uses `lang.wikipedia.org` so the reply is in the user's spoken
-    language when Whisper gave us a non-English code.
+    Resolves a title via `_resolve_wikipedia_title` (opensearch with a
+    full-text fallback) and then fetches the REST summary endpoint for
+    that title. Uses `lang.wikipedia.org` so the reply is in the user's
+    spoken language when Whisper gave us a non-English code.
 
     We deliberately do NOT reuse the generic cascade fetcher: the REST
     summary API returns a curated `extract` field — short, clean, no
     navigation cruft — which is a better fit for the untrusted-extract
     fence than the full HTML page.
+
+    `deadline` (monotonic timestamp) is forwarded to every request so a
+    nearly-exhausted chain budget cannot be blown by tail latency in this
+    branch. None means "use the default per-request timeout".
     """
     lang = (lang or "en").strip().lower() or "en"
     # Sanitise: Wikipedia's language subdomains are 2–3 letter codes. If
@@ -393,78 +517,22 @@ def _wikipedia_summary(query: str, lang: str = "en"
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
-    # Resolve a likely title via opensearch — cheaper and handles "what
-    # is possessor movie" ↔ "Possessor (film)" without us having to
-    # second-guess capitalisation. Opensearch is a title-prefix matcher,
-    # so it returns nothing for verbose conversational queries like
-    # "modern scientists similar to Albert Einstein". When that happens
-    # we cascade to the full-text search endpoint (`list=search`), which
-    # ranks articles by relevance to the whole phrase and surfaces a
-    # usable title where opensearch gave up. Without this cascade the
-    # Wikipedia fallback effectively never fires for the queries the
-    # planner produces from voice utterances.
     try:
         import urllib.parse
         search_url = f"https://{lang}.wikipedia.org/w/api.php"
-        search_resp = requests.get(
-            search_url,
-            params={
-                "action": "opensearch",
-                "search": query,
-                "limit": 1,
-                "namespace": 0,
-                "format": "json",
-            },
-            headers=headers,
-            timeout=5,
+        title = _resolve_wikipedia_title(
+            query, search_url, headers, deadline=deadline
         )
-        if search_resp.status_code != 200:
-            debug_log(
-                f"Wikipedia opensearch status {search_resp.status_code}",
-                "web",
-            )
-            return None
-        payload = search_resp.json()
-        titles = payload[1] if len(payload) > 1 else []
-        title: Optional[str] = titles[0] if titles else None
         if not title:
-            fulltext_resp = requests.get(
-                search_url,
-                params={
-                    "action": "query",
-                    "list": "search",
-                    "srsearch": query,
-                    "srlimit": 1,
-                    "srnamespace": 0,
-                    "format": "json",
-                },
-                headers=headers,
-                timeout=5,
-            )
-            if fulltext_resp.status_code != 200:
-                debug_log(
-                    f"Wikipedia fulltext status {fulltext_resp.status_code}",
-                    "web",
-                )
-                return None
-            hits = (
-                ((fulltext_resp.json() or {}).get("query") or {}).get("search")
-                or []
-            )
-            if not hits:
-                return None
-            title = (hits[0] or {}).get("title") or None
-            if not title:
-                return None
-            debug_log(
-                f"Wikipedia fulltext resolved '{query}' → '{title}'",
-                "web",
-            )
+            return None
+        timeout = _wikipedia_request_timeout(deadline)
+        if timeout is None:
+            return None
         summary_url = (
             f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
             + urllib.parse.quote(title, safe="")
         )
-        summary_resp = requests.get(summary_url, headers=headers, timeout=5)
+        summary_resp = requests.get(summary_url, headers=headers, timeout=timeout)
         if summary_resp.status_code != 200:
             debug_log(
                 f"Wikipedia summary status {summary_resp.status_code}",
@@ -735,17 +803,27 @@ class WebSearchTool(Tool):
                 context.user_print(
                     f"📚 Searching Wikipedia ({lang}) for '{search_query}'…"
                 )
-                wiki = _wikipedia_summary(search_query, lang=lang)
+                # Forward the chain deadline so the helper's three sequential
+                # API calls cannot stretch past the overall wall-clock cap on
+                # a tail-latency day. Without this the helper happily spends
+                # 3 × _WIKIPEDIA_REQUEST_TIMEOUT_SEC even if the chain has
+                # only ~2s of budget left, breaching the voice-assistant
+                # latency contract.
+                wiki = _wikipedia_summary(
+                    search_query, lang=lang, deadline=chain_deadline
+                )
                 # If the localised Wikipedia had no page, retry in
                 # English before giving up. Many topics only exist on
                 # en.wikipedia.org and the user usually prefers a
                 # grounded answer over an honest "nothing found".
-                if not wiki and lang != "en":
+                if not wiki and lang != "en" and _budget_left() > 0:
                     debug_log(
                         f"Wikipedia ({lang}) returned no match; retrying 'en'",
                         "web",
                     )
-                    wiki = _wikipedia_summary(search_query, lang="en")
+                    wiki = _wikipedia_summary(
+                        search_query, lang="en", deadline=chain_deadline
+                    )
                     if wiki:
                         lang = "en"
                 if wiki:
