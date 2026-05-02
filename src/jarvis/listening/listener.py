@@ -158,6 +158,76 @@ def _setup_nvidia_dll_path() -> None:
             debug_log(f"added NVIDIA DLL path: {d}", "voice")
 
 
+def _probe_windows_cuda_libraries(device: str) -> tuple[str, list[str]]:
+    """Probe for cuBLAS + cuDNN at runtime and return (device, missing).
+
+    Returns the device the caller should actually use (forced to "cpu" when
+    a required lib is missing) and the list of human-readable lib names that
+    weren't found. The caller is expected to surface those names to the user
+    along with a recovery hint.
+
+    Factored out of the inline check so it's unit-testable without standing
+    up the rest of the voice listener.
+    """
+    if sys.platform != "win32" or device not in ("auto", "cuda"):
+        return device, []
+
+    _setup_nvidia_dll_path()
+
+    missing_libs: list[str] = []
+    cublas_found = False
+    cudnn_found = False
+    try:
+        import ctypes
+
+        for ver in range(20, 10, -1):
+            try:
+                ctypes.CDLL(f"cublas64_{ver}.dll")
+                cublas_found = True
+                debug_log(f"cuBLAS found (cublas64_{ver}.dll)", "voice")
+                break
+            except OSError:
+                continue
+        if not cublas_found:
+            missing_libs.append("cuBLAS")
+
+        for ver in range(15, 7, -1):
+            try:
+                ctypes.CDLL(f"cudnn_ops64_{ver}.dll")
+                cudnn_found = True
+                debug_log(f"cuDNN found (cudnn_ops64_{ver}.dll)", "voice")
+                break
+            except OSError:
+                continue
+        if not cudnn_found:
+            missing_libs.append("cuDNN")
+    except Exception as e:
+        debug_log(f"CUDA library probe failed: {e}", "voice")
+
+    if not (cublas_found and cudnn_found):
+        return "cpu", missing_libs
+    return device, []
+
+
+def _print_cuda_unavailable_hint(missing_libs: list[str]) -> None:
+    """Print the user-facing CUDA-missing message and recovery hint.
+
+    The hint deliberately points at the tray action, not at "reinstall the
+    app". The Inno Setup task only fires once and skips on stale marker
+    files, so reinstalling without first deleting `{app}\\cuda` rarely
+    fixes the underlying problem. The tray action re-runs install_cuda.ps1
+    directly with UAC, which is the actual recovery path.
+    """
+    debug_log(f"CUDA libraries missing: {missing_libs}, forcing CPU mode", "voice")
+    print("  ℹ️  CUDA not available, using CPU mode", flush=True)
+    if missing_libs:
+        print(f"     Missing: {', '.join(missing_libs)}", flush=True)
+    print(
+        "  💡 For GPU acceleration, click 'Reinstall GPU libraries' in the Jarvis tray menu",
+        flush=True,
+    )
+
+
 try:
     if _is_apple_silicon():
         import mlx_whisper
@@ -1653,60 +1723,14 @@ class VoiceListener(threading.Thread):
             device = getattr(self.cfg, "whisper_device", "auto")
             compute = getattr(self.cfg, "whisper_compute_type", "int8")
 
-            # On Windows, check if CUDA runtime libraries are actually available
-            # before trying to use them. faster-whisper/CTranslate2 lazily loads
-            # CUDA libraries during transcription, causing runtime errors even if
-            # model loading succeeded. We probe for the specific DLLs needed:
-            # cuBLAS (cublas64_XX.dll) and cuDNN (cudnn_ops64_X.dll).
-            if sys.platform == 'win32' and device in ("auto", "cuda"):
-                # First, ensure NVIDIA DLL directories are on PATH.
-                # pip packages (nvidia-cublas-cu12, nvidia-cudnn-cu12) install
-                # DLLs under site-packages/nvidia/*/bin/ which isn't on PATH
-                # by default. PyInstaller bundles put them in {app}/cuda/.
-                _setup_nvidia_dll_path()
-
-                cuda_available = False
-                missing_libs = []
-                try:
-                    import ctypes
-
-                    # Check cuBLAS (required)
-                    cublas_found = False
-                    for ver in range(20, 10, -1):
-                        try:
-                            ctypes.CDLL(f"cublas64_{ver}.dll")
-                            cublas_found = True
-                            debug_log(f"cuBLAS found (cublas64_{ver}.dll)", "voice")
-                            break
-                        except OSError:
-                            continue
-                    if not cublas_found:
-                        missing_libs.append("cuBLAS")
-
-                    # Check cuDNN (required for transcription)
-                    cudnn_found = False
-                    for ver in range(15, 7, -1):
-                        try:
-                            ctypes.CDLL(f"cudnn_ops64_{ver}.dll")
-                            cudnn_found = True
-                            debug_log(f"cuDNN found (cudnn_ops64_{ver}.dll)", "voice")
-                            break
-                        except OSError:
-                            continue
-                    if not cudnn_found:
-                        missing_libs.append("cuDNN")
-
-                    cuda_available = cublas_found and cudnn_found
-                except Exception as e:
-                    debug_log(f"CUDA library probe failed: {e}", "voice")
-
-                if not cuda_available:
-                    debug_log(f"CUDA libraries missing: {missing_libs}, forcing CPU mode", "voice")
-                    print("  ℹ️  CUDA not available, using CPU mode", flush=True)
-                    if missing_libs:
-                        print(f"     Missing: {', '.join(missing_libs)}", flush=True)
-                    print("  💡 For GPU acceleration, reinstall with the CUDA option enabled", flush=True)
-                    device = "cpu"
+            # On Windows, probe for CUDA runtime libraries before trying to
+            # use them. faster-whisper/CTranslate2 lazily loads cuBLAS and
+            # cuDNN during transcription, so without this check a model
+            # that loaded fine on cuda will crash on the first audio chunk.
+            resolved_device, missing_libs = _probe_windows_cuda_libraries(device)
+            if missing_libs:
+                _print_cuda_unavailable_hint(missing_libs)
+            device = resolved_device
 
             # Build list of (device, compute_type) combinations to try
             # This handles both compute type fallbacks and CUDA -> CPU fallbacks

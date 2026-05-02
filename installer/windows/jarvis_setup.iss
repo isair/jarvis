@@ -57,8 +57,10 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: 
 [Run]
 ; Install VC++ Redistributable silently if missing
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/quiet /norestart"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated; Check: VCRedistNeeded
-; Download CUDA libraries if task selected (uses PowerShell to download and extract wheels)
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\install_cuda.ps1"" -TargetDir ""{app}\cuda"""; StatusMsg: "Downloading CUDA libraries for GPU acceleration (this may take several minutes)..."; Flags: waituntilterminated runhidden; Tasks: cudalibs
+; Download CUDA libraries if task selected (uses PowerShell to download and extract wheels).
+; -LogPath ensures every run leaves a transcript at {app}\cuda\install.log so a hidden
+; failure here is recoverable from the bug-report flow and the tray "Reinstall GPU libraries" action.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install_cuda.ps1"" -TargetDir ""{app}\cuda"" -LogPath ""{app}\cuda\install.log"""; StatusMsg: "Downloading CUDA libraries for GPU acceleration (this may take several minutes)..."; Flags: waituntilterminated runhidden; Tasks: cudalibs; AfterInstall: VerifyCudaInstall
 ; Launch the application after installation
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
@@ -88,6 +90,28 @@ begin
   // nvcuda.dll is the CUDA driver — present on any system with NVIDIA drivers
   NvSmiPath := ExpandConstant('{sys}\nvcuda.dll');
   Result := FileExists(NvSmiPath);
+end;
+
+// Surface CUDA install failures to the user instead of silently letting the
+// installer report success. install_cuda.ps1 only writes its marker after
+// verifying every expected DLL is on disk, so a missing marker means the
+// install really did fail and the user needs to know they can recover via
+// the tray menu's "Reinstall GPU libraries" action.
+procedure VerifyCudaInstall;
+var
+  MarkerPath, LogPath: String;
+begin
+  MarkerPath := ExpandConstant('{app}\cuda\.cuda_installed');
+  LogPath := ExpandConstant('{app}\cuda\install.log');
+  if not FileExists(MarkerPath) then
+  begin
+    Log('CUDA install marker not found at ' + MarkerPath + '; install failed.');
+    MsgBox(
+      'GPU library download did not complete. Jarvis will run on CPU.' #13#10 #13#10 +
+      'You can retry later from the tray menu via "Reinstall GPU libraries".' #13#10 #13#10 +
+      'Details: ' + LogPath,
+      mbInformation, MB_OK);
+  end;
 end;
 
 // Download VC++ Redistributable if needed
