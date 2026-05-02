@@ -264,6 +264,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("memory_enrichment_source", "Enrichment Source",
       "Which memory system enriches replies: all (diary + graph), diary only, or graph only",
       "memory", "choice", choices=[("diary", "Diary only"), ("graph", "Graph only"), ("all", "All (diary + graph)")])
+    f("tool_carryover_max_turns", "Tool Carryover Turns",
+      "How many prior replies' tool results to keep visible for follow-up questions",
+      "memory", "int", min_val=0, max_val=10)
+    f("tool_carryover_per_entry_chars", "Tool Carryover Length",
+      "Chars kept per carried-over tool result (UNTRUSTED fence markers preserved)",
+      "memory", "int", min_val=200, max_val=8000, step=100)
     f("agentic_max_turns", "Agentic Max Turns",
       "Maximum turns in agentic tool-use loops",
       "memory", "int", min_val=1, max_val=30)
