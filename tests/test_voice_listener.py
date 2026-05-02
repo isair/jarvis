@@ -1761,3 +1761,61 @@ class TestIsWhisperHallucination:
             "(definition + faster-whisper site + MLX site). Found: "
             f"{src.count('is_whisper_hallucination(')}"
         )
+
+
+class TestWeatherBannerExample:
+    """Tests for the adaptive weather example in the startup banner."""
+
+    def _make_listener(self, **cfg_overrides):
+        from unittest.mock import MagicMock
+        from jarvis.listening.listener import VoiceListener
+
+        cfg = MagicMock()
+        cfg.wake_word = cfg_overrides.get("wake_word", "jarvis")
+        cfg.location_enabled = cfg_overrides.get("location_enabled", True)
+        cfg.location_auto_detect = cfg_overrides.get("location_auto_detect", True)
+        cfg.location_ip_address = cfg_overrides.get("location_ip_address", None)
+
+        listener = object.__new__(VoiceListener)
+        listener.cfg = cfg
+        return listener
+
+    def test_plain_form_when_auto_detect_enabled(self):
+        """Plain 'How's the weather' example when auto-detect is on."""
+        listener = self._make_listener(location_enabled=True, location_auto_detect=True)
+        result = listener._weather_example("Jarvis")
+        assert result == "\"How's the weather, Jarvis?\""
+
+    def test_plain_form_when_manual_ip_configured(self):
+        """Plain form when auto-detect is off but a manual IP is set."""
+        listener = self._make_listener(
+            location_enabled=True,
+            location_auto_detect=False,
+            location_ip_address="1.2.3.4",
+        )
+        result = listener._weather_example("Jarvis")
+        assert result == "\"How's the weather, Jarvis?\""
+
+    def test_city_placeholder_when_location_disabled(self):
+        """City placeholder form when location is explicitly disabled."""
+        listener = self._make_listener(location_enabled=False)
+        result = listener._weather_example("Jarvis")
+        assert result == "\"How's the weather in [your city], Jarvis?\""
+
+    def test_city_placeholder_when_no_location_source(self):
+        """City placeholder form when auto-detect is off and no manual IP is set."""
+        listener = self._make_listener(
+            location_enabled=True,
+            location_auto_detect=False,
+            location_ip_address=None,
+        )
+        result = listener._weather_example("Jarvis")
+        assert result == "\"How's the weather in [your city], Jarvis?\""
+
+    def test_wake_title_reflected_in_example(self):
+        """Wake word title is correctly used in the example string."""
+        listener = self._make_listener(location_enabled=True, location_auto_detect=True)
+        assert "Helix?" in listener._weather_example("Helix")
+
+        listener2 = self._make_listener(location_enabled=False)
+        assert "Helix?" in listener2._weather_example("Helix")

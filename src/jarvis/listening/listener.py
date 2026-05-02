@@ -1561,6 +1561,20 @@ class VoiceListener(threading.Thread):
         )
         return threads
 
+    def _weather_example(self, wake_title: str) -> str:
+        """Return the weather query example for the startup banner.
+
+        Shows the plain form when a location source is configured, or the
+        [your city] placeholder form so the user knows to supply a city.
+        """
+        location_enabled = getattr(self.cfg, "location_enabled", True)
+        location_auto_detect = getattr(self.cfg, "location_auto_detect", True)
+        location_ip_address = getattr(self.cfg, "location_ip_address", None)
+        location_known = location_enabled and (location_auto_detect or bool(location_ip_address))
+        if location_known:
+            return f"\"How's the weather, {wake_title}?\""
+        return f"\"How's the weather in [your city], {wake_title}?\""
+
     def run(self) -> None:
         """Main voice listening loop."""
         if sd is None:
@@ -2097,7 +2111,7 @@ class VoiceListener(threading.Thread):
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
             wake_title = wake_word.title()
             print(f"\n{'─' * 50}\n🎙️  Listening! Try:", flush=True)
-            print(f"      \"How's the weather, {wake_title}?\"", flush=True)
+            print(f"      {self._weather_example(wake_title)}", flush=True)
             print(f"      \"I just ate a Big Mac, {wake_title}.\"", flush=True)
             print(f"      \"What are you thinking, {wake_title}?\"", flush=True)
             print(f"      \"What do you know about me, {wake_title}?\"", flush=True)
