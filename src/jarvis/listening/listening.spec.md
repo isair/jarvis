@@ -102,13 +102,13 @@ Before the listener announces "Listening!", it pre-loads every model the first e
      🧠 Intent judge 'gemma4:e2b' ready
 🎙️  Listening! Try:
       "How's the weather, Jarvis?"          ← when location is known
-      "How's the weather in London, Jarvis?"  ← when location is disabled or not configured
+      "How's the weather in [your city], Jarvis?"  ← when location is disabled or not configured
       "I just ate a Big Mac, Jarvis."
       "What are you thinking, Jarvis?"
       "What do you know about me, Jarvis?"
 ```
 
-The weather example adapts to location availability: if `location_enabled` is true and a location source is configured (`location_auto_detect` or a manual `location_ip_address`), the plain form is shown; otherwise the city-name form is shown so the user knows they need to specify a location in their query.
+The weather example adapts to location availability: if `location_enabled` is true and a location source is configured (`location_auto_detect` or a manual `location_ip_address`), the plain form is shown; otherwise the `[your city]` placeholder form is shown so the user understands they must substitute a real city name in their query.
 
 On small models, a caveat line is appended above a more involved example to set expectations (`⚠️ Small model in use (…). Assume it can't infer — spell out the steps for anything more involved:`). The Chrome MCP tip continues to appear as its own block when the browser tool is detected.
 
