@@ -183,6 +183,64 @@ class TestScrubSweepBehaviour:
             "when each summary was originally written must survive the sweep"
         )
 
+    def test_scrub_takes_effect_on_next_search_without_cache_invalidation(self, db):
+        """Cache invariant regression test.
+
+        The reply engine caches three things in DialogueMemory's hot cache
+        — warm-profile block (graph-derived), router decision (per query),
+        and the memory extractor's search parameters (per query). None
+        are derived from diary text. A diary search nevertheless reads
+        the database live on every turn that hits enrichment.
+
+        Therefore: a scrub that mutates ``conversation_summaries`` does
+        NOT need a listener-style invalidation hook to take effect on
+        a follow-up turn that reuses cached extractor params. This test
+        pins that contract — if a future change starts caching diary
+        content, this test will pass while the user observes stale
+        results, so the test alone is not enough; pair it with a code
+        comment in any new cache that diary scrubs require invalidation.
+        """
+        from jarvis.memory.conversation import (
+            DialogueMemory,
+            search_conversation_memory_by_keywords,
+        )
+
+        _seed(db, [
+            ("2026-04-10", "The user asked about Hackney. The assistant could not answer."),
+        ])
+
+        # Simulate the engine's cache: a hot-window entry holding
+        # extractor params keyed off a redacted query. The cache value is
+        # query-derived (keywords from the user query), not diary-derived.
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        cached_params = {"keywords": ["hackney"], "questions": [], "from": None, "to": None}
+        dm.hot_cache_put("enrichment:tell me about hackney", cached_params)
+
+        # User clicks Clean. Sweep mutates the row in-place.
+        events = list(scrub_all_diary_summaries(db))
+        assert events[0]["sentences_removed"] == 1
+
+        # The cache entry is still present — no listener invalidated it,
+        # and none should have. The cached value is query-derived.
+        assert dm.hot_cache_get("enrichment:tell me about hackney") == cached_params
+
+        # Now simulate the follow-up turn's diary search. It must read the
+        # cleaned row, not the pre-scrub one.
+        results = search_conversation_memory_by_keywords(
+            db=db,
+            keywords=cached_params["keywords"],
+            ollama_base_url=None,
+            ollama_embed_model=None,
+            max_results=5,
+        )
+        assert results, "diary search returned nothing after scrub — sweep may not have written back"
+        joined = " ".join(results).lower()
+        assert "hackney" in joined
+        assert "could not answer" not in joined, (
+            "follow-up search returned pre-scrub content despite the sweep — "
+            "either write-back is broken or a hidden cache is serving stale data"
+        )
+
     def test_sweep_does_not_attempt_reembed_when_no_embed_model(self, db):
         """If the caller does not pass an embed model (e.g. user has no
         embedding service configured), the sweep must still write the
