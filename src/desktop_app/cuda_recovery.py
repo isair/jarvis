@@ -20,7 +20,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class CudaRecoveryAction:
     script_path: Path
     target_dir: Path
     executable: str
-    arguments: List[str]
+    arguments: list[str]
 
 
 def _has_nvidia_driver() -> bool:
