@@ -55,7 +55,11 @@ All three rules apply in any language, not only English. The prompt states this 
 
 **Language scope:** the regex set is English-first because every poisoned row in the field sample was English. The prompt rule itself is multilingual, so the LLM-side defence still covers non-English writes; the regex is the deterministic safety net for the dominant case.
 
-**Privacy:** the bulk sweep streams per-row events as `{date_utc, sentences_removed, chars_before, chars_after, kept_original, error?}` — counts only, never raw summary text. The diary clean button must not become a data-exfiltration channel through the streaming progress UI.
+**Privacy:** the bulk sweep streams per-row events as `{date_utc, sentences_removed, chars_before, chars_after, kept_original, embedding_refreshed, error?}` — counts only, never raw summary text. The `error` value is the exception class name only (e.g. `"RuntimeError"`), never the stringified exception message, because Python exception messages can echo offending input back to the caller. The progress-event key set is locked behind a whitelist test so any future field addition forces deliberate review (`tests/test_memory_viewer_diary_scrub_api.py::test_progress_event_keys_are_a_known_whitelist`). The diary clean button must not become a data-exfiltration channel through the streaming progress UI.
+
+**Audit trail:** the bulk sweep preserves each row's original `ts_utc` on rewrite. A maintenance pass that stomped `ts_utc` would make every cleaned row look as though it had been written today, destroying the only signal users have to verify when each diary entry was actually authored.
+
+**Vector embedding:** when the bulk sweep rewrites a row, the embedding stored alongside the summary is regenerated inline from the cleaned text if the caller passes both an `ollama_base_url` and an `ollama_embed_model`. Without an embed model the rewrite still happens (FTS stays consistent via SQLite triggers); the vector embedding stays anchored to the pre-scrub text until the next user-driven write to that date. Per-row embedding refresh is best-effort: an embedding-service failure is logged but does not roll back the summary write.
 
 **Read paths:** none. The scrub only touches writes (per-summary on `update_daily_conversation_summary`) and the bulk sweep (`scrub_all_diary_summaries`). Read-time diary retrieval is untouched — by design, retrieval of cleaned data needs no extra filtering.
 

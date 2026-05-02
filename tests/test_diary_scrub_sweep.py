@@ -135,3 +135,69 @@ class TestScrubSweepBehaviour:
         assert events[0].get("error") is not None
         # Second row processed normally.
         assert events[1]["sentences_removed"] >= 1
+
+    def test_error_field_carries_class_name_not_exception_message(self, db, monkeypatch):
+        """Privacy: a stringified exception could echo row content
+        (e.g. ``ValueError("invalid literal for int(): 'sensitive text'")``).
+        The streaming UI must only see a class name.
+        """
+        _seed(db, [("2026-04-10", "The user said something sensitive about Hackney.")])
+
+        from jarvis.memory import conversation as cmod
+
+        def leaky(text: str):
+            raise RuntimeError(text)  # echoes the row content into the message
+
+        monkeypatch.setattr(cmod, "scrub_deflection_sentences", leaky)
+
+        events = list(scrub_all_diary_summaries(db))
+        assert events[0]["error"] == "RuntimeError"
+        # The original summary content must not leak into the event.
+        assert "hackney" not in str(events[0]).lower()
+
+    def test_sweep_preserves_original_ts_utc_on_rewrite(self, db):
+        """A maintenance pass must not stomp the audit trail. The row's
+        original ``ts_utc`` (when it was first written) is the only
+        signal users have to verify when each diary entry was authored;
+        if the scrub overwrites it with the sweep timestamp, every old
+        row appears to have been "written today" after a clean.
+        """
+        _seed(db, [
+            ("2026-04-10", "The user asked X. The assistant could not answer."),
+        ])
+        original_row = db.get_conversation_summary("2026-04-10")
+        original_ts = original_row["ts_utc"]
+        assert original_ts  # sanity
+
+        # Burn a measurable wall-clock delta so a stomped ts_utc would
+        # be visibly different from the original.
+        import time
+        time.sleep(0.01)
+
+        events = list(scrub_all_diary_summaries(db))
+        assert events[0]["sentences_removed"] >= 1
+
+        rewritten_row = db.get_conversation_summary("2026-04-10")
+        assert rewritten_row["ts_utc"] == original_ts, (
+            "scrub stomped the row's original ts_utc — the audit trail of "
+            "when each summary was originally written must survive the sweep"
+        )
+
+    def test_sweep_does_not_attempt_reembed_when_no_embed_model(self, db):
+        """If the caller does not pass an embed model (e.g. user has no
+        embedding service configured), the sweep must still write the
+        cleaned summary and report ``embedding_refreshed=False`` rather
+        than silently failing.
+        """
+        _seed(db, [
+            ("2026-04-10", "The user asked X. The assistant could not answer."),
+        ])
+        events = list(scrub_all_diary_summaries(
+            db,
+            ollama_base_url=None,
+            ollama_embed_model=None,
+        ))
+        assert events[0].get("embedding_refreshed") is False
+        # Cleaned content still landed.
+        rows = {r["date_utc"]: r["summary"] for r in db.get_all_conversation_summaries()}
+        assert "could not answer" not in rows["2026-04-10"].lower()

@@ -71,6 +71,18 @@ class TestScrubDropsBannedSentences:
                 "The user asked about an old photo. The assistant does not have information about it.",
                 "does not have information",
             ),
+            (
+                "The user asked about an obscure topic. The assistant stated it could not find anything.",
+                "stated it could not",
+            ),
+            (
+                "The user mentioned X. The assistant indicated it did not have details on the matter.",
+                "indicated it did not have",
+            ),
+            (
+                "The user asked about a film. The assistant explained that it does not access streaming catalogues.",
+                "explained that it does not",
+            ),
         ],
     )
     def test_banned_sentence_is_dropped_in_full(self, summary, must_disappear):
@@ -200,6 +212,33 @@ class TestScrubEdgeCases:
         assert "asked about b" in cleaned.lower()
         assert "did not have" not in cleaned.lower()
         assert "offered to search" not in cleaned.lower()
+
+    def test_multiline_summary_with_embedded_newlines(self):
+        """Sentence splitter must handle ``\\n`` whitespace between
+        sentences. Real summaries can land with newlines instead of
+        spaces depending on how the model formats its output.
+        """
+        summary = (
+            "The user asked about X.\n"
+            "The assistant did not have information.\n"
+            "The user lives in Hackney."
+        )
+        cleaned, removed = scrub_deflection_sentences(summary)
+        assert removed == 1
+        assert "hackney" in cleaned.lower()
+        assert "did not have" not in cleaned.lower()
+
+    def test_summary_without_terminal_punctuation_is_treated_as_one_sentence(self):
+        """If the LLM forgets the final period, the entire summary becomes
+        one sentence. The scrub must still behave coherently — drop the
+        whole thing if it matches a banned pattern, otherwise leave it.
+        """
+        summary = "The user asked about X and the assistant did not have information"
+        cleaned, removed = scrub_deflection_sentences(summary)
+        # One sentence containing a banned phrase → would empty → keep
+        # original (per the empty-row guard).
+        assert removed == 1
+        assert cleaned == summary
 
     def test_field_observed_post_rule_shape(self):
         """The exact shape that gemma4:e2b produced on 2026-04-27 in the

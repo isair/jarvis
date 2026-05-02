@@ -105,9 +105,28 @@ def scrub_deflection_sentences(text: Optional[str]) -> Tuple[str, int]:
     return " ".join(kept), removed
 
 
-def scrub_all_diary_summaries(db: Database) -> Iterator[dict]:
+def scrub_all_diary_summaries(
+    db: Database,
+    ollama_base_url: Optional[str] = None,
+    ollama_embed_model: Optional[str] = None,
+    embed_timeout_sec: float = 15.0,
+) -> Iterator[dict]:
     """Walk every row in ``conversation_summaries`` and apply
     ``scrub_deflection_sentences``. Writes back only when the row changed.
+
+    Preserves the row's original ``ts_utc`` on rewrite — the audit trail
+    of when each summary was *originally* written must survive a
+    maintenance pass.
+
+    Regenerates the row's vector embedding inline when both
+    ``ollama_base_url`` and ``ollama_embed_model`` are provided and the
+    DB has VSS enabled — otherwise the embedding stays based on the
+    pre-scrub text and vector search results drift from FTS results.
+    Embedding regeneration is *best-effort*: if the embedding service
+    fails we still keep the cleaned summary, since the FTS index stays
+    consistent via SQLite triggers regardless. The caller decides
+    whether to pass the embed model — for offline/local-only sweeps
+    where the user has no embedding service, omitting the args is fine.
 
     Yields one event dict per row as the walk progresses, so a streaming
     caller (NDJSON endpoint) can surface per-row feedback in real time
@@ -116,9 +135,13 @@ def scrub_all_diary_summaries(db: Database) -> Iterator[dict]:
     content into the user interface. Privacy first.
 
     Fail-open: a row that raises during scrubbing is left untouched and
-    reported with an ``error`` field; the sweep continues with the rest.
-    Mirrors ``consolidate_all_populated_nodes`` in ``graph_ops.py``.
+    reported with an ``error`` field (a generic class name, never the
+    exception message itself, so a corrupted row's content cannot leak
+    via stringified exception state). The sweep continues with the
+    rest. Mirrors ``consolidate_all_populated_nodes`` in ``graph_ops.py``.
     """
+    can_reembed = bool(ollama_base_url and ollama_embed_model and db.is_vss_enabled)
+
     rows = db.get_all_conversation_summaries()
     for row in rows:
         date_utc = row["date_utc"]
@@ -127,24 +150,77 @@ def scrub_all_diary_summaries(db: Database) -> Iterator[dict]:
         try:
             cleaned, removed = scrub_deflection_sentences(original)
         except Exception as e:
-            debug_log(f"diary scrub: failed for {date_utc} — {e}", "memory")
+            debug_log(f"diary scrub: failed for {date_utc} — {type(e).__name__}", "memory")
             yield {
                 "date_utc": date_utc,
                 "sentences_removed": 0,
                 "chars_before": chars_before,
                 "chars_after": chars_before,
                 "kept_original": True,
-                "error": str(e),
+                # Surface only the exception class name. Stringifying the
+                # exception itself (``str(e)``) could echo row content
+                # back through the streaming UI on, e.g., a TypeError
+                # whose message embeds the offending value.
+                "error": type(e).__name__,
             }
             continue
 
         kept_original = cleaned == original
+        embedding_refreshed = False
         if not kept_original:
-            db.upsert_conversation_summary(
-                date_utc=date_utc,
-                summary=cleaned,
-                topics=row["topics"],
-                source_app=row["source_app"],
+            try:
+                summary_id = db.upsert_conversation_summary(
+                    date_utc=date_utc,
+                    summary=cleaned,
+                    topics=row["topics"],
+                    source_app=row["source_app"],
+                    ts_utc=row["ts_utc"],
+                )
+            except Exception as e:
+                debug_log(
+                    f"diary scrub: write-back failed for {date_utc} — "
+                    f"{type(e).__name__}",
+                    "memory",
+                )
+                yield {
+                    "date_utc": date_utc,
+                    "sentences_removed": 0,
+                    "chars_before": chars_before,
+                    "chars_after": chars_before,
+                    "kept_original": True,
+                    "error": type(e).__name__,
+                }
+                continue
+
+            if can_reembed:
+                try:
+                    text_for_embedding = f"{cleaned} {row['topics'] or ''}"
+                    vec = get_embedding(
+                        text_for_embedding,
+                        ollama_base_url,
+                        ollama_embed_model,
+                        timeout_sec=embed_timeout_sec,
+                    )
+                    if vec is not None:
+                        db.upsert_summary_embedding(summary_id, vec)
+                        embedding_refreshed = True
+                except Exception as e:
+                    # Best-effort. The cleaned summary is already
+                    # persisted; FTS stays consistent via triggers.
+                    # A stale vector embedding is recoverable on the
+                    # next user-driven write to that date.
+                    debug_log(
+                        f"diary scrub: embedding refresh failed for "
+                        f"{date_utc} — {type(e).__name__}",
+                        "memory",
+                    )
+
+            debug_log(
+                f"diary scrub: cleaned {date_utc} — {removed} sentence"
+                f"{'' if removed == 1 else 's'} removed "
+                f"({chars_before}→{len(cleaned)} chars, "
+                f"embedding_refreshed={embedding_refreshed})",
+                "memory",
             )
 
         yield {
@@ -153,6 +229,7 @@ def scrub_all_diary_summaries(db: Database) -> Iterator[dict]:
             "chars_before": chars_before,
             "chars_after": len(cleaned),
             "kept_original": kept_original,
+            "embedding_refreshed": embedding_refreshed,
         }
 
 

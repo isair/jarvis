@@ -669,13 +669,21 @@ def diary_scrub_deflections() -> Response:
     contains *only* counts (sentences removed, char deltas) — never raw
     summary text — so this endpoint cannot leak diary content to the UI.
     """
+    from jarvis.config import load_settings
     from jarvis.memory.conversation import scrub_all_diary_summaries
     from jarvis.memory.db import Database
 
     def generate():
+        db = None
         try:
+            settings = load_settings()
             db_path = _get_db_path()
-            db = Database(db_path, sqlite_vss_path=None)
+            # Open with the configured VSS path so embedding refresh
+            # actually targets the same vector store the rest of the app
+            # reads from. Without this the bulk sweep would silently skip
+            # re-embedding on installations that have VSS enabled.
+            sqlite_vss_path = getattr(settings, "sqlite_vss_path", None)
+            db = Database(db_path, sqlite_vss_path=sqlite_vss_path)
 
             total = len(db.get_all_conversation_summaries())
             yield json.dumps({"type": "start", "total": total}) + "\n"
@@ -687,16 +695,21 @@ def diary_scrub_deflections() -> Response:
                     "rows_changed": 0,
                     "rows_kept_original": 0,
                     "total_sentences_removed": 0,
+                    "embeddings_refreshed": 0,
                 }) + "\n"
-                db.close()
                 return
 
             rows_changed = 0
             rows_kept_original = 0
             rows_seen = 0
             total_sentences_removed = 0
+            embeddings_refreshed = 0
 
-            for event in scrub_all_diary_summaries(db):
+            for event in scrub_all_diary_summaries(
+                db,
+                ollama_base_url=settings.ollama_base_url,
+                ollama_embed_model=settings.ollama_embed_model,
+            ):
                 rows_seen += 1
                 removed = event["sentences_removed"]
                 total_sentences_removed += removed
@@ -704,6 +717,8 @@ def diary_scrub_deflections() -> Response:
                     rows_kept_original += 1
                 elif removed > 0:
                     rows_changed += 1
+                if event.get("embedding_refreshed"):
+                    embeddings_refreshed += 1
                 yield json.dumps({
                     "type": "progress",
                     "processed": rows_seen,
@@ -717,12 +732,22 @@ def diary_scrub_deflections() -> Response:
                 "rows_changed": rows_changed,
                 "rows_kept_original": rows_kept_original,
                 "total_sentences_removed": total_sentences_removed,
+                "embeddings_refreshed": embeddings_refreshed,
             }) + "\n"
-
-            db.close()
         except Exception as e:
-            debug_log(f"diary scrub failed: {e}", "memory")
-            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+            debug_log(f"diary scrub failed: {type(e).__name__}", "memory")
+            # Surface only the class name to the streaming UI so a
+            # corrupted row's content cannot leak via the exception
+            # message.
+            yield json.dumps({"type": "error", "message": type(e).__name__}) + "\n"
+        finally:
+            # The connection leaks if we close only on the success path —
+            # a mid-iteration exception would orphan it until GC.
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     return Response(
         generate(),
@@ -2443,6 +2468,15 @@ def index() -> str:
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
 
+        // Diary maintenance button lives in the diary tab's sidebar, which
+        // renders on page load (diary is the default tab). Wire its handler
+        // here on the always-run setup path — initGraph only fires when the
+        // user opens the Knowledge tab, and the diary clean button must
+        // work even for users who never visit it.
+        document.getElementById('btn-scrub-deflections').addEventListener('click', () => {
+            showScrubDeflectionsModal();
+        });
+
         // ─── Graph Explorer ────────────────────────────────────────────
         let graphInitialised = false;
         let graphNodes = [];
@@ -2841,10 +2875,6 @@ def index() -> str:
 
             document.getElementById('btn-consolidate-all').addEventListener('click', () => {
                 showConsolidateAllModal();
-            });
-
-            document.getElementById('btn-scrub-deflections').addEventListener('click', () => {
-                showScrubDeflectionsModal();
             });
 
             // Resize observer
@@ -3410,7 +3440,17 @@ def index() -> str:
                                         icon = '🧹';
                                         detail = `${msg.sentences_removed} sentence${msg.sentences_removed === 1 ? '' : 's'} removed`;
                                     }
-                                    log.innerHTML += `<div>${icon} ${msg.date_utc} — ${detail}</div>`;
+                                    // Use textContent on a constructed node
+                                    // rather than innerHTML+=. The values
+                                    // come from server-controlled JSON, but
+                                    // a corrupted DB row could contain a
+                                    // malformed date_utc and the endpoint
+                                    // surfaces an exception class name on
+                                    // error — neither should be able to
+                                    // inject markup into the modal log.
+                                    const entry = document.createElement('div');
+                                    entry.textContent = `${icon} ${msg.date_utc} — ${detail}`;
+                                    log.appendChild(entry);
                                     log.scrollTop = log.scrollHeight;
                                     const pct = totalRows
                                         ? Math.min(100, Math.round((processed / totalRows) * 100))
