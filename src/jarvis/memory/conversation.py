@@ -233,6 +233,259 @@ def scrub_all_diary_summaries(
         }
 
 
+# ── Topic optimisation (LLM-driven taxonomy normalisation) ────────────────
+#
+# Topic tags extracted by the summariser are independent per-diary-write,
+# so the same concept can appear under multiple surface forms over time
+# ("cook", "cooking", "meal prep"). This sweep collects all unique tags
+# across every conversation_summaries row, asks the LLM once to propose
+# a normalised taxonomy (merging synonyms, splitting compound tags), then
+# applies the mapping to every row that needs updating.
+#
+# One LLM call for the whole database keeps latency predictable regardless
+# of diary length. The mapping is applied locally — no further LLM calls
+# during the per-row write phase.
+#
+# Fail-open: if the LLM returns None or unparseable JSON the sweep yields
+# events with topics_changed=False for every row and leaves the DB untouched.
+# A per-row write failure is also non-fatal and is reported via an 'error'
+# field (exception class name only, never message text, so corrupted row
+# content cannot leak through stringified exceptions).
+
+_TOPIC_OPTIMISE_SYSTEM_PROMPT = (
+    "You normalise topic-tag taxonomies for a personal diary. "
+    "You will receive a newline-separated list of tags extracted from diary entries. "
+    "Return a JSON object that maps each input tag to its normalised replacement.\n\n"
+    "Rules:\n"
+    "1. All output tags must be lowercase with no trailing punctuation.\n"
+    "2. Merge near-synonyms into one canonical form "
+    "(e.g. \"cook\", \"cooking\", \"meal prep\" → \"cooking\").\n"
+    "3. Split a compound tag into an array only if it clearly covers "
+    "unrelated topics (e.g. \"fitness and nutrition\" → [\"fitness\", \"nutrition\"]). "
+    "Most tags do NOT need splitting — prefer merging over splitting.\n"
+    "4. Keep specific, distinct tags as-is (e.g. \"python\", \"travel\", \"finance\").\n"
+    "5. Do not invent new tags that were not present or implied by the input.\n"
+    "6. Every input tag must appear as a key in the output JSON.\n\n"
+    "Respond with ONLY a valid JSON object. "
+    "No prose, no markdown fences, no explanation.\n\n"
+    "Example input:\ncook\ncooking\nworkout\nfitness\nfitness and nutrition\n\n"
+    "Example output:\n"
+    "{\"cook\": \"cooking\", \"cooking\": \"cooking\", "
+    "\"workout\": \"fitness\", \"fitness\": \"fitness\", "
+    "\"fitness and nutrition\": [\"fitness\", \"nutrition\"]}"
+)
+
+
+def _apply_topic_mapping(
+    topics_str: str,
+    mapping: dict[str, str | list[str]],
+) -> str:
+    """Apply a normalisation mapping to a comma-separated topics string.
+
+    Each topic is looked up in ``mapping``:
+    - string value → replace with that string
+    - list value   → expand to multiple tags (split)
+    - missing key  → keep the original tag unchanged
+
+    Deduplicates the result while preserving order (first occurrence wins).
+    """
+    original_tags = [t.strip() for t in topics_str.split(",") if t.strip()]
+    seen: set[str] = set()
+    result: list[str] = []
+    for tag in original_tags:
+        replacement = mapping.get(tag, tag)
+        if isinstance(replacement, list):
+            for r in replacement:
+                r = r.strip()
+                if r and r not in seen:
+                    seen.add(r)
+                    result.append(r)
+        else:
+            r = replacement.strip() if isinstance(replacement, str) else tag
+            if r and r not in seen:
+                seen.add(r)
+                result.append(r)
+    return ", ".join(result)
+
+
+def optimise_diary_topics(
+    db: Database,
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    ollama_embed_model: Optional[str] = None,
+    embed_timeout_sec: float = 15.0,
+) -> Iterator[dict]:
+    """Normalise topic tags across every ``conversation_summaries`` row.
+
+    Collects all unique tags from the database, asks the LLM once for a
+    normalised taxonomy (merging synonyms, optionally splitting compound
+    tags), then applies the mapping to each row. Rows with no topics are
+    skipped. Rows whose topics are unchanged after mapping are not written.
+
+    Preserves each row's original ``ts_utc`` on rewrite — a maintenance
+    pass must not make cleaned rows look like new writes.
+
+    Yields one event dict per row processed:
+    ``{date_utc, topics_changed, old_topic_count, new_topic_count, error?}``.
+    The payload contains no raw tag strings — only counts and the date — so
+    the streaming UI cannot inadvertently echo diary content.
+
+    Fail-open: LLM failure or JSON parse error leaves all rows unchanged.
+    Per-row write failures are non-fatal; the sweep continues.
+    """
+    rows = db.get_all_conversation_summaries()
+    if not rows:
+        return
+
+    # Collect all unique non-empty topics across all rows.
+    unique_topics: list[str] = []
+    seen_topics: set[str] = set()
+    for row in rows:
+        if not row["topics"]:
+            continue
+        for tag in row["topics"].split(","):
+            tag = tag.strip()
+            if tag and tag not in seen_topics:
+                seen_topics.add(tag)
+                unique_topics.append(tag)
+
+    # If there are no topics at all, emit a no-op event per row and stop.
+    if not unique_topics:
+        for row in rows:
+            yield {
+                "date_utc": row["date_utc"],
+                "topics_changed": False,
+                "old_topic_count": 0,
+                "new_topic_count": 0,
+            }
+        return
+
+    # One LLM call to get the normalised mapping.
+    mapping: dict[str, str | list[str]] = {}
+    try:
+        user_content = "\n".join(unique_topics)
+        raw = call_llm_direct(
+            ollama_base_url,
+            ollama_chat_model,
+            _TOPIC_OPTIMISE_SYSTEM_PROMPT,
+            user_content,
+            timeout_sec=60.0,
+        )
+        if raw:
+            # Strip markdown fences if the model wrapped the JSON.
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[^\n]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw)
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                mapping = parsed
+    except Exception as e:
+        debug_log(
+            f"diary topic optimise: LLM call or parse failed — {type(e).__name__}",
+            "memory",
+        )
+        # Fail-open: yield no-op events for every row and return.
+        for row in rows:
+            yield {
+                "date_utc": row["date_utc"],
+                "topics_changed": False,
+                "old_topic_count": len(row["topics"].split(",")) if row["topics"] else 0,
+                "new_topic_count": len(row["topics"].split(",")) if row["topics"] else 0,
+                "error": type(e).__name__,
+            }
+        return
+
+    # Apply the mapping to each row.
+    can_reembed = bool(ollama_base_url and ollama_embed_model and db.is_vss_enabled)
+    for row in rows:
+        date_utc = row["date_utc"]
+        original_topics = row["topics"] or ""
+        old_count = len([t for t in original_topics.split(",") if t.strip()]) if original_topics else 0
+
+        if not original_topics.strip():
+            yield {
+                "date_utc": date_utc,
+                "topics_changed": False,
+                "old_topic_count": 0,
+                "new_topic_count": 0,
+            }
+            continue
+
+        try:
+            new_topics = _apply_topic_mapping(original_topics, mapping)
+        except Exception as e:
+            debug_log(
+                f"diary topic optimise: mapping failed for {date_utc} — {type(e).__name__}",
+                "memory",
+            )
+            yield {
+                "date_utc": date_utc,
+                "topics_changed": False,
+                "old_topic_count": old_count,
+                "new_topic_count": old_count,
+                "error": type(e).__name__,
+            }
+            continue
+
+        new_count = len([t for t in new_topics.split(",") if t.strip()]) if new_topics else 0
+        topics_changed = new_topics != original_topics
+
+        if topics_changed:
+            try:
+                summary_id = db.upsert_conversation_summary(
+                    date_utc=date_utc,
+                    summary=row["summary"],
+                    topics=new_topics,
+                    source_app=row["source_app"],
+                    ts_utc=row["ts_utc"],
+                )
+            except Exception as e:
+                debug_log(
+                    f"diary topic optimise: write-back failed for {date_utc} — {type(e).__name__}",
+                    "memory",
+                )
+                yield {
+                    "date_utc": date_utc,
+                    "topics_changed": False,
+                    "old_topic_count": old_count,
+                    "new_topic_count": old_count,
+                    "error": type(e).__name__,
+                }
+                continue
+
+            if can_reembed:
+                try:
+                    text_for_embedding = f"{row['summary'] or ''} {new_topics}"
+                    vec = get_embedding(
+                        text_for_embedding,
+                        ollama_base_url,
+                        ollama_embed_model,
+                        timeout_sec=embed_timeout_sec,
+                    )
+                    if vec is not None:
+                        db.upsert_summary_embedding(summary_id, vec)
+                except Exception as e:
+                    debug_log(
+                        f"diary topic optimise: embedding refresh failed for "
+                        f"{date_utc} — {type(e).__name__}",
+                        "memory",
+                    )
+
+            debug_log(
+                f"diary topic optimise: updated {date_utc} — "
+                f"{old_count} tags → {new_count} tags",
+                "memory",
+            )
+
+        yield {
+            "date_utc": date_utc,
+            "topics_changed": topics_changed,
+            "old_topic_count": old_count,
+            "new_topic_count": new_count,
+        }
+
+
 def _scrub_tool_call(tc: dict) -> dict:
     """Return a copy of a tool-call entry with the function arguments
     scrubbed of secrets. Handles both dict and string-encoded arguments
