@@ -5,10 +5,9 @@ REM installer at dist\Jarvis-Setup-x64.exe. The resulting installer is the
 REM artefact CI ships, so manual runs of it exercise the same code paths
 REM as a real release including install_cuda.ps1 and the VerifyCudaInstall hook.
 
-setlocal
-
-cd /d "%~dp0\.."
-set "PROJECT_ROOT=%cd%"
+REM Navigate to project root (use for-loop to resolve .. reliably across shells)
+for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
+cd /d "%PROJECT_ROOT%"
 
 REM Resolve mamba env: prefer this checkout's own, fall back to the main
 REM repo's when running from a git worktree (worktrees share one env).
@@ -90,7 +89,6 @@ echo [build_installer] To test the CUDA install flow, run the installer with the
 echo                   "Download NVIDIA CUDA libraries" task ticked, then check
 echo                   "%%LOCALAPPDATA%%\Programs\Jarvis\cuda\install.log".
 
-endlocal
 goto :eof
 
 :resolve_mamba_from_worktree
