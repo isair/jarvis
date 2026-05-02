@@ -1,0 +1,9 @@
+# Windows .bat files: cmd.exe needs CRLF for `call :label` to find labels at
+# end of file. autocrlf=true on Windows clones happens to do the right thing,
+# but a Linux clone (or any tool that bypasses autocrlf) would otherwise see
+# LF and silently break label resolution. Pin the working-tree EOL.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell is more forgiving but the same logic applies.
+*.ps1 text eol=crlf
