@@ -1,9 +1,10 @@
 from __future__ import annotations
 import json
+import re
 import time
 import threading
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple, Union, Callable
+from typing import Iterator, Optional, List, Tuple, Union, Callable
 from .db import Database
 from ..llm import call_llm_direct
 from .embeddings import get_embedding
@@ -13,6 +14,223 @@ from ..utils.redact import redact, scrub_secrets
 
 _UNTRUSTED_FENCE_BEGIN = "<<<BEGIN UNTRUSTED WEB EXTRACT>>>"
 _UNTRUSTED_FENCE_END = "<<<END UNTRUSTED WEB EXTRACT>>>"
+
+
+# ── Deflection scrub (post-process safety net) ───────────────────────────
+#
+# The summariser prompt's rule 6 (added in #232) tells the LLM not to
+# narrate assistant failures, and on bigger models it works. On the
+# smallest supported model (gemma4:e2b) the prompt rule reduces but does
+# not eliminate the leak — field measurement on the author's diary
+# showed roughly 40% of post-rule writes still containing banned phrasing.
+# This regex pass runs on every diary write *and* a bulk button can replay
+# it across the whole ``conversation_summaries`` table to clean historical
+# poisoning. Mirrors the two-layer defence the knowledge graph already has
+# (#291 extractor BANNED FACT FORMS at write-time, #298/#305 deterministic
+# merge-time rewrite for historical data).
+#
+# Patterns are intentionally narrow. The bar for matching is "this is a
+# sentence whose *purpose* is to record an assistant failure" — false
+# positives erase real content and that poisons the diary in a different
+# way (silent fact loss). Precision over recall: a few residual leaks are
+# survivable, an erased preference is not.
+#
+# The patterns are English-first because every poisoned row in the
+# author's diary was English; the summariser prompt *itself* states the
+# rule applies in any language so the LLM-side defence is multilingual.
+# The regex is the deterministic safety net for the dominant case.
+DEFLECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        # "the assistant <failure verb>" — the canonical shape.
+        r"the assistant\s+(was unable|could not|did not have|does not have|"
+        r"offered to (search|help|look)|suggested checking|"
+        r"recommended consulting|clarified that[^.]{0,40}(could not|did not have|cannot|limit)|"
+        r"explained (it|that it) (could not|cannot|does not|did not)|"
+        r"stated[^.]{0,40}(could not|did not have)|"
+        r"indicated[^.]{0,40}(could not|did not have))",
+        # Capability-denial framing: "the assistant lacks X", "cannot access Y".
+        r"the assistant\s+(lacks|cannot|can'?t)\s+(access|the ability|information|specific information|details)",
+    )
+)
+
+# Sentence splitter used by the scrub. ``re.split`` with a positive
+# lookbehind keeps the terminator attached to the sentence so we don't
+# corrupt punctuation when reassembling. Splits on `.`, `!`, `?` followed
+# by whitespace or end-of-string. Doesn't try to be language-perfect — the
+# diary summariser writes in clean prose and the few edge cases (initials,
+# decimals) only cost us a slightly conservative split, never a wrong
+# scrub decision.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-ZÀ-ſ])")
+
+
+def scrub_deflection_sentences(text: Optional[str]) -> Tuple[str, int]:
+    """Drop sentences that narrate assistant failures.
+
+    Returns ``(cleaned_text, removed_sentence_count)``. The full sentence
+    containing a banned phrase is dropped, not just the phrase — leaving
+    half-sentences corrupts the record worse than the original leak.
+
+    If scrubbing would empty the summary outright (a rare conversation
+    that was *entirely* deflection), the original is returned unchanged.
+    Empty diary entries are worse than slightly-leaky ones — downstream
+    retrieval treats absence as "no record" and the user loses the topic
+    of the conversation entirely. The returned ``removed_sentence_count``
+    still reports what would have been dropped so the caller can log
+    "row would have been emptied — kept original".
+    """
+    if not text:
+        return "", 0
+
+    sentences = _SENTENCE_SPLIT.split(text.strip())
+    kept: list[str] = []
+    removed = 0
+    for sentence in sentences:
+        stripped = sentence.strip()
+        if not stripped:
+            continue
+        if any(pat.search(stripped) for pat in DEFLECTION_PATTERNS):
+            removed += 1
+            continue
+        kept.append(stripped)
+
+    if removed == 0:
+        return text, 0
+
+    if not kept:
+        # Would have emptied the summary — keep the original. The count is
+        # still surfaced so the caller can log the near-miss.
+        return text, removed
+
+    return " ".join(kept), removed
+
+
+def scrub_all_diary_summaries(
+    db: Database,
+    ollama_base_url: Optional[str] = None,
+    ollama_embed_model: Optional[str] = None,
+    embed_timeout_sec: float = 15.0,
+) -> Iterator[dict]:
+    """Walk every row in ``conversation_summaries`` and apply
+    ``scrub_deflection_sentences``. Writes back only when the row changed.
+
+    Preserves the row's original ``ts_utc`` on rewrite — the audit trail
+    of when each summary was *originally* written must survive a
+    maintenance pass.
+
+    Regenerates the row's vector embedding inline when both
+    ``ollama_base_url`` and ``ollama_embed_model`` are provided and the
+    DB has VSS enabled — otherwise the embedding stays based on the
+    pre-scrub text and vector search results drift from FTS results.
+    Embedding regeneration is *best-effort*: if the embedding service
+    fails we still keep the cleaned summary, since the FTS index stays
+    consistent via SQLite triggers regardless. The caller decides
+    whether to pass the embed model — for offline/local-only sweeps
+    where the user has no embedding service, omitting the args is fine.
+
+    Yields one event dict per row as the walk progresses, so a streaming
+    caller (NDJSON endpoint) can surface per-row feedback in real time
+    on diaries with many rows. Event payload contains *only* counts —
+    never raw summary text — so the streaming UI cannot leak diary
+    content into the user interface. Privacy first.
+
+    Fail-open: a row that raises during scrubbing is left untouched and
+    reported with an ``error`` field (a generic class name, never the
+    exception message itself, so a corrupted row's content cannot leak
+    via stringified exception state). The sweep continues with the
+    rest. Mirrors ``consolidate_all_populated_nodes`` in ``graph_ops.py``.
+    """
+    can_reembed = bool(ollama_base_url and ollama_embed_model and db.is_vss_enabled)
+
+    rows = db.get_all_conversation_summaries()
+    for row in rows:
+        date_utc = row["date_utc"]
+        original = row["summary"] or ""
+        chars_before = len(original)
+        try:
+            cleaned, removed = scrub_deflection_sentences(original)
+        except Exception as e:
+            debug_log(f"diary scrub: failed for {date_utc} — {type(e).__name__}", "memory")
+            yield {
+                "date_utc": date_utc,
+                "sentences_removed": 0,
+                "chars_before": chars_before,
+                "chars_after": chars_before,
+                "kept_original": True,
+                # Surface only the exception class name. Stringifying the
+                # exception itself (``str(e)``) could echo row content
+                # back through the streaming UI on, e.g., a TypeError
+                # whose message embeds the offending value.
+                "error": type(e).__name__,
+            }
+            continue
+
+        kept_original = cleaned == original
+        embedding_refreshed = False
+        if not kept_original:
+            try:
+                summary_id = db.upsert_conversation_summary(
+                    date_utc=date_utc,
+                    summary=cleaned,
+                    topics=row["topics"],
+                    source_app=row["source_app"],
+                    ts_utc=row["ts_utc"],
+                )
+            except Exception as e:
+                debug_log(
+                    f"diary scrub: write-back failed for {date_utc} — "
+                    f"{type(e).__name__}",
+                    "memory",
+                )
+                yield {
+                    "date_utc": date_utc,
+                    "sentences_removed": 0,
+                    "chars_before": chars_before,
+                    "chars_after": chars_before,
+                    "kept_original": True,
+                    "error": type(e).__name__,
+                }
+                continue
+
+            if can_reembed:
+                try:
+                    text_for_embedding = f"{cleaned} {row['topics'] or ''}"
+                    vec = get_embedding(
+                        text_for_embedding,
+                        ollama_base_url,
+                        ollama_embed_model,
+                        timeout_sec=embed_timeout_sec,
+                    )
+                    if vec is not None:
+                        db.upsert_summary_embedding(summary_id, vec)
+                        embedding_refreshed = True
+                except Exception as e:
+                    # Best-effort. The cleaned summary is already
+                    # persisted; FTS stays consistent via triggers.
+                    # A stale vector embedding is recoverable on the
+                    # next user-driven write to that date.
+                    debug_log(
+                        f"diary scrub: embedding refresh failed for "
+                        f"{date_utc} — {type(e).__name__}",
+                        "memory",
+                    )
+
+            debug_log(
+                f"diary scrub: cleaned {date_utc} — {removed} sentence"
+                f"{'' if removed == 1 else 's'} removed "
+                f"({chars_before}→{len(cleaned)} chars, "
+                f"embedding_refreshed={embedding_refreshed})",
+                "memory",
+            )
+
+        yield {
+            "date_utc": date_utc,
+            "sentences_removed": removed,
+            "chars_before": chars_before,
+            "chars_after": len(cleaned),
+            "kept_original": kept_original,
+            "embedding_refreshed": embedding_refreshed,
+        }
 
 
 def _scrub_tool_call(tc: dict) -> dict:
@@ -698,6 +916,21 @@ def update_daily_conversation_summary(
         if summary is None or topics is None:
             debug_log("conversation summary skipped - LLM failed to generate summary", "memory")
             return  # Skip summarization entirely
+
+        # Post-process safety net: drop any deflection sentences the LLM left
+        # in despite rule 6 of the summariser prompt. Field measurement on the
+        # smallest supported model (gemma4:e2b) showed ~40% of post-rule
+        # writes still containing banned phrasing. The scrub is deterministic,
+        # idempotent, and fails open (returns the input unchanged on empty
+        # text). See ``scrub_deflection_sentences`` and summariser.spec.md.
+        scrubbed, removed = scrub_deflection_sentences(summary)
+        if removed:
+            debug_log(
+                f"diary scrub: removed {removed} deflection sentence"
+                f"{'' if removed == 1 else 's'} on write",
+                "memory",
+            )
+            summary = scrubbed
 
         # Debug: Log the generated summary and topics
         summary_preview = summary[:200] + "..." if len(summary) > 200 else summary

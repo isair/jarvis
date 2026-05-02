@@ -344,9 +344,17 @@ class Database:
         summary: str,
         topics: Optional[str] = None,
         source_app: str = "jarvis",
+        ts_utc: Optional[str] = None,
     ) -> int:
-        """Insert or update a conversation summary for a given date."""
-        ts_utc = datetime.now(timezone.utc).isoformat()
+        """Insert or update a conversation summary for a given date.
+
+        ``ts_utc`` defaults to "now". Maintenance ops that rewrite an
+        existing row's content without changing what it represents (e.g.
+        the deflection scrub bulk sweep) should pass through the row's
+        original ``ts_utc`` so the audit trail is preserved.
+        """
+        if ts_utc is None:
+            ts_utc = datetime.now(timezone.utc).isoformat()
         with self._lock:
             cur = self.conn.cursor()
             cur.execute(
