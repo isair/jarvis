@@ -675,6 +675,14 @@ class TestWikipediaSummaryHelper:
         }
         return r
 
+    def _mk_fulltext(self, titles):
+        r = Mock()
+        r.status_code = 200
+        r.json.return_value = {
+            "query": {"search": [{"title": t} for t in titles]}
+        }
+        return r
+
     @patch("src.jarvis.tools.builtin.web_search.requests.get")
     def test_returns_title_url_extract(self, mock_get):
         from src.jarvis.tools.builtin.web_search import _wikipedia_summary
@@ -687,9 +695,40 @@ class TestWikipediaSummaryHelper:
 
     @patch("src.jarvis.tools.builtin.web_search.requests.get")
     def test_no_titles_returns_none(self, mock_get):
+        """When opensearch AND the full-text fallback both come up empty, the
+        helper bows out with `None` rather than fabricating a result."""
         from src.jarvis.tools.builtin.web_search import _wikipedia_summary
-        mock_get.side_effect = [self._mk_search([])]
+        mock_get.side_effect = [self._mk_search([]), self._mk_fulltext([])]
         assert _wikipedia_summary("nonsense blob", lang="en") is None
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_opensearch_empty_falls_back_to_fulltext(self, mock_get):
+        """Opensearch is a title-prefix matcher; the planner's verbose queries
+        ('modern scientists similar to Albert Einstein') return zero titles
+        from it. The helper must cascade to `list=search` (full-text) so the
+        Wikipedia fallback actually fires for real-world phrasings."""
+        from src.jarvis.tools.builtin.web_search import _wikipedia_summary
+        mock_get.side_effect = [
+            self._mk_search([]),  # opensearch: no prefix match
+            self._mk_fulltext(["Albert Einstein"]),  # full-text: relevance hit
+            self._mk_summary(
+                "German-born theoretical physicist…",
+                title="Albert Einstein",
+                page_url="https://en.wikipedia.org/wiki/Albert_Einstein",
+            ),
+        ]
+        result = _wikipedia_summary(
+            "modern scientists similar to Albert Einstein", lang="en"
+        )
+        assert result == (
+            "Albert Einstein",
+            "https://en.wikipedia.org/wiki/Albert_Einstein",
+            "German-born theoretical physicist…",
+        )
+        # Verify the second call hit the full-text endpoint, not summary.
+        second_call = mock_get.call_args_list[1]
+        assert second_call.kwargs["params"]["action"] == "query"
+        assert second_call.kwargs["params"]["list"] == "search"
 
     @patch("src.jarvis.tools.builtin.web_search.requests.get")
     def test_uses_language_subdomain(self, mock_get):

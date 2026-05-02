@@ -152,7 +152,13 @@ answer, the tool walks a fallback chain before giving up:
      an honest "nothing found" for those.
    Fetches an opensearch title and then the REST summary endpoint; the
    curated `extract` field goes into the fence directly (no HTML
-   scraping, cleaner payload).
+   scraping, cleaner payload). Opensearch is a title-prefix matcher and
+   returns nothing for verbose conversational queries such as
+   "modern scientists similar to Albert Einstein" — when that happens
+   the helper cascades to the full-text endpoint (`list=search`,
+   `srlimit=1`) to resolve a relevant title, then continues with the
+   REST summary fetch. Without the full-text cascade the planner's
+   typical phrasings produce zero hits and the fallback never fires.
 3. **Honest block envelope** — if every provider fails, the envelope
    admits it and forbids unverified facts (same framing as the
    links-only envelope).

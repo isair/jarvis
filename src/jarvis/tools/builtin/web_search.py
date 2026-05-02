@@ -395,7 +395,14 @@ def _wikipedia_summary(query: str, lang: str = "en"
     }
     # Resolve a likely title via opensearch — cheaper and handles "what
     # is possessor movie" ↔ "Possessor (film)" without us having to
-    # second-guess capitalisation.
+    # second-guess capitalisation. Opensearch is a title-prefix matcher,
+    # so it returns nothing for verbose conversational queries like
+    # "modern scientists similar to Albert Einstein". When that happens
+    # we cascade to the full-text search endpoint (`list=search`), which
+    # ranks articles by relevance to the whole phrase and surfaces a
+    # usable title where opensearch gave up. Without this cascade the
+    # Wikipedia fallback effectively never fires for the queries the
+    # planner produces from voice utterances.
     try:
         import urllib.parse
         search_url = f"https://{lang}.wikipedia.org/w/api.php"
@@ -419,9 +426,40 @@ def _wikipedia_summary(query: str, lang: str = "en"
             return None
         payload = search_resp.json()
         titles = payload[1] if len(payload) > 1 else []
-        if not titles:
-            return None
-        title = titles[0]
+        title: Optional[str] = titles[0] if titles else None
+        if not title:
+            fulltext_resp = requests.get(
+                search_url,
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": query,
+                    "srlimit": 1,
+                    "srnamespace": 0,
+                    "format": "json",
+                },
+                headers=headers,
+                timeout=5,
+            )
+            if fulltext_resp.status_code != 200:
+                debug_log(
+                    f"Wikipedia fulltext status {fulltext_resp.status_code}",
+                    "web",
+                )
+                return None
+            hits = (
+                ((fulltext_resp.json() or {}).get("query") or {}).get("search")
+                or []
+            )
+            if not hits:
+                return None
+            title = (hits[0] or {}).get("title") or None
+            if not title:
+                return None
+            debug_log(
+                f"Wikipedia fulltext resolved '{query}' → '{title}'",
+                "web",
+            )
         summary_url = (
             f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
             + urllib.parse.quote(title, safe="")
