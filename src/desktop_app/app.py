@@ -33,7 +33,10 @@ import atexit
 import webbrowser
 import urllib.parse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from desktop_app.cuda_recovery import CudaRecoveryAction
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
@@ -1390,6 +1393,11 @@ class JarvisSystemTray:
         self.check_updates_action.triggered.connect(lambda: self.check_for_updates(show_no_update_dialog=True))
         self.menu.addAction(self.check_updates_action)
 
+        # Reinstall GPU libraries (Windows + NVIDIA only). Only added when
+        # the bundled install script is present and an NVIDIA driver was
+        # detected; otherwise the action would be a dead button.
+        self._maybe_add_cuda_recovery_action()
+
         self.menu.addSeparator()
 
         # Open directories actions
@@ -1416,6 +1424,72 @@ class JarvisSystemTray:
         self.menu.addAction(self.quit_action)
 
         self.tray_icon.setContextMenu(self.menu)
+
+    def _maybe_add_cuda_recovery_action(self) -> None:
+        """Add the GPU-libraries reinstall action to the tray menu, when applicable."""
+        try:
+            from desktop_app.cuda_recovery import cuda_recovery_action
+        except Exception as e:
+            debug_log(f"cuda recovery import failed: {e}", "desktop")
+            return
+
+        # In bundled mode the script lives next to the executable; in dev
+        # runs it lives at installer/windows/install_cuda.ps1.
+        if getattr(sys, "frozen", False):
+            install_root = Path(sys.executable).parent
+        else:
+            install_root = Path(__file__).resolve().parents[2] / "installer" / "windows"
+
+        action_spec = cuda_recovery_action(install_root=install_root)
+        if action_spec is None:
+            return
+
+        self.cuda_recovery_action = QAction(action_spec.label)
+        self.cuda_recovery_action.triggered.connect(
+            lambda: self._run_cuda_recovery(action_spec)
+        )
+        self.menu.addAction(self.cuda_recovery_action)
+
+    def _run_cuda_recovery(self, action_spec: "CudaRecoveryAction") -> None:
+        """Confirm with the user, then launch the recovery script with UAC."""
+        from desktop_app.cuda_recovery import run_action
+        from PyQt6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(
+            None,
+            "Reinstall GPU libraries",
+            (
+                "This will download cuBLAS and cuDNN (~1.1 GB) and install them "
+                "into the Jarvis program folder. You'll see a UAC prompt. "
+                "Continue?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        ok = run_action(action_spec)
+        if not ok:
+            QMessageBox.warning(
+                None,
+                "Reinstall GPU libraries",
+                (
+                    "Could not launch the installer. If you dismissed the UAC "
+                    f"prompt, try again. See the log at\n{action_spec.target_dir / 'install.log'}"
+                ),
+            )
+            return
+
+        QMessageBox.information(
+            None,
+            "Reinstall GPU libraries",
+            (
+                "The CUDA installer is running. Once it finishes, restart "
+                f"Jarvis to use GPU acceleration. See {action_spec.target_dir / 'install.log'} "
+                "for details."
+            ),
+        )
 
     def show_setup_wizard(self) -> None:
         """Show the setup wizard window."""

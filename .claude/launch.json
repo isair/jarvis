@@ -18,6 +18,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["scripts/launch.py", "run_evals"],
       "port": null
+    },
+    {
+      "name": "Build Installer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/launch.py", "build_installer"],
+      "port": null
     }
   ]
 }

@@ -274,59 +274,9 @@ class TestWhisperComputeTypeFallback:
 class TestWindowsCudaDetection:
     """Tests for Windows CUDA detection logic."""
 
-    def test_cuda_detected_when_all_dlls_present(self):
-        """When cuBLAS and cuDNN DLLs are found, GPU mode is used."""
-        mock_whisper_model = MagicMock()
-
-        with patch("jarvis.listening.listener.sys") as mock_sys:
-            mock_sys.platform = "win32"
-            with patch("jarvis.listening.listener._setup_nvidia_dll_path"):
-                with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-                    with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                        with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
-                            with patch("jarvis.listening.listener.sd") as mock_sd:
-                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                                mock_sd.InputStream.side_effect = Exception("Stop test here")
-
-                                # All CUDA DLLs load successfully
-                                mock_ctypes = MagicMock()
-                                mock_ctypes.CDLL.return_value = MagicMock()
-                                with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
-                                    from jarvis.listening.listener import VoiceListener
-
-                                    mock_cfg = _create_mock_config()
-                                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
-                                    listener.run()
-
-                                    # Should use auto (not forced to cpu)
-                                    assert mock_class.call_args_list[0][1]["device"] == "auto"
-
-    def test_cuda_not_available_forces_cpu(self):
-        """When CUDA DLLs are missing, falls back to CPU mode."""
-        mock_whisper_model = MagicMock()
-
-        with patch("jarvis.listening.listener.sys") as mock_sys:
-            mock_sys.platform = "win32"
-            with patch("jarvis.listening.listener._setup_nvidia_dll_path"):
-                with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-                    with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                        with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
-                            with patch("jarvis.listening.listener.sd") as mock_sd:
-                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
-                                mock_sd.InputStream.side_effect = Exception("Stop test here")
-
-                                # All DLL probes fail
-                                mock_ctypes = MagicMock()
-                                mock_ctypes.CDLL.side_effect = OSError("not found")
-                                with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
-                                    from jarvis.listening.listener import VoiceListener
-
-                                    mock_cfg = _create_mock_config()
-                                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
-                                    listener.run()
-
-                                    # Should be forced to cpu
-                                    assert mock_class.call_args_list[0][1]["device"] == "cpu"
+    def setup_method(self):
+        from jarvis.listening import listener
+        listener._probe_cuda_available.cache_clear()
 
     def test_setup_nvidia_dll_path_adds_pip_package_dirs(self):
         """_setup_nvidia_dll_path adds NVIDIA pip package bin dirs to PATH."""
@@ -365,6 +315,66 @@ class TestWindowsCudaDetection:
                 pass  # nvidia packages not installed, nothing to add
         finally:
             os.environ["PATH"] = original_path
+
+    def test_probe_returns_cpu_and_missing_libs_when_dlls_absent(self):
+        """When neither cuBLAS nor cuDNN can be loaded, the probe forces CPU."""
+        mock_ctypes = MagicMock()
+        mock_ctypes.CDLL.side_effect = OSError("not found")
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with patch("jarvis.listening.listener._setup_nvidia_dll_path"):
+                with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+                    from jarvis.listening.listener import _probe_windows_cuda_libraries
+
+                    device, missing = _probe_windows_cuda_libraries("auto")
+
+        assert device == "cpu"
+        assert "cuBLAS" in missing and "cuDNN" in missing
+
+    def test_probe_returns_original_device_when_dlls_present(self):
+        """When both libraries load, the probe leaves the device choice alone."""
+        mock_ctypes = MagicMock()
+        mock_ctypes.CDLL.return_value = MagicMock()
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with patch("jarvis.listening.listener._setup_nvidia_dll_path"):
+                with patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+                    from jarvis.listening.listener import _probe_windows_cuda_libraries
+
+                    device, missing = _probe_windows_cuda_libraries("auto")
+
+        assert device == "auto"
+        assert missing == []
+
+    def test_probe_short_circuits_off_windows(self):
+        """The probe is a no-op on non-Windows platforms regardless of device."""
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            from jarvis.listening.listener import _probe_windows_cuda_libraries
+
+            device, missing = _probe_windows_cuda_libraries("auto")
+
+        assert device == "auto"
+        assert missing == []
+
+    def test_missing_cuda_hint_points_at_tray_action(self, capsys):
+        """When CUDA is missing on Windows, the hint must point users at the tray
+        recovery action — not at "reinstall the app", which is a dead end when
+        the original installer already wrote a (stale) marker file."""
+        from jarvis.listening.listener import _print_cuda_unavailable_hint
+
+        _print_cuda_unavailable_hint(["cuBLAS", "cuDNN"])
+
+        out = capsys.readouterr().out
+        assert "Reinstall GPU libraries" in out, (
+            f"hint should name the tray action; got:\n{out}"
+        )
+        assert "tray" in out.lower(), f"hint should reference the tray menu; got:\n{out}"
+        # The old "reinstall with the CUDA option enabled" wording was actively
+        # misleading: re-running the Inno Setup installer with a stale marker
+        # in place skips the CUDA download entirely. Keep it gone.
+        assert "reinstall with the CUDA option" not in out
+        assert "Missing: cuBLAS, cuDNN" in out
 
 
 class TestLargeV3TurboFallback:

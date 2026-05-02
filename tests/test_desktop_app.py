@@ -869,6 +869,137 @@ except Exception as e:
                 app_module._lock_file_handle = original_handle
 
 
+class TestCudaRecoveryAction:
+    """The tray exposes a 'Reinstall GPU libraries' action when the user has an
+    NVIDIA GPU but the runtime CUDA probe failed. The recovery flow is the only
+    way to retry the CUDA download from the user's perspective: the original
+    Inno Setup task only fires once, and the marker file used to prevent
+    re-runs even after a half-successful install.
+
+    These tests cover the platform-gating logic and the command-line shape so
+    we can change the implementation without breaking the contract.
+    """
+
+    def test_action_hidden_off_windows(self):
+        from desktop_app.cuda_recovery import cuda_recovery_action
+
+        with patch("sys.platform", "darwin"):
+            assert cuda_recovery_action(install_root=Path("/fake")) is None
+
+        with patch("sys.platform", "linux"):
+            assert cuda_recovery_action(install_root=Path("/fake")) is None
+
+    def test_action_hidden_when_no_nvidia_gpu(self, tmp_path):
+        from desktop_app.cuda_recovery import cuda_recovery_action
+
+        # No nvcuda.dll, no NVIDIA driver -> no point offering the action.
+        with patch("sys.platform", "win32"), patch(
+            "desktop_app.cuda_recovery._has_nvidia_driver", return_value=False
+        ):
+            assert cuda_recovery_action(install_root=tmp_path) is None
+
+    def test_action_hidden_when_install_script_missing(self, tmp_path):
+        from desktop_app.cuda_recovery import cuda_recovery_action
+
+        # On dev machines (running from source) the Inno Setup-bundled script
+        # does not exist; the menu action would be a dead button.
+        with patch("sys.platform", "win32"), patch(
+            "desktop_app.cuda_recovery._has_nvidia_driver", return_value=True
+        ):
+            assert cuda_recovery_action(install_root=tmp_path) is None
+
+    def test_action_present_when_windows_gpu_and_script_exist(self, tmp_path):
+        from desktop_app.cuda_recovery import cuda_recovery_action
+
+        script = tmp_path / "install_cuda.ps1"
+        script.write_text("# placeholder\n", encoding="utf-8")
+
+        with patch("sys.platform", "win32"), patch(
+            "desktop_app.cuda_recovery._has_nvidia_driver", return_value=True
+        ):
+            action = cuda_recovery_action(install_root=tmp_path)
+
+        assert action is not None
+        assert action.script_path == script
+        assert action.target_dir == tmp_path / "cuda"
+        assert "Reinstall GPU libraries" in action.label
+        # Command is what gets handed to ShellExecute / subprocess; the test
+        # pins the structure so we don't accidentally drop -ExecutionPolicy
+        # Bypass and silently fail under restricted policies.
+        assert action.executable.lower().endswith("powershell.exe")
+        assert "-ExecutionPolicy" in action.arguments
+        assert "Bypass" in action.arguments
+        assert "-File" in action.arguments
+        assert str(script) in action.arguments
+        assert str(tmp_path / "cuda") in action.arguments
+        assert "-LogPath" in action.arguments
+
+    def test_quote_arg_handles_trailing_backslash(self):
+        """Trailing backslashes inside quoted args must not eat the closing quote.
+
+        Windows argv parsing collapses 2n backslashes before a `"` into n
+        backslashes plus a string terminator, so a path like
+        `C:\\Program Files\\Jarvis\\` quoted naively becomes
+        `"C:\\Program Files\\Jarvis\\"` which CommandLineToArgvW reads as
+        `C:\\Program Files\\Jarvis"` — quote eaten, next arg fused on. The
+        canonical fix is to double trailing backslashes.
+        """
+        from desktop_app.cuda_recovery import _quote_arg
+
+        # Trailing backslash + space gets doubled inside the quotes.
+        result = _quote_arg(r"C:\Program Files\Jarvis\\")
+        assert result.endswith('\\\\\\\\"'), (
+            f"trailing backslashes must be doubled before the closing quote; got {result!r}"
+        )
+        # An embedded quote escapes correctly.
+        assert _quote_arg('a"b') == '"a\\"b"'
+        # Plain paths with spaces get the simple quoted form.
+        assert _quote_arg(r"C:\Users\me\file") == r"C:\Users\me\file"
+        assert _quote_arg(r"C:\Program Files\App") == r'"C:\Program Files\App"'
+        # Empty string round-trips to "" so ShellExecute doesn't drop the slot.
+        assert _quote_arg("") == '""'
+
+    def test_run_uses_elevation_on_windows(self, tmp_path):
+        """The script writes into Program Files; without elevation it silently
+        no-ops. Make sure the run path requests UAC explicitly."""
+        from desktop_app.cuda_recovery import CudaRecoveryAction, run_action
+
+        action = CudaRecoveryAction(
+            label="🎮 Reinstall GPU libraries",
+            script_path=tmp_path / "install_cuda.ps1",
+            target_dir=tmp_path / "cuda",
+            executable=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            arguments=[
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(tmp_path / "install_cuda.ps1"),
+                "-TargetDir", str(tmp_path / "cuda"),
+                "-LogPath", str(tmp_path / "cuda" / "install.log"),
+            ],
+        )
+        action.script_path.write_text("# placeholder\n", encoding="utf-8")
+
+        captured = {}
+
+        def fake_shell_execute(hwnd, verb, file, params, directory, show):
+            captured["verb"] = verb
+            captured["file"] = file
+            captured["params"] = params
+            return 42  # ShellExecuteW returns >32 on success
+
+        with patch("sys.platform", "win32"), patch(
+            "desktop_app.cuda_recovery._shell_execute", side_effect=fake_shell_execute
+        ):
+            run_action(action)
+
+        assert captured.get("verb") == "runas", (
+            "must request UAC elevation; install_cuda.ps1 writes to Program Files"
+        )
+        assert captured["file"].lower().endswith("powershell.exe")
+        # The argument string should reference the script and the target dir.
+        assert "install_cuda.ps1" in captured["params"]
+        assert "-LogPath" in captured["params"]
+
+
 class TestMemoryViewerModulePath:
     """Tests to verify memory viewer module references are valid.
 
