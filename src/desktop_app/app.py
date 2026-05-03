@@ -1944,11 +1944,13 @@ class JarvisSystemTray:
     def _handle_timer_alarm_line(self, line: str) -> None:
         """Intercept TIMER_ALARM IPC lines from the daemon stdout stream.
 
-        Cheap fast-path check before touching the JSON parser; the
-        signal fires for every log line so the prefix test must stay
-        a single substring comparison.
+        Cheap fast-path prefix check before touching the JSON parser;
+        the signal fires for every log line, so reject anything that
+        doesn't START with the IPC marker. ``parse_alarm_event`` does
+        the same prefix check, but doing it here avoids the .strip()
+        and the function call on the millions of unrelated log lines.
         """
-        if TIMER_ALARM_IPC_PREFIX not in line:
+        if not line.lstrip().startswith(TIMER_ALARM_IPC_PREFIX):
             return
         event = parse_alarm_event(line)
         if not event:
