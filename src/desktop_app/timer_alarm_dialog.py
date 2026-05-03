@@ -35,11 +35,9 @@ except Exception:  # pragma: no cover - import-time guard
     QSoundEffect = None  # type: ignore[assignment]
     _HAS_SOUND = False
 
-from .themes import JARVIS_THEME_STYLESHEET
+from jarvis.ipc_constants import TIMER_ALARM_IPC_PREFIX
 
-# IPC protocol prefix; must match
-# `jarvis.tools.builtin.timer.TIMER_ALARM_IPC_PREFIX`.
-TIMER_ALARM_IPC_PREFIX = "__TIMER_ALARM__:"
+from .themes import JARVIS_THEME_STYLESHEET
 
 # Fallback hard cap (ms) used only when the daemon's IPC payload
 # omits ``auto_stop_sec``. The authoritative value is the one the

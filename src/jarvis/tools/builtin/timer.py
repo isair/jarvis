@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from ...debug import debug_log
+from ...ipc_constants import TIMER_ALARM_IPC_PREFIX
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
@@ -38,12 +39,6 @@ _MAX_ACTIVE_TIMERS = 32
 # desktop dialogue and the daemon-side fallback both honour this so a
 # missed alarm never loops forever.
 _ALARM_AUTO_STOP_SEC = 30
-
-# IPC prefix used to signal the desktop app that a timer alarm should
-# start or stop. Mirrors the diary IPC pattern in `daemon.py` so the
-# desktop app can intercept these on stdout. Single source of truth so
-# the desktop receiver imports the same constant.
-TIMER_ALARM_IPC_PREFIX = "__TIMER_ALARM__:"
 
 
 def _sanitise_label(label: Optional[str]) -> Optional[str]:
@@ -155,7 +150,10 @@ class TimerManager:
         # by tests to keep wall-clock fast) survives, but expose a
         # rounded whole-second value through the stored entry so
         # downstream consumers (render payload, ETA) don't carry weird
-        # fractional state.
+        # fractional state. Floor sub-second durations to "1 second" for
+        # display so the alarm dialogue and TTS never announce "0 seconds
+        # elapsed" on a fast test timer (the real countdown still uses
+        # the original float).
         actual = float(duration_sec)
         if actual <= 0:
             raise ValueError("duration must be positive")
@@ -163,7 +161,7 @@ class TimerManager:
             raise ValueError(
                 f"duration too long (max {_MAX_DURATION_SEC // 3600} hours)"
             )
-        rounded = int(round(actual)) if actual >= 1 else 0
+        rounded = max(1, int(round(actual)))
 
         with self._lock:
             if len(self._timers) >= _MAX_ACTIVE_TIMERS:
@@ -531,9 +529,13 @@ class AlarmRegistry:
         # Auto-cap so an unattended alarm (no dialogue, no stop tool, no
         # cancel) eventually goes quiet on its own. The cap honours the
         # same 30s contract that the desktop dialogue advertises.
+        #
+        # Register the alarm BEFORE starting the auto-stop timer so
+        # there's no window in which the cap can fire and find nothing
+        # to stop (which would leave the BEL fallback running until its
+        # own wall-clock guard).
         auto_stop = threading.Timer(_ALARM_AUTO_STOP_SEC, lambda: self.stop(entry.id))
         auto_stop.daemon = True
-        auto_stop.start()
 
         with self._lock:
             self._alarms[entry.id] = _ActiveAlarm(
@@ -544,6 +546,8 @@ class AlarmRegistry:
                 auto_stop=auto_stop,
                 fallback_stop=fallback_stop,
             )
+
+        auto_stop.start()
         debug_log(
             f"🔔 alarm started id={entry.id} label={entry.label!r}",
             "tools",
