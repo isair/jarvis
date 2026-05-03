@@ -1109,6 +1109,9 @@ def index() -> str:
             opacity: 0.6;
             cursor: not-allowed;
         }
+        .diary-maintenance-btn + .diary-maintenance-btn {
+            margin-top: 0.5rem;
+        }
 
         /* Date filters */
         .date-filters {
