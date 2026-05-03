@@ -259,8 +259,9 @@ class _VersionCard(QFrame):
 
         # Collapsible content
         self._content = QWidget()
+        self._content.setObjectName("version_content")
         self._content.setStyleSheet(f"""
-            QWidget {{
+            QWidget#version_content {{
                 background-color: {COLORS['bg_secondary']};
                 border: 1px solid {COLORS['border']};
                 border-top: none;
