@@ -1572,6 +1572,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     print(f"  💬 Generating response...", flush=True)
     debug_log(f"Starting LLM conversation loop (max {max_turns} turns)...", "planning")
 
+    # Baseline: number of tool_name messages already in the message list from
+    # dialogue carryover (prior queries in the same session). The direct-exec
+    # counter must ignore these — they belong to earlier plan executions, not
+    # to the steps of the current plan.
+    _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
+
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
@@ -1595,8 +1601,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             and not _plan_under_specified
         ):
             _plan_tool_steps = tool_steps_of(action_plan)
-            _tool_results_so_far = sum(
-                1 for m in messages if m.get("tool_name")
+            _tool_results_so_far = (
+                sum(1 for m in messages if m.get("tool_name"))
+                - _plan_steps_baseline
             )
             if 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
@@ -2073,8 +2080,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     # (appended below); the nudge must point at the NEXT step,
                     # not the one that just ran. The direct-exec path above uses
                     # `_tool_results_so_far + 1` for the same reason.
-                    tool_results_so_far = sum(
-                        1 for m in messages if m.get("tool_name")
+                    tool_results_so_far = (
+                        sum(1 for m in messages if m.get("tool_name"))
+                        - _plan_steps_baseline
                     ) + 1
                     if action_plan:
                         remainder_hint = progress_nudge(

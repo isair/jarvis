@@ -21,6 +21,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/tools/builtin/tool_search.spec.md` | toolSearchTool escape hatch for mid-loop tool routing | Re-runs the same router; never removes stop/self; capped per reply |
 | `src/jarvis/reply/prompts/prompts.spec.md` | System/user prompt templates | — |
 | `src/jarvis/tools/builtin/web_search.spec.md` | webSearch tool: cascade fetch, SSRF guard, prompt-injection fence, links-only envelope | Untrusted web content is fenced as data, not instructions; rank preference over speed; honest failure over confabulation |
+| `src/jarvis/tools/builtin/nutrition/log_meal.spec.md` | logMeal tool: single-property schema for planner fast-path, internal nutrition extraction, untrusted-data fence, follow-ups | Public schema is a single optional `meal` string; nutrition fields are internal; user text is fenced as data |
 | `src/jarvis/utils/location.spec.md` | GeoIP location detection | Privacy-first; local GeoLite2 DB only |
 | `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
 | `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract, hygiene rules (deflection, attribution, topic separation), post-process scrub, and bulk-sweep clean button | Two-layer defence: prompt + deterministic scrub; corrupted summaries poison every downstream consumer |
