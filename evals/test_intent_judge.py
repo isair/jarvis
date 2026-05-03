@@ -127,6 +127,21 @@ INTENT_JUDGE_TEST_CASES = [
         expected_query_contains="flight",
         expected_query_not_contains="jarvis",
     ),
+    # Wake word at the END of a declarative statement that contains a
+    # capitalised brand/product name immediately before "Jarvis". Regression:
+    # gemma4:e2b misread "big Mac Jarvis" as the compound name "Mac Jarvis",
+    # treating "Jarvis" as a surname rather than the wake word, and returned
+    # directed=false despite its own reasoning stating it found the wake word.
+    IntentJudgeTestCase(
+        name="wake_word_trailing_after_capitalised_brand",
+        transcript="I just ate a big Mac Jarvis",
+        last_tts_text="",
+        in_hot_window=False,
+        wake_timestamp=1001.5,
+        expected_directed=True,
+        expected_query_contains="big Mac",
+        expected_query_not_contains="jarvis",
+    ),
     # Self-contained imperative with an intentionally open subject ("something",
     # "anything", "a joke") — these are valid queries and must not be treated
     # as vague references or standalone "re-issue prior question" imperatives.

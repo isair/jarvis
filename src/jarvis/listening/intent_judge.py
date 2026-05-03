@@ -175,6 +175,7 @@ Output JSON only:
 Examples:
 - "Jarvis what time is it" -> {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word + question"}}
 - "what do you know about the movie called Possessor Jarvis" -> {{"directed": true, "query": "what do you know about the movie called Possessor", "stop": false, "confidence": "high", "reasoning": "wake word at end; entity is Possessor, not Possessor Jarvis"}}
+- "I just ate a big Mac Jarvis" -> {{"directed": true, "query": "I just ate a big Mac", "stop": false, "confidence": "high", "reasoning": "wake word at end; 'Mac' is part of the brand name 'Big Mac', not a compound surname with Jarvis"}}
 - "hey Jarvis what's the weather in London" -> {{"directed": true, "query": "what's the weather in London", "stop": false, "confidence": "high", "reasoning": "wake word removed from mid-sentence position"}}
 - "Jarvis say something please" -> {{"directed": true, "query": "say something please", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
 - "Jarvis tell me a joke" -> {{"directed": true, "query": "tell me a joke", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
