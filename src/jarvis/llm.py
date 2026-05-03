@@ -44,9 +44,9 @@ def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_con
     }
     
     try:
-        resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)
-        resp.raise_for_status()
-        data = resp.json()
+        with requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec) as resp:
+            resp.raise_for_status()
+            data = resp.json()
 
         if isinstance(data, dict):
             content = extract_text_from_response(data)
@@ -100,31 +100,36 @@ def call_llm_streaming(
         "think": thinking,
     }
 
+    # Use ``with`` so the streaming response (and the underlying TCP
+    # connection) is released even if iter_lines exits early via an
+    # exception or the caller stops consuming. Without this an aborted
+    # stream pinned the connection until GC, which could happen many
+    # turns later under sustained reply load.
     try:
-        resp = requests.post(
+        with requests.post(
             f"{base_url.rstrip('/')}/api/chat",
             json=payload,
             timeout=timeout_sec,
-            stream=True
-        )
-        resp.raise_for_status()
+            stream=True,
+        ) as resp:
+            resp.raise_for_status()
 
-        full_response = []
-        for line in resp.iter_lines():
-            if line:
-                try:
-                    data = json.loads(line)
-                    if "message" in data and isinstance(data["message"], dict):
-                        content = data["message"].get("content", "")
-                        if content:
-                            full_response.append(content)
-                            if on_token:
-                                on_token(content)
-                except json.JSONDecodeError:
-                    continue
+            full_response = []
+            for line in resp.iter_lines():
+                if line:
+                    try:
+                        data = json.loads(line)
+                        if "message" in data and isinstance(data["message"], dict):
+                            content = data["message"].get("content", "")
+                            if content:
+                                full_response.append(content)
+                                if on_token:
+                                    on_token(content)
+                    except json.JSONDecodeError:
+                        continue
 
-        result = "".join(full_response)
-        return result if result.strip() else None
+            result = "".join(full_response)
+            return result if result.strip() else None
 
     except requests.exceptions.Timeout:
         return None
@@ -206,9 +211,9 @@ def chat_with_messages(
         payload["tools"] = tools
 
     try:
-        resp = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec)
-        resp.raise_for_status()
-        data = resp.json()
+        with requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec) as resp:
+            resp.raise_for_status()
+            data = resp.json()
         if isinstance(data, dict):
             return data
     except requests.exceptions.Timeout:

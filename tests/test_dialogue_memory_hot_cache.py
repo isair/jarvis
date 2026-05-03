@@ -64,6 +64,49 @@ class TestHotCachePrimitives:
 
 
 @pytest.mark.unit
+class TestHotCacheLRUCap:
+    """The hot cache must not grow without bound. Per-query keys (router
+    output, enrichment extractor output) are unique per turn, so a long
+    session would otherwise accumulate one entry per unique query.
+    """
+
+    def test_size_never_exceeds_cap(self):
+        dm = DialogueMemory()
+        cap = dm.HOT_CACHE_MAX_ENTRIES
+        for i in range(cap + 50):
+            dm.hot_cache_put(f"key:{i}", i)
+        assert len(dm._hot_cache) == cap
+
+    def test_least_recently_used_entry_evicted_first(self):
+        dm = DialogueMemory()
+        cap = dm.HOT_CACHE_MAX_ENTRIES
+        # Fill exactly to cap.
+        for i in range(cap):
+            dm.hot_cache_put(f"k{i}", i)
+        # Touch the oldest entry so it becomes most-recently-used.
+        assert dm.hot_cache_get("k0") == 0
+        # Inserting one more entry should evict the next-oldest (k1),
+        # NOT k0 since we just touched it.
+        dm.hot_cache_put("new", "v")
+        assert dm.hot_cache_get("k0") == 0
+        assert dm.hot_cache_get("k1") is None
+        assert dm.hot_cache_get("new") == "v"
+
+    def test_overwriting_existing_key_does_not_evict(self):
+        dm = DialogueMemory()
+        cap = dm.HOT_CACHE_MAX_ENTRIES
+        for i in range(cap):
+            dm.hot_cache_put(f"k{i}", i)
+        # Overwrite an existing entry — size should stay at cap, no
+        # entry should disappear.
+        dm.hot_cache_put("k0", "updated")
+        assert len(dm._hot_cache) == cap
+        assert dm.hot_cache_get("k0") == "updated"
+        # The other keys are still present.
+        assert dm.hot_cache_get(f"k{cap - 1}") == cap - 1
+
+
+@pytest.mark.unit
 class TestNextTsMonotonic:
     """``_next_ts`` exists because ``time.time()`` has ~16ms granularity
     on Windows and consecutive calls can return identical values. Without

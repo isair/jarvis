@@ -203,7 +203,15 @@ def test_fetch_web_page_success(monkeypatch):
         
         def raise_for_status(self):
             pass
-    
+
+        # The production tool wraps the response in ``with requests.get(...)``
+        # so the connection is released deterministically — mirror that here.
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     def mock_requests_get(url, **kwargs):
         return MockResponse()
     
