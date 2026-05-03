@@ -90,6 +90,37 @@ def _resolve_command(command: str) -> str:
     )
 
 
+class _StdioConnection:
+    """Async context manager that wraps a ``stdio_client`` session AND
+    owns the ``/dev/null`` file used to suppress the MCP server's stderr.
+
+    The wrapped context manager is built synchronously by
+    ``MCPClient._connect_stdio`` so existing call sites and tests that
+    construct a connection eagerly continue to work. The wrapper's job
+    is to close the devnull handle when the async context exits,
+    regardless of how the inner context terminates. Without this the
+    devnull handle leaked once per ``_session`` call (i.e. every MCP
+    tool invocation), eventually exhausting the process FD limit on
+    long-running daemons.
+    """
+
+    def __init__(self, inner_cm, errlog) -> None:
+        self._cm = inner_cm
+        self._errlog = errlog
+
+    async def __aenter__(self):
+        return await self._cm.__aenter__()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            return await self._cm.__aexit__(exc_type, exc, tb)
+        finally:
+            try:
+                self._errlog.close()
+            except Exception:
+                pass
+
+
 class MCPClient:
     """Lightweight manager to connect to external MCP servers and call tools."""
 
@@ -97,6 +128,14 @@ class MCPClient:
         self.server_configs: Dict[str, Dict[str, Any]] = mcps_config or {}
 
     def _connect_stdio(self, server_cfg: Dict[str, Any]):
+        """Build an async context manager for the stdio transport.
+
+        Returns an ``_StdioConnection`` that owns both the stdio_client
+        session and the ``/dev/null`` handle used to silence the server
+        subprocess's stderr. Path resolution and PATH injection happen
+        synchronously here so any ``FileNotFoundError`` surfaces at the
+        call site, before the ``async with`` block.
+        """
         command = str(server_cfg.get("command"))
         # Windows compatibility: prefer npx.cmd when requested
         if os.name == "nt" and command.lower() == "npx":
@@ -124,7 +163,16 @@ class MCPClient:
         # from polluting the daemon's log output.
         # Must use a real file (not StringIO) because the subprocess needs fileno().
         devnull = open(os.devnull, "w")
-        return stdio_client(params, errlog=devnull)
+        # Build the underlying transport CM eagerly so any synchronous
+        # construction error closes devnull instead of leaking it. The
+        # wrapper guarantees the handle is also closed on every async
+        # exit path — this is the actual leak fix.
+        try:
+            inner = stdio_client(params, errlog=devnull)
+        except Exception:
+            devnull.close()
+            raise
+        return _StdioConnection(inner, errlog=devnull)
 
     @asynccontextmanager
     async def _session(self, server_name: str):

@@ -50,11 +50,15 @@ class FetchWebPageTool(Tool):
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
             }
-            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-            response.raise_for_status()
+            # ``with`` releases the connection back to the pool deterministically
+            # even if BeautifulSoup or the link extraction raises midway.
+            with requests.get(url, headers=headers, timeout=15, allow_redirects=True) as response:
+                response.raise_for_status()
+                response_content = response.content
+                response_text = response.text
             try:
                 from bs4 import BeautifulSoup
-                soup = BeautifulSoup(response.content, 'html.parser')
+                soup = BeautifulSoup(response_content, 'html.parser')
                 for script in soup(["script", "style", "meta", "link", "noscript"]):
                     script.decompose()
                 title = ""
@@ -104,7 +108,7 @@ class FetchWebPageTool(Tool):
                 context.user_print("✅ Page content fetched.")
                 return ToolExecutionResult(success=True, reply_text=reply_text)
             except ImportError:
-                text = response.text[:10000]
+                text = response_text[:10000]
                 reply_text = f"**URL:** {url}\n**Raw Content:**\n{text}"
                 debug_log("fetchWebPage: BeautifulSoup not available, returning raw text", "web")
                 context.user_print("✅ Page content fetched (raw).")

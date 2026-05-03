@@ -9,6 +9,17 @@ from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.types import ToolExecutionResult
 
 
+def _make_response_mock(**attrs) -> Mock:
+    """Build a Mock that doubles as both the requests response and a context
+    manager (the production code uses ``with requests.get(...) as resp`` so
+    the connection is released deterministically).
+    """
+    resp = Mock(**attrs)
+    resp.__enter__ = Mock(return_value=resp)
+    resp.__exit__ = Mock(return_value=False)
+    return resp
+
+
 class TestFetchWebPageTool:
     """Test fetch web page tool functionality."""
 
@@ -45,12 +56,13 @@ class TestFetchWebPageTool:
     @patch('requests.get')
     def test_run_success(self, mock_get):
         """Test successful web page fetch."""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = '<html><head><title>Test</title></head><body><p>Content</p></body></html>'
-        mock_response.content = b'<html><head><title>Test</title></head><body><p>Content</p></body></html>'
-        mock_response.headers = {'content-type': 'text/html'}
-        mock_response.raise_for_status = Mock()  # Add this to prevent errors
+        mock_response = _make_response_mock(
+            status_code=200,
+            text='<html><head><title>Test</title></head><body><p>Content</p></body></html>',
+            content=b'<html><head><title>Test</title></head><body><p>Content</p></body></html>',
+            headers={'content-type': 'text/html'},
+            raise_for_status=Mock(),
+        )
         mock_get.return_value = mock_response
 
         args = {"url": "https://example.com"}
@@ -64,11 +76,13 @@ class TestFetchWebPageTool:
     @patch('requests.get')
     def test_run_success_without_beautifulsoup(self, mock_get):
         """Test successful web page fetch without BeautifulSoup."""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = '<html><body>Raw content</body></html>'
-        mock_response.headers = {'content-type': 'text/html'}
-        mock_response.raise_for_status = Mock()
+        mock_response = _make_response_mock(
+            status_code=200,
+            text='<html><body>Raw content</body></html>',
+            content=b'<html><body>Raw content</body></html>',
+            headers={'content-type': 'text/html'},
+            raise_for_status=Mock(),
+        )
         mock_get.return_value = mock_response
 
         with patch('builtins.__import__', side_effect=ImportError):
@@ -82,8 +96,7 @@ class TestFetchWebPageTool:
     @patch('requests.get')
     def test_run_http_error(self, mock_get):
         """Test fetch web page with HTTP error."""
-        mock_response = Mock()
-        mock_response.status_code = 404
+        mock_response = _make_response_mock(status_code=404)
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
         mock_get.return_value = mock_response
 
@@ -125,11 +138,12 @@ class TestFetchWebPageTool:
             '<a href="mailto:test@example.com">Mail</a>'
             '</body></html>'
         )
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = html
-        mock_response.content = html.encode()
-        mock_response.raise_for_status = Mock()
+        mock_response = _make_response_mock(
+            status_code=200,
+            text=html,
+            content=html.encode(),
+            raise_for_status=Mock(),
+        )
         mock_get.return_value = mock_response
 
         args = {"url": "https://example.com", "include_links": True}

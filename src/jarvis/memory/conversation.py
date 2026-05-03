@@ -3,6 +3,7 @@ import json
 import re
 import time
 import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Iterator, Optional, List, Tuple, Union, Callable
 from .db import Database
@@ -640,7 +641,14 @@ class DialogueMemory:
         # inspect entry age, but reads are NOT bounded by RECENT_WINDOW_SEC
         # any more — long active conversations would otherwise see warm
         # profile / router caches expire while the session is still going.
-        self._hot_cache: dict[str, Tuple[float, object]] = {}
+        # LRU-bounded so per-query keys (router cache, enrichment extractor
+        # cache) cannot grow without limit during long active sessions.
+        # Reads bump recency; writes evict the least-recently-used entry
+        # once the cap is reached. ``WARM_PROFILE_CACHE_KEY`` is a single
+        # query-agnostic entry so the cap easily covers it; explicit
+        # invalidation hooks (``clear_hot_cache``, ``invalidate_warm_profile``,
+        # new-conversation reset) still apply unchanged.
+        self._hot_cache: "OrderedDict[str, Tuple[float, object]]" = OrderedDict()
         # Hard ceiling on stored tool turns. With the default
         # ``tool_carryover_max_turns=2`` re-injected per reply, 16 lets a
         # session accumulate roughly 8x the visible budget before the
@@ -783,10 +791,19 @@ class DialogueMemory:
     # and the graph-mutation invalidator agree on it.
     WARM_PROFILE_CACHE_KEY = "warm_profile_block"
 
+    # LRU cap for the conversation-scoped scratch cache. The engine writes
+    # at most three keys per turn (router, enrichment extractor, warm
+    # profile) of which two are query-dependent, so 128 covers ~64 unique
+    # queries per active session — well above any realistic hot window
+    # while keeping memory growth bounded for marathon sessions.
+    HOT_CACHE_MAX_ENTRIES = 128
+
     def hot_cache_get(self, key: str) -> Optional[object]:
         """Return the cached value for ``key`` if present, else ``None``.
 
-        No age-based expiry: callers control invalidation via
+        Reads bump the entry to the most-recently-used end so the LRU
+        eviction policy reflects access patterns, not just insertion
+        order. No age-based expiry: callers control invalidation via
         ``clear_hot_cache``, ``invalidate_warm_profile``, or new-
         conversation reset in the engine.
         """
@@ -794,18 +811,27 @@ class DialogueMemory:
             entry = self._hot_cache.get(key)
             if not entry:
                 return None
+            self._hot_cache.move_to_end(key)
             _ts, value = entry
             return value
 
     def hot_cache_put(self, key: str, value: object) -> None:
-        """Store value under key with current timestamp."""
+        """Store value under key with current timestamp.
+
+        Evicts the least-recently-used entry once ``HOT_CACHE_MAX_ENTRIES``
+        is exceeded so per-query keys (router/enrichment caches) cannot
+        grow without bound during long sessions.
+        """
         with self._lock:
             self._hot_cache[key] = (time.time(), value)
+            self._hot_cache.move_to_end(key)
+            while len(self._hot_cache) > self.HOT_CACHE_MAX_ENTRIES:
+                self._hot_cache.popitem(last=False)
 
     def clear_hot_cache(self) -> None:
         """Drop all conversation-scoped cache entries."""
         with self._lock:
-            self._hot_cache = {}
+            self._hot_cache = OrderedDict()
 
     def invalidate_warm_profile(self) -> None:
         """Drop the cached warm-profile block. Called from the graph
