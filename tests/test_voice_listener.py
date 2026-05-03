@@ -1781,19 +1781,23 @@ class TestWeatherBannerExample:
         return listener
 
     def test_plain_form_when_auto_detect_enabled(self):
-        """Plain 'How's the weather' example when auto-detect is on."""
+        """Plain 'How's the weather' example when auto-detect is on and database is present."""
+        from unittest.mock import patch
         listener = self._make_listener(location_enabled=True, location_auto_detect=True)
-        result = listener._weather_example("Jarvis")
+        with patch("jarvis.listening.listener.is_location_available", return_value=True):
+            result = listener._weather_example("Jarvis")
         assert result == "\"How's the weather, Jarvis?\""
 
     def test_plain_form_when_manual_ip_configured(self):
-        """Plain form when auto-detect is off but a manual IP is set."""
+        """Plain form when auto-detect is off but a manual IP is set and database is present."""
+        from unittest.mock import patch
         listener = self._make_listener(
             location_enabled=True,
             location_auto_detect=False,
             location_ip_address="1.2.3.4",
         )
-        result = listener._weather_example("Jarvis")
+        with patch("jarvis.listening.listener.is_location_available", return_value=True):
+            result = listener._weather_example("Jarvis")
         assert result == "\"How's the weather, Jarvis?\""
 
     def test_city_placeholder_when_location_disabled(self):
@@ -1812,10 +1816,20 @@ class TestWeatherBannerExample:
         result = listener._weather_example("Jarvis")
         assert result == "\"How's the weather in [your city], Jarvis?\""
 
+    def test_city_placeholder_when_database_not_available(self):
+        """City placeholder form when GeoLite2 database is missing even if config enables location."""
+        from unittest.mock import patch
+        listener = self._make_listener(location_enabled=True, location_auto_detect=True)
+        with patch("jarvis.listening.listener.is_location_available", return_value=False):
+            result = listener._weather_example("Jarvis")
+        assert result == "\"How's the weather in [your city], Jarvis?\""
+
     def test_wake_title_reflected_in_example(self):
         """Wake word title is correctly used in the example string."""
-        listener = self._make_listener(location_enabled=True, location_auto_detect=True)
-        assert "Helix?" in listener._weather_example("Helix")
+        from unittest.mock import patch
+        with patch("jarvis.listening.listener.is_location_available", return_value=True):
+            listener = self._make_listener(location_enabled=True, location_auto_detect=True)
+            assert "Helix?" in listener._weather_example("Helix")
 
         listener2 = self._make_listener(location_enabled=False)
         assert "Helix?" in listener2._weather_example("Helix")

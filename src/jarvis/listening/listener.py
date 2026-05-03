@@ -23,6 +23,7 @@ from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, create_intent_judge, warm_up_ollama_model
 from ..debug import debug_log
+from ..utils.location import is_location_available
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -1570,7 +1571,11 @@ class VoiceListener(threading.Thread):
         location_enabled = getattr(self.cfg, "location_enabled", True)
         location_auto_detect = getattr(self.cfg, "location_auto_detect", True)
         location_ip_address = getattr(self.cfg, "location_ip_address", None)
-        location_known = location_enabled and (location_auto_detect or bool(location_ip_address))
+        location_known = (
+            location_enabled
+            and (location_auto_detect or bool(location_ip_address))
+            and is_location_available()
+        )
         if location_known:
             return f"\"How's the weather, {wake_title}?\""
         return f"\"How's the weather in [your city], {wake_title}?\""
