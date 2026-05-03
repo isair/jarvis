@@ -305,6 +305,7 @@ class TestCheckForUpdates:
                             status = check_for_updates()
                             assert status.update_available is True
                             assert status.latest_release.asset_id == 200001
+                            assert status.releases_since_current == [status.latest_release]
 
     @pytest.mark.unit
     def test_develop_channel_shows_update_when_asset_id_differs(self):

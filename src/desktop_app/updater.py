@@ -243,6 +243,7 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
     try:
         response = requests.get(
             GITHUB_API_URL,
+            params={"per_page": 100},
             headers={"Accept": "application/vnd.github.v3+json"},
             timeout=10,
         )

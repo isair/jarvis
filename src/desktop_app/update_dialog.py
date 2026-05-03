@@ -42,22 +42,22 @@ from .updater import (
 # Changelog parsing
 # ---------------------------------------------------------------------------
 
-_CATEGORY_MAP: dict[str, tuple[str, str, int]] = {
-    "feat":     ("✨", "New Features",  0),
-    "feature":  ("✨", "New Features",  0),
-    "fix":      ("🐛", "Bug Fixes",     1),
-    "perf":     ("⚡", "Performance",   2),
-    "refactor": ("♻️", "Improvements",  3),
-    "improve":  ("♻️", "Improvements",  3),
-    "security": ("🔒", "Security",      4),
-    "docs":     ("📝", "Documentation", 5),
-    "chore":    ("🔧", "Maintenance",   6),
-    "ci":       ("🔧", "Maintenance",   6),
-    "build":    ("🔧", "Maintenance",   6),
-    "deps":     ("🔧", "Maintenance",   6),
-    "test":     ("🧪", "Testing",       7),
-    "style":    ("🎨", "Style",         8),
-    "revert":   ("⏪", "Reverts",       9),
+_CATEGORY_MAP: dict[str, tuple[str, str]] = {
+    "feat":     ("✨", "New Features"),
+    "feature":  ("✨", "New Features"),
+    "fix":      ("🐛", "Bug Fixes"),
+    "perf":     ("⚡", "Performance"),
+    "refactor": ("♻️", "Improvements"),
+    "improve":  ("♻️", "Improvements"),
+    "security": ("🔒", "Security"),
+    "docs":     ("📝", "Documentation"),
+    "chore":    ("🔧", "Maintenance"),
+    "ci":       ("🔧", "Maintenance"),
+    "build":    ("🔧", "Maintenance"),
+    "deps":     ("🔧", "Maintenance"),
+    "test":     ("🧪", "Testing"),
+    "style":    ("🎨", "Style"),
+    "revert":   ("⏪", "Reverts"),
 }
 
 _CATEGORY_ORDER = [
@@ -66,7 +66,7 @@ _CATEGORY_ORDER = [
     "Reverts", "Changes",
 ]
 
-_DEFAULT_CATEGORY = ("📋", "Changes", 10)
+_DEFAULT_CATEGORY = ("📋", "Changes")
 
 
 @dataclass
@@ -84,7 +84,7 @@ def _detect_category(raw: str) -> tuple[str, str, str]:
         ctype = m.group(1).lower()
         clean = m.group(2).strip()
         if ctype in _CATEGORY_MAP:
-            emoji, name, _ = _CATEGORY_MAP[ctype]
+            emoji, name = _CATEGORY_MAP[ctype]
             return emoji, name, clean
     return _DEFAULT_CATEGORY[0], _DEFAULT_CATEGORY[1], raw.strip()
 
@@ -308,6 +308,7 @@ class _VersionCard(QFrame):
                     row.addWidget(bullet)
 
                     text_lbl = QLabel(entry.text)
+                    text_lbl.setTextFormat(Qt.TextFormat.PlainText)
                     text_lbl.setWordWrap(True)
                     text_lbl.setSizePolicy(
                         QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
