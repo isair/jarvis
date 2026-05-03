@@ -306,6 +306,48 @@ class TestOptimiseFailOpen:
         rows = db.get_all_conversation_summaries()
         assert rows[0]["topics"] is None
 
+    def test_fails_open_when_write_back_raises_mid_sweep(self, db, monkeypatch):
+        """A per-row write failure must not abort the sweep.
+
+        The first row's write raises; the sweep must continue and the
+        second row must be processed normally. The failed row's event
+        carries the exception class name only (no message text).
+        """
+        _seed(db, [
+            ("2026-04-10", "User made pasta.", "cook"),
+            ("2026-04-15", "User went running.", "fitness"),
+        ])
+        monkeypatch.setattr(cmod, "call_llm_direct", _fake_llm({
+            "cook": "cooking", "fitness": "fitness",
+        }))
+
+        original_upsert = db.upsert_conversation_summary
+        call_count = [0]
+
+        def failing_upsert(**kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("disk full")
+            return original_upsert(**kwargs)
+
+        db.upsert_conversation_summary = failing_upsert
+
+        events = {
+            e["date_utc"]: e for e in optimise_diary_topics(
+                db,
+                ollama_base_url="http://localhost:11434",
+                ollama_chat_model="llama3",
+            )
+        }
+
+        # First row: write failed → event flagged with error, no change persisted.
+        assert events["2026-04-10"]["error"] == "RuntimeError"
+        assert events["2026-04-10"]["topics_changed"] is False
+
+        # Second row: sweep continued and applied the mapping normally.
+        assert "error" not in events["2026-04-15"]
+        assert events["2026-04-15"]["topics_changed"] is False  # identity mapping
+
 
 # ── Idempotence ───────────────────────────────────────────────────────────
 

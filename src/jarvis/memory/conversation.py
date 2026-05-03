@@ -357,6 +357,7 @@ def optimise_diary_topics(
                 "topics_changed": False,
                 "old_topic_count": 0,
                 "new_topic_count": 0,
+                "embedding_refreshed": False,
             }
         return
 
@@ -387,11 +388,12 @@ def optimise_diary_topics(
         )
         # Fail-open: yield no-op events for every row and return.
         for row in rows:
+            count = len([t for t in row["topics"].split(",") if t.strip()]) if row["topics"] else 0
             yield {
                 "date_utc": row["date_utc"],
                 "topics_changed": False,
-                "old_topic_count": len(row["topics"].split(",")) if row["topics"] else 0,
-                "new_topic_count": len(row["topics"].split(",")) if row["topics"] else 0,
+                "old_topic_count": count,
+                "new_topic_count": count,
                 "error": type(e).__name__,
             }
         return
@@ -409,6 +411,7 @@ def optimise_diary_topics(
                 "topics_changed": False,
                 "old_topic_count": 0,
                 "new_topic_count": 0,
+                "embedding_refreshed": False,
             }
             continue
 
@@ -431,6 +434,7 @@ def optimise_diary_topics(
         new_count = len([t for t in new_topics.split(",") if t.strip()]) if new_topics else 0
         topics_changed = new_topics != original_topics
 
+        embedding_refreshed = False
         if topics_changed:
             try:
                 summary_id = db.upsert_conversation_summary(
@@ -465,6 +469,7 @@ def optimise_diary_topics(
                     )
                     if vec is not None:
                         db.upsert_summary_embedding(summary_id, vec)
+                        embedding_refreshed = True
                 except Exception as e:
                     debug_log(
                         f"diary topic optimise: embedding refresh failed for "
@@ -483,6 +488,7 @@ def optimise_diary_topics(
             "topics_changed": topics_changed,
             "old_topic_count": old_count,
             "new_topic_count": new_count,
+            "embedding_refreshed": embedding_refreshed,
         }
 
 
