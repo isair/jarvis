@@ -139,7 +139,7 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="big mac",
+        expected_query_contains="big Mac",
         expected_query_not_contains="jarvis",
     ),
     # Self-contained imperative with an intentionally open subject ("something",
