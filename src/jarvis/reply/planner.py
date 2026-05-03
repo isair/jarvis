@@ -273,7 +273,7 @@ def tool_steps_of(plan: Sequence[str]) -> List[str]:
     return []
 
 
-_TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)")
+_TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
 
 
 def tool_names_in_plan(

@@ -448,6 +448,41 @@ class TestResolveNextToolCall:
         assert result == ("webSearch", {"query": "weather in Paris"})
         assert not spy.called
 
+    def test_deterministic_parse_handles_hyphenated_mcp_tool_name(self):
+        """MCP tool names like ``chrome-devtools__navigate_page`` contain
+        hyphens. The fast-path parser must accept them and produce a clean
+        ``(name, args)`` without an LLM round-trip — otherwise the engine
+        falls through to the chat model, which on small models flakes into
+        the empty-reply fallback."""
+        cfg = _cfg()
+        schema = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "chrome-devtools__navigate_page",
+                    "description": "Navigate the browser to a URL.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"url": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        with patch.object(planner_mod, "call_llm_direct") as spy:
+            result = resolve_next_tool_call(
+                cfg,
+                "chrome-devtools__navigate_page url='https://youtube.com'",
+                [],
+                schema,
+            )
+        assert result == (
+            "chrome-devtools__navigate_page",
+            {"url": "https://youtube.com"},
+        )
+        assert not spy.called, (
+            "Hyphenated MCP tool name must parse without an LLM round-trip"
+        )
+
     def test_keeps_args_as_is_when_schema_has_no_properties(self):
         cfg = _cfg()
         schema = [
@@ -564,6 +599,26 @@ class TestToolNamesInPlan:
     def test_empty_plan(self):
         assert tool_names_in_plan([], ["webSearch"]) == []
 
+    def test_extracts_hyphenated_mcp_tool_name(self):
+        """MCP tool names embed the server in the prefix and use hyphens
+        (e.g. ``chrome-devtools__navigate_page``). The head regex must accept
+        hyphens so the planner-driven allow-list union and the
+        ``_plan_under_specified`` guard don't misclassify a perfectly valid
+        plan step as paraphrased prose.
+
+        Field trace (2026-05-03): user said "navigate to youtube.com". Planner
+        emitted ``chrome-devtools__navigate_page page='...'`` correctly, but
+        the hyphen-stripping regex extracted only ``chrome``, which wasn't a
+        known tool — so direct-exec was skipped and the small chat model
+        flaked into the empty-reply fallback.
+        """
+        plan = [
+            "chrome-devtools__navigate_page page='https://youtube.com'",
+            "Reply to the user.",
+        ]
+        names = tool_names_in_plan(plan, ["chrome-devtools__navigate_page"])
+        assert names == ["chrome-devtools__navigate_page"]
+
 
 class TestPlanHasUnresolvedToolSteps:
     def test_true_when_step_paraphrases_tool(self):
@@ -588,3 +643,15 @@ class TestPlanHasUnresolvedToolSteps:
         # real tool step paraphrased either.
         plan = ["searchMemory topic='t'", "Reply to the user."]
         assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is False
+
+    def test_false_for_hyphenated_mcp_tool_step(self):
+        """A concrete plan step naming a hyphenated MCP tool must NOT be
+        treated as under-specified — otherwise the engine skips direct-exec
+        and forces the chat model to take the turn instead."""
+        plan = [
+            "chrome-devtools__navigate_page page='https://youtube.com'",
+            "Reply to the user.",
+        ]
+        assert plan_has_unresolved_tool_steps(
+            plan, ["chrome-devtools__navigate_page"]
+        ) is False
