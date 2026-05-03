@@ -756,6 +756,94 @@ def diary_scrub_deflections() -> Response:
     )
 
 
+@app.route("/api/diary/optimise-topics", methods=["POST"])
+def diary_optimise_topics() -> Response:
+    """Normalise topic tags across every diary row via one LLM call.
+
+    Collects all unique tags, asks the configured chat model to propose a
+    normalised taxonomy (merging synonyms, splitting compound tags), then
+    applies the mapping to every row whose topics change. Streams NDJSON
+    progress so the UI shows per-row feedback in real time.
+
+    Event payload contains only counts and the date — never raw tag strings
+    — so this endpoint cannot leak diary content to the streaming UI.
+    """
+    from jarvis.config import load_settings
+    from jarvis.memory.conversation import optimise_diary_topics
+    from jarvis.memory.db import Database
+
+    def generate():
+        db = None
+        try:
+            settings = load_settings()
+            db_path = _get_db_path()
+            sqlite_vss_path = getattr(settings, "sqlite_vss_path", None)
+            db = Database(db_path, sqlite_vss_path=sqlite_vss_path)
+
+            total = len(db.get_all_conversation_summaries())
+            yield json.dumps({"type": "start", "total": total}) + "\n"
+
+            if total == 0:
+                yield json.dumps({
+                    "type": "complete",
+                    "rows": 0,
+                    "rows_changed": 0,
+                    "topics_merged": 0,
+                    "topics_expanded": 0,
+                }) + "\n"
+                return
+
+            rows_changed = 0
+            rows_seen = 0
+            topics_merged = 0
+            topics_expanded = 0
+
+            for event in optimise_diary_topics(
+                db,
+                ollama_base_url=settings.ollama_base_url,
+                ollama_chat_model=settings.ollama_chat_model,
+                ollama_embed_model=settings.ollama_embed_model,
+            ):
+                rows_seen += 1
+                if event.get("topics_changed"):
+                    rows_changed += 1
+                    old_n = event.get("old_topic_count", 0)
+                    new_n = event.get("new_topic_count", 0)
+                    if new_n < old_n:
+                        topics_merged += old_n - new_n
+                    elif new_n > old_n:
+                        topics_expanded += new_n - old_n
+                yield json.dumps({
+                    "type": "progress",
+                    "processed": rows_seen,
+                    "total": total,
+                    **event,
+                }) + "\n"
+
+            yield json.dumps({
+                "type": "complete",
+                "rows": rows_seen,
+                "rows_changed": rows_changed,
+                "topics_merged": topics_merged,
+                "topics_expanded": topics_expanded,
+            }) + "\n"
+        except Exception as e:
+            debug_log(f"diary topic optimise failed: {type(e).__name__}", "memory")
+            yield json.dumps({"type": "error", "message": type(e).__name__}) + "\n"
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+    return Response(
+        generate(),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Frontend
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1020,6 +1108,9 @@ def index() -> str:
         .diary-maintenance-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+        }
+        .diary-maintenance-btn + .diary-maintenance-btn {
+            margin-top: 0.5rem;
         }
 
         /* Date filters */
@@ -2025,6 +2116,9 @@ def index() -> str:
                         <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Remove sentences that narrate assistant failures (e.g. 'the assistant could not…') from old diary entries. The rest of each entry stays. No entries are deleted.">
                             Clean up deflection narration
                         </button>
+                        <button class="diary-maintenance-btn" id="btn-optimise-topics" title="Merge near-synonym tags, normalise casing, and split compound tags across all diary entries. Requires the chat model to be running.">
+                            Optimise tags
+                        </button>
                     </div>
                 </aside>
                 <div class="memory-list">
@@ -2475,6 +2569,10 @@ def index() -> str:
         // work even for users who never visit it.
         document.getElementById('btn-scrub-deflections').addEventListener('click', () => {
             showScrubDeflectionsModal();
+        });
+
+        document.getElementById('btn-optimise-topics').addEventListener('click', () => {
+            showOptimiseTopicsModal();
         });
 
         // ─── Graph Explorer ────────────────────────────────────────────
@@ -3490,6 +3588,161 @@ def index() -> str:
                     `;
                     delete overlay.dataset.scrubbing;
                     showToast('Diary clean failed', 'error');
+                }
+            });
+        }
+
+        function showOptimiseTopicsModal() {
+            const existing = document.querySelector('.modal-overlay');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.innerHTML = `
+                <div class="modal">
+                    <h3>🏷️ Optimise tags</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+                        Uses the chat model to build a normalised tag taxonomy across all diary entries.
+                        Near-synonyms are merged into one canonical form (e.g. "cook" and "cooking"
+                        both become "cooking"). Compound tags that cover clearly distinct topics are split.
+                    </p>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+                        Only the tags are changed — diary text is untouched. No entries are deleted.
+                        Requires the chat model to be running. Cannot be undone.
+                    </p>
+                    <div id="optimise-progress" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span id="optimise-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
+                            <span id="optimise-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0 entries</span>
+                        </div>
+                        <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
+                            <div id="optimise-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
+                        </div>
+                        <div id="optimise-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                    </div>
+                    <div class="modal-actions" id="optimise-actions">
+                        <button class="modal-btn secondary" id="btn-cancel-optimise">Cancel</button>
+                        <button class="modal-btn primary" id="btn-start-optimise">Start</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            const dismiss = () => overlay.remove();
+            document.getElementById('btn-cancel-optimise').addEventListener('click', dismiss);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay && !overlay.dataset.optimising) dismiss();
+            });
+
+            document.getElementById('btn-start-optimise').addEventListener('click', async () => {
+                overlay.dataset.optimising = 'true';
+                document.getElementById('optimise-progress').style.display = 'block';
+                document.getElementById('btn-start-optimise').disabled = true;
+                document.getElementById('btn-start-optimise').textContent = 'Optimising…';
+
+                try {
+                    const resp = await fetch('/api/diary/optimise-topics', { method: 'POST' });
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let processed = 0;
+                    let totalRows = 0;
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            try {
+                                const msg = JSON.parse(line);
+                                if (msg.type === 'start') {
+                                    totalRows = msg.total || 0;
+                                    document.getElementById('optimise-status').textContent = 'Building tag taxonomy…';
+                                    document.getElementById('optimise-count').textContent =
+                                        `0 / ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'}`;
+                                } else if (msg.type === 'progress') {
+                                    processed = msg.processed;
+                                    const countLabel = totalRows
+                                        ? `${processed} / ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'}`
+                                        : `${processed} entr${processed === 1 ? 'y' : 'ies'}`;
+                                    document.getElementById('optimise-count').textContent = countLabel;
+                                    document.getElementById('optimise-status').textContent = `Applying to ${msg.date_utc}…`;
+                                    const log = document.getElementById('optimise-log');
+                                    let icon, detail;
+                                    if (msg.error) {
+                                        icon = '❌';
+                                        detail = `error: ${msg.error}`;
+                                    } else if (!msg.topics_changed) {
+                                        icon = '➖';
+                                        detail = 'no change';
+                                    } else {
+                                        const oldN = msg.old_topic_count || 0;
+                                        const newN = msg.new_topic_count || 0;
+                                        icon = '🏷️';
+                                        detail = newN < oldN
+                                            ? `${oldN} → ${newN} tags (merged)`
+                                            : newN > oldN
+                                                ? `${oldN} → ${newN} tags (split)`
+                                                : `${newN} tag${newN === 1 ? '' : 's'} updated`;
+                                    }
+                                    const entry = document.createElement('div');
+                                    entry.textContent = `${icon} ${msg.date_utc} — ${detail}`;
+                                    log.appendChild(entry);
+                                    log.scrollTop = log.scrollHeight;
+                                    const pct = totalRows
+                                        ? Math.min(100, Math.round((processed / totalRows) * 100))
+                                        : 50 + (processed % 2) * 50;
+                                    document.getElementById('optimise-bar').style.width = pct + '%';
+                                } else if (msg.type === 'complete') {
+                                    document.getElementById('optimise-bar').style.width = '100%';
+                                    let summary;
+                                    if (msg.rows === 0) {
+                                        summary = 'No diary entries found.';
+                                    } else {
+                                        const parts = [];
+                                        if (msg.rows_changed > 0) {
+                                            parts.push(`${msg.rows_changed} of ${msg.rows} entr${msg.rows === 1 ? 'y' : 'ies'} updated`);
+                                        } else {
+                                            parts.push(`${msg.rows} entr${msg.rows === 1 ? 'y' : 'ies'} checked — all tags already optimal`);
+                                        }
+                                        if (msg.topics_merged > 0) parts.push(`${msg.topics_merged} tag${msg.topics_merged === 1 ? '' : 's'} merged`);
+                                        if (msg.topics_expanded > 0) parts.push(`${msg.topics_expanded} tag${msg.topics_expanded === 1 ? '' : 's'} split`);
+                                        summary = 'Done — ' + parts.join(', ');
+                                    }
+                                    document.getElementById('optimise-status').textContent = summary;
+                                    document.getElementById('optimise-actions').innerHTML = `
+                                        <button class="modal-btn primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
+                                    `;
+                                    delete overlay.dataset.optimising;
+                                    loadStats();
+                                    loadTopics();
+                                    loadMemories();
+                                    showToast('Tags optimised', 'success');
+                                } else if (msg.type === 'error') {
+                                    document.getElementById('optimise-status').textContent = 'Error: ' + msg.message;
+                                    document.getElementById('optimise-bar').style.width = '0%';
+                                    document.getElementById('optimise-actions').innerHTML = `
+                                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                                    `;
+                                    delete overlay.dataset.optimising;
+                                    showToast('Tag optimisation failed', 'error');
+                                }
+                            } catch (e) { /* skip malformed lines */ }
+                        }
+                    }
+                } catch (e) {
+                    document.getElementById('optimise-status').textContent = 'Connection error: ' + e.message;
+                    document.getElementById('optimise-bar').style.width = '0%';
+                    document.getElementById('optimise-actions').innerHTML = `
+                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                    `;
+                    delete overlay.dataset.optimising;
+                    showToast('Tag optimisation failed', 'error');
                 }
             });
         }

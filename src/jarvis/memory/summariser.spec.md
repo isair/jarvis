@@ -67,7 +67,25 @@ All three rules apply in any language, not only English. The prompt states this 
 
 ## Bulk Sweep UI
 
-The memory viewer's diary tab carries a "🧹 Clean up deflection narration" button under the Maintenance section in the sidebar. The modal is explicit about what is removed and what stays — only sentences that narrate assistant failures are dropped, the rest of each entry is preserved, no diary entries are deleted, and a summary that is *entirely* deflection narration is kept rather than emptied. Backed by `POST /api/diary/scrub-deflections` (NDJSON-streaming) which calls `scrub_all_diary_summaries`.
+The memory viewer's diary tab carries a Maintenance section in the sidebar with two operations:
+
+**"🧹 Clean up deflection narration"** — drops sentences that narrate assistant failures from old diary entries. The rest of each entry is preserved, no diary entries are deleted, and a summary that is *entirely* deflection narration is kept rather than emptied. Backed by `POST /api/diary/scrub-deflections` (NDJSON-streaming) which calls `scrub_all_diary_summaries`.
+
+**"🏷️ Optimise tags"** — normalises topic tags across all diary entries using the configured chat model. Because each diary write generates topics independently, the same concept may accumulate multiple surface forms over time ("cook", "cooking", "meal prep"). The optimiser collects all unique tags, makes a single LLM call to propose a normalised taxonomy (merging synonyms, splitting compound tags), then applies the mapping to every row whose tags change. Backed by `POST /api/diary/optimise-topics` (NDJSON-streaming) which calls `optimise_diary_topics`. Requires the chat model to be running. Diary text is untouched; only the `topics` column is rewritten. Preserves `ts_utc` on every rewrite. Re-embeds updated rows best-effort. Fail-open: LLM failure or bad JSON leaves all rows unchanged.
+
+## Tag Optimisation
+
+`optimise_diary_topics(db, ollama_base_url, ollama_chat_model, ...)` in `conversation.py` implements the bulk tag normalisation sweep:
+
+1. Collect all unique topic strings from every `conversation_summaries` row (one pass, in memory).
+2. One `call_llm_direct` call to `ollama_chat_model` with `_TOPIC_OPTIMISE_SYSTEM_PROMPT` — returns a JSON object mapping each input tag to its normalised form (string for merge, list for split).
+3. Apply the mapping via `_apply_topic_mapping()` to each row's comma-separated topics string. Deduplicates the result while preserving order so a merge that produces two identical tags (e.g. "cook, cooking" → "cooking, cooking") collapses cleanly.
+4. Write back only rows whose topics changed, preserving `ts_utc` (same contract as the deflection scrub).
+5. Re-embed updated rows if an embed model is configured.
+
+Yields one event per row: `{date_utc, topics_changed, old_topic_count, new_topic_count, error?}`. No raw tag values in events — counts only.
+
+Idempotent once the mapping has been applied: a second run finds no tags to change.
 
 ## Evals and Regression Guards
 
@@ -82,6 +100,7 @@ The memory viewer's diary tab carries a "🧹 Clean up deflection narration" but
 | `TestScrubDropsBannedSentences` / `TestScrubPreservesLegitimateContent` / `TestScrubEdgeCases` | `tests/test_diary_deflection_scrub.py` | Scrub-function unit tests |
 | `TestScrubSweepBehaviour` | `tests/test_diary_scrub_sweep.py` | Bulk-sweep DB integration |
 | `TestDiaryScrubEndpoint` | `tests/test_memory_viewer_diary_scrub_api.py` | Endpoint streaming + privacy contract |
+| `TestOptimiseContract` / `TestOptimiseMerge` / `TestOptimiseSplit` / `TestOptimiseDeduplicate` / `TestOptimiseAuditTrail` / `TestOptimiseFailOpen` / `TestOptimiseIdempotence` | `tests/test_diary_topic_optimise.py` | Tag optimisation — generator contract, merge/split semantics, dedup, audit trail, fail-open, idempotence |
 
 Live evals target the smallest supported model (gemma4:e2b) and `xfail` softly on weaker models rather than hard-failing, documenting residual risk instead of masking it.
 
