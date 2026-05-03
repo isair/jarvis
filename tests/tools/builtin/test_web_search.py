@@ -511,6 +511,11 @@ class TestWebSearchTool:
         # Block envelope must NOT fire — we rescued the query.
         lowered = result.reply_text.lower()
         assert "blocked by duckduckgo" not in lowered
+        # The 🚧 bot-challenge console line MUST fire even though Brave rescued —
+        # spec §Progress messages: "Rate-limit detection fires regardless of
+        # fallback availability."
+        printed = "\n".join(call.args[0] for call in self.context.user_print.call_args_list)
+        assert "🚧 DuckDuckGo served a bot-challenge page" in printed
 
     @patch('src.jarvis.tools.builtin.web_search._wikipedia_summary')
     @patch('requests.get')
@@ -590,10 +595,8 @@ class TestWebSearchTool:
 
         assert result.success is True
         printed = "\n".join(call.args[0] for call in self.context.user_print.call_args_list)
-        # Must log that DDG returned nothing before Wikipedia fires.
-        assert "no" in printed.lower() and (
-            "result" in printed.lower() or "duckduckgo" in printed.lower()
-        )
+        # Must log the exact no-results message before Wikipedia fires.
+        assert "⚠️ No DuckDuckGo results found." in printed
         # Wikipedia success line must still appear.
         assert "wikipedia" in printed.lower()
 
@@ -664,6 +667,10 @@ class TestWebSearchTool:
         assert "blocked by duckduckgo" in lowered or "bot-protection" in lowered
         assert "you have failed" in lowered
         assert "must not contain any specific facts" in lowered
+        # The 🚧 console line must also fire — the reply envelope alone is
+        # insufficient to confirm the early-print contract is satisfied.
+        printed = "\n".join(call.args[0] for call in self.context.user_print.call_args_list)
+        assert "🚧 DuckDuckGo served a bot-challenge page" in printed
 
     @patch('requests.get')
     def test_run_network_failure_graceful(self, mock_get):
