@@ -704,6 +704,21 @@ class WebSearchTool(Tool):
             except Exception as ddg_error:
                 debug_log(f"DuckDuckGo search failed: {ddg_error}", "web")
 
+            # Log DDG outcome immediately — field-triage must see why we're
+            # falling back regardless of whether a subsequent provider rescues
+            # the query. The spec requires the 🚧 bot-challenge line to fire
+            # even when Wikipedia then succeeds (spec §Progress messages).
+            # The ⚠️ no-results line fills the equivalent gap for the zero-
+            # result case, which previously produced no output between
+            # "🌐 Searching…" and "📚 Searching Wikipedia…".
+            if ddg_rate_limited and not instant_results:
+                context.user_print(
+                    "🚧 DuckDuckGo served a bot-challenge page — "
+                    "search blocked, no results retrieved."
+                )
+            elif not result_urls and not instant_results:
+                context.user_print("⚠️ No DuckDuckGo results found.")
+
             # Auto-fetch content from top results to provide actual data.
             # Cascade through the first 3 results in PARALLEL under a shared
             # wall-clock cap. The original serial 3 × 8s design could block
@@ -1001,18 +1016,6 @@ class WebSearchTool(Tool):
                 elif used_source == "wikipedia":
                     context.user_print(
                         "✅ Answered via Wikipedia fallback."
-                    )
-                elif ddg_rate_limited and not instant_results:
-                    # A rate-limit page occasionally has a header link that
-                    # slips past the result filter; printing "Found 1 result"
-                    # over a bot-challenge page is actively misleading during
-                    # field triage. Surface the block directly instead.
-                    # (If we still got an instant answer from api.ddg.com —
-                    # a separate endpoint — we prefer the normal success
-                    # line below, since the user got a useful reply.)
-                    context.user_print(
-                        "🚧 DuckDuckGo served a bot-challenge page — "
-                        "search blocked, no results retrieved."
                     )
                 elif count_results > 0:
                     context.user_print(f"✅ Found {count_results} results.")

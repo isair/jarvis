@@ -179,10 +179,14 @@ field-triage which provider actually carried the reply.
 
 ### Progress messages
 
-The tool prints a progress line to the terminal before each provider attempt:
+The tool prints progress lines to the terminal as the pipeline advances:
 
-- DuckDuckGo: `🌐 Searching the web for '<query>'…`
-- Wikipedia: `📚 Searching Wikipedia (<lang>) for '<query>'…`
+- DuckDuckGo attempt start: `🌐 Searching the web for '<query>'…`
+- DDG returned a bot-challenge page: `🚧 DuckDuckGo served a bot-challenge page — search blocked, no results retrieved.`
+- DDG returned zero results (not rate-limited): `⚠️ No DuckDuckGo results found.`
+- Wikipedia fallback attempt: `📚 Searching Wikipedia (<lang>) for '<query>'…`
+
+The DDG failure lines (`🚧` / `⚠️`) are printed **immediately after the DDG block**, before fallbacks run, so field-triage can always see why the tool fell back regardless of whether a subsequent provider rescues the query. This is distinct from the final status line (`✅ Answered via Wikipedia fallback.`) which only fires when a provider succeeds.
 
 These are ephemeral stdout prints (`context.user_print`). They are not persisted, not logged to file, and not included in the tool result returned to the LLM.
 

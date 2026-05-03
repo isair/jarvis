@@ -514,6 +514,91 @@ class TestWebSearchTool:
 
     @patch('src.jarvis.tools.builtin.web_search._wikipedia_summary')
     @patch('requests.get')
+    def test_bot_challenge_log_fires_even_when_wikipedia_rescues(
+        self, mock_get, mock_wiki
+    ):
+        """When DDG is bot-challenged AND Wikipedia successfully rescues the
+        query, the console must still print the bot-challenge warning AND the
+        Wikipedia success line — both, not just the latter.
+
+        Spec says (web_search.spec.md line 175-178): "Rate-limit detection
+        fires regardless of fallback availability: the 🚧 … line is printed
+        … even if a fallback then rescues the query."
+
+        The bug: the status block used elif, so used_source == "wikipedia"
+        fired first and silently swallowed the bot-challenge message.
+        """
+        self.context.cfg.brave_search_api_key = ""
+        self.context.cfg.wikipedia_fallback_enabled = True
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {}
+        instant.raise_for_status = Mock()
+        challenge = Mock()
+        challenge.status_code = 400
+        challenge.content = b'<div class="anomaly-modal"></div>'
+        mock_get.side_effect = [instant, challenge]
+        mock_wiki.return_value = (
+            "Some Topic",
+            "https://en.wikipedia.org/wiki/Some_Topic",
+            "Some topic is a thing.",
+        )
+
+        result = self.tool.run({"search_query": "some topic"}, self.context)
+
+        assert result.success is True
+        printed = "\n".join(call.args[0] for call in self.context.user_print.call_args_list)
+        # Bot-challenge line must appear even though Wikipedia rescued.
+        assert "bot-challenge" in printed.lower() or "blocked" in printed.lower()
+        # Wikipedia success line must also appear.
+        assert "wikipedia" in printed.lower()
+
+    @patch('src.jarvis.tools.builtin.web_search._wikipedia_summary')
+    @patch('requests.get')
+    def test_zero_ddg_results_logged_before_wikipedia_fallback(
+        self, mock_get, mock_wiki
+    ):
+        """When DDG returns zero results (not rate-limited) and Wikipedia
+        rescues, the console must print a 'no results' warning before the
+        Wikipedia search line so field-triage can see why we fell back.
+
+        Without this, the log shows:
+          🌐 Searching the web for 'local events for tomorrow'…
+          📚 Searching Wikipedia (en) for 'local events for tomorrow'…
+          ✅ Answered via Wikipedia fallback.
+
+        With no indication of what DDG found (or didn't find).
+        """
+        self.context.cfg.brave_search_api_key = ""
+        self.context.cfg.wikipedia_fallback_enabled = True
+        instant = Mock()
+        instant.status_code = 200
+        instant.json.return_value = {}
+        instant.raise_for_status = Mock()
+        # DDG returns HTTP 200 with no usable links.
+        empty_ddg = Mock()
+        empty_ddg.status_code = 200
+        empty_ddg.content = b'<html><body><p>No results found.</p></body></html>'
+        mock_get.side_effect = [instant, empty_ddg]
+        mock_wiki.return_value = (
+            "Local Events",
+            "https://en.wikipedia.org/wiki/Local_Events",
+            "Local events are events that happen locally.",
+        )
+
+        result = self.tool.run({"search_query": "local events for tomorrow"}, self.context)
+
+        assert result.success is True
+        printed = "\n".join(call.args[0] for call in self.context.user_print.call_args_list)
+        # Must log that DDG returned nothing before Wikipedia fires.
+        assert "no" in printed.lower() and (
+            "result" in printed.lower() or "duckduckgo" in printed.lower()
+        )
+        # Wikipedia success line must still appear.
+        assert "wikipedia" in printed.lower()
+
+    @patch('src.jarvis.tools.builtin.web_search._wikipedia_summary')
+    @patch('requests.get')
     def test_wikipedia_fallback_uses_detected_language(self, mock_get, mock_wiki):
         """Wikipedia fallback must hit the host matching the Whisper-detected
         utterance language, and its extract must reach the fence.
