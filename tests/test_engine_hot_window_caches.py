@@ -89,6 +89,56 @@ def test_tool_router_cached_across_turns(
 @patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
 @patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
 @patch("src.jarvis.memory.graph.GraphMemoryStore")
+@patch("src.jarvis.reply.engine.plan_query", return_value=[])
+@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("src.jarvis.reply.engine.extract_text_from_response")
+@patch("src.jarvis.reply.engine.chat_with_messages")
+def test_router_fallback_to_all_tools_is_not_cached(
+    mock_chat, mock_extract, mock_extractor, mock_plan,
+    _mock_graph, _mock_warm, _mock_fmt,
+):
+    """When the router falls open to the full tool catalogue (its parse-failure
+    fail-open path), the engine must NOT persist that result in the
+    conversation-scoped cache. Otherwise a single small-model fluke pins
+    ``allowed_tools`` to "all N" for the rest of the session, overwhelms the
+    planner, and starves the chat model.
+
+    Field trace (2026-05-03): user said "navigate to youtube.com". The router
+    LLM flaked, fell open to ~41 tools, the cache stored that, every
+    subsequent navigate attempt replayed the cached 41-tool set, and the small
+    chat model produced an empty reply ("Sorry, I had trouble processing
+    that"). Pre-#281 this didn't happen because the router re-rolled per turn.
+    """
+    from src.jarvis.tools.registry import BUILTIN_TOOLS
+    full_catalogue = list(BUILTIN_TOOLS.keys())
+
+    mock_chat.side_effect = [
+        {"message": {"content": "hello"}},
+        {"message": {"content": "hello again"}},
+    ]
+    mock_extract.side_effect = ["hello", "hello again"]
+
+    db = Mock()
+    cfg = _mock_cfg()
+    dm = DialogueMemory()
+
+    with patch(
+        "src.jarvis.reply.engine.select_tools",
+        return_value=full_catalogue,
+    ) as mock_select:
+        run_reply_engine(db=db, cfg=cfg, tts=None, text="navigate to youtube", dialogue_memory=dm)
+        run_reply_engine(db=db, cfg=cfg, tts=None, text="navigate to youtube", dialogue_memory=dm)
+
+    assert mock_select.call_count == 2, (
+        "fall-open-to-all-tools must not be cached; the router should re-run "
+        f"on the second identical turn — was called {mock_select.call_count} times"
+    )
+
+
+@pytest.mark.unit
+@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
+@patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
+@patch("src.jarvis.memory.graph.GraphMemoryStore")
 @patch("src.jarvis.reply.engine.select_tools", return_value=[])
 @patch("src.jarvis.reply.engine.plan_query", return_value=[])
 @patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={"keywords": ["x"], "questions": []})

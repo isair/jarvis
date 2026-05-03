@@ -333,12 +333,12 @@ def _select_llm(
             timeout_sec=llm_timeout_sec,
         )
     except Exception as e:
-        debug_log(f"LLM tool selection failed: {e}, falling back to all tools", "planning")
-        return _all_tool_names(builtin_tools, mcp_tools)
+        debug_log(f"LLM tool selection failed: {e}, falling back to keyword strategy", "planning")
+        return _select_keyword(query, builtin_tools, mcp_tools)
 
     if not resp or not isinstance(resp, str):
-        debug_log("LLM tool selection returned empty, falling back to all tools", "planning")
-        return _all_tool_names(builtin_tools, mcp_tools)
+        debug_log("LLM tool selection returned empty, falling back to keyword strategy", "planning")
+        return _select_keyword(query, builtin_tools, mcp_tools)
 
     resp_lower = resp.strip().lower()
     if resp_lower == "none":
@@ -364,8 +364,8 @@ def _select_llm(
     selected = _ensure_always_included(selected, builtin_tools, mcp_tools)
 
     if len(selected) <= len(_ALWAYS_INCLUDED):
-        debug_log("LLM tool selection matched nothing, falling back to all tools", "planning")
-        return _all_tool_names(builtin_tools, mcp_tools)
+        debug_log("LLM tool selection matched nothing, falling back to keyword strategy", "planning")
+        return _select_keyword(query, builtin_tools, mcp_tools)
 
     debug_log(f"LLM tool selection: {len(selected)}/{len(known)} tools selected", "planning")
     return selected

@@ -383,34 +383,74 @@ class TestLLMStrategy:
         assert result == ["stop"]
 
     @pytest.mark.unit
-    def test_llm_failure_falls_back_to_all(self):
+    def test_llm_failure_falls_back_to_keyword(self):
+        """When the router LLM raises (timeout, network, etc.) the fallback is
+        keyword scoring — not the full catalogue. A 30+-tool fall-open kills
+        small chat models (they choke on 41-tool prompts) and pins the
+        conversation cache to "everything"; keyword narrowing preserves at
+        least some routing on tool-name overlap with the query."""
         def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
             raise TimeoutError("LLM timed out")
 
         with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
             result = select_tools(
-                "anything",
+                "weather in London",
                 _builtin(), _mcp(),
                 strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )
-        assert len(result) == len(_builtin()) + len(_mcp())
+        # Keyword strategy on "weather" picks getWeather (its name + desc both
+        # contain "weather"); irrelevant tools like fetchMeals must NOT appear.
+        assert "getWeather" in result
+        assert "fetchMeals" not in result
+        assert "homeassistant__turn_on" not in result
 
     @pytest.mark.unit
-    def test_empty_response_falls_back_to_all(self):
+    def test_empty_response_falls_back_to_keyword(self):
+        """Empty router response is treated identically to a hard failure:
+        fall back to keyword scoring rather than to the full catalogue."""
         def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
             return ""
 
         with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
             result = select_tools(
-                "anything",
+                "weather report",
                 _builtin(), {},
                 strategy=ToolSelectionStrategy.LLM,
                 llm_base_url="http://localhost",
                 llm_model="test",
             )
-        assert len(result) == len(_builtin())
+        assert "getWeather" in result
+        assert "fetchMeals" not in result
+
+    @pytest.mark.unit
+    def test_unparseable_response_falls_back_to_keyword(self):
+        """When the router response is non-empty but no token matches a known
+        tool name (small-model garbage), the fallback is keyword scoring.
+        Field trace: a small router occasionally produces text like "I think
+        we should..." that the parser strips to nothing — pre-fix this fell
+        open to all 41 tools; post-fix it narrows on query keywords."""
+        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+            return "I think we should pick one"  # no known tool name
+
+        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
+            result = select_tools(
+                "navigate to youtube.com",
+                _builtin(),
+                {"chrome-devtools__navigate_page": FakeToolSpec(
+                    "chrome-devtools__navigate_page",
+                    "Navigate the browser to a given URL.",
+                )},
+                strategy=ToolSelectionStrategy.LLM,
+                llm_base_url="http://localhost",
+                llm_model="test",
+            )
+        # Keyword scoring matches "navigate" → chrome-devtools__navigate_page.
+        assert "chrome-devtools__navigate_page" in result
+        # The full catalogue must NOT be returned — that's the regression we're
+        # fixing (small-model 41-tool overload).
+        assert len(result) < len(_builtin()) + 1
 
     @pytest.mark.unit
     def test_ignores_hallucinated_tool_names(self):

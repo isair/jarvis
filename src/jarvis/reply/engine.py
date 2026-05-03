@@ -824,7 +824,25 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
-        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+        # Don't cache the router's "fall open to all tools" fallback. That
+        # path fires when the LLM router times out, returns empty, or emits
+        # a response no token of which matches a known tool name — i.e. the
+        # router gave up. Caching its "give up = expose everything" output
+        # for the rest of the conversation pins ``allowed_tools`` to the
+        # full catalogue, overwhelms the planner (which then paraphrases
+        # tool steps as prose), and starves a small chat model into
+        # producing the empty-reply fallback. Re-rolling the router on the
+        # next turn is cheap and almost always recovers.
+        _router_returned_full_catalog = (
+            routed_tools is not None
+            and len(routed_tools) == len(_full_catalog_names)
+            and set(routed_tools) == set(_full_catalog_names)
+        )
+        if (
+            dialogue_memory
+            and hasattr(dialogue_memory, "hot_cache_put")
+            and not _router_returned_full_catalog
+        ):
             dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
     _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
     _planner_tool_catalog: list[tuple[str, str]] = []
