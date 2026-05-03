@@ -96,6 +96,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: comma-separated tool names or `none`. Capped at `_LLM_MAX_SELECTED` (5). Always-included tools (`stop`, `toolSearchTool`) are unioned in regardless.
 - **Limits**: `llm_timeout_sec`. On failure → all tools.
 - **Caching**: `routed_tools` cached in `DialogueMemory._hot_cache` under key `router:{redacted_query}|{strategy}|{builtin-names}|{mcp-names}` for the lifetime of the active conversation. The catalogue signature lets a mid-conversation MCP refresh invalidate the cache; `context_hint` is intentionally excluded so time/location drift inside one conversation doesn't bust it. Cleared by `clear_hot_cache()` on the `stop` signal and on new-conversation entry.
+- **Carry-over guard (engine-side overlay)**: after the cache lookup/write, the engine inspects the previous assistant turn's tool calls. When the current query is a short follow-up (≤80 chars by character count, no language-specific keywords) and the previous turn invoked tools, those tool names are unioned back into the local `routed_tools` for this turn only. Compensates for small routers that misroute follow-ups (e.g. "I'm in London" routing to `webSearch` after a `getWeather` chain). The augmentation never touches the cache — replays of the same query in future turns get the raw router output. See `src/jarvis/reply/reply.spec.md` §6 (Tool allow-list per turn) for the full contract.
 
 ## 8. Tool Searcher (mid-loop escape hatch)
 

@@ -647,6 +647,59 @@ def _live_time_location_string(cfg) -> str:
         return ""
 
 
+# Char-length cutoff for the tool carry-over guard. A short follow-up is
+# very likely the user supplying a missing argument or otherwise continuing
+# the prior tool's chain of reasoning ("I'm in London", "make it three",
+# "the second one"). Beyond this threshold the user has typically restated
+# enough intent for the router pick to stand on its own.
+_CARRYOVER_FOLLOWUP_MAX_CHARS = 80
+
+
+def _previous_turn_tool_names(recent_messages: list) -> list[str]:
+    """Return tool names invoked by the most recent assistant turn.
+
+    Walks ``recent_messages`` from the end backwards collecting tool names
+    from both calling protocols, stopping at the first genuine user message
+    (i.e. a ``role=user`` entry that is NOT a text-tool result, which the
+    text-tool fallback stores as ``role=user`` with a ``tool_name`` field).
+
+    Native tool calling: ``assistant`` messages carry a ``tool_calls`` list
+    where each entry has ``function.name``.
+
+    Text-tool fallback (small models): tool results are appended as
+    ``user`` messages tagged with ``tool_name``.
+
+    Returns deduplicated names in chronological order. Tool messages
+    without an identifying name (``role=tool``) are skipped — they belong
+    to the previous turn but don't carry the tool name themselves.
+    """
+    if not recent_messages:
+        return []
+    found_reversed: list[str] = []
+    seen: set[str] = set()
+    for msg in reversed(recent_messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role == "user" and not msg.get("tool_name"):
+            break
+        if role == "assistant":
+            tcalls = msg.get("tool_calls") or []
+            if isinstance(tcalls, list):
+                for tc in tcalls:
+                    fn = (tc or {}).get("function") if isinstance(tc, dict) else None
+                    name = fn.get("name") if isinstance(fn, dict) else None
+                    if isinstance(name, str) and name and name not in seen:
+                        found_reversed.append(name)
+                        seen.add(name)
+        elif role == "user" and msg.get("tool_name"):
+            name = msg.get("tool_name")
+            if isinstance(name, str) and name and name not in seen:
+                found_reversed.append(name)
+                seen.add(name)
+    return list(reversed(found_reversed))
+
+
 def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
     """Compact summary of live context for the query extractor and tool router.
 
@@ -844,6 +897,28 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             and not _router_returned_full_catalog
         ):
             dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
+
+    # Tool carry-over guard: when the previous assistant turn invoked a
+    # tool and the current query is a short follow-up, union the previous
+    # tool names back into the allow-list. Compensates for small routers
+    # that misroute follow-ups (e.g. "I'm in London" routing to webSearch
+    # after a getWeather chain). Engine-side per-turn overlay: the cache
+    # above stores only the raw router output, so this never poisons the
+    # cache.
+    routed_tools = list(routed_tools or [])
+    _carryover_names: list[str] = []
+    if recent_messages and len(redacted) <= _CARRYOVER_FOLLOWUP_MAX_CHARS:
+        for _name in _previous_turn_tool_names(recent_messages):
+            if _name in _full_catalog_names and _name not in routed_tools:
+                _carryover_names.append(_name)
+        if _carryover_names:
+            routed_tools = routed_tools + _carryover_names
+            debug_log(
+                f"tool carry-over: union {_carryover_names} from previous "
+                f"assistant turn into allow-list",
+                "planning",
+            )
+
     _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
     _planner_tool_catalog: list[tuple[str, str]] = []
     for _schema in (_planner_schema or []):
@@ -1196,6 +1271,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if _plan_name not in allowed_tools:
                 allowed_tools.append(_plan_name)
                 _selection_source = f"{strategy.value}+plan"
+    if _carryover_names:
+        _selection_source = f"{_selection_source}+carryover"
     # `stop` is the termination sentinel — always exposed so the chat
     # model can emit it once it has enough to answer.
     if "stop" not in allowed_tools:
