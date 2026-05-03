@@ -305,6 +305,7 @@ class TestCheckForUpdates:
                             status = check_for_updates()
                             assert status.update_available is True
                             assert status.latest_release.asset_id == 200001
+                            assert status.releases_since_current == [status.latest_release]
 
     @pytest.mark.unit
     def test_develop_channel_shows_update_when_asset_id_differs(self):
@@ -399,6 +400,178 @@ class TestUpdateStatus:
         assert status.update_available is True
         assert status.current_version == "0.9.0"
         assert status.latest_release.version == "1.0.0"
+
+    @pytest.mark.unit
+    def test_releases_since_current_defaults_to_empty_list(self):
+        status = UpdateStatus(
+            update_available=False,
+            current_version="1.0.0",
+            current_channel="stable",
+            latest_release=None,
+        )
+        assert status.releases_since_current == []
+
+    @pytest.mark.unit
+    def test_collects_all_releases_since_current_version(self):
+        """Stable channel should return every release newer than the installed version."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {
+                "id": 3,
+                "tag_name": "v1.3.0",
+                "name": "v1.3.0",
+                "draft": False,
+                "prerelease": False,
+                "html_url": "https://example.com/v1.3.0",
+                "body": "* feat: feature three (#3)",
+                "assets": [{"id": 300, "name": "Jarvis-macOS-arm64.zip",
+                            "browser_download_url": "https://example.com/dl3", "size": 1000}],
+            },
+            {
+                "id": 2,
+                "tag_name": "v1.2.0",
+                "name": "v1.2.0",
+                "draft": False,
+                "prerelease": False,
+                "html_url": "https://example.com/v1.2.0",
+                "body": "* fix: bug two (#2)",
+                "assets": [{"id": 200, "name": "Jarvis-macOS-arm64.zip",
+                            "browser_download_url": "https://example.com/dl2", "size": 1000}],
+            },
+            {
+                "id": 1,
+                "tag_name": "v1.0.0",
+                "name": "v1.0.0",
+                "draft": False,
+                "prerelease": False,
+                "html_url": "https://example.com/v1.0.0",
+                "body": "* Initial release",
+                "assets": [{"id": 100, "name": "Jarvis-macOS-arm64.zip",
+                            "browser_download_url": "https://example.com/dl1", "size": 1000}],
+            },
+        ]
+
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
+            with patch("requests.get", return_value=mock_response):
+                with patch("sys.platform", "darwin"):
+                    with patch("platform.machine", return_value="arm64"):
+                        status = check_for_updates()
+                        assert status.update_available is True
+                        assert status.latest_release.version == "1.3.0"
+                        assert len(status.releases_since_current) == 2
+                        assert status.releases_since_current[0].version == "1.3.0"
+                        assert status.releases_since_current[1].version == "1.2.0"
+
+    @pytest.mark.unit
+    def test_releases_since_current_empty_when_no_update(self):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {
+                "id": 1,
+                "tag_name": "v1.0.0",
+                "name": "v1.0.0",
+                "draft": False,
+                "prerelease": False,
+                "html_url": "https://example.com/v1.0.0",
+                "body": "",
+                "assets": [{"id": 100, "name": "Jarvis-macOS-arm64.zip",
+                            "browser_download_url": "https://example.com/dl1", "size": 1000}],
+            },
+        ]
+
+        with patch("desktop_app.updater.get_version", return_value=("1.0.0", "stable")):
+            with patch("requests.get", return_value=mock_response):
+                with patch("sys.platform", "darwin"):
+                    with patch("platform.machine", return_value="arm64"):
+                        status = check_for_updates()
+                        assert status.update_available is False
+                        assert status.releases_since_current == []
+
+
+class TestChangelogParsing:
+    """Tests for release notes parsing."""
+
+    @pytest.mark.unit
+    def test_parse_empty_notes_returns_empty_dict(self):
+        from desktop_app.update_dialog import parse_release_notes
+        assert parse_release_notes("") == {}
+
+    @pytest.mark.unit
+    def test_parse_feat_commit_goes_to_new_features(self):
+        from desktop_app.update_dialog import parse_release_notes
+        result = parse_release_notes("* feat(memory): add tag optimisation (#327)")
+        assert "New Features" in result
+        assert len(result["New Features"]) == 1
+        assert result["New Features"][0].text == "add tag optimisation"
+        assert result["New Features"][0].pr_number == 327
+
+    @pytest.mark.unit
+    def test_parse_fix_commit_goes_to_bug_fixes(self):
+        from desktop_app.update_dialog import parse_release_notes
+        result = parse_release_notes(
+            "* fix(listener): show city placeholder when GeoLite2 DB is missing (#331)"
+        )
+        assert "Bug Fixes" in result
+        assert "show city placeholder" in result["Bug Fixes"][0].text
+        assert result["Bug Fixes"][0].pr_number == 331
+
+    @pytest.mark.unit
+    def test_parse_strips_by_attribution(self):
+        from desktop_app.update_dialog import parse_release_notes
+        result = parse_release_notes("* fix: some fix by @someuser")
+        assert "Bug Fixes" in result
+        assert "@someuser" not in result["Bug Fixes"][0].text
+
+    @pytest.mark.unit
+    def test_parse_strips_full_changelog_footer(self):
+        from desktop_app.update_dialog import parse_release_notes
+        notes = (
+            "* feat: new feature (#1)\n\n"
+            "**Full Changelog**: https://github.com/owner/repo/compare/v1.0...v1.1"
+        )
+        result = parse_release_notes(notes)
+        total = sum(len(v) for v in result.values())
+        assert total == 1
+
+    @pytest.mark.unit
+    def test_parse_unknown_prefix_goes_to_changes(self):
+        from desktop_app.update_dialog import parse_release_notes
+        result = parse_release_notes("* Some change without prefix")
+        assert "Changes" in result
+
+    @pytest.mark.unit
+    def test_parse_categories_ordered_feat_before_fix_before_maintenance(self):
+        from desktop_app.update_dialog import parse_release_notes
+        notes = "* chore: update deps (#1)\n* feat: new thing (#2)\n* fix: bug fix (#3)"
+        result = parse_release_notes(notes)
+        keys = list(result.keys())
+        assert keys.index("New Features") < keys.index("Bug Fixes") < keys.index("Maintenance")
+
+    @pytest.mark.unit
+    def test_parse_github_auto_generated_format(self):
+        """GitHub auto-generated notes use 'by @user in https://.../pull/NNN' format."""
+        from desktop_app.update_dialog import parse_release_notes
+        notes = (
+            "## What's Changed\n"
+            "* fix(something): description by @contributor "
+            "in https://github.com/owner/repo/pull/123\n\n"
+            "**Full Changelog**: https://github.com/owner/repo/compare/v1.0...v1.1"
+        )
+        result = parse_release_notes(notes)
+        assert "Bug Fixes" in result
+        entry = result["Bug Fixes"][0]
+        assert "@contributor" not in entry.text
+        assert "https://" not in entry.text
+        assert entry.pr_number == 123
+
+    @pytest.mark.unit
+    def test_parse_dash_bullets(self):
+        from desktop_app.update_dialog import parse_release_notes
+        result = parse_release_notes("- feat: a feature\n- fix: a fix")
+        assert "New Features" in result
+        assert "Bug Fixes" in result
 
 
 class TestReleaseInfo:
