@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -173,6 +173,7 @@ class UpdateStatus:
     current_version: str
     current_channel: str
     latest_release: Optional[ReleaseInfo]
+    releases_since_current: list[ReleaseInfo] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -206,6 +207,21 @@ def parse_version(tag: str) -> tuple[int, ...]:
         return (0, 0, 0)
 
 
+def _make_release_info(release: dict, asset: dict) -> ReleaseInfo:
+    return ReleaseInfo(
+        asset_id=asset["id"],
+        tag_name=release["tag_name"],
+        version=release["tag_name"].lstrip("v"),
+        name=release.get("name", release["tag_name"]),
+        prerelease=release.get("prerelease", False),
+        html_url=release["html_url"],
+        download_url=asset["browser_download_url"],
+        asset_name=asset["name"],
+        asset_size=asset["size"],
+        release_notes=release.get("body", ""),
+    )
+
+
 def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
     """Check GitHub Releases for available updates.
 
@@ -233,41 +249,57 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
         response.raise_for_status()
         releases = response.json()
 
-        target_release = None
         platform_asset_name = get_platform_asset_name()
 
-        for release in releases:
-            if release.get("draft", False):
-                continue
-
-            if channel == UpdateChannel.STABLE and release.get("prerelease", False):
-                continue
-
-            if channel == UpdateChannel.DEVELOP:
+        if channel == UpdateChannel.DEVELOP:
+            target_release = None
+            for release in releases:
+                if release.get("draft", False):
+                    continue
                 if release.get("tag_name") != "latest":
                     continue
-
-            assets = release.get("assets", [])
-            for asset in assets:
-                if asset["name"] == platform_asset_name:
-                    target_release = ReleaseInfo(
-                        asset_id=asset["id"],
-                        tag_name=release["tag_name"],
-                        version=release["tag_name"].lstrip("v"),
-                        name=release.get("name", release["tag_name"]),
-                        prerelease=release.get("prerelease", False),
-                        html_url=release["html_url"],
-                        download_url=asset["browser_download_url"],
-                        asset_name=asset["name"],
-                        asset_size=asset["size"],
-                        release_notes=release.get("body", ""),
-                    )
+                for asset in release.get("assets", []):
+                    if asset["name"] == platform_asset_name:
+                        target_release = _make_release_info(release, asset)
+                        break
+                if target_release:
                     break
 
-            if target_release:
-                break
+            if not target_release:
+                return UpdateStatus(
+                    update_available=False,
+                    current_version=current_version,
+                    current_channel=current_channel,
+                    latest_release=None,
+                )
 
-        if not target_release:
+            last_installed_id = get_last_installed_asset_id()
+            update_available = (
+                last_installed_id is None
+                or target_release.asset_id != last_installed_id
+            )
+            return UpdateStatus(
+                update_available=update_available,
+                current_version=current_version,
+                current_channel=current_channel,
+                latest_release=target_release,
+                releases_since_current=[target_release] if update_available else [],
+            )
+
+        # STABLE: collect every release newer than the current version so the
+        # dialog can show a full changelog spanning multiple skipped versions.
+        current_tuple = parse_version(current_version)
+        newer_releases: list[ReleaseInfo] = []
+        for release in releases:
+            if release.get("draft", False) or release.get("prerelease", False):
+                continue
+            for asset in release.get("assets", []):
+                if asset["name"] == platform_asset_name:
+                    if parse_version(release["tag_name"]) > current_tuple:
+                        newer_releases.append(_make_release_info(release, asset))
+                    break  # found the platform asset for this release
+
+        if not newer_releases:
             return UpdateStatus(
                 update_available=False,
                 current_version=current_version,
@@ -275,24 +307,12 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
                 latest_release=None,
             )
 
-        if channel == UpdateChannel.DEVELOP:
-            # For develop channel, compare asset IDs to detect new builds
-            # (release ID stays the same when "latest" is updated, but asset IDs change)
-            last_installed_id = get_last_installed_asset_id()
-            update_available = (
-                last_installed_id is None
-                or target_release.asset_id != last_installed_id
-            )
-        else:
-            current_tuple = parse_version(current_version)
-            latest_tuple = parse_version(target_release.tag_name)
-            update_available = latest_tuple > current_tuple
-
         return UpdateStatus(
-            update_available=update_available,
+            update_available=True,
             current_version=current_version,
             current_channel=current_channel,
-            latest_release=target_release,
+            latest_release=newer_releases[0],
+            releases_since_current=newer_releases,
         )
 
     except requests.RequestException as e:
