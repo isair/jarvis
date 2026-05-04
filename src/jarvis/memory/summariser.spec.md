@@ -48,7 +48,10 @@ All three rules apply in any language, not only English. The prompt states this 
 **Why a second layer:** field measurement on the smallest supported model (gemma4:e2b) showed roughly 40% of post-rule writes still contained banned phrasing despite rule 6 of the prompt. The prompt reduces the leak; it does not eliminate it on small models. A deterministic pass catches what slips through.
 
 **What it does:**
-- Splits the summary into sentences and drops any sentence whose content matches `DEFLECTION_PATTERNS` — narrow regexes covering "the assistant `<failure verb>`" shapes (`was unable`, `could not`, `did not have`, `offered to search/help/look`, `suggested checking`, `recommended consulting`, `lacks/cannot access`, `clarified that … could not`, `explained it could not`).
+- Splits the summary into sentences and drops any sentence whose content matches `DEFLECTION_PATTERNS` — narrow regexes covering "the assistant `<failure verb>`" shapes:
+  - Direct: `was unable`, `could not`/`couldn't`, `did not have`/`didn't have`, `does not have`/`doesn't have`, `did not know`/`didn't know`, `does not know`/`doesn't know`, `was/is not able`/`wasn't/isn't able`, `failed to`, `offered to search/help/look`, `suggested checking`, `recommended consulting`.
+  - Capability denial: `lacks/cannot/can't access`, `lacks the ability/information/details`.
+  - Reporting verb + `it` + denial: `clarified/explained/stated/indicated [that] it could not …` (canonical), plus `said/noted/acknowledged/admitted/apologised/reported [that] it <denial>`. The required `it` between the reporting verb and the denial prevents stripping sentences whose subject is the user or a third-party entity (e.g. "The assistant said the film is from 2020" stays).
 - Drops the **whole sentence** containing a match, never just the phrase. Half-sentences corrupt the record worse than the original leak.
 - Returns the input unchanged if scrubbing would empty the summary outright. An empty diary entry is worse than a slightly-leaky one — downstream retrieval treats absence as "no record" and the user loses the topic of the conversation entirely. The "would have removed" count is still surfaced so callers can log the near-miss.
 - Idempotent — running twice produces the same output, so the bulk sweep is safe to re-run.

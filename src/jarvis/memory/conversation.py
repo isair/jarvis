@@ -52,6 +52,36 @@ DEFLECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"indicated[^.]{0,40}(could not|did not have))",
         # Capability-denial framing: "the assistant lacks X", "cannot access Y".
         r"the assistant\s+(lacks|cannot|can'?t)\s+(access|the ability|information|specific information|details)",
+        # Direct contraction/variant shapes that the canonical pattern misses:
+        # "the assistant couldn't ...", "didn't have ...", "doesn't know ...",
+        # "failed to ...", "was not able ...". Bare "didn't"/"doesn't" alone is
+        # too broad (could record a fact about a third party), so we anchor to
+        # the same denial-tail nouns the canonical pattern uses (have, know).
+        r"the assistant\s+("
+        r"couldn'?t|"
+        r"didn'?t (have|know)|doesn'?t (have|know)|"
+        r"did not know|does not know|"
+        r"was not able|is not able|wasn'?t able|isn'?t able|"
+        r"failed to"
+        r")\b",
+        # Reporting-verb framing: "the assistant said/noted/acknowledged/admitted
+        # [that] it <denial>". The canonical pattern only covers
+        # "clarified/explained/stated/indicated"; small models routinely use
+        # "said" instead (the user-reported leak). The required "it" between
+        # the reporting verb and the denial keeps this from stripping
+        # sentences whose subject is the user or a third-party entity (e.g.
+        # "The assistant said the film is from 2020").
+        r"the assistant\s+("
+        r"said|noted|acknowledged|admitted|apologised|apologized|reported"
+        r")\s+(?:that\s+)?it\s+("
+        r"could not|couldn'?t|cannot|can'?t|"
+        r"did not (have|know)|didn'?t (have|know)|"
+        r"does not (have|know)|doesn'?t (have|know)|"
+        r"was unable|is unable|was not able|is not able|"
+        r"has no\s+(information|details|access|knowledge|ability|data|capabilit)|"
+        r"had no\s+(information|details|access|knowledge|ability|data|capabilit)|"
+        r"lacks"
+        r")",
     )
 )
 
