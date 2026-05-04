@@ -430,7 +430,14 @@ Examples:
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 200,
-                        "num_ctx": 4096,
+                        # Headroom for: ~2k-token system prompt + up to 2 minutes
+                        # of chatty multi-speaker transcript (default
+                        # transcript_buffer_duration_sec=120 in listener.py).
+                        # 4096 was cutting close to 90% utilisation in the
+                        # worst case after the prompt grew in PR #362, which
+                        # risks silent ollama truncation of the system
+                        # prompt's tail.
+                        "num_ctx": 8192,
                     },
                 },
                 timeout=self.config.timeout_sec,
