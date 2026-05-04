@@ -55,10 +55,9 @@ class TestKeySerialisation:
         from pynput import keyboard as pk
         from src.jarvis.dictation.listener_proc import _serialise_key, _deserialise_key
 
-        original = pk.KeyCode.from_vk(65)  # 'A' on Windows VK
+        original = pk.KeyCode.from_vk(65)
         wire = _serialise_key(original)
         restored = _deserialise_key(wire)
-        # Round-trip should preserve vk equality
         assert restored.vk == original.vk
 
     def test_unknown_kind_deserialises_to_none(self):
@@ -68,11 +67,11 @@ class TestKeySerialisation:
 
 
 # ---------------------------------------------------------------------------
-# Wrapper lifecycle (mocked subprocess)
+# Test doubles for spawn / Pipe
 # ---------------------------------------------------------------------------
 
 class _FakeConn:
-    """Minimal stand-in for a one-way multiprocessing.Pipe end."""
+    """One-way Pipe end stand-in."""
 
     def __init__(self):
         self._inbox: list = []
@@ -89,8 +88,6 @@ class _FakeConn:
             self._eof = True
 
     def poll(self, timeout: float = 0.0) -> bool:
-        # Real multiprocessing.Pipe.poll returns True for a closed/EOF pipe
-        # so the next recv() raises EOFError immediately.
         deadline = time.time() + timeout
         while True:
             with self._lock:
@@ -114,10 +111,10 @@ class _FakeConn:
 
 
 class _FakeProc:
-    """Stand-in for a multiprocessing.Process with controllable liveness."""
+    """multiprocessing.Process stand-in with controllable liveness."""
 
     def __init__(self):
-        self._alive = True
+        self._alive = False
         self.terminate_called = False
         self.kill_called = False
 
@@ -128,7 +125,6 @@ class _FakeProc:
         return self._alive
 
     def die(self) -> None:
-        """Simulate the child process crashing."""
         self._alive = False
 
     def terminate(self) -> None:
@@ -143,42 +139,82 @@ class _FakeProc:
         return None
 
 
-def _install_fake_context(monkeypatch, conn: _FakeConn, proc: _FakeProc):
-    """Patch multiprocessing.get_context so the wrapper uses our fakes."""
+def _install_pluggable_fake_context(monkeypatch):
+    """Patch ``multiprocessing.get_context`` to hand out fresh fakes per spawn.
+
+    Returns a list that captures every (conn, proc) pair the wrapper allocates,
+    so tests can drive specific generations.
+    """
+    spawned: list[tuple[_FakeConn, _FakeProc]] = []
+
+    def make_pair():
+        conn, child_conn = _FakeConn(), _FakeConn()
+        proc = _FakeProc()
+        spawned.append((conn, proc))
+        return conn, child_conn, proc
+
     fake_ctx = MagicMock()
-    fake_ctx.Pipe.return_value = (conn, MagicMock())  # parent_conn, child_conn
-    fake_ctx.Process.return_value = proc
+
+    pending: list[tuple[_FakeConn, _FakeConn, _FakeProc]] = []
+
+    def pipe_side_effect(*_a, **_kw):
+        triple = make_pair()
+        pending.append(triple)
+        return triple[0], triple[1]
+
+    def process_side_effect(*_a, **_kw):
+        return pending.pop(0)[2]
+
+    fake_ctx.Pipe.side_effect = pipe_side_effect
+    fake_ctx.Process.side_effect = process_side_effect
 
     from src.jarvis.dictation import listener_proc
     monkeypatch.setattr(listener_proc.multiprocessing, "get_context", lambda *_a, **_kw: fake_ctx)
-    return fake_ctx
+    return spawned
 
+
+def _accelerate_supervisor(monkeypatch):
+    """Shrink retry caps and backoff so respawn behaviour is testable in <1 s."""
+    from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+    monkeypatch.setattr(SubprocessKeyboardListener, "_BACKOFF_SCHEDULE", (0.0,))
+    monkeypatch.setattr(SubprocessKeyboardListener, "_CLEAN_RUN_WINDOW", 30.0)
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle (mocked subprocess)
+# ---------------------------------------------------------------------------
 
 class TestSubprocessListenerLifecycle:
-    """The wrapper must spawn, relay, stop, and survive child crashes."""
-
     def test_start_spawns_child_process(self, monkeypatch):
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
 
-        conn, proc = _FakeConn(), _FakeProc()
-        ctx = _install_fake_context(monkeypatch, conn, proc)
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
         listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
         try:
             listener.start()
-            assert ctx.Process.called
-            # Child end of pipe must be passed to the subprocess function.
-            args, kwargs = ctx.Process.call_args
-            assert kwargs.get("daemon") is True
+            assert _wait_until(lambda: len(spawned) >= 1)
+            conn, proc = spawned[0]
+            assert proc.is_alive()
         finally:
             listener.stop()
 
-    def test_relays_press_events_to_callback(self, monkeypatch):
+    def test_relays_press_and_release_events(self, monkeypatch):
         from pynput import keyboard as pk
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener, _serialise_key
 
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
         seen: list = []
         listener = SubprocessKeyboardListener(
@@ -187,12 +223,13 @@ class TestSubprocessListenerLifecycle:
         )
         try:
             listener.start()
+            assert _wait_until(lambda: spawned and spawned[0][0] is not None)
+            conn, _proc = spawned[0]
+
             conn.send_to_parent({"event": "press", "key": _serialise_key(pk.Key.ctrl_l)})
             conn.send_to_parent({"event": "release", "key": _serialise_key(pk.KeyCode.from_char("d"))})
 
-            deadline = time.time() + 2.0
-            while time.time() < deadline and len(seen) < 2:
-                time.sleep(0.02)
+            assert _wait_until(lambda: len(seen) >= 2)
         finally:
             listener.stop()
 
@@ -203,8 +240,8 @@ class TestSubprocessListenerLifecycle:
         from pynput import keyboard as pk
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener, _serialise_key
 
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
         deliveries: list = []
 
@@ -212,119 +249,161 @@ class TestSubprocessListenerLifecycle:
             deliveries.append("boom")
             raise RuntimeError("callback exploded")
 
-        def ok(_key):
-            deliveries.append("ok")
-
-        listener = SubprocessKeyboardListener(on_press=boom, on_release=ok)
+        listener = SubprocessKeyboardListener(on_press=boom, on_release=lambda _k: deliveries.append("ok"))
         try:
             listener.start()
+            assert _wait_until(lambda: spawned and spawned[0][0] is not None)
+            conn, _proc = spawned[0]
             conn.send_to_parent({"event": "press", "key": _serialise_key(pk.Key.ctrl_l)})
             conn.send_to_parent({"event": "release", "key": _serialise_key(pk.Key.ctrl_l)})
 
-            deadline = time.time() + 2.0
-            while time.time() < deadline and len(deliveries) < 2:
-                time.sleep(0.02)
+            assert _wait_until(lambda: len(deliveries) >= 2)
         finally:
             listener.stop()
 
         assert deliveries == ["boom", "ok"]
 
-    def test_subprocess_death_stops_reader_without_exception(self, monkeypatch):
-        """If the child crashes (SIGILL), the parent must stay up."""
+    def test_error_event_does_not_trigger_respawn(self, monkeypatch):
+        """A child-side error payload is logged but the live child stays alive."""
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
 
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
         listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
         try:
             listener.start()
-            # Simulate the child crashing — no EOF on pipe, just process gone.
-            proc.die()
-            # Reader thread should exit on its own within a couple of poll cycles.
-            deadline = time.time() + 3.0
-            reader = listener._reader_thread
-            while time.time() < deadline and reader is not None and reader.is_alive():
-                time.sleep(0.05)
-            assert reader is None or not reader.is_alive(), (
-                "reader thread did not exit after subprocess died — "
-                "would leak forever and never report the crash"
-            )
-        finally:
-            listener.stop()
+            assert _wait_until(lambda: spawned and spawned[0][0] is not None)
+            conn, proc = spawned[0]
+            conn.send_to_parent({"event": "error", "message": "transient pynput hiccup"})
 
-    def test_pipe_eof_exits_reader(self, monkeypatch):
-        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
-
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
-
-        listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
-        try:
-            listener.start()
-            conn.signal_eof()
-            deadline = time.time() + 3.0
-            reader = listener._reader_thread
-            while time.time() < deadline and reader is not None and reader.is_alive():
-                time.sleep(0.05)
-            assert reader is None or not reader.is_alive()
+            time.sleep(0.1)
+            assert proc.is_alive()
+            assert len(spawned) == 1  # no respawn
         finally:
             listener.stop()
 
     def test_stop_terminates_subprocess(self, monkeypatch):
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
 
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
         listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
         listener.start()
+        assert _wait_until(lambda: spawned and spawned[0][1].is_alive())
         listener.stop()
 
+        _conn, proc = spawned[0]
         assert proc.terminate_called
+        assert listener._supervisor_thread is None
 
     def test_stop_is_idempotent(self, monkeypatch):
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
 
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
+        _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
         listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
         listener.start()
         listener.stop()
         listener.stop()  # Must not raise.
 
-    def test_error_event_logs_without_killing_reader(self, monkeypatch):
-        """An ``error`` payload from the child should be logged but must not
-        crash or stop the reader — the child may keep producing key events
-        after a transient warning."""
+
+# ---------------------------------------------------------------------------
+# Auto-respawn (the whole point of the supervisor)
+# ---------------------------------------------------------------------------
+
+class TestAutoRespawn:
+    def test_subprocess_death_triggers_respawn(self, monkeypatch):
+        """When the child dies, the supervisor must spawn a fresh child."""
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
 
-        conn, proc = _FakeConn(), _FakeProc()
-        _install_fake_context(monkeypatch, conn, proc)
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
 
-        on_press = MagicMock()
-        listener = SubprocessKeyboardListener(on_press=on_press, on_release=MagicMock())
+        listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
         try:
             listener.start()
-            conn.send_to_parent({"event": "error", "message": "transient pynput hiccup"})
-            # Reader thread should still be running and able to dispatch
-            # subsequent events.
-            time.sleep(0.1)
-            reader = listener._reader_thread
-            assert reader is not None and reader.is_alive()
+            assert _wait_until(lambda: spawned and spawned[0][1].is_alive())
+            spawned[0][1].die()  # simulate native crash
+
+            # Supervisor should respawn — wait for a second generation.
+            assert _wait_until(lambda: len(spawned) >= 2, timeout=3.0)
+            assert spawned[1][1].is_alive()
         finally:
             listener.stop()
 
-    def test_spawn_failure_leaves_wrapper_unstarted(self, monkeypatch):
-        """If the OS refuses to spawn, the wrapper must not raise and must
-        not leak the prepared pipe — the daemon should keep running and the
-        engine should be free to retry on next start."""
+    def test_gives_up_after_max_consecutive_failures(self, monkeypatch):
+        """If every spawned child dies immediately, the supervisor must stop
+        spawning after the cap so we don't burn CPU in a crash loop."""
+        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
+
+        listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
+        try:
+            listener.start()
+            # Kill each generation as it appears, never letting any run for the
+            # clean-window threshold.
+            seen = 0
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                if len(spawned) > seen:
+                    spawned[seen][1].die()
+                    seen += 1
+                if not (
+                    listener._supervisor_thread is not None
+                    and listener._supervisor_thread.is_alive()
+                ):
+                    break
+                time.sleep(0.02)
+        finally:
+            listener.stop()
+
+        # Cap is 3 consecutive failures, so we expect at most 3 spawn attempts
+        # before the supervisor gives up.
+        assert len(spawned) == SubprocessKeyboardListener._MAX_CONSECUTIVE_FAILURES, (
+            f"expected exactly {SubprocessKeyboardListener._MAX_CONSECUTIVE_FAILURES} "
+            f"spawn attempts before give-up, saw {len(spawned)}"
+        )
+
+    def test_clean_long_run_resets_failure_counter(self, monkeypatch):
+        """A spawn that ran for longer than ``_CLEAN_RUN_WINDOW`` is treated as
+        the start of a fresh failure series."""
+        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        monkeypatch.setattr(SubprocessKeyboardListener, "_BACKOFF_SCHEDULE", (0.0,))
+        # A very small clean-window so the test runs fast.
+        monkeypatch.setattr(SubprocessKeyboardListener, "_CLEAN_RUN_WINDOW", 0.05)
+
+        listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
+        try:
+            listener.start()
+            # Let the first child run past the clean window before killing it.
+            assert _wait_until(lambda: spawned and spawned[0][1].is_alive())
+            time.sleep(0.1)
+            spawned[0][1].die()
+
+            assert _wait_until(lambda: len(spawned) >= 2, timeout=2.0)
+            # Failure counter should have been reset by the clean run, so it is
+            # at 1 (this latest death), not 2.
+            assert listener._failure_count == 1
+        finally:
+            listener.stop()
+
+    def test_spawn_failure_counts_toward_give_up(self, monkeypatch):
+        """If ``proc.start()`` raises every time, give up after the cap."""
         from src.jarvis.dictation import listener_proc
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
 
-        class _FailingProc:
+        attempts = {"n": 0}
+
+        class _AlwaysFailingProc:
             def start(self):
+                attempts["n"] += 1
                 raise OSError("nope")
 
             def is_alive(self):
@@ -339,23 +418,69 @@ class TestSubprocessListenerLifecycle:
             def join(self, timeout=None):
                 pass
 
-        conn = _FakeConn()
         fake_ctx = MagicMock()
-        fake_ctx.Pipe.return_value = (conn, _FakeConn())
-        fake_ctx.Process.return_value = _FailingProc()
-        monkeypatch.setattr(listener_proc.multiprocessing, "get_context", lambda *_a, **_kw: fake_ctx)
+        fake_ctx.Pipe.side_effect = lambda *_a, **_kw: (_FakeConn(), _FakeConn())
+        fake_ctx.Process.side_effect = lambda *_a, **_kw: _AlwaysFailingProc()
+        monkeypatch.setattr(
+            listener_proc.multiprocessing, "get_context", lambda *_a, **_kw: fake_ctx
+        )
+        _accelerate_supervisor(monkeypatch)
 
         listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
-        listener.start()  # Must not raise.
+        try:
+            listener.start()
+            # Wait for supervisor to exit (give-up).
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                supervisor = listener._supervisor_thread
+                if supervisor is None or not supervisor.is_alive():
+                    break
+                time.sleep(0.02)
+        finally:
+            listener.stop()
 
-        assert listener._proc is None
-        assert listener._reader_thread is None
-        # Wrapper is in initial state — a future start() can retry.
-        listener.stop()  # Idempotent on an unstarted wrapper.
+        assert attempts["n"] == SubprocessKeyboardListener._MAX_CONSECUTIVE_FAILURES
 
+    def test_restart_after_give_up_resets_state(self, monkeypatch):
+        """After giving up, calling ``start()`` again must allow a fresh
+        attempt — the user has presumably fixed whatever caused the loop."""
+        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
+
+        listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
+        try:
+            # First session: kill every child until give-up.
+            listener.start()
+            seen = 0
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                if len(spawned) > seen:
+                    spawned[seen][1].die()
+                    seen += 1
+                supervisor = listener._supervisor_thread
+                if supervisor is None or not supervisor.is_alive():
+                    break
+                time.sleep(0.02)
+            assert len(spawned) == SubprocessKeyboardListener._MAX_CONSECUTIVE_FAILURES
+
+            # Second session: should attempt again from a clean state.
+            listener.start()
+            assert _wait_until(
+                lambda: len(spawned) > SubprocessKeyboardListener._MAX_CONSECUTIVE_FAILURES,
+                timeout=3.0,
+            )
+        finally:
+            listener.stop()
+
+
+# ---------------------------------------------------------------------------
+# Error-message truncation
+# ---------------------------------------------------------------------------
+
+class TestErrorMessageTruncation:
     def test_oversized_error_message_is_truncated(self):
-        """Error messages from the child are capped so a runaway traceback
-        can't flood the parent's debug log."""
         from src.jarvis.dictation.listener_proc import _MAX_ERROR_MESSAGE_LEN, _listener_main
 
         sent: list = []
@@ -364,7 +489,6 @@ class TestSubprocessListenerLifecycle:
             def send(self, msg):
                 sent.append(msg)
 
-        # Force pynput import to fail with a giant message.
         import builtins
         original_import = builtins.__import__
 
@@ -379,8 +503,7 @@ class TestSubprocessListenerLifecycle:
         finally:
             builtins.__import__ = original_import
 
-        assert sent, "child should have sent an error payload"
-        assert sent[0]["event"] == "error"
+        assert sent and sent[0]["event"] == "error"
         assert len(sent[0]["message"]) <= _MAX_ERROR_MESSAGE_LEN + len("...[truncated]")
 
 
@@ -390,7 +513,6 @@ class TestSubprocessListenerLifecycle:
 
 def _crash_target(conn):
     """Module-level target so multiprocessing.spawn can pickle it."""
-    # Simulate a native abort() — same blast radius as a SIGILL from C code.
     os._exit(134)
 
 
@@ -401,10 +523,13 @@ def _crash_target(conn):
 class TestRealSubprocessCrashIsolation:
     """Verify that a child crash actually does not take down the parent."""
 
-    def test_child_crash_does_not_kill_parent(self):
-        """Spawn a child that immediately exits abnormally; parent's reader
-        thread must exit cleanly and the parent process must keep running."""
+    def test_child_crash_triggers_respawn_then_give_up(self, monkeypatch):
+        """A child that crashes immediately should be respawned, then the
+        supervisor should give up cleanly without ever taking the parent down."""
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+
+        # Tighter cap and zero backoff so the test finishes promptly.
+        monkeypatch.setattr(SubprocessKeyboardListener, "_BACKOFF_SCHEDULE", (0.0,))
 
         with patch(
             "src.jarvis.dictation.listener_proc._listener_main",
@@ -416,15 +541,15 @@ class TestRealSubprocessCrashIsolation:
             )
             try:
                 listener.start()
-                # Reader thread should detect the dead process and exit.
-                deadline = time.time() + 8.0
-                reader = listener._reader_thread
-                while time.time() < deadline and reader is not None and reader.is_alive():
+                deadline = time.time() + 30.0
+                while time.time() < deadline:
+                    supervisor = listener._supervisor_thread
+                    if supervisor is None or not supervisor.is_alive():
+                        break
                     time.sleep(0.1)
-                assert reader is None or not reader.is_alive(), (
-                    "reader thread did not exit after child died"
+                supervisor = listener._supervisor_thread
+                assert supervisor is None or not supervisor.is_alive(), (
+                    "supervisor never gave up after repeated child crashes"
                 )
             finally:
                 listener.stop()
-
-        # Parent process is obviously still alive — that's the whole point.

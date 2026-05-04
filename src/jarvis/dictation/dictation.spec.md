@@ -93,11 +93,17 @@ events to the parent over a `Pipe`, where they are reconstructed into pynput
 If the child crashes:
 
 - The parent's reader thread detects the dead process via `proc.is_alive()`
-  and exits cleanly.
-- The daemon stays up. Voice listening, dictation history, and every other
-  feature keep working.
-- Dictation goes offline silently until the engine is restarted (no
-  auto-respawn yet — keeps blast radius small while we collect telemetry).
+  and exits.
+- A supervisor thread in the parent transparently respawns the child after
+  a short backoff (1 s, 2 s, 5 s). Up to `_MAX_CONSECUTIVE_FAILURES`
+  consecutive crashes are tolerated before the supervisor gives up — past
+  that point we'd just be burning CPU spawning into a deterministic crash
+  loop.
+- A spawn that ran longer than `_CLEAN_RUN_WINDOW` (60 s) resets the failure
+  counter, so an occasional hiccup over a long session doesn't accumulate.
+- When the supervisor gives up it prints a one-line warning to the console;
+  the daemon stays up and dictation can be re-enabled by restarting the
+  engine (calling `start()` again resets the counter for a fresh session).
 
 Side effect: the Windows low-level keyboard hook timeout (Windows silently
 removes hooks whose callbacks take more than ~5 s) now applies inside the

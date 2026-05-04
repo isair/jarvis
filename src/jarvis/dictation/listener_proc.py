@@ -4,8 +4,8 @@ The pynput Listener owns native event taps (CGEventTap on macOS, low-level
 Win32 hooks on Windows) that have crashed with SIGILL/SIGABRT in C-level
 code. Those signals can't be caught from Python, so a single bad event tears
 down the whole daemon. Running the Listener in a separate process means a
-crash kills the child only; the daemon stays up and dictation goes offline
-silently until the engine is restarted.
+crash kills the child only; a supervisor thread in the parent then respawns
+the child up to a small bounded number of times before giving up.
 
 The wrapper exposes a minimal ``Listener``-like API (``start`` / ``stop``)
 so the engine can treat it as a drop-in replacement.
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import multiprocessing
 import threading
+import time
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
@@ -144,11 +145,21 @@ class SubprocessKeyboardListener:
 
     Spawns a child process that owns the real listener and relays key events
     over a pipe. A reader thread in the parent calls the supplied callbacks.
-    Crashes in the child do not propagate — the reader exits and dictation
-    silently goes offline until the engine is restarted.
+    A supervisor thread watches the child and transparently respawns it after
+    a crash, up to ``_MAX_CONSECUTIVE_FAILURES`` failures within
+    ``_CLEAN_RUN_WINDOW`` seconds — after that it gives up to avoid burning
+    CPU spawning into a deterministic crash loop.
     """
 
-    _POLL_INTERVAL = 0.5  # seconds between liveness checks
+    _POLL_INTERVAL = 0.5  # seconds — max wait per liveness check
+    _TERMINATE_JOIN_TIMEOUT = 1.0
+    _KILL_JOIN_TIMEOUT = 0.5
+    _READER_JOIN_TIMEOUT = 1.0
+    _SUPERVISOR_JOIN_TIMEOUT = 2.0
+
+    _MAX_CONSECUTIVE_FAILURES = 3
+    _CLEAN_RUN_WINDOW = 60.0  # seconds — a run longer than this resets the counter
+    _BACKOFF_SCHEDULE = (1.0, 2.0, 5.0)  # seconds, indexed by failure count
 
     def __init__(
         self,
@@ -160,12 +171,125 @@ class SubprocessKeyboardListener:
         self._proc: Optional[Any] = None
         self._conn: Optional[Any] = None
         self._reader_thread: Optional[threading.Thread] = None
+        self._supervisor_thread: Optional[threading.Thread] = None
         self._stop_flag = threading.Event()
+        self._failure_count = 0
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def start(self) -> None:
-        if self._proc is not None:
+        if self._supervisor_thread is not None and self._supervisor_thread.is_alive():
             return
 
+        # Allow restart after a previous give-up.
+        self._stop_flag.clear()
+        self._failure_count = 0
+
+        self._supervisor_thread = threading.Thread(
+            target=self._supervise,
+            daemon=True,
+            name="dictation-listener-supervisor",
+        )
+        try:
+            self._supervisor_thread.start()
+        except Exception as exc:
+            debug_log(f"failed to start dictation listener supervisor: {exc}", "dictation")
+            self._supervisor_thread = None
+
+    def stop(self) -> None:
+        self._stop_flag.set()
+        self._teardown_child()
+
+        supervisor = self._supervisor_thread
+        if (
+            supervisor is not None
+            and supervisor.is_alive()
+            and supervisor is not threading.current_thread()
+        ):
+            supervisor.join(timeout=self._SUPERVISOR_JOIN_TIMEOUT)
+        self._supervisor_thread = None
+
+    # ------------------------------------------------------------------
+    # Supervisor — owns the spawn / respawn lifecycle
+    # ------------------------------------------------------------------
+
+    def _supervise(self) -> None:
+        """Spawn the child, wait for the reader to exit, decide whether to retry."""
+        while not self._stop_flag.is_set():
+            spawned_at = time.time()
+            if not self._spawn_child():
+                if not self._record_failure_and_should_retry():
+                    return
+                self._sleep_with_stop(self._current_backoff())
+                continue
+
+            reader = self._reader_thread
+            if reader is None:
+                # Spawn succeeded but reader didn't take — treat as failure.
+                self._teardown_child()
+                if not self._record_failure_and_should_retry():
+                    return
+                self._sleep_with_stop(self._current_backoff())
+                continue
+
+            reader.join()  # blocks until child dies, pipe closes, or stop()
+
+            if self._stop_flag.is_set():
+                return
+
+            self._teardown_child()  # clean up zombie state before deciding
+
+            ran_for = time.time() - spawned_at
+            if ran_for >= self._CLEAN_RUN_WINDOW:
+                # The previous spawn ran cleanly for long enough that we treat
+                # this as a fresh failure series.
+                self._failure_count = 0
+
+            if not self._record_failure_and_should_retry():
+                return
+
+            debug_log(
+                f"dictation listener subprocess died after {ran_for:.1f}s — "
+                f"respawning (attempt {self._failure_count + 1}/{self._MAX_CONSECUTIVE_FAILURES})",
+                "dictation",
+            )
+            self._sleep_with_stop(self._current_backoff())
+
+    def _record_failure_and_should_retry(self) -> bool:
+        """Bump the failure counter; return False once the cap is reached."""
+        self._failure_count += 1
+        if self._failure_count >= self._MAX_CONSECUTIVE_FAILURES:
+            print(
+                "  ⚠️  Dictation listener crashed repeatedly — giving up. "
+                "Restart Jarvis to retry.",
+                flush=True,
+            )
+            debug_log(
+                f"dictation listener gave up after {self._failure_count} consecutive failures",
+                "dictation",
+            )
+            return False
+        return True
+
+    def _current_backoff(self) -> float:
+        idx = min(self._failure_count - 1, len(self._BACKOFF_SCHEDULE) - 1)
+        idx = max(idx, 0)
+        return self._BACKOFF_SCHEDULE[idx]
+
+    def _sleep_with_stop(self, seconds: float) -> None:
+        """Sleep that returns early when stop() is signalled."""
+        if seconds <= 0:
+            return
+        self._stop_flag.wait(timeout=seconds)
+
+    # ------------------------------------------------------------------
+    # Spawn / teardown a single child instance
+    # ------------------------------------------------------------------
+
+    def _spawn_child(self) -> bool:
+        """Spawn one child + reader. Returns True on success."""
         ctx = multiprocessing.get_context("spawn")
         parent_conn, child_conn = ctx.Pipe(duplex=False)
         proc = ctx.Process(
@@ -174,20 +298,16 @@ class SubprocessKeyboardListener:
             daemon=True,
         )
 
-        # The spawn re-execs the bundled exe in frozen builds; on a starved
-        # system that can fail. Treat any failure as "dictation offline" and
-        # leave the wrapper in its initial state so the caller can retry.
         try:
             proc.start()
         except Exception as exc:
             debug_log(f"failed to spawn dictation listener: {exc}", "dictation")
             self._safe_close(parent_conn)
             self._safe_close(child_conn)
-            return
+            return False
 
         self._conn = parent_conn
         self._proc = proc
-
         # Only the child writes; close the child end in the parent so an EOF
         # is delivered if the child exits without sending anything else.
         self._safe_close(child_conn)
@@ -200,33 +320,15 @@ class SubprocessKeyboardListener:
             )
             self._reader_thread.start()
         except Exception as exc:
-            # Out-of-resources for thread creation — abandon the child rather
-            # than leak it.
             debug_log(f"failed to start dictation listener reader: {exc}", "dictation")
             self._reader_thread = None
-            self.stop()
-            return
+            return False
 
         debug_log("dictation listener subprocess started", "dictation")
+        return True
 
-    @staticmethod
-    def _safe_close(conn: Any) -> None:
-        if conn is None:
-            return
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    # Total worst-case teardown is ~2.5 s; daemon=True backstops anything
-    # the OS still has alive after that.
-    _TERMINATE_JOIN_TIMEOUT = 1.0
-    _KILL_JOIN_TIMEOUT = 0.5
-    _READER_JOIN_TIMEOUT = 1.0
-
-    def stop(self) -> None:
-        self._stop_flag.set()
-
+    def _teardown_child(self) -> None:
+        """Tear down whatever child + reader are currently alive."""
         proc = self._proc
         if proc is not None:
             try:
@@ -244,12 +346,25 @@ class SubprocessKeyboardListener:
         self._conn = None
 
         reader = self._reader_thread
-        if reader is not None and reader.is_alive() and reader is not threading.current_thread():
+        if (
+            reader is not None
+            and reader.is_alive()
+            and reader is not threading.current_thread()
+        ):
             reader.join(timeout=self._READER_JOIN_TIMEOUT)
         self._reader_thread = None
 
+    @staticmethod
+    def _safe_close(conn: Any) -> None:
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
-    # Internal
+    # Reader loop — one per child instance
     # ------------------------------------------------------------------
 
     def _read_loop(self) -> None:
@@ -269,7 +384,7 @@ class SubprocessKeyboardListener:
                 if proc is not None and not proc.is_alive():
                     debug_log(
                         "dictation listener subprocess exited unexpectedly "
-                        "(pynput crashed?) — dictation disabled until restart",
+                        "(pynput crashed?) — supervisor will respawn",
                         "dictation",
                     )
                     return
