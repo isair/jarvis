@@ -2,22 +2,26 @@
 
 Field trace (2026-05-03, gemma4:e2b):
   Turn 1 user: "how's the weather tomorrow Jarvis?" → no location set →
-    assistant invokes ``getWeather``, gets "no location set", replies asking
-    for a location.
+    assistant invokes ``getWeather``, tool returns ``success=False``
+    ("I couldn't auto-detect your location, please tell me a city"),
+    assistant relays the request.
   Turn 2 user: "I'm in London" → small-model router picks ``webSearch``
     instead of ``getWeather``, planner falls back to a web search for
-    "weather in london tomorrow", DDG fails, Wikipedia matches the 2014 film
-    "Edge of Tomorrow", and the assistant parrots the film summary as the
-    weather answer.
+    "weather in london tomorrow", DDG fails, Wikipedia matches the 2014
+    film "Edge of Tomorrow", and the assistant parrots the film summary
+    as the weather answer.
 
-Fix: when the previous assistant turn invoked a tool and the current user
-query is a short follow-up (≤ ~80 chars), union the previous turn's tool
-names back into the allow-list even if the small router missed them. This
-lets the chat model (or planner direct-exec) continue the original tool
-chain with the new info the user just supplied.
+Fix: when the previous assistant turn invoked a tool that reported
+``success=False`` on its ``ToolExecutionResult``, union the previous
+turn's tool name into the allow-list. The ``tool_failed`` flag stamped
+onto each recorded tool result is the truth source. Gating on failure
+(rather than recency or query length) means a successful chain followed
+by a genuine new short ask ("play some music") correctly does NOT carry
+over the prior tool.
 
-The carry-over is an engine-side per-turn overlay: the router cache stores
-only the raw router output, so future identical queries are unaffected.
+The carry-over is an engine-side per-turn overlay: the router cache
+stores only the raw router output, so future identical queries are
+unaffected.
 """
 
 from unittest.mock import Mock, patch
@@ -73,6 +77,37 @@ def _tool_names_from_chat_call(call) -> set[str]:
     return names
 
 
+def _failed_tool_turn(tool_name: str, tool_call_id: str = "c1") -> list[dict]:
+    """Plant a previous-turn tool turn where the tool was invoked and
+    reported failure. Mirrors the message shape the engine records for a
+    native tool call whose ``ToolExecutionResult.success`` was False.
+    """
+    return [
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": tool_call_id, "type": "function",
+            "function": {"name": tool_name, "arguments": {}},
+        }]},
+        {"role": "tool", "tool_call_id": tool_call_id,
+         "tool_name": tool_name,
+         "content": "I couldn't auto-detect your location.",
+         "tool_failed": True},
+    ]
+
+
+def _succeeded_tool_turn(tool_name: str, tool_call_id: str = "c1") -> list[dict]:
+    """Plant a previous-turn tool turn where the tool succeeded."""
+    return [
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": tool_call_id, "type": "function",
+            "function": {"name": tool_name, "arguments": {"location": "London"}},
+        }]},
+        {"role": "tool", "tool_call_id": tool_call_id,
+         "tool_name": tool_name,
+         "content": "London: 15°C and partly cloudy.",
+         "tool_failed": False},
+    ]
+
+
 @pytest.mark.unit
 @patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
 @patch("src.jarvis.memory.graph_ops.build_warm_profile",
@@ -82,16 +117,16 @@ def _tool_names_from_chat_call(call) -> set[str]:
 @patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
 @patch("src.jarvis.reply.engine.extract_text_from_response")
 @patch("src.jarvis.reply.engine.chat_with_messages")
-def test_short_followup_carries_over_previous_turn_tool(
+def test_followup_carries_over_failed_previous_tool(
     mock_chat, mock_extract, _mock_extract_mem, _mock_plan,
     _mock_graph, _mock_warm, _mock_fmt,
 ):
-    """Previous turn invoked ``getWeather``; this turn's router only picked
-    ``webSearch``. The engine must union ``getWeather`` back in so the
-    chat model can re-call it with the location the user just supplied.
+    """Previous turn invoked ``getWeather`` and the tool reported failure;
+    this turn's router only picked ``webSearch``. The engine must union
+    ``getWeather`` back in so the chat model can re-call it with the
+    location the user just supplied.
     """
     mock_chat.side_effect = [
-        # Turn 2 only — single text reply.
         {"message": {"content": "Weather in London is 15°C."}},
     ]
     mock_extract.side_effect = ["Weather in London is 15°C."]
@@ -99,18 +134,8 @@ def test_short_followup_carries_over_previous_turn_tool(
     db = Mock()
     cfg = _mock_cfg()
     dm = DialogueMemory()
-    # Plant the previous turn's footprint: user asked for the weather, the
-    # assistant invoked getWeather, the tool reported no location, the
-    # assistant asked for one.
     dm.add_message("user", "how's the weather tomorrow Jarvis")
-    dm.record_tool_turn([
-        {"role": "assistant", "content": "", "tool_calls": [{
-            "id": "c1", "type": "function",
-            "function": {"name": "getWeather", "arguments": {}},
-        }]},
-        {"role": "tool", "tool_call_id": "c1",
-         "content": "No location is configured."},
-    ])
+    dm.record_tool_turn(_failed_tool_turn("getWeather"))
     dm.add_message("assistant", "I do not have a location set.")
 
     with patch(
@@ -120,14 +145,12 @@ def test_short_followup_carries_over_previous_turn_tool(
         run_reply_engine(db=db, cfg=cfg, tts=None,
                          text="I'm in London", dialogue_memory=dm)
 
-    # The chat model on turn 2 must see BOTH webSearch and getWeather.
-    turn2_call = mock_chat.call_args_list[-1]
-    tool_names = _tool_names_from_chat_call(turn2_call)
+    tool_names = _tool_names_from_chat_call(mock_chat.call_args_list[-1])
     assert "webSearch" in tool_names, (
         f"router pick must remain visible; saw {sorted(tool_names)}"
     )
     assert "getWeather" in tool_names, (
-        "previous-turn tool must be carried over for short follow-ups; "
+        "previous-turn failed tool must be carried over; "
         f"saw {sorted(tool_names)}"
     )
 
@@ -141,48 +164,39 @@ def test_short_followup_carries_over_previous_turn_tool(
 @patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
 @patch("src.jarvis.reply.engine.extract_text_from_response")
 @patch("src.jarvis.reply.engine.chat_with_messages")
-def test_long_followup_does_not_trigger_carryover(
+def test_successful_previous_tool_does_not_trigger_carryover(
     mock_chat, mock_extract, _mock_extract_mem, _mock_plan,
     _mock_graph, _mock_warm, _mock_fmt,
 ):
-    """A long follow-up means the user has likely changed topics on purpose.
-    Carry-over must NOT fire — the router pick is authoritative.
+    """A successful prior tool call means the chain completed. A genuine
+    new short ask ("log my breakfast") must NOT inherit the prior tool —
+    that would noisily widen the allow-list for unrelated turns and
+    risks small models replaying the previous tool. The router pick
+    stands on its own.
     """
     mock_chat.side_effect = [
-        {"message": {"content": "Sure thing."}},
+        {"message": {"content": "Logged."}},
     ]
-    mock_extract.side_effect = ["Sure thing."]
+    mock_extract.side_effect = ["Logged."]
 
     db = Mock()
     cfg = _mock_cfg()
     dm = DialogueMemory()
-    dm.add_message("user", "how's the weather tomorrow Jarvis")
-    dm.record_tool_turn([
-        {"role": "assistant", "content": "", "tool_calls": [{
-            "id": "c1", "type": "function",
-            "function": {"name": "getWeather", "arguments": {}},
-        }]},
-        {"role": "tool", "tool_call_id": "c1", "content": "No location."},
-    ])
-    dm.add_message("assistant", "I do not have a location set.")
-
-    long_query = (
-        "Forget the weather — instead can you write me a haiku about "
-        "the futility of cataloguing chess endgames in long-form prose."
-    )
-    assert len(long_query) > 80
+    dm.add_message("user", "how's the weather in London")
+    dm.record_tool_turn(_succeeded_tool_turn("getWeather"))
+    dm.add_message("assistant", "It's 15°C and partly cloudy in London.")
 
     with patch(
         "src.jarvis.reply.engine.select_tools",
-        return_value=["webSearch"],
+        return_value=["logMeal"],
     ):
         run_reply_engine(db=db, cfg=cfg, tts=None,
-                         text=long_query, dialogue_memory=dm)
+                         text="log my breakfast", dialogue_memory=dm)
 
     tool_names = _tool_names_from_chat_call(mock_chat.call_args_list[-1])
-    assert "webSearch" in tool_names
+    assert "logMeal" in tool_names
     assert "getWeather" not in tool_names, (
-        "long-query follow-ups should not inherit prior-turn tools; "
+        "successful prior tool must not be carried over; "
         f"saw {sorted(tool_names)}"
     )
 
@@ -219,7 +233,6 @@ def test_cold_start_does_not_trigger_carryover(
 
     tool_names = _tool_names_from_chat_call(mock_chat.call_args_list[-1])
     assert "webSearch" in tool_names
-    # No prior tool turn → no carry-over candidates at all.
     assert "getWeather" not in tool_names
 
 
@@ -250,13 +263,7 @@ def test_carryover_does_not_pollute_router_cache(
     cfg = _mock_cfg()
     dm = DialogueMemory()
     dm.add_message("user", "how's the weather tomorrow Jarvis")
-    dm.record_tool_turn([
-        {"role": "assistant", "content": "", "tool_calls": [{
-            "id": "c1", "type": "function",
-            "function": {"name": "getWeather", "arguments": {}},
-        }]},
-        {"role": "tool", "tool_call_id": "c1", "content": "No location."},
-    ])
+    dm.record_tool_turn(_failed_tool_turn("getWeather"))
     dm.add_message("assistant", "I do not have a location set.")
 
     with patch(
@@ -266,8 +273,6 @@ def test_carryover_does_not_pollute_router_cache(
         run_reply_engine(db=db, cfg=cfg, tts=None,
                          text="I'm in London", dialogue_memory=dm)
 
-    # Find the router cache entry for "I'm in London" and confirm it stores
-    # only the raw router output (webSearch), not the carry-over union.
     cached_router_entries = [
         (k, v) for k, v in dm._hot_cache.items() if k.startswith("router:")
     ]
@@ -277,3 +282,55 @@ def test_carryover_does_not_pollute_router_cache(
             f"router cache for {key!r} should hold raw router output "
             f"['webSearch']; got {value!r}"
         )
+
+
+@pytest.mark.unit
+@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
+@patch("src.jarvis.memory.graph_ops.build_warm_profile",
+       return_value={"user": "", "directives": ""})
+@patch("src.jarvis.memory.graph.GraphMemoryStore")
+@patch("src.jarvis.reply.engine.plan_query", return_value=[])
+@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("src.jarvis.reply.engine.extract_text_from_response")
+@patch("src.jarvis.reply.engine.chat_with_messages")
+def test_long_followup_still_carries_over_when_previous_failed(
+    mock_chat, mock_extract, _mock_extract_mem, _mock_plan,
+    _mock_graph, _mock_warm, _mock_fmt,
+):
+    """Failure-gated carry-over does NOT depend on query length. A long
+    follow-up that supplies the missing arg ("Right, sorry — I'm in
+    Edinburgh, please try the lookup again for tomorrow") must still
+    carry over the failed tool. The earlier char-length heuristic was
+    dropped because it false-negatived this shape; the failure flag is
+    the right signal.
+    """
+    mock_chat.side_effect = [
+        {"message": {"content": "Edinburgh weather: 12°C."}},
+    ]
+    mock_extract.side_effect = ["Edinburgh weather: 12°C."]
+
+    db = Mock()
+    cfg = _mock_cfg()
+    dm = DialogueMemory()
+    dm.add_message("user", "how's the weather tomorrow Jarvis")
+    dm.record_tool_turn(_failed_tool_turn("getWeather"))
+    dm.add_message("assistant", "I do not have a location set.")
+
+    long_followup = (
+        "Right, sorry — I'm in Edinburgh, please try the lookup again for "
+        "tomorrow morning if you would."
+    )
+    assert len(long_followup) > 80
+
+    with patch(
+        "src.jarvis.reply.engine.select_tools",
+        return_value=["webSearch"],
+    ):
+        run_reply_engine(db=db, cfg=cfg, tts=None,
+                         text=long_followup, dialogue_memory=dm)
+
+    tool_names = _tool_names_from_chat_call(mock_chat.call_args_list[-1])
+    assert "getWeather" in tool_names, (
+        f"long follow-up to a failed tool must still carry over; "
+        f"saw {sorted(tool_names)}"
+    )

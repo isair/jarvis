@@ -51,9 +51,12 @@ def _make_get_weather_runner(capture: ToolCallCapture):
     """Mock for ``run_tool_with_retries`` that responds to getWeather based
     on the location argument.
 
-    Empty args → "no location is configured" (turn 1 shape).
-    ``location='London'`` (or any non-empty location) → the canned forecast.
-    Everything else falls through to "OK".
+    Empty args → ``success=False`` ("could not auto-detect location") to
+    match the real getWeather behaviour and stamp ``tool_failed=True`` on
+    the recorded tool turn (turn 1 shape).
+    ``location='London'`` (or any non-empty location) → ``success=True``
+    plus the canned forecast.
+    Everything else falls through to ``success=True`` "OK".
     """
     from jarvis.tools.types import ToolExecutionResult
 
@@ -63,8 +66,11 @@ def _make_get_weather_runner(capture: ToolCallCapture):
             location = ((tool_args or {}).get("location") or "").strip()
             if not location:
                 return ToolExecutionResult(
-                    success=True,
-                    reply_text="No location is configured for the user.",
+                    success=False,
+                    reply_text=(
+                        "I couldn't auto-detect your location. Please "
+                        "tell me which city to check the weather for."
+                    ),
                 )
             return ToolExecutionResult(
                 success=True,

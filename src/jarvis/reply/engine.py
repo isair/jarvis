@@ -647,35 +647,44 @@ def _live_time_location_string(cfg) -> str:
         return ""
 
 
-# Char-length cutoff for the tool carry-over guard. A short follow-up is
-# very likely the user supplying a missing argument or otherwise continuing
-# the prior tool's chain of reasoning ("I'm in London", "make it three",
-# "the second one"). Beyond this threshold the user has typically restated
-# enough intent for the router pick to stand on its own.
-_CARRYOVER_FOLLOWUP_MAX_CHARS = 80
+def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
+    """Return tool names whose previous-turn invocation reported failure.
 
+    The carry-over guard uses this to widen the allow-list so the chat
+    model can re-invoke a stalled tool with the info the user supplies on
+    the follow-up turn. Gating on failure (rather than recency or length)
+    captures exactly the case the guard exists for: a chain that did not
+    complete because the tool could not do its job. Successful chains do
+    not carry over — they are done, and a genuine new short ask should
+    not inherit the prior turn's tools.
 
-def _previous_turn_tool_names(recent_messages: list) -> list[str]:
-    """Return tool names invoked by the most recent assistant turn.
+    The walker reads the ``tool_failed`` flag stamped onto each recorded
+    tool result message:
 
-    Walks ``recent_messages`` from the end backwards collecting tool names
-    from both calling protocols, stopping at the first genuine user message
-    (i.e. a ``role=user`` entry that is NOT a text-tool result, which the
-    text-tool fallback stores as ``role=user`` with a ``tool_name`` field).
+    - Native tool calling: the assistant message carries the tool name
+      under ``tool_calls[*].function.name`` and the matching ``role=tool``
+      result message carries ``tool_call_id`` and ``tool_failed``. Names
+      are collected only when the matching result was failed.
+    - Text-tool fallback (small models): tool results are appended as
+      ``role=user`` messages tagged with both ``tool_name`` and
+      ``tool_failed``. Failed names are collected directly.
 
-    Native tool calling: ``assistant`` messages carry a ``tool_calls`` list
-    where each entry has ``function.name``.
+    Walks ``recent_messages`` from the end backwards, stopping at the
+    first genuine user message (a ``role=user`` entry without a
+    ``tool_name`` field). Returns deduplicated names in chronological
+    order.
 
-    Text-tool fallback (small models): tool results are appended as
-    ``user`` messages tagged with ``tool_name``.
-
-    Returns deduplicated names in chronological order. Tool messages
-    without an identifying name (``role=tool``) are skipped — they belong
-    to the previous turn but don't carry the tool name themselves.
+    The ``tool_failed`` flag is the truth source: a tool may return
+    ``ToolExecutionResult(success=False, reply_text='…please tell me a
+    location.')`` — engine renders it as a normal tool result for the
+    chat model to read, but the carry-over guard sees the failure flag
+    and re-widens the allow-list.
     """
     if not recent_messages:
         return []
-    found_reversed: list[str] = []
+    pending_call_id_to_name: dict[str, str] = {}
+    failed_call_ids: set[str] = set()
+    failed_names_text_tool: list[str] = []
     seen: set[str] = set()
     for msg in reversed(recent_messages):
         if not isinstance(msg, dict):
@@ -687,17 +696,36 @@ def _previous_turn_tool_names(recent_messages: list) -> list[str]:
             tcalls = msg.get("tool_calls") or []
             if isinstance(tcalls, list):
                 for tc in tcalls:
-                    fn = (tc or {}).get("function") if isinstance(tc, dict) else None
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function")
                     name = fn.get("name") if isinstance(fn, dict) else None
-                    if isinstance(name, str) and name and name not in seen:
-                        found_reversed.append(name)
-                        seen.add(name)
+                    cid = tc.get("id")
+                    if (
+                        isinstance(name, str) and name
+                        and isinstance(cid, str) and cid
+                    ):
+                        pending_call_id_to_name[cid] = name
+        elif role == "tool":
+            if msg.get("tool_failed"):
+                cid = msg.get("tool_call_id")
+                if isinstance(cid, str) and cid:
+                    failed_call_ids.add(cid)
         elif role == "user" and msg.get("tool_name"):
-            name = msg.get("tool_name")
-            if isinstance(name, str) and name and name not in seen:
-                found_reversed.append(name)
-                seen.add(name)
-    return list(reversed(found_reversed))
+            if msg.get("tool_failed"):
+                name = msg.get("tool_name")
+                if isinstance(name, str) and name and name not in seen:
+                    failed_names_text_tool.append(name)
+                    seen.add(name)
+    # Resolve native-mode failed call ids to names.
+    failed_names_native: list[str] = []
+    for cid, name in pending_call_id_to_name.items():
+        if cid in failed_call_ids and name not in seen:
+            failed_names_native.append(name)
+            seen.add(name)
+    # Text-tool walked end-to-front, native order follows assistant-message
+    # walk; both are reversed back to chronological for stable output.
+    return list(reversed(failed_names_text_tool)) + failed_names_native
 
 
 def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
@@ -899,23 +927,33 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
 
     # Tool carry-over guard: when the previous assistant turn invoked a
-    # tool and the current query is a short follow-up, union the previous
-    # tool names back into the allow-list. Compensates for small routers
-    # that misroute follow-ups (e.g. "I'm in London" routing to webSearch
-    # after a getWeather chain). Engine-side per-turn overlay: the cache
-    # above stores only the raw router output, so this never poisons the
-    # cache.
+    # tool that FAILED (success=False on the ToolExecutionResult), union
+    # the previous tool name back into the allow-list. Compensates for
+    # small routers that misroute follow-ups where the user is supplying
+    # the missing info — e.g. turn 1 "how's the weather tomorrow?" stalls
+    # because no location is configured, turn 2 "I'm in London" routes to
+    # webSearch instead of re-invoking getWeather. Gating on the prior
+    # tool's failure flag (rather than query length) means a successful
+    # chain followed by a genuine new short ask ("play some music")
+    # correctly does NOT carry over the prior tool. The flag distinguishes
+    # only success vs failure, not failure mode (argument issue vs network
+    # vs anything else); the user is most likely to follow up with a
+    # correction either way, and the chat model can still pick a different
+    # tool from the widened list.
+    #
+    # Engine-side per-turn overlay: the cache above stores only the raw
+    # router output, so this never poisons the cache.
     routed_tools = list(routed_tools or [])
     _carryover_names: list[str] = []
-    if recent_messages and len(redacted) <= _CARRYOVER_FOLLOWUP_MAX_CHARS:
-        for _name in _previous_turn_tool_names(recent_messages):
+    if recent_messages:
+        for _name in _previous_turn_failed_tool_names(recent_messages):
             if _name in _full_catalog_names and _name not in routed_tools:
                 _carryover_names.append(_name)
         if _carryover_names:
             routed_tools = routed_tools + _carryover_names
             debug_log(
                 f"tool carry-over: union {_carryover_names} from previous "
-                f"assistant turn into allow-list",
+                f"failed tool turn into allow-list",
                 "planning",
             )
 
@@ -1799,6 +1837,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     f"{_plan_text}{_plan_hint}"
                                 ),
                                 "tool_name": _name,
+                                "tool_failed": not _plan_result.success,
                             })
                             recent_tool_signatures.append(_cand_sig)
                             if len(recent_tool_signatures) > 5:
@@ -2204,6 +2243,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "role": "user",
                         "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
                         "tool_name": tool_name,  # kept for duplicate detection
+                        "tool_failed": not result.success,
                     })
                 else:
                     messages.append({
@@ -2211,6 +2251,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
                         "content": effective_result,
+                        "tool_failed": not result.success,
                     })
                 debug_log(f"    ✅ tool result appended ({len(effective_result)} chars)", "planning")
 
@@ -2239,13 +2280,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             else:
                 err = result.error_message or "(no result)"
                 if use_text_tools:
-                    messages.append({"role": "user", "content": f"[Tool error: {tool_name}] {err}"})
+                    messages.append({
+                        "role": "user",
+                        "content": f"[Tool error: {tool_name}] {err}",
+                        "tool_name": tool_name,
+                        "tool_failed": True,
+                    })
                 else:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
-                        "content": f"Error: {err}"
-                })
+                        "tool_name": tool_name,
+                        "content": f"Error: {err}",
+                        "tool_failed": True,
+                    })
                 debug_log(f"    ❌ tool error: {err}", "planning")
             # Loop continues to let the agent produce the next step/final reply
             continue

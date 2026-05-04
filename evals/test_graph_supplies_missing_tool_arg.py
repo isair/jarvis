@@ -41,8 +41,11 @@ def _make_runner(capture: ToolCallCapture):
             location = ((tool_args or {}).get("location") or "").strip()
             if not location:
                 return ToolExecutionResult(
-                    success=True,
-                    reply_text="No location is configured for the user.",
+                    success=False,
+                    reply_text=(
+                        "I couldn't auto-detect your location. Please "
+                        "tell me which city to check the weather for."
+                    ),
                 )
             return ToolExecutionResult(
                 success=True,
