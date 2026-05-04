@@ -93,7 +93,13 @@ def set_diary_update_callbacks(
 
 
 def get_pending_diary_chunks() -> list:
-    """Get pending conversation chunks from dialogue memory (for UI display)."""
+    """Get pending conversation chunks from dialogue memory (for UI display only).
+
+    Uses ``get_pending_chunks()`` which discards the atomic snapshot timestamp.
+    Do not use the result of this function to drive diary saves — the actual
+    save path goes through ``update_diary_from_dialogue_memory``, which calls
+    ``get_pending_chunks_with_snapshot()`` internally.
+    """
     global _global_dialogue_memory
     if _global_dialogue_memory is None:
         return []
@@ -199,6 +205,9 @@ def _check_and_update_diary(
         debug_log(f"diary update: should_update={should_update}, force={force}", "memory")
 
         if should_update:
+            # Display-only: get a snapshot of pending chunks to notify the UI.
+            # The atomic snapshot for the actual save is captured inside
+            # update_diary_from_dialogue_memory via get_pending_chunks_with_snapshot().
             pending_chunks = _global_dialogue_memory.get_pending_chunks()
             debug_log(f"diary update: found {len(pending_chunks)} pending chunks", "memory")
 
@@ -609,6 +618,7 @@ def main() -> None:
         if _global_dialogue_memory is None:
             print("⚠️ Dialogue memory is None - nothing to save", flush=True)
         else:
+            # Display-only count; actual save uses the atomic snapshot path.
             pending = _global_dialogue_memory.get_pending_chunks()
             print(f"💬 Found {len(pending)} pending conversation chunks", flush=True)
 

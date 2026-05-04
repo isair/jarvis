@@ -514,6 +514,52 @@ class TestDialogueMemoryEdgeCases:
         time.sleep(0.15)
         assert not dm.should_update_diary()
 
+    def test_get_pending_chunks_with_snapshot_empty(self):
+        """Snapshot on a fresh DialogueMemory returns empty chunks and zero timestamp."""
+        dm = DialogueMemory()
+        chunks, ts = dm.get_pending_chunks_with_snapshot()
+        assert chunks == []
+        assert ts == 0.0
+
+    def test_get_pending_chunks_with_snapshot_returns_unsaved_messages(self):
+        """Snapshot returns chunks for unsaved messages in role.title() format."""
+        dm = DialogueMemory()
+        dm.add_message("user", "Hello")
+        dm.add_message("assistant", "Hi there")
+        chunks, _ = dm.get_pending_chunks_with_snapshot()
+        assert len(chunks) == 2
+        assert chunks[0] == "User: Hello"
+        assert chunks[1] == "Assistant: Hi there"
+
+    def test_get_pending_chunks_with_snapshot_excludes_saved_messages(self):
+        """Snapshot excludes messages already marked as saved."""
+        dm = DialogueMemory()
+        dm.add_message("user", "Old message")
+        dm.clear_pending_updates()
+        dm.add_message("user", "New message")
+        chunks, _ = dm.get_pending_chunks_with_snapshot()
+        assert len(chunks) == 1
+        assert "New message" in chunks[0]
+
+    def test_get_pending_chunks_with_snapshot_monotonicity(self):
+        """Snapshot timestamp is strictly less than any message added afterwards."""
+        dm = DialogueMemory()
+        dm.add_message("user", "Before snapshot")
+        _, snapshot_ts = dm.get_pending_chunks_with_snapshot()
+        dm.add_message("user", "After snapshot")
+        # The message added after the snapshot must have a strictly greater timestamp.
+        after_ts = dm._messages[-1][0]
+        assert after_ts > snapshot_ts
+
+    def test_get_pending_chunks_with_snapshot_consistent_with_get_pending_chunks(self):
+        """get_pending_chunks() is consistent with get_pending_chunks_with_snapshot()."""
+        dm = DialogueMemory()
+        dm.add_message("user", "Hello")
+        dm.add_message("assistant", "World")
+        chunks_simple = dm.get_pending_chunks()
+        chunks_snapshot, _ = dm.get_pending_chunks_with_snapshot()
+        assert chunks_simple == chunks_snapshot
+
     @patch('src.jarvis.memory.conversation.update_daily_conversation_summary')
     def test_update_diary_preserves_new_messages_during_slow_llm(self, mock_summary):
         """Integration test: messages arriving during slow LLM call are preserved."""

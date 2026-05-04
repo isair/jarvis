@@ -924,16 +924,35 @@ class DialogueMemory:
     def get_pending_chunks(self) -> List[str]:
         """Get unsaved messages as formatted chunks for diary update.
 
-        Returns messages that haven't been saved to diary yet (timestamp > _last_saved_timestamp).
-        Thread-safe.
+        Returns messages that haven't been saved to diary yet
+        (timestamp > _last_saved_timestamp). Thread-safe.
+
+        For diary flush callers that need an atomic snapshot timestamp,
+        use ``get_pending_chunks_with_snapshot()`` instead — this method
+        discards the snapshot and is intended for display/notification
+        purposes only.
+        """
+        chunks, _ = self.get_pending_chunks_with_snapshot()
+        return chunks
+
+    def get_pending_chunks_with_snapshot(self) -> Tuple[List[str], float]:
+        """Return (pending_chunks, snapshot_timestamp) atomically.
+
+        The snapshot is ``_last_ts`` — the highest timestamp assigned by
+        ``_next_ts`` so far. Because ``_next_ts`` is strictly monotonic,
+        every ``add_message`` call after this lock is released will produce
+        a timestamp strictly greater than the snapshot. Callers should pass
+        the returned snapshot to ``mark_saved_up_to`` rather than computing
+        their own ``time.time()`` snapshot, which can collide with ``_next_ts``
+        on low-resolution clocks (Windows ~16ms tick).
         """
         with self._lock:
-            # Get messages that haven't been saved yet
             unsaved_messages = [
                 (ts, role, content) for ts, role, content in self._messages
                 if ts > self._last_saved_timestamp
             ]
-            return [f"{role.title()}: {content}" for _, role, content in unsaved_messages]
+            chunks = [f"{role.title()}: {content}" for _, role, content in unsaved_messages]
+            return chunks, self._last_ts
 
     def has_pending_chunks(self) -> bool:
         """Check if there are unsaved messages. Thread-safe."""
@@ -1556,13 +1575,19 @@ def update_diary_from_dialogue_memory(
         return None
 
     try:
-        # CRITICAL: Capture the current timestamp BEFORE getting chunks
-        # This ensures that any new messages arriving during LLM summarization
-        # (which can take 30-45 seconds) won't be incorrectly marked as saved.
-        snapshot_timestamp = time.time()
-
-        # Get pending chunks from dialogue memory
-        pending_chunks = dialogue_memory.get_pending_chunks()
+        # Atomically capture pending chunks AND the snapshot timestamp.
+        # Using ``_last_ts`` (via get_pending_chunks_with_snapshot) rather
+        # than a bare ``time.time()`` call guarantees that the snapshot is
+        # strictly before any future ``add_message`` call, regardless of
+        # OS clock granularity. On Windows ``time.time()`` has ~16ms
+        # resolution, so a separate ``time.time()`` snapshot and the
+        # ``_next_ts`` call inside a concurrent ``add_message`` can both
+        # land on the same tick, producing identical timestamps. The new
+        # message then fails the ``ts > snapshot`` test in
+        # ``get_pending_chunks`` and is wrongly treated as already saved.
+        pending_chunks, snapshot_timestamp = (
+            dialogue_memory.get_pending_chunks_with_snapshot()
+        )
         debug_log(f"diary update: got {len(pending_chunks)} pending chunks from dialogue_memory", "memory")
 
         if not pending_chunks:
