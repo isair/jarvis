@@ -162,6 +162,11 @@ ECHO / MARKER RULES:
 - "(CURRENT - JUDGE THIS)" = segment to judge now
 - Use earlier segments to resolve references only, not as query source
 
+TRANSCRIPT NOISE:
+- Segments come from Whisper ASR and may contain mishearings: wrong homophones (to/too/two), tense slips (answered/answer), substituted similar-sounding words, fused word boundaries ("ever ist" for "Everest"), or short nonsense fillers. None of this changes the rules above — it is a reminder that a segment looking malformed or off-topic is often noise to skip past, not a topic to anchor on.
+- When such a segment sits between a real question and an imperative wake-word call, treat it as noise and still re-issue the original question (see the Mount Everest + chatter + "answer that" example below).
+- Within the extracted query string, fix obvious ASR slips quietly (tense, fused words, homophones) so the query is answerable; do NOT rewrite content or change the user's intent.
+
 STOP DETECTION:
 - "stop", "quiet" (standalone or short command) -> directed=true, stop=true, query=""
 
