@@ -64,6 +64,76 @@ MIN_QUERY_CHARS = 4
 SEARCH_MEMORY_DIRECTIVE = "searchMemory"
 
 
+# URL hygiene applied to resolved tool arguments.
+#
+# Background (2026-05 field trace, chrome-devtools__navigate_page):
+# the planner LLM emitted `page='[youtube.com](http://youtube.com)'`
+# (markdown link syntax leaked from training priors) and even when the
+# resolver remapped the key to `url` the value retained the wrapper.
+# Puppeteer's Page.navigate then rejected with "Cannot navigate to
+# invalid URL". A separate failure mode is bare-domain values like
+# `youtube.com` with no scheme — Page.navigate rejects those too.
+#
+# Two-stage normalisation closes both holes in one place:
+#   1. Strip `[text](url)` markdown wrappers, keeping only the URL
+#      portion. Tools should never receive markdown — it's never a
+#      valid tool argument.
+#   2. Prepend `https://` to scheme-less bare domains so URL-shaped
+#      arguments always reach the tool as a fully-qualified URL.
+#
+# Scoped to keys whose name suggests a URL value to avoid stomping on
+# unrelated string args (a `query='youtube.com tutorials'` step must
+# stay literal). Keys are matched against a small allow-list of common
+# URL-ish parameter names; this is generic enough to cover every MCP
+# server we ship with and every tool we plan to add.
+_MARKDOWN_LINK_RE = re.compile(r"^\s*\[([^\]]*)\]\((https?://[^\s)]+)\)\s*$")
+_BARE_DOMAIN_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+"
+    r"(?:[/?#][^\s]*)?$",
+    re.IGNORECASE,
+)
+_URL_KEY_RE = re.compile(
+    r"^(?:url|uri|href|link|address|target_?url|page_?url|location)$",
+    re.IGNORECASE,
+)
+
+
+def _normalise_url_value(value: str) -> str:
+    """Coerce a string tool argument into a valid URL when it's URL-shaped.
+
+    See module-level commentary above ``_MARKDOWN_LINK_RE`` for the
+    motivating field trace. Returns the input unchanged if it doesn't
+    look like a URL (so unrelated string args pass through untouched).
+    """
+    if not isinstance(value, str):
+        return value
+    s = value.strip()
+    if not s:
+        return value
+    m = _MARKDOWN_LINK_RE.match(s)
+    if m:
+        s = m.group(2).strip()
+    if "://" not in s and _BARE_DOMAIN_RE.match(s):
+        s = "https://" + s
+    return s
+
+
+def _normalise_url_args(args: dict) -> dict:
+    """Apply :func:`_normalise_url_value` to every URL-keyed string arg.
+
+    Returns a new dict; non-URL keys and non-string values pass through
+    unchanged. Safe to call on any resolver output.
+    """
+    if not isinstance(args, dict) or not args:
+        return args
+    out = dict(args)
+    for k, v in args.items():
+        if isinstance(v, str) and _URL_KEY_RE.match(str(k)):
+            out[k] = _normalise_url_value(v)
+    return out
+
+
 def resolve_planner_model(cfg) -> str:
     """Pick the LLM for planning.
 
@@ -552,7 +622,7 @@ def _parse_plan_step_concrete(
             # The planner used key names that don't match the tool's
             # schema — surface to the LLM resolver which can remap them.
             return None
-    return name, args
+    return name, _normalise_url_args(args)
 
 
 def resolve_next_tool_call(
@@ -711,7 +781,7 @@ def resolve_next_tool_call(
                 "planning",
             )
         args = filtered
-    return name, args
+    return name, _normalise_url_args(args)
 
 
 __all__ = [

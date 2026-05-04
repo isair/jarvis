@@ -1795,9 +1795,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 f"{_name}({_args!r})",
                                 "planning",
                             )
+                            try:
+                                _plan_args_preview = json.dumps(
+                                    _args or {}, ensure_ascii=False
+                                )
+                            except Exception:
+                                _plan_args_preview = str(_args)
+                            if len(_plan_args_preview) > 160:
+                                _plan_args_preview = (
+                                    _plan_args_preview[:157] + "..."
+                                )
                             print(
                                 f"    🗺️ Plan step {_tool_results_so_far + 1} "
-                                f"→ direct-exec {_name}",
+                                f"→ direct-exec {_name} {_plan_args_preview}",
                                 flush=True,
                             )
                             _plan_call_id = (
@@ -1836,10 +1846,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     raw_tool_result=_plan_result.reply_text,
                                 )
                             else:
-                                _plan_text = (
-                                    f"Error: "
-                                    f"{_plan_result.error_message or '(no result)'}"
+                                _plan_err = (
+                                    _plan_result.error_message or "(no result)"
                                 )
+                                _plan_err_preview = (
+                                    _plan_err
+                                    if len(_plan_err) <= 240
+                                    else _plan_err[:237] + "..."
+                                )
+                                print(
+                                    f"    ❌ {_name} error: {_plan_err_preview}",
+                                    flush=True,
+                                )
+                                _plan_text = f"Error: {_plan_err}"
                             _plan_tool_results_after = _tool_results_so_far + 1
                             if action_plan:
                                 _plan_hint = progress_nudge(
@@ -2011,7 +2030,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
-            print(f"    🛠️ Agent → {tool_name}", flush=True)
+            try:
+                _args_preview = json.dumps(tool_args or {}, ensure_ascii=False)
+            except Exception:
+                _args_preview = str(tool_args)
+            if len(_args_preview) > 160:
+                _args_preview = _args_preview[:157] + "..."
+            print(f"    🛠️ Agent → {tool_name} {_args_preview}", flush=True)
 
             # Check if tool is not allowed - respond with tool error
             if tool_name not in allowed_tools:
@@ -2297,6 +2322,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     pass
             else:
                 err = result.error_message or "(no result)"
+                _err_preview = err if len(err) <= 240 else err[:237] + "..."
+                print(f"    ❌ {tool_name} error: {_err_preview}", flush=True)
                 if use_text_tools:
                     messages.append({
                         "role": "user",
