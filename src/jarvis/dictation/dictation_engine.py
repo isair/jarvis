@@ -705,11 +705,9 @@ class DictationEngine:
                 )
                 return
 
-        # The pynput Listener owns a CGEventTap (macOS) or a low-level Win32
-        # hook — both have crashed the daemon with SIGILL/SIGABRT on real
-        # installs (issues #252, #353, #354).  Run it in an isolated child
-        # process so a native crash kills the child only and the daemon stays
-        # up; dictation just goes offline until restart.
+        # The Listener runs in an isolated child process so a native crash
+        # in pynput's CGEventTap / Win32 hook can't take down the daemon.
+        # See dictation.spec.md "Subprocess isolation" for details.
         from .listener_proc import SubprocessKeyboardListener
         self._listener = SubprocessKeyboardListener(
             on_press=self._on_key_press,

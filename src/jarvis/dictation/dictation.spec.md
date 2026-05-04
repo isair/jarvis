@@ -107,10 +107,14 @@ risking the hook being torn down. Existing off-thread dispatch in
 listener wire.
 
 The macOS 26+ guard (see "Edge Cases") still short-circuits before spawning
-the child — there is no point starting a process we know will crash on its
-first key event.
+the child — subprocess isolation only contains crashes, it does not enable
+Tahoe support, so there is no point starting a process we know will crash
+on its first key event.
 
-This addresses crashes reported in issues #252, #353 and #354.
+If `multiprocessing.spawn` itself fails (rare; e.g. a starved system or a
+broken frozen build), the wrapper logs the failure, leaves itself in the
+unstarted state, and the daemon stays up. Dictation will retry on the next
+engine restart.
 
 ### Audio Device Handling
 

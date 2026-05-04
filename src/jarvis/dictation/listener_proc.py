@@ -1,26 +1,24 @@
 """Subprocess-isolated pynput keyboard listener.
 
-The pynput Listener has been observed to crash with SIGILL/SIGABRT in C-level
-code (CGEventTap on macOS, low-level Win32 hooks on Windows). Running it in a
-separate process means a crash kills the child only — the daemon stays up and
-dictation just stops working until the next restart, instead of taking down the
-whole app (issues #252, #353, #354).
+The pynput Listener owns native event taps (CGEventTap on macOS, low-level
+Win32 hooks on Windows) that have crashed with SIGILL/SIGABRT in C-level
+code. Those signals can't be caught from Python, so a single bad event tears
+down the whole daemon. Running the Listener in a separate process means a
+crash kills the child only; the daemon stays up and dictation goes offline
+silently until the engine is restarted.
 
-The wrapper exposes a minimal ``Listener``-like API (``start`` / ``stop``) so
-the engine can treat it as a drop-in replacement.
+The wrapper exposes a minimal ``Listener``-like API (``start`` / ``stop``)
+so the engine can treat it as a drop-in replacement.
 
-Architecture::
-
-    DictationEngine               child subprocess
-    ───────────────               ─────────────────
-    SubprocessKeyboardListener
-      ├─ start() ──spawn──▶  pynput.Listener
-      ├─ reader thread ◀─pipe──  on_press / on_release
-      │   └─ on_press / on_release callbacks
-      └─ stop() ──terminate──▶  exit
-
-Key events are serialised to plain dicts on the wire so neither end has to
-unpickle pynput objects across the process boundary.
+Privacy and trust model
+-----------------------
+Every keystroke (press and release) is forwarded over a local
+``multiprocessing.Pipe`` so the parent can detect hotkey combos. The pipe is
+an OS-level handle owned exclusively by the parent and the spawned child;
+no other process can read it. Wire payloads contain only key identity
+(``name`` / ``char`` / ``vk``), never window context or user content, and
+``debug_log`` calls in this module never include key data. The child is our
+own spawn and is therefore trusted on the receive side.
 """
 
 from __future__ import annotations
@@ -37,10 +35,12 @@ from ..debug import debug_log
 # ---------------------------------------------------------------------------
 
 def _serialise_key(key: Any) -> dict:
-    """Convert a pynput Key/KeyCode to a JSON-safe dict.
+    """Convert a pynput Key/KeyCode to a plain dict for cross-process transport.
 
     pynput is imported lazily so this module loads in environments where it
     isn't installed (e.g. unit tests that only exercise the deserialiser).
+    The output never contains window context or user content, only key
+    identity.
     """
     from pynput import keyboard as pk
 
@@ -59,8 +59,11 @@ def _serialise_key(key: Any) -> dict:
 def _deserialise_key(payload: dict) -> Optional[Any]:
     """Reconstruct a pynput Key/KeyCode from the wire dict.
 
-    Returns ``None`` if the payload is unrecognised so callers can skip it
-    rather than crash on garbled input.
+    The payload originates from a child process we spawned ourselves over a
+    private OS pipe, so it is trusted. ``getattr`` is used with a known enum
+    (``pk.Key``) and a default of ``None``, so unknown names cannot resolve
+    to arbitrary attributes. Returns ``None`` for unrecognised payloads so
+    callers can skip them rather than crash on garbled input.
     """
     if not isinstance(payload, dict):
         return None
@@ -90,6 +93,9 @@ def _deserialise_key(payload: dict) -> Optional[Any]:
 # Subprocess entry point
 # ---------------------------------------------------------------------------
 
+_MAX_ERROR_MESSAGE_LEN = 200
+
+
 def _listener_main(conn: Any) -> None:
     """Run the real pynput Listener and emit events on *conn*.
 
@@ -118,8 +124,13 @@ def _listener_main(conn: Any) -> None:
         listener.start()
         listener.join()
     except Exception as exc:
+        # Truncate so a noisy traceback message can't flood the parent's debug
+        # log if pynput ever decides to dump file paths or stack frames.
+        message = repr(exc)
+        if len(message) > _MAX_ERROR_MESSAGE_LEN:
+            message = message[:_MAX_ERROR_MESSAGE_LEN] + "...[truncated]"
         try:
-            conn.send({"event": "error", "message": repr(exc)})
+            conn.send({"event": "error", "message": message})
         except Exception:
             pass
 
@@ -157,27 +168,61 @@ class SubprocessKeyboardListener:
 
         ctx = multiprocessing.get_context("spawn")
         parent_conn, child_conn = ctx.Pipe(duplex=False)
-        self._conn = parent_conn
-        self._proc = ctx.Process(
+        proc = ctx.Process(
             target=_listener_main,
             args=(child_conn,),
             daemon=True,
         )
-        self._proc.start()
+
+        # The spawn re-execs the bundled exe in frozen builds; on a starved
+        # system that can fail. Treat any failure as "dictation offline" and
+        # leave the wrapper in its initial state so the caller can retry.
+        try:
+            proc.start()
+        except Exception as exc:
+            debug_log(f"failed to spawn dictation listener: {exc}", "dictation")
+            self._safe_close(parent_conn)
+            self._safe_close(child_conn)
+            return
+
+        self._conn = parent_conn
+        self._proc = proc
+
         # Only the child writes; close the child end in the parent so an EOF
         # is delivered if the child exits without sending anything else.
+        self._safe_close(child_conn)
+
         try:
-            child_conn.close()
+            self._reader_thread = threading.Thread(
+                target=self._read_loop,
+                daemon=True,
+                name="dictation-listener-reader",
+            )
+            self._reader_thread.start()
+        except Exception as exc:
+            # Out-of-resources for thread creation — abandon the child rather
+            # than leak it.
+            debug_log(f"failed to start dictation listener reader: {exc}", "dictation")
+            self._reader_thread = None
+            self.stop()
+            return
+
+        debug_log("dictation listener subprocess started", "dictation")
+
+    @staticmethod
+    def _safe_close(conn: Any) -> None:
+        if conn is None:
+            return
+        try:
+            conn.close()
         except Exception:
             pass
 
-        self._reader_thread = threading.Thread(
-            target=self._read_loop,
-            daemon=True,
-            name="dictation-listener-reader",
-        )
-        self._reader_thread.start()
-        debug_log("dictation listener subprocess started", "dictation")
+    # Total worst-case teardown is ~2.5 s; daemon=True backstops anything
+    # the OS still has alive after that.
+    _TERMINATE_JOIN_TIMEOUT = 1.0
+    _KILL_JOIN_TIMEOUT = 0.5
+    _READER_JOIN_TIMEOUT = 1.0
 
     def stop(self) -> None:
         self._stop_flag.set()
@@ -187,24 +232,20 @@ class SubprocessKeyboardListener:
             try:
                 if proc.is_alive():
                     proc.terminate()
-                    proc.join(timeout=2.0)
+                    proc.join(timeout=self._TERMINATE_JOIN_TIMEOUT)
                 if proc.is_alive():
                     proc.kill()
-                    proc.join(timeout=1.0)
+                    proc.join(timeout=self._KILL_JOIN_TIMEOUT)
             except Exception as exc:
                 debug_log(f"dictation listener subprocess teardown error: {exc}", "dictation")
         self._proc = None
 
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+        self._safe_close(self._conn)
+        self._conn = None
 
         reader = self._reader_thread
         if reader is not None and reader.is_alive() and reader is not threading.current_thread():
-            reader.join(timeout=2.0)
+            reader.join(timeout=self._READER_JOIN_TIMEOUT)
         self._reader_thread = None
 
     # ------------------------------------------------------------------

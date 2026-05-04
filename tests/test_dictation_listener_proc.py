@@ -1,13 +1,13 @@
 """Tests for the subprocess-isolated pynput keyboard listener.
 
-The pynput Listener has been observed to crash with SIGILL/SIGABRT in C-level
-code (CGEventTap on macOS, low-level Win32 hooks on Windows). Running it in a
-separate process means a crash kills the child only — the daemon stays up
-(issues #252, #353, #354).
+The wrapper exists because pynput's Listener has crashed with SIGILL/SIGABRT
+in C-level code (CGEventTap on macOS, low-level Win32 hooks on Windows),
+and those signals can't be caught from Python. Running it in a separate
+process keeps a native crash from taking down the daemon.
 
-These tests exercise the parent-side wrapper without spawning real subprocesses
-so they are fast and deterministic, then a smaller integration test verifies
-that crash isolation actually holds end-to-end.
+These tests exercise the parent-side wrapper without spawning real
+subprocesses so they are fast and deterministic, then a smaller integration
+test verifies that crash isolation actually holds end-to-end.
 """
 
 from __future__ import annotations
@@ -293,6 +293,95 @@ class TestSubprocessListenerLifecycle:
         listener.start()
         listener.stop()
         listener.stop()  # Must not raise.
+
+    def test_error_event_logs_without_killing_reader(self, monkeypatch):
+        """An ``error`` payload from the child should be logged but must not
+        crash or stop the reader — the child may keep producing key events
+        after a transient warning."""
+        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+
+        conn, proc = _FakeConn(), _FakeProc()
+        _install_fake_context(monkeypatch, conn, proc)
+
+        on_press = MagicMock()
+        listener = SubprocessKeyboardListener(on_press=on_press, on_release=MagicMock())
+        try:
+            listener.start()
+            conn.send_to_parent({"event": "error", "message": "transient pynput hiccup"})
+            # Reader thread should still be running and able to dispatch
+            # subsequent events.
+            time.sleep(0.1)
+            reader = listener._reader_thread
+            assert reader is not None and reader.is_alive()
+        finally:
+            listener.stop()
+
+    def test_spawn_failure_leaves_wrapper_unstarted(self, monkeypatch):
+        """If the OS refuses to spawn, the wrapper must not raise and must
+        not leak the prepared pipe — the daemon should keep running and the
+        engine should be free to retry on next start."""
+        from src.jarvis.dictation import listener_proc
+        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
+
+        class _FailingProc:
+            def start(self):
+                raise OSError("nope")
+
+            def is_alive(self):
+                return False
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                pass
+
+            def join(self, timeout=None):
+                pass
+
+        conn = _FakeConn()
+        fake_ctx = MagicMock()
+        fake_ctx.Pipe.return_value = (conn, _FakeConn())
+        fake_ctx.Process.return_value = _FailingProc()
+        monkeypatch.setattr(listener_proc.multiprocessing, "get_context", lambda *_a, **_kw: fake_ctx)
+
+        listener = SubprocessKeyboardListener(on_press=MagicMock(), on_release=MagicMock())
+        listener.start()  # Must not raise.
+
+        assert listener._proc is None
+        assert listener._reader_thread is None
+        # Wrapper is in initial state — a future start() can retry.
+        listener.stop()  # Idempotent on an unstarted wrapper.
+
+    def test_oversized_error_message_is_truncated(self):
+        """Error messages from the child are capped so a runaway traceback
+        can't flood the parent's debug log."""
+        from src.jarvis.dictation.listener_proc import _MAX_ERROR_MESSAGE_LEN, _listener_main
+
+        sent: list = []
+
+        class _CapturingConn:
+            def send(self, msg):
+                sent.append(msg)
+
+        # Force pynput import to fail with a giant message.
+        import builtins
+        original_import = builtins.__import__
+
+        def boom(name, *args, **kwargs):
+            if name == "pynput" or name.startswith("pynput."):
+                raise RuntimeError("x" * 5000)
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = boom
+        try:
+            _listener_main(_CapturingConn())
+        finally:
+            builtins.__import__ = original_import
+
+        assert sent, "child should have sent an error payload"
+        assert sent[0]["event"] == "error"
+        assert len(sent[0]["message"]) <= _MAX_ERROR_MESSAGE_LEN + len("...[truncated]")
 
 
 # ---------------------------------------------------------------------------
