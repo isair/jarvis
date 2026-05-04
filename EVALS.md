@@ -21,7 +21,9 @@
 
 ## 🔁 Retry Outcomes
 
-Of the 21 initial failures, 10 passed within 3 retries (≈48% were flaky), 11 failed consistently. After investigating the consistent failures against the prior commit `73035d4` (the state when the last report claimed 100% on intent-judge / merge-consolidation), all 11 are pre-existing small-model edge cases or environment-flaky cases — **no behavioural regressions on this branch**.
+Of the 21 initial failures, 10 passed within 3 retries (≈48% were flaky), 11 failed consistently. After bisecting against `main` (`1816f3e`):
+- 10 of the 11 are pre-existing small-model edge cases or environment-flaky cases.
+- 1 (`cross_segment_answer_that_with_noise`) is a real regression introduced on this branch by commit `a8f133c` (the "big Mac" few-shot example). **Fixed in this PR** by adding a contrasting cross-segment-with-noise example to the intent-judge prompt; now passes 5/5 reps and incidentally lifts `multi_person_weather_discussion` from 0/5 to 4/5.
 
 ### ✅ Passed on retry (treated as flaky, not regressions)
 
@@ -50,9 +52,9 @@ Of the 21 initial failures, 10 passed within 3 retries (≈48% were flaky), 11 f
 | `TestDiarySuppliesMissingToolArg::test_diary_location_grounds_get_weather_call` | New (#352) — docstring acknowledges small-model deflection is expected until follow-up memory work lands |
 | `TestGraphSuppliesMissingToolArg::test_warm_profile_user_fact_grounds_get_weather_call` | New (#352) — same warm-profile-grounding limitation as above |
 | `TestPatternConsolidation::test_repeated_activities_consolidate[sushi pattern]` | Flaky on small model — passes 3/3 when run in isolation; failed only when bundled with other retries (likely VRAM / model-state contention). No code change. |
-| `TestIntentJudgeMultiSegment::test_multi_segment_case[multi_person_weather_discussion]` | Pre-existing small-model limitation — also fails 3/3 at prior commit `73035d4` (state of the previous "100%" report); intent judge can't reliably resolve "what do you think" to a cross-segment topic on `gemma4:e2b`. The previous report's 100% was a single lucky run, not a stable baseline. |
-| `TestIntentJudgeMultiSegment::test_multi_segment_case[cross_segment_answer_that_with_noise]` | Pre-existing small-model limitation — sister case `cross_segment_answer_that_weather` (no noise segment) does pass; the noise segment "Charlie sands to that" overlaps with "answer that" and confuses the small model's referent picker. Also flaky at prior commit. |
-| `TestIntentJudgeMultiSegment::test_multi_segment_case[cross_segment_go_ahead_and_answer]` | Pre-existing small-model limitation — also fails 3/3 at prior commit `73035d4`; small model passes the multi-word imperative ("go ahead and answer") through literally despite the prompt listing it as an imperative variant. |
+| `TestIntentJudgeMultiSegment::test_multi_segment_case[multi_person_weather_discussion]` | Improved by intent-judge prompt fix below — now passes 4/5 reps in isolation (was 0/5). Remaining single-rep failure is small-model variance, not a regression. |
+| `TestIntentJudgeMultiSegment::test_multi_segment_case[cross_segment_answer_that_with_noise]` | **Regression introduced between `main` and `develop`.** Bisected to commit `a8f133c` (the "big Mac" few-shot example). Fixed by adding a contrasting cross-segment-with-noise example to the prompt. Now passes 5/5 reps. |
+| `TestIntentJudgeMultiSegment::test_multi_segment_case[cross_segment_go_ahead_and_answer]` | Pre-existing small-model limitation — also fails 5/5 against `main`'s `intent_judge.py` (commit `1816f3e`). Small model passes the multi-word imperative ("go ahead and answer") through literally despite the prompt listing it as an imperative variant. Out of scope for this branch. |
 
 ---
 

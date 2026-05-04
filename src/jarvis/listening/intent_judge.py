@@ -181,6 +181,7 @@ Examples:
 - "Jarvis tell me a joke" -> {{"directed": true, "query": "tell me a joke", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
 - Previous "dinosaurs are cool" + Current "Jarvis what do you think about that" -> {{"directed": true, "query": "what do you think about dinosaurs being cool", "stop": false, "confidence": "high", "reasoning": "resolved 'that' to dinosaurs"}}
 - Previous "How's the weather?" + Current "Jarvis answer that" -> {{"directed": true, "query": "how is the weather", "stop": false, "confidence": "high", "reasoning": "imperative -> re-issue prior question"}}
+- Previous "How tall is Mount Everest" + Noise "some unrelated chatter" + Current "Jarvis answer that" -> {{"directed": true, "query": "how tall is Mount Everest", "stop": false, "confidence": "high", "reasoning": "imperative -> re-issue prior QUESTION; ignore the chatter segment, re-issue the original question even when noise sits between"}}
 - Hot window, user says "I think absurdism is better" -> {{"directed": true, "query": "I think absurdism is better", "stop": false, "confidence": "high", "reasoning": "user statement in hot window"}}
 - "(during TTS)" segments only -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo"}}
 - "stop" -> {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
