@@ -683,6 +683,7 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
     if not recent_messages:
         return []
     pending_call_id_to_name: dict[str, str] = {}
+    seen_call_ids: set[str] = set()
     failed_call_ids: set[str] = set()
     failed_names_text_tool: list[str] = []
     seen: set[str] = set()
@@ -707,9 +708,10 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
                     ):
                         pending_call_id_to_name[cid] = name
         elif role == "tool":
-            if msg.get("tool_failed"):
-                cid = msg.get("tool_call_id")
-                if isinstance(cid, str) and cid:
+            cid = msg.get("tool_call_id")
+            if isinstance(cid, str) and cid:
+                seen_call_ids.add(cid)
+                if msg.get("tool_failed"):
                     failed_call_ids.add(cid)
         elif role == "user" and msg.get("tool_name"):
             if msg.get("tool_failed"):
@@ -723,6 +725,22 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
         if cid in failed_call_ids and name not in seen:
             failed_names_native.append(name)
             seen.add(name)
+    # Diagnose dropped or unmatched tool turns: an assistant tool_call
+    # without ANY corresponding role=tool result (success or failure)
+    # indicates upstream data loss (truncation, scrub, eviction). The
+    # carry-over still fail-opens (no widening for the unmatched name),
+    # but logging surfaces the cause when it happens.
+    _orphan_call_ids = [
+        cid for cid in pending_call_id_to_name
+        if cid not in seen_call_ids
+    ]
+    if _orphan_call_ids:
+        debug_log(
+            f"tool carry-over: {len(_orphan_call_ids)} assistant tool_call(s) "
+            f"have no matching role=tool result in the recent window "
+            f"(call_ids={_orphan_call_ids[:3]}{'…' if len(_orphan_call_ids) > 3 else ''})",
+            "planning",
+        )
     # Text-tool walked end-to-front, native order follows assistant-message
     # walk; both are reversed back to chronological for stable output.
     return list(reversed(failed_names_text_tool)) + failed_names_native

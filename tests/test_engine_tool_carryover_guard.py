@@ -108,6 +108,28 @@ def _succeeded_tool_turn(tool_name: str, tool_call_id: str = "c1") -> list[dict]
     ]
 
 
+def _failed_text_tool_turn(tool_name: str) -> list[dict]:
+    """Plant a previous-turn tool turn in the text-tool fallback shape
+    (small models). Tool error is appended as a ``role=user`` message
+    tagged with both ``tool_name`` and ``tool_failed=True``.
+    """
+    return [
+        {"role": "assistant",
+         "content": (
+             "```tool_call\n"
+             '{"name": "' + tool_name + '", "arguments": {}}\n'
+             "```"
+         )},
+        {"role": "user",
+         "content": (
+             "[Tool error: " + tool_name + "] I couldn't auto-detect "
+             "your location."
+         ),
+         "tool_name": tool_name,
+         "tool_failed": True},
+    ]
+
+
 @pytest.mark.unit
 @patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
 @patch("src.jarvis.memory.graph_ops.build_warm_profile",
@@ -333,4 +355,209 @@ def test_long_followup_still_carries_over_when_previous_failed(
     assert "getWeather" in tool_names, (
         f"long follow-up to a failed tool must still carry over; "
         f"saw {sorted(tool_names)}"
+    )
+
+
+@pytest.mark.unit
+@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
+@patch("src.jarvis.memory.graph_ops.build_warm_profile",
+       return_value={"user": "", "directives": ""})
+@patch("src.jarvis.memory.graph.GraphMemoryStore")
+@patch("src.jarvis.reply.engine.plan_query", return_value=[])
+@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("src.jarvis.reply.engine.extract_text_from_response")
+@patch("src.jarvis.reply.engine.chat_with_messages")
+def test_text_tool_fallback_failure_carries_over(
+    mock_chat, mock_extract, _mock_extract_mem, _mock_plan,
+    _mock_graph, _mock_warm, _mock_fmt,
+):
+    """Small-model path: the previous turn's tool error was stored as a
+    ``role=user`` message tagged with ``tool_name`` and
+    ``tool_failed=True``. The walker must collect the name from this
+    shape too, not only from native ``assistant.tool_calls`` + ``role=tool``
+    pairs.
+    """
+    mock_chat.side_effect = [
+        {"message": {"content": "Weather in Berlin is 9°C."}},
+    ]
+    mock_extract.side_effect = ["Weather in Berlin is 9°C."]
+
+    db = Mock()
+    cfg = _mock_cfg()
+    dm = DialogueMemory()
+    dm.add_message("user", "how's the weather")
+    dm.record_tool_turn(_failed_text_tool_turn("getWeather"))
+    dm.add_message("assistant", "I couldn't auto-detect your location.")
+
+    with patch(
+        "src.jarvis.reply.engine.select_tools",
+        return_value=["webSearch"],
+    ):
+        run_reply_engine(db=db, cfg=cfg, tts=None,
+                         text="I'm in Berlin", dialogue_memory=dm)
+
+    tool_names = _tool_names_from_chat_call(mock_chat.call_args_list[-1])
+    assert "getWeather" in tool_names, (
+        "text-tool fallback failure shape must be carried over; "
+        f"saw {sorted(tool_names)}"
+    )
+
+
+@pytest.mark.unit
+@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
+@patch("src.jarvis.memory.graph_ops.build_warm_profile",
+       return_value={"user": "", "directives": ""})
+@patch("src.jarvis.memory.graph.GraphMemoryStore")
+@patch("src.jarvis.reply.engine.plan_query", return_value=[])
+@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("src.jarvis.reply.engine.extract_text_from_response")
+@patch("src.jarvis.reply.engine.chat_with_messages")
+def test_multi_tool_call_only_failed_sibling_carries_over(
+    mock_chat, mock_extract, _mock_extract_mem, _mock_plan,
+    _mock_graph, _mock_warm, _mock_fmt,
+):
+    """When an assistant message carries multiple tool_calls but only
+    one of them failed, only the failed name must be carried over. The
+    successful sibling stays the chat model's responsibility through
+    its own routing.
+    """
+    mock_chat.side_effect = [
+        {"message": {"content": "Sure."}},
+    ]
+    mock_extract.side_effect = ["Sure."]
+
+    db = Mock()
+    cfg = _mock_cfg()
+    dm = DialogueMemory()
+    dm.add_message("user", "weather and search Pushkin")
+    dm.record_tool_turn([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c-w", "type": "function",
+             "function": {"name": "getWeather", "arguments": {}}},
+            {"id": "c-s", "type": "function",
+             "function": {"name": "webSearch", "arguments": {"query": "Pushkin"}}},
+        ]},
+        # getWeather failed (no location), webSearch succeeded.
+        {"role": "tool", "tool_call_id": "c-w",
+         "tool_name": "getWeather",
+         "content": "I couldn't auto-detect your location.",
+         "tool_failed": True},
+        {"role": "tool", "tool_call_id": "c-s",
+         "tool_name": "webSearch",
+         "content": "Pushkin was a Russian poet (1799-1837).",
+         "tool_failed": False},
+    ])
+    dm.add_message("assistant",
+                   "Pushkin was a Russian poet. I couldn't auto-detect "
+                   "your location for the weather lookup.")
+
+    with patch(
+        "src.jarvis.reply.engine.select_tools",
+        return_value=["fetchWebPage"],
+    ):
+        run_reply_engine(db=db, cfg=cfg, tts=None,
+                         text="I'm in Paris", dialogue_memory=dm)
+
+    tool_names = _tool_names_from_chat_call(mock_chat.call_args_list[-1])
+    assert "getWeather" in tool_names, (
+        "failed sibling tool_call must be carried over; "
+        f"saw {sorted(tool_names)}"
+    )
+    assert "webSearch" not in tool_names, (
+        "successful sibling tool_call must NOT be carried over; "
+        f"saw {sorted(tool_names)}"
+    )
+
+
+@pytest.mark.unit
+@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
+@patch("src.jarvis.memory.graph_ops.build_warm_profile",
+       return_value={"user": "", "directives": ""})
+@patch("src.jarvis.memory.graph.GraphMemoryStore")
+@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("src.jarvis.reply.engine.extract_text_from_response")
+@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("src.jarvis.reply.engine.run_tool_with_retries")
+def test_planner_direct_exec_stamps_tool_failed(
+    mock_tool, mock_chat, mock_extract, _mock_extract_mem,
+    _mock_graph, _mock_warm, _mock_fmt,
+):
+    """The planner's direct-exec path (text-tool mode + concrete plan
+    step) appends tool results without going through the chat-model
+    loop. Verify that path stamps ``tool_failed`` so the next turn's
+    walker can see prior failures planted by direct-exec.
+    """
+    from src.jarvis.tools.types import ToolExecutionResult
+
+    cfg = _mock_cfg()
+    cfg.ollama_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
+
+    # First reply: planner emits a getWeather step, direct-exec runs the
+    # tool which returns success=False (no location), then the chat
+    # model produces a final text reply.
+    mock_tool.return_value = ToolExecutionResult(
+        success=False,
+        reply_text="I couldn't auto-detect your location.",
+    )
+    mock_chat.side_effect = [
+        {"message": {"content": "Tell me which city."}},
+    ]
+    mock_extract.side_effect = ["Tell me which city."]
+
+    db = Mock()
+    dm = DialogueMemory()
+
+    # Concrete plan step the resolver fast-path can parse without an LLM.
+    with patch(
+        "src.jarvis.reply.engine.plan_query",
+        return_value=["getWeather", "Reply to the user."],
+    ), patch(
+        "src.jarvis.reply.engine.select_tools",
+        return_value=["getWeather"],
+    ):
+        run_reply_engine(db=db, cfg=cfg, tts=None,
+                         text="how's the weather",
+                         dialogue_memory=dm)
+
+    # The direct-exec path should have recorded a tool turn with the
+    # failure flag set so a follow-up turn can carry over getWeather.
+    assert dm._tool_turns, (
+        "planner direct-exec path must record a tool turn into "
+        "dialogue memory carryover"
+    )
+    stored_msgs = [m for _ts, msgs in dm._tool_turns for m in msgs]
+    failed_entries = [
+        m for m in stored_msgs
+        if m.get("tool_failed") and m.get("tool_name") == "getWeather"
+    ]
+    assert failed_entries, (
+        "direct-exec failure must stamp tool_failed=True; "
+        f"stored messages: {stored_msgs}"
+    )
+
+
+@pytest.mark.unit
+def test_walker_logs_orphan_assistant_tool_call(caplog):
+    """When an assistant tool_call has no matching role=tool result in
+    the recent window (e.g. truncation, scrub, eviction), the walker
+    should fail-open and log a diagnostic — never crash, never silently
+    widen the allow-list with the orphan name.
+    """
+    from src.jarvis.reply.engine import _previous_turn_failed_tool_names
+
+    recent = [
+        {"role": "user", "content": "weather please"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c-orphan", "type": "function",
+             "function": {"name": "getWeather", "arguments": {}}},
+        ]},
+        # No matching role=tool result for c-orphan.
+        {"role": "assistant", "content": "I couldn't auto-detect."},
+    ]
+
+    names = _previous_turn_failed_tool_names(recent)
+    # No failed tool result was seen, so nothing carries over even
+    # though an assistant tool_call exists.
+    assert names == [], (
+        f"orphan tool_call must not be carried over; got {names}"
     )
