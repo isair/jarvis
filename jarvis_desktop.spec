@@ -112,6 +112,14 @@ hiddenimports = [
     'jarvis.listening.wake_detection',
     'jarvis.listening.transcript_buffer',
     'jarvis.listening.intent_judge',
+    # Dictation modules (listener_proc is loaded by multiprocessing.spawn
+    # in the child process, so PyInstaller must bundle it explicitly).
+    'jarvis.dictation',
+    'jarvis.dictation.dictation_engine',
+    'jarvis.dictation.history',
+    'jarvis.dictation.listener_proc',
+    'pynput',
+    'pynput.keyboard',
     # Memory modules
     'jarvis.memory',
     'jarvis.memory.conversation',

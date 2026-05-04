@@ -144,27 +144,32 @@ class TestEngineLifecycle:
         except ImportError:
             pytest.skip("pynput or sounddevice not installed")
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_creates_listener(self, mock_kb, mock_sys, mock_platform):
+    def test_start_creates_listener(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
         # Force a platform where pynput is allowed (avoid macOS 26+ guard)
         mock_sys.platform = "linux"
-        mock_listener_instance = MagicMock()
-        mock_kb.Listener.return_value = mock_listener_instance
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
         mock_kb.Key.ctrl_l = MagicMock()
         mock_kb.Key.shift = MagicMock()
+        mock_listener_instance = MagicMock()
+        mock_sub_cls.return_value = mock_listener_instance
 
         engine = _make_engine()
         engine.start()
 
         assert engine._started is True
+        # Listener now lives in a child process — engine drives it via the
+        # SubprocessKeyboardListener wrapper, never pynput.Listener directly.
+        mock_kb.Listener.assert_not_called()
         mock_listener_instance.start.assert_called_once()
 
         engine.stop()
         assert engine._started is False
+        mock_listener_instance.stop.assert_called_once()
 
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard", None)
     def test_start_without_pynput_is_noop(self):
@@ -192,11 +197,14 @@ class TestEngineLifecycle:
         engine.start()
         assert engine._started is False
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_skips_on_macos_26(self, mock_kb, mock_sys, mock_platform):
-        """pynput crashes on macOS 26+ (TSM thread assertion). Engine must skip."""
+    def test_start_skips_on_macos_26(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
+        """pynput crashes on macOS 26+ (TSM thread assertion). Engine must skip
+        even spawning the subprocess — no point starting a child we know will
+        crash on first key event."""
         mock_sys.platform = "darwin"
         mock_platform.mac_ver.return_value = ("26.2", ("", "", ""), "")
         mock_kb.Key = MagicMock()
@@ -207,21 +215,23 @@ class TestEngineLifecycle:
         engine = _make_engine()
         engine.start()
         assert engine._started is False
+        mock_sub_cls.assert_not_called()
         mock_kb.Listener.assert_not_called()
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_allowed_on_macos_15(self, mock_kb, mock_sys, mock_platform):
+    def test_start_allowed_on_macos_15(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
         """pynput should still work on macOS 15 (Sequoia) and earlier."""
         mock_sys.platform = "darwin"
         mock_platform.mac_ver.return_value = ("15.4", ("", "", ""), "")
-        mock_listener = MagicMock()
-        mock_kb.Listener.return_value = mock_listener
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
         mock_kb.Key.ctrl_l = MagicMock()
         mock_kb.Key.shift = MagicMock()
+        mock_listener = MagicMock()
+        mock_sub_cls.return_value = mock_listener
 
         engine = _make_engine()
         engine.start()
@@ -229,18 +239,19 @@ class TestEngineLifecycle:
         mock_listener.start.assert_called_once()
         engine.stop()
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform):
+    def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
         """Windows should not be affected by the macOS guard."""
         mock_sys.platform = "win32"
-        mock_listener = MagicMock()
-        mock_kb.Listener.return_value = mock_listener
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
         mock_kb.Key.ctrl_l = MagicMock()
         mock_kb.Key.shift = MagicMock()
+        mock_listener = MagicMock()
+        mock_sub_cls.return_value = mock_listener
 
         engine = _make_engine()
         engine.start()
