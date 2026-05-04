@@ -33,7 +33,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine.
-- **Limits**: `intent_judge_timeout_sec` (15s). `num_ctx: 4096` (explicit — transcript buffer can reach 400+ tokens; Ollama's model default of 2048 would silently truncate it).
+- **Limits**: `intent_judge_timeout_sec` (15s). `num_ctx: 8192` (explicit — system prompt is ~2k tokens after PR #362, and the rolling transcript buffer at default `transcript_buffer_duration_sec=120` can reach ~1.5k tokens in chatty multi-speaker scenes; 4096 left ~10% headroom and risked silent ollama truncation of the system prompt's tail, where the few-shot examples and TRANSCRIPT NOISE block live).
 
 ## 3. Memory Enrichment Extractor
 

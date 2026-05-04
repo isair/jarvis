@@ -162,6 +162,11 @@ ECHO / MARKER RULES:
 - "(CURRENT - JUDGE THIS)" = segment to judge now
 - Use earlier segments to resolve references only, not as query source
 
+TRANSCRIPT NOISE:
+- Segments come from Whisper ASR and may contain mishearings: wrong homophones (to/too/two), tense slips (answered/answer), substituted similar-sounding words, fused word boundaries ("ever ist" for "Everest"), or short nonsense fillers. None of this changes the rules above — it is a reminder that a segment looking malformed or off-topic is often noise to skip past, not a topic to anchor on.
+- When such a segment sits between a real question and an imperative wake-word call, treat it as noise and still re-issue the original question (see the Mount Everest + chatter + "answer that" example below).
+- Within the extracted query string, fix obvious ASR slips quietly (tense, fused words, homophones) so the query is answerable; do NOT rewrite content or change the user's intent.
+
 STOP DETECTION:
 - "stop", "quiet" (standalone or short command) -> directed=true, stop=true, query=""
 
@@ -181,6 +186,8 @@ Examples:
 - "Jarvis tell me a joke" -> {{"directed": true, "query": "tell me a joke", "stop": false, "confidence": "high", "reasoning": "self-contained imperative"}}
 - Previous "dinosaurs are cool" + Current "Jarvis what do you think about that" -> {{"directed": true, "query": "what do you think about dinosaurs being cool", "stop": false, "confidence": "high", "reasoning": "resolved 'that' to dinosaurs"}}
 - Previous "How's the weather?" + Current "Jarvis answer that" -> {{"directed": true, "query": "how is the weather", "stop": false, "confidence": "high", "reasoning": "imperative -> re-issue prior question"}}
+- Previous "How tall is Mount Everest" + Noise "some unrelated chatter" + Current "Jarvis answer that" -> {{"directed": true, "query": "how tall is Mount Everest", "stop": false, "confidence": "high", "reasoning": "imperative -> re-issue prior QUESTION; ignore the chatter segment, re-issue the original question even when noise sits between"}}
+- Previous "What's the capital of Portugal" + Current "Jarvis go ahead and answer" -> {{"directed": true, "query": "what is the capital of Portugal", "stop": false, "confidence": "high", "reasoning": "multi-word imperative ('go ahead and answer') is the same pattern as 'answer that' -> re-issue prior question; do NOT pass the imperative through literally"}}
 - Hot window, user says "I think absurdism is better" -> {{"directed": true, "query": "I think absurdism is better", "stop": false, "confidence": "high", "reasoning": "user statement in hot window"}}
 - "(during TTS)" segments only -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo"}}
 - "stop" -> {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
@@ -423,7 +430,14 @@ Examples:
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 200,
-                        "num_ctx": 4096,
+                        # Headroom for: ~2k-token system prompt + up to 2 minutes
+                        # of chatty multi-speaker transcript (default
+                        # transcript_buffer_duration_sec=120 in listener.py).
+                        # 4096 was cutting close to 90% utilisation in the
+                        # worst case after the prompt grew in PR #362, which
+                        # risks silent ollama truncation of the system
+                        # prompt's tail.
+                        "num_ctx": 8192,
                     },
                 },
                 timeout=self.config.timeout_sec,

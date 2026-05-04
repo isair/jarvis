@@ -1,16 +1,16 @@
 # 🧪 Jarvis Evaluation Report
 
-**Generated:** 2026-04-27 (ad-hoc update on this branch only — see "Memory merge consolidation" below; rest of report inherited from develop's last full regen)
+**Generated:** 2026-05-04 (gemma4:e2b column refreshed with retry-aware outcomes from a full `--single` run; gpt-oss:20b column inherited unchanged from the 2026-04-27 regen)
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **331/349 passed (94.8%)** across all categories *(merge consolidation now also covers meta-narrative pruning; the previously xfail'd pattern-boundary case is a regular PASS)*
+**Overall:** 🟢 **340/354 passed (96.0%)** across all categories *(small-model column re-baselined from a fresh `gemma4:e2b` run with up to 3× retries; three new tests added in #352, one intent-judge regression introduced by `a8f133c` recovered by the prompt fix in this PR — see "Intent judge" below)*
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
-| 🤖 Agent behaviour | `gemma4:e2b` | 129 | 11 | 2 | 🟢 92.1% |
+| 🤖 Agent behaviour | `gemma4:e2b` | 136 | 7 | 2 | 🟢 95.1% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 7 | 0 | 🟢 95.4% |
-| 🎤 Intent judge | `gemma4:e2b` (fixed) | 47 | 0 | 0 | 🟢 100.0% |
+| 🎤 Intent judge | `gemma4:e2b` (fixed) | 48 | 0 | 0 | 🟢 100.0% |
 | 🧠 Memory merge consolidation | `gemma4:e2b` | 11 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
@@ -41,14 +41,15 @@
 | Bad: empty acknowledgment | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Bad: generic greeting ignores query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Casual statement without wake word rejected | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Chained research: who directed Possessor and what else have they made | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Chained research: who directed Possessor and what else have they made | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Correction loop accepts single or retry | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| Cross turn pronoun resolution | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Cross turn pronoun resolution | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | DIRECTIVES: tone, length, forbidden phrases, address form | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Date query with date in context returns none | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Diary location grounds getWeather call (#352) | ❌ 0/1 (0%) | ➖ |
 | Diet changed from bulking to cutting | ⏭️ SKIPPED | 🔸 1/1 XFAIL |
 | Digested tool result produces grounded reply | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Director-then-filmography needs two searches | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Director-then-filmography needs two searches | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Enrichment results appear in system message | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Enrichment skips questions answered by context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Escape hatch then follow up action | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -56,11 +57,13 @@
 | Extraction with explicit quantities | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | First turn calls web search not clarification | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | Follow up after correction calls web search | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
-| Follow up resolves pronoun in search query | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Follow up resolves pronoun in search query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Follow-up references previous turn context | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Followup naming place routes to getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Followup supplies missing tool arg — short follow-up continues previous tool chain (#352) | ✅ 1/1 (100%) | ➖ |
 | Good: brief but informative | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Good: complete weekly forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
+| Graph supplies missing tool arg — warm-profile fact grounds getWeather call (#352) | ❌ 0/1 (0%) | ➖ |
 | Graph-enriched facts surface in the reply, no denial | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Greeting: hello | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Greeting: ni hao (Chinese) | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -87,7 +90,7 @@
 | Mixed summary: keep novel facts, drop stale weather/recommendations | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Navigate prose gets nudged into tool call | 🔸 1/1 XFAIL | ✅ 1/1 (100%) |
 | No deflection: tech news | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
-| No deflection: time query | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| No deflection: time query | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No deflection: tomorrow weather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No deflection: weekly rain forecast | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | No email tool declines honestly | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -126,7 +129,7 @@
 | Tool retry: vague go ahead | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Tool retry: vague just try | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Toolsearchtool widens then navigate | 🔸 1/1 XFAIL | 🔸 1/1 XFAIL |
-| Topic switch: search → weather uses getWeather | ❌ 0/1 (0%) | ✅ 1/1 (100%) |
+| Topic switch: search → weather uses getWeather | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Topic switch: weather → store hours uses webSearch | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Trivial conversations produce no extracted facts | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
 | Tts echo segments skipped user query extracted | ✅ 1/1 (100%) | ✅ 1/1 (100%) |
@@ -190,7 +193,12 @@
 
 ## 🎤 Intent judge
 
-> Pinned to `gemma4:e2b` (the voice intent classifier). Not affected by the judge model.
+> Pinned to `gemma4:e2b` (the voice intent classifier). Not affected by the judge model. Re-run on 2026-05-04 with the prompt fix in this PR; cells repped 5× where they sit on the small-model edge.
+
+**Notes:**
+- `cross_segment_answer_that_with_noise` regressed between `main` and `develop` (introduced by `a8f133c`'s "big Mac" few-shot example, which biased the small model toward preserving user text instead of resolving cross-segment imperatives). Two contrasting examples added in this PR — one for prior-question-with-noise, one for the multi-word "go ahead and answer" imperative — restore both this case and `multi_person_weather_discussion` and `cross_segment_go_ahead_and_answer` (each 5/5).
+- New case `wake_word_trailing_after_capitalised_brand` (added in `a8f133c`) covers the original "big Mac" regression and is preserved by the fix.
+- The three edge cases were each repped 5× during the prompt iteration to confirm stability; recorded as 1/1 here for consistency with the rest of the table.
 
 | Test Case | Pass Rate | Status |
 |-----------|-----------|:------:|
@@ -240,6 +248,7 @@
 | wake_word_share_statement_trailing | 1/1 (100%) | ✅ |
 | wake_word_simple_question | 1/1 (100%) | ✅ |
 | wake_word_statement_remember | 1/1 (100%) | ✅ |
+| wake_word_trailing_after_capitalised_brand | 1/1 (100%) | ✅ |
 | wake_word_trailing_after_named_entity | 1/1 (100%) | ✅ |
 
 ---
