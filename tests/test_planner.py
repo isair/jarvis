@@ -501,6 +501,139 @@ class TestResolveNextToolCall:
         assert result == ("freeform", {"anything": "goes"})
 
 
+class TestUrlArgNormalisation:
+    """The resolver must hand chrome/browser MCP tools a fully-qualified
+    URL.
+
+    Field trace (2026-05): the planner emitted
+    ``page='[youtube.com](http://youtube.com)'`` for the user query
+    "navigate to youtube.com". The slow-path resolver remapped the key
+    to ``url`` (the schema's actual property) but preserved the markdown
+    wrapper as the value, so chrome-devtools-mcp received
+    ``{"url": "[youtube.com](http://youtube.com)"}`` and Puppeteer's
+    Page.navigate rejected with "Cannot navigate to invalid URL".
+    A scheme-less bare ``youtube.com`` value fails the same way.
+
+    The fix is generic: any URL-keyed string value gets
+    markdown-stripped and scheme-prepended before it leaves the planner.
+    """
+
+    def _navigate_schema(self):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "chrome-devtools__navigate_page",
+                    "description": "Navigate to a URL.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ]
+
+    def test_strips_markdown_link_wrapper_in_slow_path(self):
+        cfg = _cfg()
+        raw = (
+            '{"name": "chrome-devtools__navigate_page", "arguments": '
+            '{"url": "[youtube.com](http://youtube.com)"}}'
+        )
+        with patch.object(planner_mod, "call_llm_direct", return_value=raw):
+            result = resolve_next_tool_call(
+                cfg,
+                "chrome-devtools__navigate_page page='[youtube.com](http://youtube.com)'",
+                [],
+                self._navigate_schema(),
+            )
+        assert result == (
+            "chrome-devtools__navigate_page",
+            {"url": "http://youtube.com"},
+        )
+
+    def test_prepends_scheme_to_bare_domain_in_slow_path(self):
+        cfg = _cfg()
+        raw = (
+            '{"name": "chrome-devtools__navigate_page", "arguments": '
+            '{"url": "youtube.com"}}'
+        )
+        with patch.object(planner_mod, "call_llm_direct", return_value=raw):
+            result = resolve_next_tool_call(
+                cfg,
+                "chrome-devtools__navigate_page page='youtube.com'",
+                [],
+                self._navigate_schema(),
+            )
+        assert result == (
+            "chrome-devtools__navigate_page",
+            {"url": "https://youtube.com"},
+        )
+
+    def test_prepends_scheme_to_bare_domain_in_fast_path(self):
+        """Fast path parses ``url='youtube.com'`` deterministically; the
+        normalisation must apply there too so we don't regress on the
+        common case where the planner uses the right key name."""
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct", return_value="null") as spy:
+            result = resolve_next_tool_call(
+                cfg,
+                "chrome-devtools__navigate_page url='youtube.com'",
+                [],
+                self._navigate_schema(),
+            )
+        assert result == (
+            "chrome-devtools__navigate_page",
+            {"url": "https://youtube.com"},
+        )
+        assert spy.call_count == 0, "fast path must not call the LLM resolver"
+
+    def test_preserves_already_qualified_url(self):
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct", return_value="null"):
+            result = resolve_next_tool_call(
+                cfg,
+                "chrome-devtools__navigate_page url='https://youtube.com/feed/trending'",
+                [],
+                self._navigate_schema(),
+            )
+        assert result == (
+            "chrome-devtools__navigate_page",
+            {"url": "https://youtube.com/feed/trending"},
+        )
+
+    def test_does_not_touch_unrelated_string_args(self):
+        """A ``query='youtube.com tutorials'`` arg on webSearch must stay
+        literal — we only normalise values keyed as URLs."""
+        cfg = _cfg()
+        schema = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "webSearch",
+                    "description": "Search.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        raw = (
+            '{"name": "webSearch", "arguments": '
+            '{"query": "youtube.com tutorials"}}'
+        )
+        with patch.object(planner_mod, "call_llm_direct", return_value=raw):
+            result = resolve_next_tool_call(
+                cfg,
+                "webSearch find tutorials",
+                [],
+                schema,
+            )
+        assert result == ("webSearch", {"query": "youtube.com tutorials"})
+
+
 class TestToolStepsOf:
     def test_multi_step_drops_final_synthesis_step(self):
         assert tool_steps_of(["a", "b", "reply"]) == ["a", "b"]
