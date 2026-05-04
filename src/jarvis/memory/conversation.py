@@ -924,15 +924,16 @@ class DialogueMemory:
     def get_pending_chunks(self) -> List[str]:
         """Get unsaved messages as formatted chunks for diary update.
 
-        Returns messages that haven't been saved to diary yet (timestamp > _last_saved_timestamp).
-        Thread-safe.
+        Returns messages that haven't been saved to diary yet
+        (timestamp > _last_saved_timestamp). Thread-safe.
+
+        For diary flush callers that need an atomic snapshot timestamp,
+        use ``get_pending_chunks_with_snapshot()`` instead — this method
+        discards the snapshot and is intended for display/notification
+        purposes only.
         """
-        with self._lock:
-            unsaved_messages = [
-                (ts, role, content) for ts, role, content in self._messages
-                if ts > self._last_saved_timestamp
-            ]
-            return [f"{role.title()}: {content}" for _, role, content in unsaved_messages]
+        chunks, _ = self.get_pending_chunks_with_snapshot()
+        return chunks
 
     def get_pending_chunks_with_snapshot(self) -> Tuple[List[str], float]:
         """Return (pending_chunks, snapshot_timestamp) atomically.
