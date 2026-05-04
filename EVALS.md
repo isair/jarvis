@@ -4,13 +4,13 @@
 
 ## 📊 TL;DR
 
-**Overall:** 🟢 **338/354 passed (95.5%)** across all categories *(small-model column re-baselined from a fresh `gemma4:e2b` run with up to 3× retries; three new tests added in #352, one intent-judge regression introduced by `a8f133c` recovered by the prompt fix in this PR — see "Intent judge" below)*
+**Overall:** 🟢 **340/354 passed (96.0%)** across all categories *(small-model column re-baselined from a fresh `gemma4:e2b` run with up to 3× retries; three new tests added in #352, one intent-judge regression introduced by `a8f133c` recovered by the prompt fix in this PR — see "Intent judge" below)*
 
 | Category | Model | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|-------:|-------:|--------:|----------:|
 | 🤖 Agent behaviour | `gemma4:e2b` | 136 | 7 | 2 | 🟢 95.1% |
 | 🤖 Agent behaviour | `gpt-oss:20b` | 145 | 7 | 0 | 🟢 95.4% |
-| 🎤 Intent judge | `gemma4:e2b` (fixed) | 46 | 2 | 0 | 🟡 95.8% |
+| 🎤 Intent judge | `gemma4:e2b` (fixed) | 48 | 0 | 0 | 🟢 100.0% |
 | 🧠 Memory merge consolidation | `gemma4:e2b` | 11 | 0 | 0 | 🟢 100.0% |
 
 ### 💡 Model Selection Guide
@@ -196,9 +196,9 @@
 > Pinned to `gemma4:e2b` (the voice intent classifier). Not affected by the judge model. Re-run on 2026-05-04 with the prompt fix in this PR; cells repped 5× where they sit on the small-model edge.
 
 **Notes:**
-- `cross_segment_answer_that_with_noise` regressed between `main` and `develop` (introduced by `a8f133c`'s "big Mac" few-shot example, which biased the small model toward preserving user text instead of resolving cross-segment imperatives). The prompt fix in this PR restores it to 5/5 and incidentally lifts `multi_person_weather_discussion` from 0/5 to 4/5.
-- `cross_segment_go_ahead_and_answer` also fails 0/5 on `main`'s `intent_judge.py` — pre-existing small-model limitation, not a regression from this branch. Out of scope for this PR.
+- `cross_segment_answer_that_with_noise` regressed between `main` and `develop` (introduced by `a8f133c`'s "big Mac" few-shot example, which biased the small model toward preserving user text instead of resolving cross-segment imperatives). Two contrasting examples added in this PR — one for prior-question-with-noise, one for the multi-word "go ahead and answer" imperative — restore both this case and `multi_person_weather_discussion` and `cross_segment_go_ahead_and_answer` (each 5/5).
 - New case `wake_word_trailing_after_capitalised_brand` (added in `a8f133c`) covers the original "big Mac" regression and is preserved by the fix.
+- The three edge cases were each repped 5× during the prompt iteration to confirm stability; recorded as 1/1 here for consistency with the rest of the table.
 
 | Test Case | Pass Rate | Status |
 |-----------|-----------|:------:|
@@ -220,7 +220,7 @@
 | cross_segment_answer_that_with_noise | 1/1 (100%) | ✅ |
 | cross_segment_answered_that_whisper_variant | 1/1 (100%) | ✅ |
 | cross_segment_dinosaur_opinion | 1/1 (100%) | ✅ |
-| cross_segment_go_ahead_and_answer | 0/5 (0%) | ❌ |
+| cross_segment_go_ahead_and_answer | 1/1 (100%) | ✅ |
 | cross_segment_hot_window_followup | 1/1 (100%) | ✅ |
 | cross_segment_imperative_superseded_by_new_question | 1/1 (100%) | ✅ |
 | echo_plus_followup_extracted | 1/1 (100%) | ✅ |
@@ -229,7 +229,7 @@
 | hot_window_simple_followup | 1/1 (100%) | ✅ |
 | mentioned_in_narrative_past_tense | 1/1 (100%) | ✅ |
 | multi_person_vague_reference | 1/1 (100%) | ✅ |
-| multi_person_weather_discussion | 4/5 (80%) | ⚠️ |
+| multi_person_weather_discussion | 1/1 (100%) | ✅ |
 | multiple_echoes_then_interrupt | 1/1 (100%) | ✅ |
 | no_wake_word_casual_speech | 1/1 (100%) | ✅ |
 | no_wake_word_in_buffer | 1/1 (100%) | ✅ |
@@ -248,7 +248,7 @@
 | wake_word_share_statement_trailing | 1/1 (100%) | ✅ |
 | wake_word_simple_question | 1/1 (100%) | ✅ |
 | wake_word_statement_remember | 1/1 (100%) | ✅ |
-| wake_word_trailing_after_capitalised_brand | 5/5 (100%) | ✅ |
+| wake_word_trailing_after_capitalised_brand | 1/1 (100%) | ✅ |
 | wake_word_trailing_after_named_entity | 1/1 (100%) | ✅ |
 
 ---
