@@ -42,15 +42,20 @@ class TestSummariserForbidsDeflectionNarration:
     def test_prompt_forbids_narrating_failures(self):
         prompt = self._capture_system_prompt()
         lowered = prompt.lower()
-        # The prompt must explicitly say "do not narrate assistant failures/deflections".
-        assert "do not narrate" in lowered or "do not record" in lowered or "do not preserve" in lowered, (
-            "Summariser prompt must explicitly forbid narrating assistant failures."
-        )
-        # Must name at least one specific failure pattern — "deflect", "lacked", or
-        # "offered to search" — otherwise the rule is too abstract for small models.
-        assert any(term in lowered for term in ("deflect", "lacked", "offered to search", "failed to answer")), (
-            "Summariser prompt must name specific failure patterns to omit."
-        )
+        # The prompt must explicitly forbid narrating assistant failures.
+        # Accepts any clear injunction shape ("never narrate", "do not narrate",
+        # "drop every sentence", etc.) — what matters is that the directive
+        # is present, not its exact phrasing.
+        assert any(injunction in lowered for injunction in (
+            "never narrate", "do not narrate", "do not record", "do not preserve",
+            "drop every sentence", "drop all forms of",
+        )), "Summariser prompt must explicitly forbid narrating assistant failures."
+        # Must name at least one specific failure pattern — "deflect", "lacked",
+        # "offered to search", "failed to" — otherwise the rule is too abstract
+        # for small models.
+        assert any(term in lowered for term in (
+            "deflect", "lacked", "offered to search", "failed to",
+        )), "Summariser prompt must name specific failure patterns to omit."
 
     def test_prompt_explains_why_failures_must_be_omitted(self):
         """The prompt must give a reason, so the LLM generalises to variants it didn't see."""
@@ -164,6 +169,77 @@ class TestSummariserForbidsDeflectionNarration:
         assert "jarvis" in lowered and "possessor" in lowered, (
             "Summariser prompt should include the Possessor/Jarvis topic-welding "
             "BAD→GOOD example."
+        )
+
+
+class TestRewriteDeflectionSystemPrompt:
+    """The bulk-rewrite system prompt is a separate LLM context from the
+    summariser. It must carry its own contract guarantees because old
+    diary rows written before the summariser was tightened depend on it
+    to clean themselves up, and downstream behaviour (graph extraction,
+    enrichment, future replies) inherits whatever the rewrite produces.
+    """
+
+    def _prompt(self) -> str:
+        from jarvis.memory.conversation import _REWRITE_DEFLECTION_SYSTEM_PROMPT
+        return _REWRITE_DEFLECTION_SYSTEM_PROMPT
+
+    def test_prompt_names_the_canonical_deflection_shapes(self):
+        lowered = self._prompt().lower()
+        # The prompt must enumerate enough verb shapes for a small model
+        # to generalise from. A bare "remove deflection" instruction is
+        # too abstract — small models read past it.
+        for shape in (
+            "could not", "couldn't", "cannot", "did not", "does not",
+            "was unable", "was not able", "failed to",
+            "offered to search", "lacks",
+        ):
+            assert shape in lowered, (
+                f"Rewrite prompt must name the {shape!r} shape so small "
+                f"models recognise the failure pattern."
+            )
+
+    def test_prompt_protects_attributed_claims_and_user_facts(self):
+        """The same content that the summariser is allowed to keep must
+        survive the rewrite. Without this guard the rewrite will strip
+        attributed assistant claims (a third-party fact attributed to
+        the assistant) and user-stated facts."""
+        lowered = self._prompt().lower()
+        # Names the kept categories so the model knows what NOT to drop.
+        assert "attributed" in lowered or "user said" in lowered or "user-stated" in lowered, (
+            "Rewrite prompt must explicitly list KEEP categories "
+            "(attributed assistant claims, user-stated facts)."
+        )
+        assert "verbatim" in lowered, (
+            "Rewrite prompt must instruct the model to keep non-deflection "
+            "content verbatim — otherwise it paraphrases and corrupts."
+        )
+
+    def test_prompt_is_language_agnostic(self):
+        lowered = self._prompt().lower()
+        assert "any language" in lowered or "every language" in lowered or "all languages" in lowered, (
+            "Rewrite prompt must apply across languages — the leak shows "
+            "up in any language the user speaks."
+        )
+
+    def test_prompt_forbids_translation(self):
+        """A rewrite that translates the diary breaks downstream FTS,
+        embeddings, and graph extraction — all of which expect the
+        original language."""
+        lowered = self._prompt().lower()
+        assert "not translate" in lowered or "do not translate" in lowered or (
+            "keep" in lowered and "language" in lowered
+        ), "Rewrite prompt must forbid translation of the output."
+
+    def test_prompt_specifies_empty_output_for_all_deflection_rows(self):
+        """If the row is *entirely* deflection, the model must return the
+        empty string. The Python layer's empty-rewrite guard then keeps
+        the original (an empty diary entry would be worse — retrieval
+        treats absence as 'no record')."""
+        lowered = self._prompt().lower()
+        assert "empty" in lowered, (
+            "Rewrite prompt must instruct the model how to handle a row "
+            "that is entirely deflection (return empty)."
         )
 
 
