@@ -172,6 +172,77 @@ class TestSummariserForbidsDeflectionNarration:
         )
 
 
+class TestRewriteDeflectionSystemPrompt:
+    """The bulk-rewrite system prompt is a separate LLM context from the
+    summariser. It must carry its own contract guarantees because old
+    diary rows written before the summariser was tightened depend on it
+    to clean themselves up, and downstream behaviour (graph extraction,
+    enrichment, future replies) inherits whatever the rewrite produces.
+    """
+
+    def _prompt(self) -> str:
+        from jarvis.memory.conversation import _REWRITE_DEFLECTION_SYSTEM_PROMPT
+        return _REWRITE_DEFLECTION_SYSTEM_PROMPT
+
+    def test_prompt_names_the_canonical_deflection_shapes(self):
+        lowered = self._prompt().lower()
+        # The prompt must enumerate enough verb shapes for a small model
+        # to generalise from. A bare "remove deflection" instruction is
+        # too abstract — small models read past it.
+        for shape in (
+            "could not", "couldn't", "cannot", "did not", "does not",
+            "was unable", "was not able", "failed to",
+            "offered to search", "lacks",
+        ):
+            assert shape in lowered, (
+                f"Rewrite prompt must name the {shape!r} shape so small "
+                f"models recognise the failure pattern."
+            )
+
+    def test_prompt_protects_attributed_claims_and_user_facts(self):
+        """The same content that the summariser is allowed to keep must
+        survive the rewrite. Without this guard the rewrite will strip
+        attributed assistant claims (a third-party fact attributed to
+        the assistant) and user-stated facts."""
+        lowered = self._prompt().lower()
+        # Names the kept categories so the model knows what NOT to drop.
+        assert "attributed" in lowered or "user said" in lowered or "user-stated" in lowered, (
+            "Rewrite prompt must explicitly list KEEP categories "
+            "(attributed assistant claims, user-stated facts)."
+        )
+        assert "verbatim" in lowered, (
+            "Rewrite prompt must instruct the model to keep non-deflection "
+            "content verbatim — otherwise it paraphrases and corrupts."
+        )
+
+    def test_prompt_is_language_agnostic(self):
+        lowered = self._prompt().lower()
+        assert "any language" in lowered or "every language" in lowered or "all languages" in lowered, (
+            "Rewrite prompt must apply across languages — the leak shows "
+            "up in any language the user speaks."
+        )
+
+    def test_prompt_forbids_translation(self):
+        """A rewrite that translates the diary breaks downstream FTS,
+        embeddings, and graph extraction — all of which expect the
+        original language."""
+        lowered = self._prompt().lower()
+        assert "not translate" in lowered or "do not translate" in lowered or (
+            "keep" in lowered and "language" in lowered
+        ), "Rewrite prompt must forbid translation of the output."
+
+    def test_prompt_specifies_empty_output_for_all_deflection_rows(self):
+        """If the row is *entirely* deflection, the model must return the
+        empty string. The Python layer's empty-rewrite guard then keeps
+        the original (an empty diary entry would be worse — retrieval
+        treats absence as 'no record')."""
+        lowered = self._prompt().lower()
+        assert "empty" in lowered, (
+            "Rewrite prompt must instruct the model how to handle a row "
+            "that is entirely deflection (return empty)."
+        )
+
+
 class TestDiaryEnrichmentInjectionFraming:
     """The reply engine must frame diary enrichment as reference-only, not as instructions."""
 

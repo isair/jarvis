@@ -101,11 +101,26 @@ def _rewrite_diary_summary(
         return None
 
     # Strip whitespace and any markdown fences the model may have wrapped
-    # around the response despite the instructions.
+    # around the response despite the instructions. Two shapes are common:
+    #   "```optional-tag\n<content>\n```"  — the canonical multi-line shape
+    #   "```<content>```"                  — single-line, malformed but seen
+    # Both must be unwrapped: the previous regex-only path treated the
+    # single-line shape as one giant opening fence and consumed the whole
+    # response, tripping the empty-rewrite guard and dropping a clean
+    # rewrite for no good reason.
     cleaned = raw.strip()
     if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```[^\n]*\n?", "", cleaned)
-        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+        cleaned = cleaned[3:]
+        # Multi-line case: drop the optional language tag up to the first
+        # newline. We only look in the first 50 chars to avoid consuming
+        # legitimate inline backticks deeper in the content.
+        head = cleaned[:50]
+        if "\n" in head:
+            cleaned = cleaned.split("\n", 1)[1]
+        # Closing fence (works for both shapes).
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3]
+        cleaned = cleaned.strip()
     # Some models like to echo the fence markers back. Strip them if so.
     if cleaned.startswith(_UNTRUSTED_FENCE_BEGIN):
         cleaned = cleaned[len(_UNTRUSTED_FENCE_BEGIN):].lstrip()

@@ -253,3 +253,97 @@ class TestRewriteSweepBehaviour:
         persisted = db.get_all_conversation_summaries()[0]["summary"]
         assert persisted == "User asked X."
         assert "```" not in persisted
+
+    def test_strips_single_line_backtick_wrap(self, tmp_path, monkeypatch):
+        r"""Regression: the previous regex strip treated ``\`\`\`X\`\`\``` as
+        one giant opening fence and consumed the whole response, tripping
+        the empty-rewrite guard and dropping a perfectly good rewrite.
+        The fix unwraps both single-line and multi-line fence shapes."""
+        db = Database(tmp_path / "jarvis.db")
+        _seed(db, [
+            ("2026-04-10", "User asked X. The assistant could not help.", None),
+        ])
+
+        monkeypatch.setattr(
+            cmod, "call_llm_direct",
+            lambda *a, **k: "```User asked X.```",
+        )
+        events = list(rewrite_all_diary_summaries(
+            db, ollama_base_url="http://localhost", ollama_chat_model="test",
+        ))
+
+        # The rewrite must land — not get dropped via the would_empty guard.
+        assert events[0]["rewritten"] is True
+        assert events[0]["would_empty"] is False
+        persisted = db.get_all_conversation_summaries()[0]["summary"]
+        assert persisted == "User asked X."
+
+    def test_strips_language_tagged_fences(self, tmp_path, monkeypatch):
+        """Models often emit ```text\\n...\\n``` despite being told no
+        markdown. The language tag (anything between the opening ``` and
+        the first newline) must be dropped along with the fence."""
+        db = Database(tmp_path / "jarvis.db")
+        _seed(db, [
+            ("2026-04-10", "User asked X. The assistant could not help.", None),
+        ])
+
+        monkeypatch.setattr(
+            cmod, "call_llm_direct",
+            lambda *a, **k: "```text\nUser asked X.\n```",
+        )
+        list(rewrite_all_diary_summaries(
+            db, ollama_base_url="http://localhost", ollama_chat_model="test",
+        ))
+
+        persisted = db.get_all_conversation_summaries()[0]["summary"]
+        assert persisted == "User asked X."
+
+    def test_strips_echoed_untrusted_fence_markers(self, tmp_path, monkeypatch):
+        """The diary text is wrapped in ``<<<BEGIN UNTRUSTED WEB EXTRACT>>>``
+        markers before being passed to the model (treat-as-data framing).
+        Some models echo those markers back. They must be stripped so the
+        markers don't end up persisted in the diary."""
+        db = Database(tmp_path / "jarvis.db")
+        _seed(db, [
+            ("2026-04-10", "User asked X. The assistant could not help.", None),
+        ])
+
+        monkeypatch.setattr(
+            cmod, "call_llm_direct",
+            lambda *a, **k: (
+                "<<<BEGIN UNTRUSTED WEB EXTRACT>>>\n"
+                "User asked X.\n"
+                "<<<END UNTRUSTED WEB EXTRACT>>>"
+            ),
+        )
+        list(rewrite_all_diary_summaries(
+            db, ollama_base_url="http://localhost", ollama_chat_model="test",
+        ))
+
+        persisted = db.get_all_conversation_summaries()[0]["summary"]
+        assert persisted == "User asked X."
+        assert "BEGIN UNTRUSTED" not in persisted
+        assert "END UNTRUSTED" not in persisted
+
+    def test_whitespace_only_difference_is_treated_as_no_change(self, tmp_path, monkeypatch):
+        """Idempotence: the LLM may return content with different leading/
+        trailing whitespace. We compare stripped texts, so this should not
+        trigger a writeback (no embedding refresh, ts_utc preserved)."""
+        db = Database(tmp_path / "jarvis.db")
+        _seed(db, [
+            ("2026-04-15", "The user prefers Celsius.", None),
+        ])
+        original_ts = db.get_all_conversation_summaries()[0]["ts_utc"]
+
+        time.sleep(1.1)
+
+        monkeypatch.setattr(
+            cmod, "call_llm_direct",
+            lambda *a, **k: "  The user prefers Celsius.  \n",
+        )
+        events = list(rewrite_all_diary_summaries(
+            db, ollama_base_url="http://localhost", ollama_chat_model="test",
+        ))
+
+        assert events[0]["rewritten"] is False
+        assert db.get_all_conversation_summaries()[0]["ts_utc"] == original_ts
