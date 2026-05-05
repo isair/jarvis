@@ -2114,7 +2114,7 @@ def index() -> str:
 
                     <div class="sidebar-section" id="diary-maintenance-section">
                         <div class="sidebar-title">🧹 Maintenance</div>
-                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Ask the chat model to remove sentences that narrate assistant failures (e.g. 'the assistant could not…') from old diary entries. The rest of each entry stays verbatim. No entries are deleted. Requires the chat model to be running.">
+                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Ask the chat model to remove sentences that narrate assistant failures (e.g. 'the assistant could not...') from old diary entries. The rest of each entry stays verbatim. No entries are deleted. Requires the chat model to be running.">
                             Clean up deflection narration
                         </button>
                         <button class="diary-maintenance-btn" id="btn-optimise-topics" title="Merge near-synonym tags, normalise casing, and split compound tags across all diary entries. Requires the chat model to be running.">
@@ -3455,7 +3455,7 @@ def index() -> str:
                     <p style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
                         Asks the chat model to rewrite each old diary entry, removing only
                         sentences that narrate the assistant's failures (for example
-                        "the assistant could not…", "offered to search…", "did not have
+                        "the assistant could not...", "offered to search...", "did not have
                         information"). The rest of each entry stays verbatim.
                     </p>
                     <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
@@ -3490,16 +3490,33 @@ def index() -> str:
             document.getElementById('btn-start-scrub').addEventListener('click', async () => {
                 overlay.dataset.scrubbing = 'true';
                 document.getElementById('scrub-progress').style.display = 'block';
-                document.getElementById('btn-start-scrub').disabled = true;
-                document.getElementById('btn-start-scrub').textContent = 'Cleaning…';
+                // The sweep is one synchronous LLM call per row; on a
+                // multi-year diary that's many minutes. The user must
+                // be able to bail out without closing the browser. When
+                // the AbortController fires, the fetch reader rejects
+                // with AbortError and the Flask generator gets a closed
+                // pipe on its next yield, ending the sweep cleanly. Any
+                // rows already rewritten stay rewritten — partial
+                // progress is the design (the bulk sweep is idempotent,
+                // so a re-run picks up where this run stopped).
+                const controller = new AbortController();
+                let processed = 0;
+                let totalRows = 0;
+                document.getElementById('scrub-actions').innerHTML = `
+                    <button class="modal-btn secondary" id="btn-abort-scrub">Abort</button>
+                `;
+                document.getElementById('btn-abort-scrub').addEventListener('click', () => {
+                    controller.abort();
+                });
 
                 try {
-                    const resp = await fetch('/api/diary/scrub-deflections', { method: 'POST' });
+                    const resp = await fetch('/api/diary/scrub-deflections', {
+                        method: 'POST',
+                        signal: controller.signal,
+                    });
                     const reader = resp.body.getReader();
                     const decoder = new TextDecoder();
                     let buffer = '';
-                    let processed = 0;
-                    let totalRows = 0;
 
                     while (true) {
                         const { done, value } = await reader.read();
@@ -3523,7 +3540,7 @@ def index() -> str:
                                         ? `${processed} / ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'}`
                                         : `${processed} entr${processed === 1 ? 'y' : 'ies'}`;
                                     document.getElementById('scrub-count').textContent = countLabel;
-                                    document.getElementById('scrub-status').textContent = `Cleaning ${msg.date_utc}…`;
+                                    document.getElementById('scrub-status').textContent = `Cleaning ${msg.date_utc}...`;
                                     const log = document.getElementById('scrub-log');
                                     let icon, detail;
                                     if (msg.error) {
@@ -3584,13 +3601,31 @@ def index() -> str:
                         }
                     }
                 } catch (e) {
-                    document.getElementById('scrub-status').textContent = 'Connection error: ' + e.message;
-                    document.getElementById('scrub-bar').style.width = '0%';
-                    document.getElementById('scrub-actions').innerHTML = `
-                        <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
-                    `;
-                    delete overlay.dataset.scrubbing;
-                    showToast('Diary clean failed', 'error');
+                    if (e.name === 'AbortError') {
+                        // User-initiated abort. Partial progress stays
+                        // in the DB (the sweep is per-row idempotent and
+                        // re-running picks up where this run stopped).
+                        const summary = totalRows
+                            ? `Stopped — ${processed} of ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'} processed`
+                            : 'Stopped before any entries were processed';
+                        document.getElementById('scrub-status').textContent = summary;
+                        document.getElementById('scrub-actions').innerHTML = `
+                            <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                        `;
+                        delete overlay.dataset.scrubbing;
+                        loadStats();
+                        loadMemories();
+                        // No toast on user-initiated abort — the modal
+                        // status update communicates the partial result.
+                    } else {
+                        document.getElementById('scrub-status').textContent = 'Connection error: ' + e.message;
+                        document.getElementById('scrub-bar').style.width = '0%';
+                        document.getElementById('scrub-actions').innerHTML = `
+                            <button class="modal-btn secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                        `;
+                        delete overlay.dataset.scrubbing;
+                        showToast('Diary clean failed', 'error');
+                    }
                 }
             });
         }

@@ -1106,7 +1106,7 @@ def generate_conversation_summary(
     Generate a concise conversation summary from recent chunks and previous summary.
 
     Args:
-        recent_chunks: List of conversation chunks to summarize
+        recent_chunks: List of conversation chunks to summarise
         previous_summary: Previous summary for today (if any)
         ollama_base_url: Ollama API base URL
         ollama_chat_model: Model to use
@@ -1120,7 +1120,7 @@ def generate_conversation_summary(
 
     chunks_text = "\n".join(recent_chunks[-10:])  # Last 10 chunks to keep context manageable
 
-    system_prompt = """You are a conversation summarizer for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
+    system_prompt = """You are a conversation summariser for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
 
 Create a summary that:
 1. Captures the key topics discussed and important information shared
@@ -1356,7 +1356,7 @@ def search_conversation_memory_by_keywords(
 ) -> List[str]:
     """
     Search conversation memory using multiple keywords with OR logic.
-    This is optimized for memory enrichment where we have extracted topic keywords.
+    This is optimised for memory enrichment where we have extracted topic keywords.
 
     Args:
         db: Database instance
@@ -1463,7 +1463,7 @@ def search_conversation_memory(
 ) -> List[str]:
     """
     Search conversation memory with a natural language query or phrase.
-    This is optimized for direct user queries and tool usage.
+    This is optimised for direct user queries and tool usage.
 
     Args:
         db: Database instance

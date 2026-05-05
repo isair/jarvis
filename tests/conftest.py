@@ -17,6 +17,21 @@ if ROOT is None:
     ROOT = _this_file.parent.parent
 
 SRC = ROOT / "src"
+# Both ROOT and SRC are on sys.path so tests can write either
+#   ``from src.jarvis.x import ...``  (older style, ``src.`` prefix)
+# or
+#   ``from jarvis.x import ...``      (newer style, no prefix)
+# CAUTION: those two import paths resolve to *distinct module instances*.
+# A monkeypatch on ``src.jarvis.memory.conversation.X`` does NOT take
+# effect on ``jarvis.memory.conversation.X`` and vice versa. When a test
+# stubs out a symbol the production code calls, you MUST patch the same
+# module instance the production code resolves at runtime. Production code
+# in ``src/`` imports without the ``src.`` prefix (e.g. inside endpoint
+# handlers it's ``from jarvis.memory.conversation import ...``), so a test
+# that monkeypatches a symbol used by production should also import
+# without the prefix. This is the convention going forward; the older
+# ``from src.X`` style is left in place to avoid a churn-only sweep, but
+# do not adopt it for new tests that monkeypatch.
 # Add repository root so that 'src' is a package prefix.
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
