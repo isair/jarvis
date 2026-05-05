@@ -24,6 +24,7 @@ own spawn and is therefore trusted on the receive side.
 from __future__ import annotations
 
 import multiprocessing
+import sys
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -418,4 +419,15 @@ class SubprocessKeyboardListener:
         try:
             callback(key)
         except Exception as exc:
+            # Surface the failure on stderr in addition to debug_log.  Without
+            # this, an exception in `_on_key_press` (e.g. a callback that
+            # touches state which isn't ready yet) silently disappears unless
+            # voice_debug is on, and the user sees the hotkey doing nothing.
+            import traceback
+            print(
+                f"  ⚠️  Dictation listener callback raised: {exc!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            traceback.print_exc(file=sys.stderr)
             debug_log(f"dictation listener callback error: {exc}", "dictation")

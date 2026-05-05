@@ -263,6 +263,39 @@ class TestSubprocessListenerLifecycle:
 
         assert deliveries == ["boom", "ok"]
 
+    def test_callback_exception_is_surfaced_on_stderr(self, monkeypatch, capsys):
+        """An exception inside the user callback must be visible without
+        voice_debug.  Otherwise a hotkey doing nothing silently looks like the
+        listener subprocess is dead, when in fact the callback is throwing.
+        """
+        from pynput import keyboard as pk
+        from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener, _serialise_key
+
+        spawned = _install_pluggable_fake_context(monkeypatch)
+        _accelerate_supervisor(monkeypatch)
+
+        delivered: list = []
+
+        def boom(_key):
+            delivered.append(_key)
+            raise RuntimeError("simulated callback failure xyzzy")
+
+        listener = SubprocessKeyboardListener(on_press=boom, on_release=lambda _k: None)
+        try:
+            listener.start()
+            assert _wait_until(lambda: spawned and spawned[0][0] is not None)
+            conn, _proc = spawned[0]
+            conn.send_to_parent({"event": "press", "key": _serialise_key(pk.Key.ctrl_l)})
+            assert _wait_until(lambda: len(delivered) >= 1)
+            # Give the dispatcher a moment to print the traceback.
+            time.sleep(0.05)
+        finally:
+            listener.stop()
+
+        captured = capsys.readouterr()
+        assert "Dictation listener callback raised" in captured.err
+        assert "simulated callback failure xyzzy" in captured.err
+
     def test_error_event_does_not_trigger_respawn(self, monkeypatch):
         """A child-side error payload is logged but the live child stays alive."""
         from src.jarvis.dictation.listener_proc import SubprocessKeyboardListener
