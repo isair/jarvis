@@ -262,7 +262,7 @@ class SubprocessKeyboardListener:
         self._failure_count += 1
         if self._failure_count >= self._MAX_CONSECUTIVE_FAILURES:
             print(
-                "  ⚠️  Dictation listener crashed repeatedly — giving up. "
+                "  ⚠️  Dictation listener crashed repeatedly. Giving up. "
                 "Restart Jarvis to retry.",
                 flush=True,
             )

@@ -129,6 +129,81 @@ class TestHotkeyParsing:
         assert trigger is not None
 
 
+class TestModifierFamilyMatching:
+    """Modifier keys should match regardless of handedness.
+
+    pynput may report ``ctrl`` (generic, VK 0x11) or ``ctrl_l`` (VK 0xA2)
+    depending on the platform and whether the Listener runs in a subprocess.
+    The engine must treat these as equivalent when checking the hotkey.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_pynput(self):
+        try:
+            import pynput  # noqa: F401
+        except ImportError:
+            pytest.skip("pynput not installed")
+
+    def _make_engine_with_hotkey(self, hotkey):
+        from src.jarvis.dictation.dictation_engine import DictationEngine
+        import threading
+        return DictationEngine(
+            whisper_model_ref=lambda: None,
+            whisper_backend_ref=lambda: None,
+            mlx_repo_ref=lambda: None,
+            hotkey=hotkey,
+            sample_rate=16000,
+            transcribe_lock=threading.Lock(),
+        )
+
+    def test_generic_ctrl_satisfies_ctrl_l_requirement(self):
+        """Key.ctrl (VK 0x11) must satisfy a hotkey that requires Key.ctrl_l."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        # Simulate: pynput emits the generic Key.ctrl instead of Key.ctrl_l
+        assert engine._key_matches(pk.Key.ctrl, pk.Key.ctrl, pk.Key.ctrl_l)
+
+    def test_ctrl_l_satisfies_ctrl_requirement(self):
+        """Key.ctrl_l must satisfy a hotkey that requires the generic Key.ctrl."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert engine._key_matches(pk.Key.ctrl_l, pk.Key.ctrl_l, pk.Key.ctrl)
+
+    def test_ctrl_r_satisfies_ctrl_l_requirement(self):
+        """Right Ctrl must satisfy a left-Ctrl requirement (hotkey says 'ctrl')."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert engine._key_matches(pk.Key.ctrl_r, pk.Key.ctrl_r, pk.Key.ctrl_l)
+
+    def test_cmd_r_satisfies_cmd_requirement(self):
+        """Right Win / Cmd must satisfy a hotkey that requires generic Key.cmd."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert engine._key_matches(pk.Key.cmd_r, pk.Key.cmd_r, pk.Key.cmd)
+
+    def test_all_modifiers_held_with_generic_ctrl(self):
+        """_all_modifiers_held must return True when generic Key.ctrl is pressed
+        but the hotkey requires Key.ctrl_l."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        # Simulate pressing generic ctrl + cmd
+        engine._pressed_modifiers = {pk.Key.ctrl, pk.Key.cmd}
+        assert engine._all_modifiers_held()
+
+    def test_all_modifiers_held_with_sided_keys(self):
+        """Sided modifier keys (ctrl_l + cmd) must satisfy the hotkey requirement."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        engine._pressed_modifiers = {pk.Key.ctrl_l, pk.Key.cmd}
+        assert engine._all_modifiers_held()
+
+    def test_wrong_modifier_family_does_not_match(self):
+        """Alt must NOT satisfy a ctrl requirement."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert not engine._key_matches(pk.Key.alt_l, pk.Key.alt_l, pk.Key.ctrl_l)
+
+
 # ---------------------------------------------------------------------------
 # Engine lifecycle
 # ---------------------------------------------------------------------------

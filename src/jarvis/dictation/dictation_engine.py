@@ -486,6 +486,20 @@ _MODIFIER_MAP = {
     "win": "cmd",
 }
 
+# Groups of modifier key names that are treated as interchangeable during
+# hotkey matching.  pynput may report the generic variant (e.g. ``ctrl``,
+# VK 0x11) or a sided variant (``ctrl_l``, VK 0xA2) depending on the
+# platform and — critically — on whether the listener runs in a subprocess
+# where Windows can deliver a different VK code than in the parent process.
+# Treating the whole family as equivalent ensures ``ctrl+cmd`` detects
+# any Ctrl key regardless of handedness.
+_MODIFIER_FAMILIES: tuple[frozenset, ...] = (
+    frozenset({"ctrl", "ctrl_l", "ctrl_r"}),
+    frozenset({"shift", "shift_l", "shift_r"}),
+    frozenset({"alt", "alt_l", "alt_r"}),
+    frozenset({"cmd", "cmd_l", "cmd_r"}),
+)
+
 
 def format_hotkey_display(combo: str) -> str:
     """Format a hotkey string for human-readable display.
@@ -747,27 +761,54 @@ class DictationEngine:
         return key
 
     def _key_matches(self, key, nkey, target) -> bool:
-        """Check whether *key* (raw) / *nkey* (normalised) matches *target*."""
+        """Check whether *key* (raw) / *nkey* (normalised) matches *target*.
+
+        Modifier keys are matched by family so that, for example, a ``ctrl``
+        event (VK 0x11) satisfies a ``ctrl_l`` requirement.  This matters when
+        the pynput Listener runs in a subprocess where Windows may deliver the
+        generic variant of a modifier VK instead of the sided one.
+        """
         if target is None:
             return False
         if nkey == target or key == target:
             return True
-        if getattr(key, "name", None) == getattr(target, "name", None):
+        key_name = getattr(key, "name", None)
+        target_name = getattr(target, "name", None)
+        if key_name is not None and key_name == target_name:
             return True
+        # Treat sided and generic modifier variants as equivalent
+        # (e.g. ctrl_l satisfies ctrl requirement and vice versa).
+        if key_name and target_name:
+            for family in _MODIFIER_FAMILIES:
+                if key_name in family and target_name in family:
+                    return True
         if hasattr(key, "char") and key.char:
             if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
                 return True
         return False
 
     def _all_modifiers_held(self) -> bool:
-        """Return True when every required modifier is currently pressed."""
-        return all(
-            m in self._pressed_modifiers or any(
-                getattr(p, "name", None) == getattr(m, "name", None)
-                for p in self._pressed_modifiers
-            )
-            for m in self._modifiers
-        )
+        """Return True when every required modifier is currently pressed.
+
+        A pressed modifier satisfies a required one if they are identical or
+        belong to the same modifier family (e.g. a pressed ``ctrl`` satisfies
+        a required ``ctrl_l``).
+        """
+        def _satisfies(required, pressed_set) -> bool:
+            if required in pressed_set:
+                return True
+            req_name = getattr(required, "name", None)
+            for pressed in pressed_set:
+                pressed_name = getattr(pressed, "name", None)
+                if pressed_name == req_name:
+                    return True
+                if pressed_name and req_name:
+                    for family in _MODIFIER_FAMILIES:
+                        if pressed_name in family and req_name in family:
+                            return True
+            return False
+
+        return all(_satisfies(m, self._pressed_modifiers) for m in self._modifiers)
 
     def _on_key_press(self, key) -> None:
         nkey = self._normalise_key(key)
