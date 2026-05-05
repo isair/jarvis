@@ -30,9 +30,14 @@ except ImportError:
 class TestDiaryScrubEndpoint:
     @pytest.fixture(autouse=True)
     def setup_app(self, tmp_path, monkeypatch):
-        from src.desktop_app import memory_viewer
-        from src.jarvis.memory import conversation as cmod
-        from src.jarvis.memory.db import Database
+        # Import via the same module paths the endpoint itself uses
+        # (no ``src.`` prefix). With both repo-root and ``src/`` on
+        # ``sys.path`` (see ``tests/conftest.py``), ``src.jarvis.x`` and
+        # ``jarvis.x`` resolve to distinct module instances and a
+        # monkeypatch on one does not land on the other.
+        from desktop_app import memory_viewer
+        import jarvis.memory.conversation as cmod
+        from jarvis.memory.db import Database
 
         db_path = str(tmp_path / "test.db")
         # Seed before the endpoint opens its own connection — the
@@ -168,7 +173,7 @@ class TestDiaryScrubEndpoint:
         This test asserts the handler is wired in the always-run section
         of the page setup script, not nested inside ``initGraph``.
         """
-        from src.desktop_app import memory_viewer
+        from desktop_app import memory_viewer
 
         client = memory_viewer.app.test_client()
         html = client.get("/").get_data(as_text=True)
