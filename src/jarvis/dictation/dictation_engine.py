@@ -82,6 +82,7 @@ def _generate_beep_wav(freq: float = 520, duration: float = 0.10) -> bytes:
 
 _START_BEEP: Optional[bytes] = None
 _STOP_BEEP: Optional[bytes] = None
+_NOT_READY_BEEP: Optional[bytes] = None
 
 
 def _get_start_beep() -> bytes:
@@ -96,6 +97,20 @@ def _get_stop_beep() -> bytes:
     if _STOP_BEEP is None:
         _STOP_BEEP = _generate_beep_wav(freq=440, duration=0.10)
     return _STOP_BEEP
+
+
+def _get_not_ready_beep() -> bytes:
+    """Low-pitched, longer beep used when the hotkey fired but recording
+    cannot start (Whisper not loaded, audio device unavailable, …).
+
+    Distinct from the start/stop beeps so the user immediately recognises
+    "I pressed the hotkey but nothing is happening" instead of staring at a
+    silent screen.
+    """
+    global _NOT_READY_BEEP
+    if _NOT_READY_BEEP is None:
+        _NOT_READY_BEEP = _generate_beep_wav(freq=220, duration=0.20)
+    return _NOT_READY_BEEP
 
 
 def _play_beep(wav_data: bytes) -> None:
@@ -897,11 +912,20 @@ class DictationEngine:
                 return
             self._recording = True
 
-        # Check Whisper readiness
+        # Check Whisper readiness.  Spec: "Whisper not yet loaded → play
+        # 'not ready' beep, skip" — without audible/visible feedback the
+        # user just sees the hotkey doing nothing and assumes dictation
+        # itself is broken.
         model = self._whisper_model_ref()
         backend = self._whisper_backend_ref()
         if model is None and backend != "mlx":
             debug_log("whisper model not loaded — dictation skipped", "dictation")
+            print(
+                "  ⚠️  Dictation hotkey pressed but Whisper isn't loaded yet. "
+                "Wait for startup to finish, then try again.",
+                flush=True,
+            )
+            _play_beep(_get_not_ready_beep())
             self._recording = False
             return
 
@@ -955,6 +979,11 @@ class DictationEngine:
                 debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
+            print(
+                f"  ⚠️  Dictation could not open the audio stream: {exc}",
+                flush=True,
+            )
+            _play_beep(_get_not_ready_beep())
             self._recording = False
             if self._on_dictation_end:
                 self._on_dictation_end()
@@ -964,6 +993,11 @@ class DictationEngine:
             self._stream.start()
         except Exception as exc:
             debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
+            print(
+                f"  ⚠️  Dictation could not start the audio stream: {exc}",
+                flush=True,
+            )
+            _play_beep(_get_not_ready_beep())
             self._recording = False
             if self._on_dictation_end:
                 self._on_dictation_end()

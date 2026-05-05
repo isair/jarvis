@@ -357,6 +357,49 @@ class TestRecordingStateMachine:
         engine._start_recording()
         assert engine._recording is False
 
+    def test_start_recording_plays_not_ready_beep_when_whisper_missing(self, capsys):
+        """Hotkey fired but Whisper not loaded → audible + visible feedback.
+
+        Without this the user just sees the hotkey doing nothing and assumes
+        dictation itself is broken.  The spec requires a "not ready" beep
+        and the user-facing console line gives a hint about what to do.
+        """
+        from src.jarvis.dictation.dictation_engine import _get_not_ready_beep
+
+        engine = _make_engine(whisper_model_ref=lambda: None)
+        with patch("src.jarvis.dictation.dictation_engine._play_beep") as mock_beep:
+            engine._start_recording()
+        mock_beep.assert_called_once_with(_get_not_ready_beep())
+        captured = capsys.readouterr()
+        assert "Whisper" in captured.out and "⚠️" in captured.out
+        assert engine._recording is False
+
+    def test_start_recording_surfaces_audio_stream_open_failure(self, capsys):
+        """Audio device unavailable → not-ready beep + console line, not silence."""
+        from src.jarvis.dictation.dictation_engine import _get_not_ready_beep
+
+        engine = _make_engine()
+        with patch("src.jarvis.dictation.dictation_engine.sd") as mock_sd, \
+             patch("src.jarvis.dictation.dictation_engine._play_beep") as mock_beep:
+            mock_sd.query_devices.return_value = {"default_samplerate": 16000}
+            mock_sd.InputStream.side_effect = RuntimeError("no audio device")
+            engine._start_recording()
+        # Start beep would have fired before the failure; the not-ready beep
+        # must follow so the user knows recording aborted.
+        called_with = [c.args[0] for c in mock_beep.call_args_list]
+        assert _get_not_ready_beep() in called_with
+        captured = capsys.readouterr()
+        assert "audio stream" in captured.out and "⚠️" in captured.out
+        assert engine._recording is False
+
+    def test_not_ready_beep_is_distinct_from_start_and_stop(self):
+        """Not-ready beep must sound different so the user can tell them apart."""
+        from src.jarvis.dictation.dictation_engine import (
+            _get_not_ready_beep, _get_start_beep, _get_stop_beep,
+        )
+        assert _get_not_ready_beep() != _get_start_beep()
+        assert _get_not_ready_beep() != _get_stop_beep()
+
     def test_start_recording_allows_mlx_without_model(self):
         """MLX backend uses repo reference, not model object."""
         engine = _make_engine(
