@@ -3,7 +3,7 @@ Tests for ``optimise_diary_topics`` — the LLM-driven bulk sweep that
 normalises topic tags across every row in ``conversation_summaries``.
 
 Merges near-synonyms, splits compound tags, and normalises casing.
-Mirrors the shape of ``scrub_all_diary_summaries``: generator contract,
+Mirrors the shape of ``rewrite_all_diary_summaries``: generator contract,
 fail-open semantics, audit-trail preservation, and privacy constraints.
 """
 

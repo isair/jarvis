@@ -1,10 +1,14 @@
 """Tests for the diary scrub HTTP endpoint.
 
 The endpoint streams NDJSON, and the contract under test is:
-1. it walks every diary row and writes back cleaned text;
+1. it walks every diary row and writes back rewritten text;
 2. event payloads contain only counts, never raw summary text — the diary
    clean button must not become a data-exfiltration channel through the
    streaming progress UI.
+
+The endpoint is now backed by an LLM rewrite (the chat model is asked to
+remove deflection narration from each row). Tests stub the LLM so they
+stay deterministic and offline.
 """
 
 from __future__ import annotations
@@ -26,8 +30,14 @@ except ImportError:
 class TestDiaryScrubEndpoint:
     @pytest.fixture(autouse=True)
     def setup_app(self, tmp_path, monkeypatch):
-        from src.desktop_app import memory_viewer
-        from src.jarvis.memory.db import Database
+        # Import via the same module paths the endpoint itself uses
+        # (no ``src.`` prefix). With both repo-root and ``src/`` on
+        # ``sys.path`` (see ``tests/conftest.py``), ``src.jarvis.x`` and
+        # ``jarvis.x`` resolve to distinct module instances and a
+        # monkeypatch on one does not land on the other.
+        from desktop_app import memory_viewer
+        import jarvis.memory.conversation as cmod
+        from jarvis.memory.db import Database
 
         db_path = str(tmp_path / "test.db")
         # Seed before the endpoint opens its own connection — the
@@ -53,6 +63,24 @@ class TestDiaryScrubEndpoint:
 
         # Make the endpoint use the seeded path.
         monkeypatch.setattr(memory_viewer, "_get_db_path", lambda: db_path)
+
+        # Stub the LLM rewrite call. The fake model returns a text with the
+        # known-bad sentences stripped out and everything else verbatim.
+        # This keeps the endpoint test deterministic; the rewrite logic
+        # itself is exercised in tests/test_diary_rewrite_sweep.py.
+        def fake_rewrite(base_url, model, system_prompt, user_prompt, **kwargs):
+            # The user prompt is the diary text wrapped in untrusted-input
+            # fence markers — strip them to recover the original.
+            text = user_prompt
+            for marker in ("<<<BEGIN UNTRUSTED WEB EXTRACT>>>", "<<<END UNTRUSTED WEB EXTRACT>>>"):
+                text = text.replace(marker, "")
+            text = text.replace("Return the cleaned text only.", "").strip()
+            # Drop any sentence containing "the assistant".
+            sentences = [s.strip() for s in text.split(".") if s.strip()]
+            kept = [s for s in sentences if "the assistant" not in s.lower()]
+            return ". ".join(kept) + ("." if kept else "")
+
+        monkeypatch.setattr(cmod, "call_llm_direct", fake_rewrite)
 
         memory_viewer.app.config["TESTING"] = True
         self.client = memory_viewer.app.test_client()
@@ -102,15 +130,15 @@ class TestDiaryScrubEndpoint:
     def test_progress_event_keys_are_a_known_whitelist(self):
         """Defence-in-depth for the privacy contract: rather than just
         proving sentinels are absent, lock down the *shape* of progress
-        events. Any future field added to ``scrub_all_diary_summaries``
+        events. Any future field added to ``rewrite_all_diary_summaries``
         that could carry summary text must trip this test, forcing a
         review.
         """
         events = self._stream()
         allowed = {
             "type", "processed", "total",
-            "date_utc", "sentences_removed", "chars_before", "chars_after",
-            "kept_original", "embedding_refreshed", "error",
+            "date_utc", "chars_before", "chars_after",
+            "rewritten", "would_empty", "embedding_refreshed", "error",
         }
         for ev in events:
             if ev.get("type") != "progress":
@@ -128,9 +156,9 @@ class TestDiaryScrubEndpoint:
         complete = events[-1]
         assert complete["type"] == "complete"
         assert complete["rows"] == 3
-        assert complete["rows_changed"] == 2
-        assert complete["total_sentences_removed"] == 2
-        assert complete["rows_kept_original"] == 0
+        # Two of the three rows had assistant-deflection sentences.
+        assert complete["rows_rewritten"] == 2
+        assert complete["rows_would_empty"] == 0
 
     def test_diary_button_handler_wired_outside_graph_init(self):
         """Regression for the field bug where clicking the diary maintenance
@@ -145,7 +173,7 @@ class TestDiaryScrubEndpoint:
         This test asserts the handler is wired in the always-run section
         of the page setup script, not nested inside ``initGraph``.
         """
-        from src.desktop_app import memory_viewer
+        from desktop_app import memory_viewer
 
         client = memory_viewer.app.test_client()
         html = client.get("/").get_data(as_text=True)
