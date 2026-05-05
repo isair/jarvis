@@ -6,7 +6,7 @@ The diary summariser (`conversation.py::generate_conversation_summary`) condense
 
 The summariser prompt enforces a fixed set of hygiene rules. Each rule exists because a specific field incident produced corrupted diary entries that misled later sessions. Rules are cumulative — none supersedes another.
 
-The prompt is the first layer. A second deterministic layer (`scrub_deflection_sentences`) runs on every diary write and is also exposed as a one-shot bulk sweep for cleaning historical poisoning. This mirrors the two-layer defence the knowledge graph already has (extractor BANNED FACT FORMS at write-time, deterministic merge-time rewrite for historical data — see [`graph.spec.md`](graph.spec.md)).
+The summariser prompt is the only write-time defence. There is no post-process scrub — the prompt is single-source-of-truth, language-agnostic, and improves automatically as the underlying chat model improves. Historical entries written before the prompt was tightened can be cleaned via a user-triggered LLM rewrite (see [LLM Rewrite Sweep](#llm-rewrite-sweep)).
 
 ## Core Behaviour
 
@@ -41,35 +41,44 @@ Unrelated topics must never be welded into one grammatical clause. No shared "an
 
 All three rules apply in any language, not only English. The prompt states this explicitly because small models otherwise assume the rule is keyed to the English phrases it names.
 
-## Post-Process Scrub (Deterministic Safety Net)
+## LLM Rewrite Sweep
 
-`scrub_deflection_sentences(text)` runs every diary write and is also exposed as the bulk sweep `scrub_all_diary_summaries(db)` for cleaning historical rows.
+`rewrite_all_diary_summaries(db, ollama_base_url, ollama_chat_model, ...)` is a user-triggered bulk operation that walks every row in `conversation_summaries` and asks the chat model to remove deflection narration from each. It exists for cleaning **historical** poisoning from rows written before the summariser prompt was tightened. There is no equivalent on the write path — new writes rely on the prompt alone.
 
-**Why a second layer:** field measurement on the smallest supported model (gemma4:e2b) showed roughly 40% of post-rule writes still contained banned phrasing despite rule 6 of the prompt. The prompt reduces the leak; it does not eliminate it on small models. A deterministic pass catches what slips through.
+**Why an LLM rather than regex:** the leak shows up in any language the user speaks, in any phrasing the model invents. A regex set is English-first by definition (you can only enumerate the patterns you can think of) and grows into a whack-a-mole. A small instruction-following model handles the semantic check in one shot, in any language, and improves automatically as the user's chat model upgrades. Mirrors `optimise_diary_topics` in shape and privacy guarantees.
 
-**What it does:**
-- Splits the summary into sentences and drops any sentence whose content matches `DEFLECTION_PATTERNS` — narrow regexes covering "the assistant `<failure verb>`" shapes (`was unable`, `could not`, `did not have`, `offered to search/help/look`, `suggested checking`, `recommended consulting`, `lacks/cannot access`, `clarified that … could not`, `explained it could not`).
-- Drops the **whole sentence** containing a match, never just the phrase. Half-sentences corrupt the record worse than the original leak.
-- Returns the input unchanged if scrubbing would empty the summary outright. An empty diary entry is worse than a slightly-leaky one — downstream retrieval treats absence as "no record" and the user loses the topic of the conversation entirely. The "would have removed" count is still surfaced so callers can log the near-miss.
-- Idempotent — running twice produces the same output, so the bulk sweep is safe to re-run.
+**Prompt contract (`_REWRITE_DEFLECTION_SYSTEM_PROMPT`):**
+- Return the entry with EVERY sentence removed whose subject is the assistant and whose verb describes inability, deflection, hesitation, or non-knowledge.
+- Keep every other sentence verbatim — no paraphrasing, reordering, translating, or "improving".
+- Keep attributed assistant claims ("the assistant said Possessor is a 2020 film") — those carry information.
+- Keep user-stated facts and tool-grounded data — those are not assistant failures.
+- Output the cleaned text only. Empty string if the entire summary is deflection. Verbatim input if nothing needs removing.
+- Applies in every language; do NOT translate the output.
 
-**Language scope:** the regex set is English-first because every poisoned row in the field sample was English. The prompt rule itself is multilingual, so the LLM-side defence still covers non-English writes; the regex is the deterministic safety net for the dominant case.
+**Untrusted-input fence:** the diary text is wrapped in `<<<BEGIN UNTRUSTED WEB EXTRACT>>>` / `<<<END UNTRUSTED WEB EXTRACT>>>` markers (the same fence used for web-search content) before being passed to the model, so a row containing what looks like instructions is treated as data, not as a directive to follow. The fence markers, if echoed back, are stripped from the response.
 
-**Privacy:** the bulk sweep streams per-row events as `{date_utc, sentences_removed, chars_before, chars_after, kept_original, embedding_refreshed, error?}` — counts only, never raw summary text. The `error` value is the exception class name only (e.g. `"RuntimeError"`), never the stringified exception message, because Python exception messages can echo offending input back to the caller. The progress-event key set is locked behind a whitelist test so any future field addition forces deliberate review (`tests/test_memory_viewer_diary_scrub_api.py::test_progress_event_keys_are_a_known_whitelist`). The diary clean button must not become a data-exfiltration channel through the streaming progress UI.
+**Empty-rewrite guard:** if the model returns an empty string (a row that was *entirely* deflection), the original is kept and a `would_empty: true` flag is surfaced. An empty diary entry is worse than a slightly-leaky one — downstream retrieval treats absence as "no record" and the user loses the topic entirely.
 
-**Audit trail:** the bulk sweep preserves each row's original `ts_utc` on rewrite. A maintenance pass that stomped `ts_utc` would make every cleaned row look as though it had been written today, destroying the only signal users have to verify when each diary entry was actually authored.
+**Privacy:** the sweep streams per-row events as `{date_utc, chars_before, chars_after, rewritten, would_empty, embedding_refreshed, error?}` — counts and booleans only, never raw summary text. The `error` value is the exception class name only (e.g. `"RuntimeError"`), never the stringified exception message, because Python exception messages can echo offending input back to the caller. The progress-event key set is locked behind a whitelist test so any future field addition forces deliberate review (`tests/test_memory_viewer_diary_scrub_api.py::test_progress_event_keys_are_a_known_whitelist`). The diary clean button must not become a data-exfiltration channel through the streaming progress UI.
 
-**Vector embedding:** when the bulk sweep rewrites a row, the embedding stored alongside the summary is regenerated inline from the cleaned text if the caller passes both an `ollama_base_url` and an `ollama_embed_model`. Without an embed model the rewrite still happens (FTS stays consistent via SQLite triggers); the vector embedding stays anchored to the pre-scrub text until the next user-driven write to that date. Per-row embedding refresh is best-effort: an embedding-service failure is logged but does not roll back the summary write.
+**Audit trail:** preserves each row's original `ts_utc` on rewrite. A maintenance pass that stomped `ts_utc` would make every cleaned row look as though it had been written today, destroying the only signal users have to verify when each diary entry was actually authored.
 
-**Cache invariant:** diary content is never cached across turns. The reply engine's hot cache (`DialogueMemory._hot_cache`) holds three kinds of value — the warm-profile block (graph-derived, not diary), the per-query router decision, and the per-query memory-extractor parameters (keywords, questions, time window). None are derived from diary text, so the scrub does not need a listener-style invalidation hook. The actual diary search (`search_conversation_memory_by_keywords` → `db.search_hybrid`) hits SQLite live on every enrichment-bearing turn. Concurrency between the sweep and an in-flight reply is handled by SQLite WAL: separate `Database` instances on different connections, but WAL serialises writes against reads at the file level. Counterpart to the graph's `invalidate_warm_profile` listener — the graph needs one because the warm profile is a *derived cached projection* of node data; the diary has no such projection, so no listener is needed. Future diary-content caches (if any) must follow this rule: either invalidate on scrub via a listener, or do not cache across turns. There is one inherent limitation independent of caching: the previous turn's already-spoken assistant reply lives in `DialogueMemory._messages`. If a follow-up lands on the recall-gate fast path (hot window covers the topic), the user is answered from rolling dialogue rather than a fresh enrichment. The scrub does not retroactively rewrite spoken history; the next turn that triggers fresh enrichment sees the cleaned diary.
+**Vector embedding:** when a row is rewritten, the embedding stored alongside the summary is regenerated inline from the cleaned text if the caller passes both an `ollama_base_url` and an `ollama_embed_model`. Without an embed model the rewrite still happens (FTS stays consistent via SQLite triggers); the vector embedding stays anchored to the pre-rewrite text until the next user-driven write to that date. Per-row embedding refresh is best-effort: an embedding-service failure is logged but does not roll back the summary write.
 
-**Read paths:** none. The scrub only touches writes (per-summary on `update_daily_conversation_summary`) and the bulk sweep (`scrub_all_diary_summaries`). Read-time diary retrieval is untouched — by design, retrieval of cleaned data needs no extra filtering.
+**Fail-open at every layer:**
+- LLM call failure on a row → row is left untouched and reported with `error` set to the exception class name.
+- Empty rewrite → row is left untouched, `would_empty: true` surfaced.
+- Per-row write failure → row is reported with `error`, the sweep continues.
+
+**Cache invariant:** diary content is never cached across turns. The reply engine's hot cache holds the warm-profile block (graph-derived, not diary), the per-query router decision, and the per-query memory-extractor parameters. None are derived from diary text, so the rewrite sweep does not need a listener-style invalidation hook. The actual diary search hits SQLite live on every enrichment-bearing turn. Concurrency between the sweep and an in-flight reply is handled by SQLite WAL. There is one inherent limitation: the previous turn's already-spoken assistant reply lives in `DialogueMemory._messages`. If a follow-up lands on the recall-gate fast path, the user is answered from rolling dialogue rather than a fresh enrichment. The rewrite does not retroactively rewrite spoken history; the next turn that triggers fresh enrichment sees the cleaned diary.
+
+**Read paths:** none. The rewrite only touches the bulk sweep. Read-time diary retrieval is untouched.
 
 ## Bulk Sweep UI
 
 The memory viewer's diary tab carries a Maintenance section in the sidebar with two operations:
 
-**"🧹 Clean up deflection narration"** — drops sentences that narrate assistant failures from old diary entries. The rest of each entry is preserved, no diary entries are deleted, and a summary that is *entirely* deflection narration is kept rather than emptied. Backed by `POST /api/diary/scrub-deflections` (NDJSON-streaming) which calls `scrub_all_diary_summaries`.
+**"🧹 Clean up deflection narration"** — asks the chat model to rewrite each old diary entry, removing only sentences that narrate assistant failures. The rest of each entry is preserved verbatim, no diary entries are deleted, and a summary that is *entirely* deflection narration is kept rather than emptied. Requires the chat model to be running. Backed by `POST /api/diary/scrub-deflections` (NDJSON-streaming) which calls `rewrite_all_diary_summaries`. The endpoint URL still says "scrub" for backwards compatibility; the implementation is now LLM-driven.
 
 **"🏷️ Optimise tags"** — normalises topic tags across all diary entries using the configured chat model. Because each diary write generates topics independently, the same concept may accumulate multiple surface forms over time ("cook", "cooking", "meal prep"). The optimiser collects all unique tags, makes a single LLM call to propose a normalised taxonomy (merging synonyms, splitting compound tags), then applies the mapping to every row whose tags change. Backed by `POST /api/diary/optimise-topics` (NDJSON-streaming) which calls `optimise_diary_topics`. Requires the chat model to be running. Diary text is untouched; only the `topics` column is rewritten. Preserves `ts_utc` on every rewrite. Re-embeds updated rows best-effort. Fail-open: LLM failure or bad JSON leaves all rows unchanged.
 
@@ -80,7 +89,7 @@ The memory viewer's diary tab carries a Maintenance section in the sidebar with 
 1. Collect all unique topic strings from every `conversation_summaries` row (one pass, in memory).
 2. One `call_llm_direct` call to `ollama_chat_model` with `_TOPIC_OPTIMISE_SYSTEM_PROMPT` — returns a JSON object mapping each input tag to its normalised form (string for merge, list for split).
 3. Apply the mapping via `_apply_topic_mapping()` to each row's comma-separated topics string. Deduplicates the result while preserving order so a merge that produces two identical tags (e.g. "cook, cooking" → "cooking, cooking") collapses cleanly.
-4. Write back only rows whose topics changed, preserving `ts_utc` (same contract as the deflection scrub).
+4. Write back only rows whose topics changed, preserving `ts_utc` (same contract as the deflection rewrite).
 5. Re-embed updated rows if an embed model is configured.
 
 Yields one event per row: `{date_utc, topics_changed, old_topic_count, new_topic_count, error?}`. No raw tag values in events — counts only.
@@ -95,10 +104,8 @@ Idempotent once the mapping has been applied: a second run finds no tags to chan
 | `test_omits_deflection_when_topic_never_resolved` | `evals/test_diary_summariser_hygiene.py` | Rule 1, unresolved case |
 | `test_unrelated_topics_are_not_welded_into_one_clause` | `evals/test_diary_summariser_hygiene.py` | Rule 3 |
 | `test_preserves_legitimate_user_preferences` | `evals/test_diary_summariser_hygiene.py` | Cross-rule: hygiene must not strip real content |
-| `test_scrub_catches_residual_leak_when_prompt_lets_through_deflection` | `evals/test_diary_summariser_hygiene.py` | Post-process scrub safety net |
 | `TestSummariserForbidsDeflectionNarration` | `tests/test_diary_poisoning_defence.py` | Prompt-content regression (rules 1–3) |
-| `TestScrubDropsBannedSentences` / `TestScrubPreservesLegitimateContent` / `TestScrubEdgeCases` | `tests/test_diary_deflection_scrub.py` | Scrub-function unit tests |
-| `TestScrubSweepBehaviour` | `tests/test_diary_scrub_sweep.py` | Bulk-sweep DB integration |
+| `TestRewriteSweepBehaviour` | `tests/test_diary_rewrite_sweep.py` | LLM-rewrite bulk sweep DB integration, fail-open, audit trail |
 | `TestDiaryScrubEndpoint` | `tests/test_memory_viewer_diary_scrub_api.py` | Endpoint streaming + privacy contract |
 | `TestOptimiseContract` / `TestOptimiseMerge` / `TestOptimiseSplit` / `TestOptimiseDeduplicate` / `TestOptimiseAuditTrail` / `TestOptimiseFailOpen` / `TestOptimiseIdempotence` | `tests/test_diary_topic_optimise.py` | Tag optimisation — generator contract, merge/split semantics, dedup, audit trail, fail-open, idempotence |
 

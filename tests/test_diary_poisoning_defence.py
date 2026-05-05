@@ -42,15 +42,20 @@ class TestSummariserForbidsDeflectionNarration:
     def test_prompt_forbids_narrating_failures(self):
         prompt = self._capture_system_prompt()
         lowered = prompt.lower()
-        # The prompt must explicitly say "do not narrate assistant failures/deflections".
-        assert "do not narrate" in lowered or "do not record" in lowered or "do not preserve" in lowered, (
-            "Summariser prompt must explicitly forbid narrating assistant failures."
-        )
-        # Must name at least one specific failure pattern — "deflect", "lacked", or
-        # "offered to search" — otherwise the rule is too abstract for small models.
-        assert any(term in lowered for term in ("deflect", "lacked", "offered to search", "failed to answer")), (
-            "Summariser prompt must name specific failure patterns to omit."
-        )
+        # The prompt must explicitly forbid narrating assistant failures.
+        # Accepts any clear injunction shape ("never narrate", "do not narrate",
+        # "drop every sentence", etc.) — what matters is that the directive
+        # is present, not its exact phrasing.
+        assert any(injunction in lowered for injunction in (
+            "never narrate", "do not narrate", "do not record", "do not preserve",
+            "drop every sentence", "drop all forms of",
+        )), "Summariser prompt must explicitly forbid narrating assistant failures."
+        # Must name at least one specific failure pattern — "deflect", "lacked",
+        # "offered to search", "failed to" — otherwise the rule is too abstract
+        # for small models.
+        assert any(term in lowered for term in (
+            "deflect", "lacked", "offered to search", "failed to",
+        )), "Summariser prompt must name specific failure patterns to omit."
 
     def test_prompt_explains_why_failures_must_be_omitted(self):
         """The prompt must give a reason, so the LLM generalises to variants it didn't see."""

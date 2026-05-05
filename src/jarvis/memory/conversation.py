@@ -17,129 +17,141 @@ _UNTRUSTED_FENCE_BEGIN = "<<<BEGIN UNTRUSTED WEB EXTRACT>>>"
 _UNTRUSTED_FENCE_END = "<<<END UNTRUSTED WEB EXTRACT>>>"
 
 
-# ── Deflection scrub (post-process safety net) ───────────────────────────
+# ── Deflection rewrite (LLM-driven historical cleanup) ────────────────────
 #
-# The summariser prompt's rule 6 (added in #232) tells the LLM not to
-# narrate assistant failures, and on bigger models it works. On the
-# smallest supported model (gemma4:e2b) the prompt rule reduces but does
-# not eliminate the leak — field measurement on the author's diary
-# showed roughly 40% of post-rule writes still containing banned phrasing.
-# This regex pass runs on every diary write *and* a bulk button can replay
-# it across the whole ``conversation_summaries`` table to clean historical
-# poisoning. Mirrors the two-layer defence the knowledge graph already has
-# (#291 extractor BANNED FACT FORMS at write-time, #298/#305 deterministic
-# merge-time rewrite for historical data).
+# The summariser prompt forbids deflection narration at write time. There
+# is no post-write scrub — relying on the prompt keeps the pipeline single-
+# layered and language-agnostic. Old rows written before the prompt was
+# tightened can still contain leaked phrasing; ``rewrite_all_diary_summaries``
+# is a user-triggered bulk sweep that asks the chat model to rewrite each
+# row, removing sentences that narrate assistant failures while keeping
+# everything else verbatim.
 #
-# Patterns are intentionally narrow. The bar for matching is "this is a
-# sentence whose *purpose* is to record an assistant failure" — false
-# positives erase real content and that poisons the diary in a different
-# way (silent fact loss). Precision over recall: a few residual leaks are
-# survivable, an erased preference is not.
-#
-# The patterns are English-first because every poisoned row in the
-# author's diary was English; the summariser prompt *itself* states the
-# rule applies in any language so the LLM-side defence is multilingual.
-# The regex is the deterministic safety net for the dominant case.
-DEFLECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(p, re.IGNORECASE)
-    for p in (
-        # "the assistant <failure verb>" — the canonical shape.
-        r"the assistant\s+(was unable|could not|did not have|does not have|"
-        r"offered to (search|help|look)|suggested checking|"
-        r"recommended consulting|clarified that[^.]{0,40}(could not|did not have|cannot|limit)|"
-        r"explained (it|that it) (could not|cannot|does not|did not)|"
-        r"stated[^.]{0,40}(could not|did not have)|"
-        r"indicated[^.]{0,40}(could not|did not have))",
-        # Capability-denial framing: "the assistant lacks X", "cannot access Y".
-        r"the assistant\s+(lacks|cannot|can'?t)\s+(access|the ability|information|specific information|details)",
-    )
-)
+# Why an LLM rather than regex: the leak shows up in any language the user
+# speaks, in any phrasing the model invents. A regex zoo is a whack-a-mole
+# we lose. A small instruction-following model handles the semantic check
+# in one shot, in any language, and improves automatically as the user's
+# chat model upgrades.
 
-# Sentence splitter used by the scrub. ``re.split`` with a positive
-# lookbehind keeps the terminator attached to the sentence so we don't
-# corrupt punctuation when reassembling. Splits on `.`, `!`, `?` followed
-# by whitespace or end-of-string. Doesn't try to be language-perfect — the
-# diary summariser writes in clean prose and the few edge cases (initials,
-# decimals) only cost us a slightly conservative split, never a wrong
-# scrub decision.
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-ZÀ-ſ])")
+_REWRITE_DEFLECTION_SYSTEM_PROMPT = """You are cleaning historical entries in a personal diary. Each entry summarises one day's conversation between a user and an AI assistant.
+
+Your task: return the entry with EVERY sentence removed whose subject is the assistant and whose verb describes the assistant's own inability, deflection, hesitation, or non-knowledge. Keep every other sentence verbatim — do not paraphrase, reorder, translate, or "improve" anything else.
+
+Sentences to REMOVE (and any equivalent phrasing in any other language):
+- "The assistant could not / couldn't / cannot / can't / was not able / was unable / failed to ..."
+- "The assistant did not / didn't / does not / doesn't have / know / find / access ..."
+- "The assistant said / noted / explained / stated / clarified / acknowledged / admitted / apologised that it could not / cannot / didn't / does not / had no / lacked ..."
+- "The assistant offered to search / help / look, suggested checking, recommended consulting ..."
+- "The assistant lacks / has no / had no information / details / access ..."
+
+Sentences to KEEP (these are NOT deflections):
+- "The user asked about X." — record of a user request, no assistant failure narrated.
+- "The assistant said Possessor is a 2020 film by Brandon Cronenberg." — attributed factual claim.
+- "The user said they prefer Celsius." — user-stated fact.
+- "The user told the assistant to always reply in British English." — user directive, not assistant failure.
+- "The weather in London was 12°C." — tool-grounded fact.
+
+Output format: return the cleaned summary text only. No prose framing, no markdown, no explanation, no labels. Output the empty string if every sentence is a deflection. Output the input verbatim if nothing needs removing.
+
+This task applies in every language. Do NOT translate the output — keep the original language."""
 
 
-def scrub_deflection_sentences(text: Optional[str]) -> Tuple[str, int]:
-    """Drop sentences that narrate assistant failures.
+def _rewrite_diary_summary(
+    summary: str,
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    timeout_sec: float = 30.0,
+) -> Optional[str]:
+    """Ask the chat model to remove deflection narration from one summary.
 
-    Returns ``(cleaned_text, removed_sentence_count)``. The full sentence
-    containing a banned phrase is dropped, not just the phrase — leaving
-    half-sentences corrupts the record worse than the original leak.
-
-    If scrubbing would empty the summary outright (a rare conversation
-    that was *entirely* deflection), the original is returned unchanged.
-    Empty diary entries are worse than slightly-leaky ones — downstream
-    retrieval treats absence as "no record" and the user loses the topic
-    of the conversation entirely. The returned ``removed_sentence_count``
-    still reports what would have been dropped so the caller can log
-    "row would have been emptied — kept original".
+    Returns the rewritten text, or ``None`` on LLM failure. The empty
+    string is a legitimate result ("entire summary was deflection") but
+    callers must guard against persisting it (we keep the original in
+    that case — empty diary entries are worse than slightly-leaky ones).
     """
-    if not text:
-        return "", 0
+    if not summary or not summary.strip():
+        return summary
 
-    sentences = _SENTENCE_SPLIT.split(text.strip())
-    kept: list[str] = []
-    removed = 0
-    for sentence in sentences:
-        stripped = sentence.strip()
-        if not stripped:
-            continue
-        if any(pat.search(stripped) for pat in DEFLECTION_PATTERNS):
-            removed += 1
-            continue
-        kept.append(stripped)
+    try:
+        # Fence the diary content so the model treats it as data, not
+        # instructions. Same pattern used for untrusted web extracts —
+        # the diary may contain any past LLM output, which can include
+        # text that *looks* like instructions.
+        user_prompt = (
+            f"{_UNTRUSTED_FENCE_BEGIN}\n"
+            f"{summary}\n"
+            f"{_UNTRUSTED_FENCE_END}\n\n"
+            "Return the cleaned text only."
+        )
+        raw = call_llm_direct(
+            ollama_base_url,
+            ollama_chat_model,
+            _REWRITE_DEFLECTION_SYSTEM_PROMPT,
+            user_prompt,
+            timeout_sec=timeout_sec,
+        )
+    except Exception as e:
+        debug_log(
+            f"diary rewrite: LLM call failed — {type(e).__name__}",
+            "memory",
+        )
+        return None
 
-    if removed == 0:
-        return text, 0
+    if raw is None:
+        return None
 
-    if not kept:
-        # Would have emptied the summary — keep the original. The count is
-        # still surfaced so the caller can log the near-miss.
-        return text, removed
+    # Strip whitespace and any markdown fences the model may have wrapped
+    # around the response despite the instructions.
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[^\n]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+    # Some models like to echo the fence markers back. Strip them if so.
+    if cleaned.startswith(_UNTRUSTED_FENCE_BEGIN):
+        cleaned = cleaned[len(_UNTRUSTED_FENCE_BEGIN):].lstrip()
+    if cleaned.endswith(_UNTRUSTED_FENCE_END):
+        cleaned = cleaned[:-len(_UNTRUSTED_FENCE_END)].rstrip()
 
-    return " ".join(kept), removed
+    return cleaned
 
 
-def scrub_all_diary_summaries(
+def rewrite_all_diary_summaries(
     db: Database,
-    ollama_base_url: Optional[str] = None,
+    ollama_base_url: str,
+    ollama_chat_model: str,
     ollama_embed_model: Optional[str] = None,
     embed_timeout_sec: float = 15.0,
+    rewrite_timeout_sec: float = 30.0,
 ) -> Iterator[dict]:
-    """Walk every row in ``conversation_summaries`` and apply
-    ``scrub_deflection_sentences``. Writes back only when the row changed.
+    """Walk every row in ``conversation_summaries`` and ask the chat model
+    to remove deflection narration. Writes back only when the row changed.
 
-    Preserves the row's original ``ts_utc`` on rewrite — the audit trail
+    Preserves each row's original ``ts_utc`` on rewrite — the audit trail
     of when each summary was *originally* written must survive a
     maintenance pass.
 
     Regenerates the row's vector embedding inline when both
     ``ollama_base_url`` and ``ollama_embed_model`` are provided and the
-    DB has VSS enabled — otherwise the embedding stays based on the
-    pre-scrub text and vector search results drift from FTS results.
-    Embedding regeneration is *best-effort*: if the embedding service
-    fails we still keep the cleaned summary, since the FTS index stays
-    consistent via SQLite triggers regardless. The caller decides
-    whether to pass the embed model — for offline/local-only sweeps
-    where the user has no embedding service, omitting the args is fine.
+    DB has VSS enabled. Embedding regeneration is *best-effort*: if the
+    embedding service fails we still keep the cleaned summary, since the
+    FTS index stays consistent via SQLite triggers regardless.
 
-    Yields one event dict per row as the walk progresses, so a streaming
-    caller (NDJSON endpoint) can surface per-row feedback in real time
-    on diaries with many rows. Event payload contains *only* counts —
-    never raw summary text — so the streaming UI cannot leak diary
-    content into the user interface. Privacy first.
+    Yields one event dict per row as the walk progresses. Event payload
+    contains *only* counts and the date — never raw summary text — so
+    the streaming UI cannot leak diary content. Privacy first.
 
-    Fail-open: a row that raises during scrubbing is left untouched and
-    reported with an ``error`` field (a generic class name, never the
-    exception message itself, so a corrupted row's content cannot leak
-    via stringified exception state). The sweep continues with the
-    rest. Mirrors ``consolidate_all_populated_nodes`` in ``graph_ops.py``.
+    Fail-open at every layer:
+    - LLM call failure on a row → row is left untouched and reported
+      with ``error`` set to the exception class name only (never the
+      exception message — that can echo offending input back).
+    - Empty rewrite (model thinks the whole row was deflection) → row
+      is left untouched. An empty diary entry is worse than a slightly-
+      leaky one because retrieval treats absence as "no record". The
+      ``would_empty`` flag is surfaced so the UI can show the near-miss.
+    - Per-row write failure → row is reported with ``error``, the sweep
+      continues with the rest.
+
+    Mirrors ``optimise_diary_topics`` for shape and privacy guarantees.
     """
     can_reembed = bool(ollama_base_url and ollama_embed_model and db.is_vss_enabled)
 
@@ -148,88 +160,124 @@ def scrub_all_diary_summaries(
         date_utc = row["date_utc"]
         original = row["summary"] or ""
         chars_before = len(original)
-        try:
-            cleaned, removed = scrub_deflection_sentences(original)
-        except Exception as e:
-            debug_log(f"diary scrub: failed for {date_utc} — {type(e).__name__}", "memory")
+
+        if not original.strip():
             yield {
                 "date_utc": date_utc,
-                "sentences_removed": 0,
                 "chars_before": chars_before,
                 "chars_after": chars_before,
-                "kept_original": True,
-                # Surface only the exception class name. Stringifying the
-                # exception itself (``str(e)``) could echo row content
-                # back through the streaming UI on, e.g., a TypeError
-                # whose message embeds the offending value.
+                "rewritten": False,
+                "would_empty": False,
+                "embedding_refreshed": False,
+            }
+            continue
+
+        cleaned = _rewrite_diary_summary(
+            original,
+            ollama_base_url,
+            ollama_chat_model,
+            timeout_sec=rewrite_timeout_sec,
+        )
+        if cleaned is None:
+            # LLM failure on this row. Leave it untouched and continue.
+            yield {
+                "date_utc": date_utc,
+                "chars_before": chars_before,
+                "chars_after": chars_before,
+                "rewritten": False,
+                "would_empty": False,
+                "embedding_refreshed": False,
+                "error": "RewriteFailed",
+            }
+            continue
+
+        cleaned_stripped = cleaned.strip()
+        # Empty rewrite → keep the original. Empty diary entries are
+        # worse than leaky ones because retrieval treats absence as
+        # "no record" and the user loses the topic entirely.
+        if not cleaned_stripped:
+            yield {
+                "date_utc": date_utc,
+                "chars_before": chars_before,
+                "chars_after": chars_before,
+                "rewritten": False,
+                "would_empty": True,
+                "embedding_refreshed": False,
+            }
+            continue
+
+        if cleaned_stripped == original.strip():
+            yield {
+                "date_utc": date_utc,
+                "chars_before": chars_before,
+                "chars_after": chars_before,
+                "rewritten": False,
+                "would_empty": False,
+                "embedding_refreshed": False,
+            }
+            continue
+
+        embedding_refreshed = False
+        try:
+            summary_id = db.upsert_conversation_summary(
+                date_utc=date_utc,
+                summary=cleaned_stripped,
+                topics=row["topics"],
+                source_app=row["source_app"],
+                ts_utc=row["ts_utc"],
+            )
+        except Exception as e:
+            debug_log(
+                f"diary rewrite: write-back failed for {date_utc} — "
+                f"{type(e).__name__}",
+                "memory",
+            )
+            yield {
+                "date_utc": date_utc,
+                "chars_before": chars_before,
+                "chars_after": chars_before,
+                "rewritten": False,
+                "would_empty": False,
+                "embedding_refreshed": False,
                 "error": type(e).__name__,
             }
             continue
 
-        kept_original = cleaned == original
-        embedding_refreshed = False
-        if not kept_original:
+        if can_reembed:
             try:
-                summary_id = db.upsert_conversation_summary(
-                    date_utc=date_utc,
-                    summary=cleaned,
-                    topics=row["topics"],
-                    source_app=row["source_app"],
-                    ts_utc=row["ts_utc"],
+                text_for_embedding = f"{cleaned_stripped} {row['topics'] or ''}"
+                vec = get_embedding(
+                    text_for_embedding,
+                    ollama_base_url,
+                    ollama_embed_model,
+                    timeout_sec=embed_timeout_sec,
                 )
+                if vec is not None:
+                    db.upsert_summary_embedding(summary_id, vec)
+                    embedding_refreshed = True
             except Exception as e:
+                # Best-effort. Cleaned summary is already persisted;
+                # FTS stays consistent via triggers. A stale embedding
+                # is recoverable on the next user-driven write.
                 debug_log(
-                    f"diary scrub: write-back failed for {date_utc} — "
-                    f"{type(e).__name__}",
+                    f"diary rewrite: embedding refresh failed for "
+                    f"{date_utc} — {type(e).__name__}",
                     "memory",
                 )
-                yield {
-                    "date_utc": date_utc,
-                    "sentences_removed": 0,
-                    "chars_before": chars_before,
-                    "chars_after": chars_before,
-                    "kept_original": True,
-                    "error": type(e).__name__,
-                }
-                continue
 
-            if can_reembed:
-                try:
-                    text_for_embedding = f"{cleaned} {row['topics'] or ''}"
-                    vec = get_embedding(
-                        text_for_embedding,
-                        ollama_base_url,
-                        ollama_embed_model,
-                        timeout_sec=embed_timeout_sec,
-                    )
-                    if vec is not None:
-                        db.upsert_summary_embedding(summary_id, vec)
-                        embedding_refreshed = True
-                except Exception as e:
-                    # Best-effort. The cleaned summary is already
-                    # persisted; FTS stays consistent via triggers.
-                    # A stale vector embedding is recoverable on the
-                    # next user-driven write to that date.
-                    debug_log(
-                        f"diary scrub: embedding refresh failed for "
-                        f"{date_utc} — {type(e).__name__}",
-                        "memory",
-                    )
-
-            debug_log(
-                f"diary scrub: cleaned {date_utc} — {removed} sentence"
-                f"{'' if removed == 1 else 's'} removed "
-                f"({chars_before}→{len(cleaned)} chars, "
-                f"embedding_refreshed={embedding_refreshed})",
-                "memory",
-            )
+        debug_log(
+            f"diary rewrite: cleaned {date_utc} — "
+            f"{chars_before}→{len(cleaned_stripped)} chars "
+            f"(embedding_refreshed={embedding_refreshed})",
+            "memory",
+        )
 
         yield {
             "date_utc": date_utc,
-            "sentences_removed": removed,
             "chars_before": chars_before,
-            "chars_after": len(cleaned),
-            "kept_original": kept_original,
+            "chars_after": len(cleaned_stripped),
+            "rewritten": True,
+            "would_empty": False,
             "embedding_refreshed": embedding_refreshed,
         }
 
@@ -1065,17 +1113,43 @@ Create a summary that:
 3. Focuses on facts, decisions, and context that would be useful for future conversations
 4. Includes any personal information, preferences, or important events mentioned
 5. Maintains a neutral, factual tone
-6. Records what the user asked about and what was established as true — NOT the assistant's conversational missteps. Do NOT narrate moments where the assistant failed to answer, said it lacked information, offered to search, deflected, declined, or clarified its own limitations. Those events are transient and do not generalise; preserving them in the diary trains future sessions to repeat the same failures.
-   - If the assistant eventually answered (e.g. after calling a tool), summarise the final answer only.
-   - If the topic was raised but never resolved, record only the topic and the user's intent — strip out every phrase describing the assistant's inability, uncertainty, or offers to help.
-   - Never write phrases like "the assistant did not have/does not have information", "the assistant could not", "the assistant offered to search", "the assistant was unable", "the assistant clarified that it…", "the assistant lacks…", or their equivalents in any language.
+6. CRITICAL — never narrate the assistant's own failures, deflections, hesitations, or limitations. The diary records what the user shared and what was established as true. The assistant's own missteps are conversational noise. If preserved, they are retrieved by future sessions as "history" and prime the model to repeat the same failure.
 
-   Example of what NOT to write:
-     BAD: "The user asked about the book Piranesi. The assistant stated it did not have specific information on that book."
-   Example of the correct output:
+   Drop EVERY sentence whose subject is the assistant and whose verb describes inability, deflection, or non-knowledge. This includes (and is not limited to):
+   - "the assistant could not / couldn't / cannot / can't / was not able / was unable / failed to …"
+   - "the assistant did not / didn't / does not / doesn't have / know / find / access …"
+   - "the assistant said / noted / explained / stated / clarified / acknowledged / admitted / apologised that it could not / cannot / didn't / does not / had no / lacked …"
+   - "the assistant offered to search / help / look / check, suggested checking, recommended consulting …"
+   - "the assistant lacks / has no / had no information / details / access / knowledge …"
+   - any equivalent phrasing in ANY other language describing the assistant's inability, uncertainty, or offer to help.
+
+   If you find yourself about to write such a sentence, do not write it. Just omit it. The diary is shorter — that is correct.
+
+   - If the assistant eventually answered (e.g. after calling a tool), summarise the FINAL answer only.
+   - If the topic was raised but never resolved, record only the topic and the user's intent — strip every phrase about the assistant's inability, uncertainty, or offer to help.
+
+   English — what NOT to write:
+     BAD: "The user asked about the book Piranesi. The assistant stated it did not have specific information."
+     BAD: "The user wanted travel info. The assistant said it couldn't access live data."
+     BAD: "The user asked for a recipe. The assistant offered to search the web."
+     BAD: "The user asked about a venue. The assistant failed to find anything."
+   English — correct output:
      GOOD: "The user asked about the book Piranesi."
+     GOOD: "The user wanted travel info."
+     GOOD: "The user asked for a recipe."
+     GOOD: "The user asked about a venue."
 
-   This rule applies in any language.
+   Turkish — what NOT to write:
+     KÖTÜ: "Kullanıcı bir restoran sordu. Asistan o konuda bilgisi olmadığını söyledi."
+   Turkish — correct:
+     İYİ: "Kullanıcı bir restoran sordu."
+
+   Spanish — what NOT to write:
+     MAL: "El usuario preguntó por una película. El asistente dijo que no tenía información."
+   Spanish — correct:
+     BIEN: "El usuario preguntó por una película."
+
+   This rule has no exceptions and applies in every language.
 7. CRITICAL attribution rule — record what was SAID faithfully, but make clear WHO said it. The diary is a log of the conversation, not a fact sheet, so preserve the actual content (including the assistant's answers, because a later session may need them — and because the user may later correct a wrong answer, and we want the whole chain on record). What must not happen is quietly promoting an assistant claim into an unattributed fact, because the assistant may hallucinate.
    - When the assistant states something about a third-party entity (film, book, product, company, person, place, event, scientific fact, definition), always attribute it in the summary: write "the assistant said/stated/explained X" rather than "X". The attribution lets downstream readers treat the claim with appropriate skepticism.
    - Never paraphrase an attributed claim into an unattributed assertion. "The assistant said Possessor is a 2006 film by Brandon Cronenberg" is fine (attribution preserved). "Possessor is a 2006 film by Brandon Cronenberg" is NOT (attribution stripped — now reads as established fact).
@@ -1220,21 +1294,6 @@ def update_daily_conversation_summary(
         if summary is None or topics is None:
             debug_log("conversation summary skipped - LLM failed to generate summary", "memory")
             return  # Skip summarization entirely
-
-        # Post-process safety net: drop any deflection sentences the LLM left
-        # in despite rule 6 of the summariser prompt. Field measurement on the
-        # smallest supported model (gemma4:e2b) showed ~40% of post-rule
-        # writes still containing banned phrasing. The scrub is deterministic,
-        # idempotent, and fails open (returns the input unchanged on empty
-        # text). See ``scrub_deflection_sentences`` and summariser.spec.md.
-        scrubbed, removed = scrub_deflection_sentences(summary)
-        if removed:
-            debug_log(
-                f"diary scrub: removed {removed} deflection sentence"
-                f"{'' if removed == 1 else 's'} on write",
-                "memory",
-            )
-            summary = scrubbed
 
         # Debug: Log the generated summary and topics
         summary_preview = summary[:200] + "..." if len(summary) > 200 else summary

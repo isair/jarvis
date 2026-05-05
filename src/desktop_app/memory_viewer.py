@@ -658,19 +658,24 @@ def graph_consolidate_all() -> Response:
 
 @app.route("/api/diary/scrub-deflections", methods=["POST"])
 def diary_scrub_deflections() -> Response:
-    """Run the deterministic deflection scrub over every diary row.
+    """Ask the chat model to remove deflection narration from every diary row.
 
-    The scrub drops sentences that narrate assistant failures
-    ("the assistant could not…", "offered to search…", etc.) from each
-    summary. Counterpart to the on-write scrub in
-    ``update_daily_conversation_summary`` — that one stops new poisoning,
-    this one cleans the historical backlog. Streams NDJSON progress so
-    the UI can render per-row deltas. Crucially, the event payload
-    contains *only* counts (sentences removed, char deltas) — never raw
-    summary text — so this endpoint cannot leak diary content to the UI.
+    The summariser prompt forbids deflection narration at write time, but
+    rows written before the prompt was tightened can still contain leaked
+    phrasing. This endpoint walks every row and asks the configured chat
+    model to rewrite it, dropping sentences that narrate the assistant's
+    own failures while keeping everything else verbatim.
+
+    Streams NDJSON progress so the UI can render per-row deltas. Crucially,
+    the event payload contains *only* counts (char deltas, booleans, the
+    date) — never raw summary text — so this endpoint cannot leak diary
+    content to the UI.
+
+    Requires the chat model to be running. Per-row rewrite failures are
+    fail-open: the row is left untouched, the sweep continues.
     """
     from jarvis.config import load_settings
-    from jarvis.memory.conversation import scrub_all_diary_summaries
+    from jarvis.memory.conversation import rewrite_all_diary_summaries
     from jarvis.memory.db import Database
 
     def generate():
@@ -692,31 +697,28 @@ def diary_scrub_deflections() -> Response:
                 yield json.dumps({
                     "type": "complete",
                     "rows": 0,
-                    "rows_changed": 0,
-                    "rows_kept_original": 0,
-                    "total_sentences_removed": 0,
+                    "rows_rewritten": 0,
+                    "rows_would_empty": 0,
                     "embeddings_refreshed": 0,
                 }) + "\n"
                 return
 
-            rows_changed = 0
-            rows_kept_original = 0
+            rows_rewritten = 0
+            rows_would_empty = 0
             rows_seen = 0
-            total_sentences_removed = 0
             embeddings_refreshed = 0
 
-            for event in scrub_all_diary_summaries(
+            for event in rewrite_all_diary_summaries(
                 db,
                 ollama_base_url=settings.ollama_base_url,
+                ollama_chat_model=settings.ollama_chat_model,
                 ollama_embed_model=settings.ollama_embed_model,
             ):
                 rows_seen += 1
-                removed = event["sentences_removed"]
-                total_sentences_removed += removed
-                if event.get("kept_original") and removed > 0 and "error" not in event:
-                    rows_kept_original += 1
-                elif removed > 0:
-                    rows_changed += 1
+                if event.get("rewritten"):
+                    rows_rewritten += 1
+                if event.get("would_empty"):
+                    rows_would_empty += 1
                 if event.get("embedding_refreshed"):
                     embeddings_refreshed += 1
                 yield json.dumps({
@@ -729,13 +731,12 @@ def diary_scrub_deflections() -> Response:
             yield json.dumps({
                 "type": "complete",
                 "rows": rows_seen,
-                "rows_changed": rows_changed,
-                "rows_kept_original": rows_kept_original,
-                "total_sentences_removed": total_sentences_removed,
+                "rows_rewritten": rows_rewritten,
+                "rows_would_empty": rows_would_empty,
                 "embeddings_refreshed": embeddings_refreshed,
             }) + "\n"
         except Exception as e:
-            debug_log(f"diary scrub failed: {type(e).__name__}", "memory")
+            debug_log(f"diary rewrite failed: {type(e).__name__}", "memory")
             # Surface only the class name to the streaming UI so a
             # corrupted row's content cannot leak via the exception
             # message.
@@ -2113,7 +2114,7 @@ def index() -> str:
 
                     <div class="sidebar-section" id="diary-maintenance-section">
                         <div class="sidebar-title">🧹 Maintenance</div>
-                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Remove sentences that narrate assistant failures (e.g. 'the assistant could not…') from old diary entries. The rest of each entry stays. No entries are deleted.">
+                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Ask the chat model to remove sentences that narrate assistant failures (e.g. 'the assistant could not…') from old diary entries. The rest of each entry stays verbatim. No entries are deleted. Requires the chat model to be running.">
                             Clean up deflection narration
                         </button>
                         <button class="diary-maintenance-btn" id="btn-optimise-topics" title="Merge near-synonym tags, normalise casing, and split compound tags across all diary entries. Requires the chat model to be running.">
@@ -3452,14 +3453,15 @@ def index() -> str:
                 <div class="modal">
                     <h3>🧹 Clean up deflection narration</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
-                        Removes only sentences that narrate the assistant's failures
-                        (for example "the assistant could not…", "offered to search…",
-                        "did not have information") from old diary entries. The rest of each
-                        entry stays untouched.
+                        Asks the chat model to rewrite each old diary entry, removing only
+                        sentences that narrate the assistant's failures (for example
+                        "the assistant could not…", "offered to search…", "did not have
+                        information"). The rest of each entry stays verbatim.
                     </p>
                     <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
                         If a summary is <em>entirely</em> deflection narration it is left as-is rather
-                        than emptied. No diary entries are deleted. Cannot be undone.
+                        than emptied. No diary entries are deleted. Requires the chat model
+                        to be running. Cannot be undone.
                     </p>
                     <div id="scrub-progress" style="display: none;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
@@ -3527,16 +3529,17 @@ def index() -> str:
                                     if (msg.error) {
                                         icon = '❌';
                                         detail = `error: ${msg.error}`;
-                                    } else if (msg.sentences_removed === 0) {
+                                    } else if (msg.would_empty) {
+                                        // Model wanted to empty the row; kept original instead.
+                                        icon = '🛡️';
+                                        detail = 'would have emptied · kept original';
+                                    } else if (msg.rewritten) {
+                                        const delta = (msg.chars_before || 0) - (msg.chars_after || 0);
+                                        icon = '🧹';
+                                        detail = `rewritten · ${delta} chars removed`;
+                                    } else {
                                         icon = '➖';
                                         detail = 'clean';
-                                    } else if (msg.kept_original) {
-                                        // Defensive: would have emptied the row, kept original.
-                                        icon = '🛡️';
-                                        detail = `${msg.sentences_removed} flagged · kept original`;
-                                    } else {
-                                        icon = '🧹';
-                                        detail = `${msg.sentences_removed} sentence${msg.sentences_removed === 1 ? '' : 's'} removed`;
                                     }
                                     // Use textContent on a constructed node
                                     // rather than innerHTML+=. The values
@@ -3558,8 +3561,8 @@ def index() -> str:
                                     document.getElementById('scrub-bar').style.width = '100%';
                                     const summary = msg.rows === 0
                                         ? 'No diary entries found.'
-                                        : `Done — ${msg.rows_changed} of ${msg.rows} entr${msg.rows === 1 ? 'y' : 'ies'} cleaned, ${msg.total_sentences_removed} sentence${msg.total_sentences_removed === 1 ? '' : 's'} removed`
-                                          + (msg.rows_kept_original ? ` (${msg.rows_kept_original} kept original to avoid emptying)` : '');
+                                        : `Done — ${msg.rows_rewritten} of ${msg.rows} entr${msg.rows === 1 ? 'y' : 'ies'} rewritten`
+                                          + (msg.rows_would_empty ? ` (${msg.rows_would_empty} kept original to avoid emptying)` : '');
                                     document.getElementById('scrub-status').textContent = summary;
                                     document.getElementById('scrub-actions').innerHTML = `
                                         <button class="modal-btn primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
