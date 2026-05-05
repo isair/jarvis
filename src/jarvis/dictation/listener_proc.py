@@ -104,7 +104,21 @@ def _listener_main(conn: Any) -> None:
     Top-level so ``multiprocessing.spawn`` can pickle and re-import it. If
     pynput's C-level event tap aborts the process, only this child dies; the
     parent's reader thread notices via ``proc.is_alive()`` and exits cleanly.
+
+    A handful of unconditional stderr prints stay in this function on
+    purpose: when the listener silently fails to deliver events (the kind of
+    Windows hook problem we have hit before), they are the only signal the
+    user gets about what stage the subprocess reached. Removing them makes
+    a "hotkey does nothing" report indistinguishable from "subprocess never
+    ran" without a custom debug build.
     """
+    import os as _os
+
+    print(
+        f"  🎙️  Dictation listener subprocess started (PID {_os.getpid()})",
+        file=sys.stderr,
+        flush=True,
+    )
     try:
         from pynput import keyboard as pk
 
@@ -124,6 +138,18 @@ def _listener_main(conn: Any) -> None:
 
         listener = pk.Listener(on_press=on_press, on_release=on_release)
         listener.start()
+        # Wait briefly for the listener thread to install its hook so we can
+        # tell "hook installed successfully" from "subprocess started but
+        # never managed to hook".
+        try:
+            listener.wait()
+        except Exception:
+            pass
+        print(
+            "  🎙️  Dictation listener hook installed — waiting for keys",
+            file=sys.stderr,
+            flush=True,
+        )
         listener.join()
     except Exception as exc:
         # Truncate so a noisy traceback message can't flood the parent's debug
@@ -131,6 +157,11 @@ def _listener_main(conn: Any) -> None:
         message = repr(exc)
         if len(message) > _MAX_ERROR_MESSAGE_LEN:
             message = message[:_MAX_ERROR_MESSAGE_LEN] + "...[truncated]"
+        print(
+            f"  ⚠️  Dictation listener subprocess crashed during startup: {message}",
+            file=sys.stderr,
+            flush=True,
+        )
         try:
             conn.send({"event": "error", "message": message})
         except Exception:
