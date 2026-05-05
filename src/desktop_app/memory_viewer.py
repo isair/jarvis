@@ -2114,7 +2114,7 @@ def index() -> str:
 
                     <div class="sidebar-section" id="diary-maintenance-section">
                         <div class="sidebar-title">🧹 Maintenance</div>
-                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Ask the chat model to remove sentences that narrate assistant failures (e.g. 'the assistant could not...') from old diary entries. The rest of each entry stays verbatim. No entries are deleted. Requires the chat model to be running.">
+                        <button class="diary-maintenance-btn" id="btn-scrub-deflections" title="Ask the chat model to remove sentences that narrate assistant failures (e.g. 'the assistant could not…') from old diary entries. The rest of each entry stays verbatim. No entries are deleted. Requires the chat model to be running.">
                             Clean up deflection narration
                         </button>
                         <button class="diary-maintenance-btn" id="btn-optimise-topics" title="Merge near-synonym tags, normalise casing, and split compound tags across all diary entries. Requires the chat model to be running.">
@@ -3455,7 +3455,7 @@ def index() -> str:
                     <p style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
                         Asks the chat model to rewrite each old diary entry, removing only
                         sentences that narrate the assistant's failures (for example
-                        "the assistant could not...", "offered to search...", "did not have
+                        "the assistant could not…", "offered to search…", "did not have
                         information"). The rest of each entry stays verbatim.
                     </p>
                     <p style="color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
@@ -3540,7 +3540,7 @@ def index() -> str:
                                         ? `${processed} / ${totalRows} entr${totalRows === 1 ? 'y' : 'ies'}`
                                         : `${processed} entr${processed === 1 ? 'y' : 'ies'}`;
                                     document.getElementById('scrub-count').textContent = countLabel;
-                                    document.getElementById('scrub-status').textContent = `Cleaning ${msg.date_utc}...`;
+                                    document.getElementById('scrub-status').textContent = `Cleaning ${msg.date_utc}…`;
                                     const log = document.getElementById('scrub-log');
                                     let icon, detail;
                                     if (msg.error) {
