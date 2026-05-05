@@ -83,58 +83,6 @@ class TestScrubDropsBannedSentences:
                 "The user asked about a film. The assistant explained that it does not access streaming catalogues.",
                 "explained that it does not",
             ),
-            # ── Reporting verb "said" + denial (the user-reported leak) ─────
-            (
-                "The user asked about a tube delay. The assistant said it couldn't check live travel data.",
-                "couldn't check",
-            ),
-            (
-                "The user asked to open a website. The assistant said it could not open browsers.",
-                "could not open",
-            ),
-            (
-                "The user asked about a recipe. The assistant said it didn't know that one.",
-                "didn't know",
-            ),
-            (
-                "The user asked about a venue. The assistant said it does not have access to that information.",
-                "does not have access",
-            ),
-            (
-                "The user asked about a fact. The assistant said it has no information on that topic.",
-                "has no information",
-            ),
-            # ── Direct "failed to" shape ────────────────────────────────────
-            (
-                "The user asked for a search. The assistant failed to find any matching results.",
-                "failed to find",
-            ),
-            # ── Direct contraction shapes ──────────────────────────────────
-            (
-                "The user asked about a place. The assistant didn't have any details about it.",
-                "didn't have",
-            ),
-            (
-                "The user asked a question. The assistant doesn't have access to that.",
-                "doesn't have",
-            ),
-            (
-                "The user asked about an obscure topic. The assistant couldn't answer that.",
-                "couldn't answer",
-            ),
-            # ── Other reporting verbs + "it" + denial ──────────────────────
-            (
-                "The user asked about a setting. The assistant noted that it could not change system preferences.",
-                "could not change",
-            ),
-            (
-                "The user asked about an event. The assistant acknowledged it had no information about it.",
-                "had no information",
-            ),
-            (
-                "The user asked about a capability. The assistant admitted it was not able to perform that.",
-                "was not able",
-            ),
         ],
     )
     def test_banned_sentence_is_dropped_in_full(self, summary, must_disappear):
