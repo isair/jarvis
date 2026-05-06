@@ -3,6 +3,304 @@ import os
 import pytest
 
 
+@pytest.fixture
+def shutdown_persistent_runtime():
+    """Tear down the persistent MCP runtime singleton between tests."""
+    yield
+    try:
+        from jarvis.tools.external.mcp_runtime import shutdown_runtime
+        shutdown_runtime()
+    except Exception:
+        pass
+
+
+def _make_tracked_doubles(call_count, enter_count, exit_count, *, fail_on_call=None,
+                          tools_payload=None):
+    """Build patchable doubles for ``stdio_client`` and ``ClientSession``.
+
+    ``fail_on_call`` may be a list whose values trigger ``call_tool`` to
+    raise ``RuntimeError(value)`` on the matching invocation index. A
+    ``None`` entry means succeed normally.
+    """
+    fail_on_call = list(fail_on_call or [])
+
+    class TrackedConn:
+        async def __aenter__(self_):
+            enter_count["n"] += 1
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            exit_count["n"] += 1
+            return False
+
+    class TrackedSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def call_tool(_self, name, arguments):
+                    idx = call_count["n"]
+                    call_count["n"] += 1
+                    if idx < len(fail_on_call) and fail_on_call[idx] is not None:
+                        raise RuntimeError(fail_on_call[idx])
+                    return type(
+                        "R",
+                        (),
+                        {"content": f"called:{name}:{arguments}", "isError": False, "meta": None},
+                    )()
+
+                async def list_tools(_self):
+                    payload = tools_payload or []
+                    fake_tools = [
+                        type("T", (), {"name": n, "description": d, "inputSchema": s})()
+                        for (n, d, s) in payload
+                    ]
+                    return type("LR", (), {"tools": fake_tools})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    return TrackedConn, TrackedSession
+
+
+def _patch_mcp_doubles(monkeypatch, TrackedConn, TrackedSession):
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client._resolve_command", lambda c: c
+    )
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client.stdio_client",
+        lambda params, **kw: TrackedConn(),
+    )
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client.ClientSession", TrackedSession
+    )
+
+
+@pytest.mark.unit
+def test_invoke_tool_keeps_mcp_session_alive_across_calls(monkeypatch, shutdown_persistent_runtime):
+    """Stateful MCP servers (e.g. chrome-devtools-mcp) launch child processes
+    such as a browser that die when the server's stdio session is torn down.
+    Two consecutive invocations on the same server must share a single
+    long-lived stdio session, not spawn the server subprocess twice.
+    """
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    enter_count = {"n": 0}
+    exit_count = {"n": 0}
+    call_count = {"n": 0}
+
+    TrackedConn, TrackedSession = _make_tracked_doubles(
+        call_count, enter_count, exit_count
+    )
+    _patch_mcp_doubles(monkeypatch, TrackedConn, TrackedSession)
+
+    mcps = {"persist": {"transport": "stdio", "command": "/bin/true", "args": []}}
+    client = MCPClient(mcps)
+
+    r1 = client.invoke_tool("persist", "alpha", {"x": 1})
+    r2 = client.invoke_tool("persist", "beta", {"y": 2})
+
+    assert call_count["n"] == 2
+    assert enter_count["n"] == 1, (
+        f"stdio connection must be opened once for stateful MCP servers, "
+        f"was opened {enter_count['n']} times"
+    )
+    assert exit_count["n"] == 0, (
+        "stdio connection must remain open across invocations"
+    )
+    # Sanity: results pass through unchanged
+    assert r1["isError"] is False
+    assert r2["isError"] is False
+
+
+@pytest.mark.unit
+def test_invoke_tool_retries_on_transient_session_loss(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """If a worker raises ``_WorkerDeadError`` (its stdio session ended
+    mid-call), the runtime must drop it, spawn a fresh one and retry
+    once. Observable behaviour: the second invocation succeeds even
+    though the first underlying worker call failed with the sentinel.
+    """
+    from jarvis.tools.external.mcp_client import MCPClient
+    from jarvis.tools.external import mcp_runtime as _runtime_mod
+
+    enter_count = {"n": 0}
+    exit_count = {"n": 0}
+    call_count = {"n": 0}
+
+    TrackedConn, TrackedSession = _make_tracked_doubles(
+        call_count, enter_count, exit_count
+    )
+    _patch_mcp_doubles(monkeypatch, TrackedConn, TrackedSession)
+
+    real_invoke = _runtime_mod._ServerWorker.invoke
+    invoke_calls = {"n": 0}
+
+    def flaky_invoke(self, tool_name, arguments, timeout):
+        invoke_calls["n"] += 1
+        if invoke_calls["n"] == 1:
+            # Simulate the worker discovering its session is dead.
+            raise _runtime_mod._WorkerDeadError("simulated session loss")
+        return real_invoke(self, tool_name, arguments, timeout)
+
+    monkeypatch.setattr(_runtime_mod._ServerWorker, "invoke", flaky_invoke)
+
+    client = MCPClient(
+        {"flaky": {"transport": "stdio", "command": "/bin/true", "args": []}}
+    )
+
+    res = client.invoke_tool("flaky", "alpha", {"x": 1})
+
+    assert res["isError"] is False
+    assert invoke_calls["n"] == 2, (
+        "runtime should retry exactly once after _WorkerDeadError"
+    )
+    assert enter_count["n"] == 2, (
+        "the retry must spawn a fresh stdio connection (new worker)"
+    )
+
+
+@pytest.mark.unit
+def test_get_worker_replaces_on_config_change(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """Changing a server's config (e.g. updated args) must cause the
+    runtime to replace the existing worker with a fresh one so the new
+    subprocess actually receives the new arguments.
+    """
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    enter_count = {"n": 0}
+    exit_count = {"n": 0}
+    call_count = {"n": 0}
+
+    TrackedConn, TrackedSession = _make_tracked_doubles(
+        call_count, enter_count, exit_count
+    )
+    _patch_mcp_doubles(monkeypatch, TrackedConn, TrackedSession)
+
+    cfg_v1 = {"transport": "stdio", "command": "/bin/true", "args": []}
+    cfg_v2 = {"transport": "stdio", "command": "/bin/true", "args": ["--flag"]}
+
+    client_v1 = MCPClient({"swap": cfg_v1})
+    client_v1.invoke_tool("swap", "alpha", {})
+    assert enter_count["n"] == 1
+
+    client_v2 = MCPClient({"swap": cfg_v2})
+    client_v2.invoke_tool("swap", "alpha", {})
+    assert enter_count["n"] == 2, "config change must spawn a new stdio session"
+
+
+@pytest.mark.unit
+def test_worker_startup_failure_propagates(monkeypatch, shutdown_persistent_runtime):
+    """If session initialisation fails (e.g. subprocess cannot start),
+    the failure must propagate to the caller rather than hang.
+    """
+    from jarvis.tools.external.mcp_client import (
+        MCPClient,
+        MCPServerSessionError,
+    )
+
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client._resolve_command", lambda c: c
+    )
+
+    def _broken_stdio_client(params, **kw):
+        raise FileNotFoundError("simulated subprocess spawn failure")
+
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client.stdio_client", _broken_stdio_client
+    )
+
+    client = MCPClient(
+        {"broken": {"transport": "stdio", "command": "/bin/true", "args": []}}
+    )
+
+    with pytest.raises((FileNotFoundError, MCPServerSessionError, RuntimeError)):
+        client.invoke_tool("broken", "alpha", {})
+
+
+@pytest.mark.unit
+def test_runtime_isolates_workers_per_server(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """Two distinct servers must each have their own stdio session;
+    invoking one must not interfere with the other.
+    """
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    enter_count = {"n": 0}
+    exit_count = {"n": 0}
+    call_count = {"n": 0}
+
+    TrackedConn, TrackedSession = _make_tracked_doubles(
+        call_count, enter_count, exit_count
+    )
+    _patch_mcp_doubles(monkeypatch, TrackedConn, TrackedSession)
+
+    mcps = {
+        "alpha": {"transport": "stdio", "command": "/bin/true", "args": []},
+        "beta": {"transport": "stdio", "command": "/bin/true", "args": []},
+    }
+    client = MCPClient(mcps)
+
+    client.invoke_tool("alpha", "x", {})
+    client.invoke_tool("beta", "y", {})
+    client.invoke_tool("alpha", "x", {})
+
+    assert call_count["n"] == 3
+    assert enter_count["n"] == 2, (
+        "each server should open exactly one stdio connection regardless of "
+        "the order calls arrive in"
+    )
+
+
+@pytest.mark.unit
+def test_list_tools_uses_persistent_session(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """Discovery and the first ``invoke_tool`` should share a single
+    stdio session — listing then invoking must not spawn the server
+    twice.
+    """
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    enter_count = {"n": 0}
+    exit_count = {"n": 0}
+    call_count = {"n": 0}
+
+    TrackedConn, TrackedSession = _make_tracked_doubles(
+        call_count,
+        enter_count,
+        exit_count,
+        tools_payload=[
+            ("alpha", "first tool", {"type": "object"}),
+            ("beta", "second tool", {"type": "object"}),
+        ],
+    )
+    _patch_mcp_doubles(monkeypatch, TrackedConn, TrackedSession)
+
+    client = MCPClient(
+        {"shared": {"transport": "stdio", "command": "/bin/true", "args": []}}
+    )
+
+    listed = client.list_tools("shared")
+    assert {t["name"] for t in listed} == {"alpha", "beta"}
+
+    client.invoke_tool("shared", "alpha", {})
+
+    assert enter_count["n"] == 1, (
+        "list_tools and invoke_tool should reuse the same stdio session"
+    )
+
+
 @pytest.mark.unit
 def test_absolute_path_command_skips_which(monkeypatch, tmp_path):
     """Absolute paths to executables should use os.path.isfile, not shutil.which."""

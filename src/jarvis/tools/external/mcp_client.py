@@ -11,7 +11,19 @@ from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
 
 import glob as _glob
+import shlex as _shlex
 import sys as _sys
+
+
+class MCPServerSessionError(RuntimeError):
+    """Raised when a stateful MCP server's session has been lost.
+
+    Public, stable type that callers can catch to distinguish a
+    transient session failure (subprocess crashed, idle timeout
+    elapsed mid-call) from a tool-level error returned by ``call_tool``.
+    The persistent runtime retries once internally before this surfaces
+    to ``MCPClient`` callers.
+    """
 
 # Static directories to search when a command isn't on the daemon's PATH.
 # macOS GUI-launched processes often miss Homebrew, nvm, fnm, and Volta paths.
@@ -75,8 +87,12 @@ def _resolve_command(command: str) -> str:
         try:
             import subprocess
             shell = _get_user_shell()
+            # Quote the command so shell metacharacters in a misconfigured
+            # ``mcps[*].command`` cannot inject extra commands into the
+            # login shell. Defensive — config is user-owned, but keeping
+            # the value safe for any path that touches a shell is cheap.
             result = subprocess.run(
-                [shell, "-lc", f"which {command}"],
+                [shell, "-lc", f"which {_shlex.quote(command)}"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
@@ -213,51 +229,110 @@ class MCPClient:
     async def invoke_tool_async(self, server_name: str, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         async with self._session(server_name) as session:
             res = await session.call_tool(tool_name, arguments or {})
-            raw_content = getattr(res, "content", None)
-            is_error = getattr(res, "isError", False)
-            meta = getattr(res, "meta", None)
-
-            def _flatten(content) -> str:
-                if content is None:
-                    return ""
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    parts = []
-                    for item in content:
-                        parts.append(_flatten(item))
-                    return "\n".join([p for p in parts if p])
-                if isinstance(content, dict):
-                    # Common MCP content variants
-                    if "text" in content:
-                        return str(content.get("text") or "")
-                    if content.get("type") == "text" and "data" in content:
-                        return str(content.get("data") or "")
-                    # Fallback to stringified dict
-                    try:
-                        return str(content)
-                    except Exception:
-                        return ""
-                # Fallback
-                try:
-                    return str(content)
-                except Exception:
-                    return ""
-
-            text = _flatten(raw_content)
-
-            return {
-                "content": raw_content,
-                "text": text,
-                "isError": is_error,
-                "meta": meta,
-            }
+            return _result_to_dict(res)
 
     # Convenience sync wrappers
     def list_tools(self, server_name: str) -> List[Dict[str, Any]]:
-        return asyncio.run(self.list_tools_async(server_name))
+        """Discover tools from the named server.
+
+        Routes through the persistent MCP runtime so the same stdio
+        session that services discovery also services subsequent
+        ``invoke_tool`` calls — avoids paying subprocess startup twice.
+        """
+        cfg = self._require_stdio_cfg(server_name)
+        from .mcp_runtime import get_runtime, _WorkerDeadError
+
+        runtime = get_runtime()
+        try:
+            res = runtime.list_tools(server_name, cfg)
+        except _WorkerDeadError as e:
+            raise MCPServerSessionError(str(e)) from e
+
+        tools_list = getattr(res, "tools", res) if hasattr(res, "tools") else res
+        result: List[Dict[str, Any]] = []
+        for t in tools_list:
+            result.append(
+                {
+                    "name": getattr(t, "name", None),
+                    "description": getattr(t, "description", None),
+                    "inputSchema": getattr(t, "inputSchema", None),
+                }
+            )
+        return result
 
     def invoke_tool(self, server_name: str, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return asyncio.run(self.invoke_tool_async(server_name, tool_name, arguments))
+        """Invoke a tool against the named server.
+
+        Routes through the persistent MCP runtime so the server's stdio
+        session stays alive across calls. Stateful servers (e.g.
+        chrome-devtools-mcp, which owns a Chrome process) cannot survive
+        the one-shot ``asyncio.run`` pattern: tearing down the session
+        kills the subprocess and any children it launched.
+
+        On a transient session loss (subprocess died, idle timeout
+        elapsed mid-call) the runtime retries once with a fresh worker.
+        If that retry also fails, a ``MCPServerSessionError`` propagates;
+        callers can distinguish that from tool-level errors carried in
+        the returned dict's ``isError`` field.
+        """
+        cfg = self._require_stdio_cfg(server_name)
+        from .mcp_runtime import get_runtime, _WorkerDeadError
+
+        runtime = get_runtime()
+        try:
+            res = runtime.invoke(server_name, cfg, tool_name, arguments)
+        except _WorkerDeadError as e:
+            raise MCPServerSessionError(str(e)) from e
+        return _result_to_dict(res)
+
+    def _require_stdio_cfg(self, server_name: str) -> Dict[str, Any]:
+        """Return the server config, validating presence and transport."""
+        cfg = self.server_configs.get(server_name)
+        if not cfg:
+            raise ValueError(
+                f"Unknown MCP server '{server_name}'. Check config.mcps."
+            )
+        transport = str(cfg.get("transport") or "stdio").lower()
+        if transport != "stdio":
+            raise NotImplementedError(
+                f"Unsupported MCP transport '{transport}'. Only 'stdio' is supported currently."
+            )
+        return cfg
+
+
+def _result_to_dict(res: Any) -> Dict[str, Any]:
+    """Convert an MCP ``call_tool`` response object to the internal dict shape."""
+    raw_content = getattr(res, "content", None)
+    is_error = getattr(res, "isError", False)
+    meta = getattr(res, "meta", None)
+    return {
+        "content": raw_content,
+        "text": _flatten_content(raw_content),
+        "isError": is_error,
+        "meta": meta,
+    }
+
+
+def _flatten_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [_flatten_content(item) for item in content]
+        return "\n".join([p for p in parts if p])
+    if isinstance(content, dict):
+        if "text" in content:
+            return str(content.get("text") or "")
+        if content.get("type") == "text" and "data" in content:
+            return str(content.get("data") or "")
+        try:
+            return str(content)
+        except Exception:
+            return ""
+    try:
+        return str(content)
+    except Exception:
+        return ""
 
 
