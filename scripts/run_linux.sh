@@ -4,10 +4,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-if [ ! -d .venv ]; then
+if [ -d venv ]; then
+  source venv/bin/activate
+elif [ -d .venv ]; then
+  source .venv/bin/activate
+else
   python3 -m venv .venv
+  source .venv/bin/activate
 fi
-source .venv/bin/activate
 pip install -r requirements.txt
 
 export PYTHONPATH="$REPO_ROOT/src"
