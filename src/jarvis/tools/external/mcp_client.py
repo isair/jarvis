@@ -213,51 +213,72 @@ class MCPClient:
     async def invoke_tool_async(self, server_name: str, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         async with self._session(server_name) as session:
             res = await session.call_tool(tool_name, arguments or {})
-            raw_content = getattr(res, "content", None)
-            is_error = getattr(res, "isError", False)
-            meta = getattr(res, "meta", None)
-
-            def _flatten(content) -> str:
-                if content is None:
-                    return ""
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    parts = []
-                    for item in content:
-                        parts.append(_flatten(item))
-                    return "\n".join([p for p in parts if p])
-                if isinstance(content, dict):
-                    # Common MCP content variants
-                    if "text" in content:
-                        return str(content.get("text") or "")
-                    if content.get("type") == "text" and "data" in content:
-                        return str(content.get("data") or "")
-                    # Fallback to stringified dict
-                    try:
-                        return str(content)
-                    except Exception:
-                        return ""
-                # Fallback
-                try:
-                    return str(content)
-                except Exception:
-                    return ""
-
-            text = _flatten(raw_content)
-
-            return {
-                "content": raw_content,
-                "text": text,
-                "isError": is_error,
-                "meta": meta,
-            }
+            return _result_to_dict(res)
 
     # Convenience sync wrappers
     def list_tools(self, server_name: str) -> List[Dict[str, Any]]:
         return asyncio.run(self.list_tools_async(server_name))
 
     def invoke_tool(self, server_name: str, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return asyncio.run(self.invoke_tool_async(server_name, tool_name, arguments))
+        """Invoke a tool against the named server.
+
+        Routes through the persistent MCP runtime so the server's stdio
+        session stays alive across calls. Stateful servers (e.g.
+        chrome-devtools-mcp, which owns a Chrome process) cannot survive
+        the one-shot ``asyncio.run`` pattern: tearing down the session
+        kills the subprocess and any children it launched.
+        """
+        cfg = self.server_configs.get(server_name)
+        if not cfg:
+            raise ValueError(
+                f"Unknown MCP server '{server_name}'. Check config.mcps."
+            )
+        transport = str(cfg.get("transport") or "stdio").lower()
+        if transport != "stdio":
+            raise NotImplementedError(
+                f"Unsupported MCP transport '{transport}'. Only 'stdio' is supported currently."
+            )
+
+        from .mcp_runtime import get_runtime
+
+        runtime = get_runtime()
+        res = runtime.invoke(server_name, cfg, tool_name, arguments)
+        return _result_to_dict(res)
+
+
+def _result_to_dict(res: Any) -> Dict[str, Any]:
+    """Convert an MCP ``call_tool`` response object to the internal dict shape."""
+    raw_content = getattr(res, "content", None)
+    is_error = getattr(res, "isError", False)
+    meta = getattr(res, "meta", None)
+    return {
+        "content": raw_content,
+        "text": _flatten_content(raw_content),
+        "isError": is_error,
+        "meta": meta,
+    }
+
+
+def _flatten_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [_flatten_content(item) for item in content]
+        return "\n".join([p for p in parts if p])
+    if isinstance(content, dict):
+        if "text" in content:
+            return str(content.get("text") or "")
+        if content.get("type") == "text" and "data" in content:
+            return str(content.get("data") or "")
+        try:
+            return str(content)
+        except Exception:
+            return ""
+    try:
+        return str(content)
+    except Exception:
+        return ""
 
 

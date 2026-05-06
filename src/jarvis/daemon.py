@@ -632,6 +632,15 @@ def main() -> None:
 
         if tts is not None:
             tts.stop()
+
+        # Tear down persistent MCP sessions so subprocess-launched
+        # children (e.g. chrome-devtools-mcp's Chrome) close cleanly.
+        try:
+            from .tools.external.mcp_runtime import shutdown_runtime
+            shutdown_runtime()
+        except Exception as _e:
+            debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
+
         db.close()
 
         # Drop the warm-profile graph listener so the module registry does

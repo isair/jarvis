@@ -3,6 +3,97 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=False)
+def _shutdown_persistent_runtime():
+    """Tear down the persistent MCP runtime singleton between tests."""
+    yield
+    try:
+        from jarvis.tools.external.mcp_runtime import shutdown_runtime
+        shutdown_runtime()
+    except Exception:
+        pass
+
+
+@pytest.mark.unit
+def test_invoke_tool_keeps_mcp_session_alive_across_calls(monkeypatch, _shutdown_persistent_runtime):
+    """Stateful MCP servers (e.g. chrome-devtools-mcp) launch child processes
+    such as a browser that die when the server's stdio session is torn down.
+    Two consecutive invocations on the same server must share a single
+    long-lived stdio session, not spawn the server subprocess twice.
+    """
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    enter_count = {"n": 0}
+    exit_count = {"n": 0}
+    call_count = {"n": 0}
+
+    class TrackedConn:
+        async def __aenter__(self):
+            enter_count["n"] += 1
+            return object(), object()
+
+        async def __aexit__(self, *a):
+            exit_count["n"] += 1
+            return False
+
+    class TrackedSession:
+        def __init__(self, read, write):
+            pass
+
+        async def __aenter__(self):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def call_tool(_self, name, arguments):
+                    call_count["n"] += 1
+                    return type(
+                        "R",
+                        (),
+                        {"content": f"called:{name}:{arguments}", "isError": False, "meta": None},
+                    )()
+
+            return _S()
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client._resolve_command", lambda c: c
+    )
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client.stdio_client",
+        lambda params, **kw: TrackedConn(),
+    )
+    monkeypatch.setattr(
+        "jarvis.tools.external.mcp_client.ClientSession", TrackedSession
+    )
+
+    mcps = {
+        "persist": {
+            "transport": "stdio",
+            "command": "/bin/true",
+            "args": [],
+        }
+    }
+    client = MCPClient(mcps)
+
+    r1 = client.invoke_tool("persist", "alpha", {"x": 1})
+    r2 = client.invoke_tool("persist", "beta", {"y": 2})
+
+    assert call_count["n"] == 2
+    assert enter_count["n"] == 1, (
+        f"stdio connection must be opened once for stateful MCP servers, "
+        f"was opened {enter_count['n']} times"
+    )
+    assert exit_count["n"] == 0, (
+        "stdio connection must remain open across invocations"
+    )
+    # Sanity: results pass through unchanged
+    assert r1["isError"] is False
+    assert r2["isError"] is False
+
+
 @pytest.mark.unit
 def test_absolute_path_command_skips_which(monkeypatch, tmp_path):
     """Absolute paths to executables should use os.path.isfile, not shutil.which."""
