@@ -4,10 +4,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-if [ ! -d .venv ]; then
+if [ -d venv ]; then
+  VENV_DIR="venv"
+elif [ -d .venv ]; then
+  VENV_DIR=".venv"
+else
   python3 -m venv .venv
+  VENV_DIR=".venv"
 fi
-source .venv/bin/activate
+source "$VENV_DIR/bin/activate"
 pip install -r requirements.txt
 
 # Build Swift capture helper (scaffold)

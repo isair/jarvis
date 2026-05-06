@@ -5,13 +5,14 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
 if [ -d venv ]; then
-  source venv/bin/activate
+  VENV_DIR="venv"
 elif [ -d .venv ]; then
-  source .venv/bin/activate
+  VENV_DIR=".venv"
 else
   python3 -m venv .venv
-  source .venv/bin/activate
+  VENV_DIR=".venv"
 fi
+source "$VENV_DIR/bin/activate"
 pip install -r requirements.txt
 
 export PYTHONPATH="$REPO_ROOT/src"
