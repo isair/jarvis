@@ -2,10 +2,9 @@
 
 PR 1 covers the Ollama backend only. These tests pin the
 provider-agnostic ``LLMBackend`` interface against the ``OllamaBackend``
-implementation, and confirm that the legacy top-level functions
+implementation, and confirm that the function-style entry points
 (``call_llm_direct``, ``call_llm_streaming``, ``chat_with_messages``)
-continue to work so existing call sites do not need to change in this
-PR.
+dispatch to the same backend.
 
 The tests intentionally exercise observable behaviour (return values,
 ``on_token`` callbacks, raised errors) rather than implementation
@@ -431,13 +430,13 @@ class TestFactory:
 
 
 # ---------------------------------------------------------------------------
-# Backwards compatibility — legacy top-level functions
+# Function-style entry points dispatch to the same backend
 # ---------------------------------------------------------------------------
 
 
-class TestLegacyFunctions:
+class TestFunctionStyleEntryPoints:
     @patch("jarvis.llm.requests.post")
-    def test_call_llm_direct_still_returns_text(self, mock_post):
+    def test_call_llm_direct_returns_text(self, mock_post):
         from jarvis.llm import call_llm_direct
 
         mock_post.return_value = _make_response(json_data={"message": {"content": "hello"}})
@@ -445,7 +444,7 @@ class TestLegacyFunctions:
         assert call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "u") == "hello"
 
     @patch("jarvis.llm.requests.post")
-    def test_chat_with_messages_still_returns_dict(self, mock_post):
+    def test_chat_with_messages_returns_dict(self, mock_post):
         from jarvis.llm import chat_with_messages
 
         mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
@@ -458,7 +457,7 @@ class TestLegacyFunctions:
         assert result["message"]["content"] == "ok"
 
     @patch("jarvis.llm.requests.post")
-    def test_call_llm_streaming_still_invokes_callback(self, mock_post):
+    def test_call_llm_streaming_invokes_callback(self, mock_post):
         from jarvis.llm import call_llm_streaming
 
         chunks = [json.dumps({"message": {"content": "x"}}).encode()]
@@ -472,7 +471,7 @@ class TestLegacyFunctions:
         assert seen == ["x"]
         assert result == "x"
 
-    def test_extract_text_from_response_still_importable(self):
+    def test_extract_text_from_response_importable(self):
         from jarvis.llm import extract_text_from_response
 
         assert extract_text_from_response({"message": {"content": "hi"}}) == "hi"

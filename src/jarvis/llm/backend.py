@@ -6,10 +6,10 @@ later PRs) implements this ABC. Callers obtain an instance via
 ``jarvis.llm.get_llm_backend(settings)`` and never construct backends
 directly so the chosen runtime can swap based on user config.
 
-The method signatures intentionally mirror the legacy free functions
+The method signatures intentionally mirror the function-style helpers
 (``call_llm_direct``, ``call_llm_streaming``, ``chat_with_messages``)
-so the migration is mechanical and existing callers can move over one
-at a time.
+so the two styles are interchangeable: each helper takes ``base_url``
+plus the same args and forwards to the matching backend method.
 """
 
 from __future__ import annotations

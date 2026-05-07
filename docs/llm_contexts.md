@@ -2,7 +2,7 @@
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
-> **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) — either via the legacy free functions (`call_llm_direct`, `call_llm_streaming`, `chat_with_messages`) or, in newer code, via `get_llm_backend(settings)` returning an `LLMBackend`. The only implementation today is `OllamaBackend`; the per-context model resolution, gating, timeouts, and prompts are unchanged by the abstraction.
+> **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) — function-style (`call_llm_direct`, `call_llm_streaming`, `chat_with_messages`) and object-style (`get_llm_backend(settings)`) entry points dispatch to the same backend. The only implementation today is `OllamaBackend`; the per-context model resolution, gating, timeouts, and prompts are unchanged by the abstraction.
 
 ---
 

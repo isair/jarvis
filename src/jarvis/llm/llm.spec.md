@@ -2,7 +2,7 @@
 
 The `jarvis.llm` package owns every LLM HTTP call Jarvis makes. It exists to keep Jarvis runtime-agnostic: the same reply engine, planner, intent judge, evaluator, memory pipeline, and tools work whether the user runs Ollama, an OpenAI-compatible server (LM Studio, oMLX, llama.cpp's `llama-server`, vLLM, LocalAI), or an Anthropic-compatible server.
 
-This spec covers the abstraction shape, the supported providers, and the legacy free functions that bridge the existing call sites.
+This spec covers the abstraction shape, the supported providers, and the two interchangeable entry-point styles (object and function).
 
 ## Goals
 
@@ -14,7 +14,7 @@ This spec covers the abstraction shape, the supported providers, and the legacy 
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| PR 1 | Extract `LLMBackend` ABC, `OllamaBackend`, factory, re-exports. Ollama-only. Zero behaviour change. | Done |
+| PR 1 | Extract `LLMBackend` ABC, `OllamaBackend`, factory, function-style helpers. Ollama-only. Zero behaviour change. | Done |
 | PR 2 | Add `OpenAICompatibleBackend`, `llm_provider` config key + migration, embedding routing override. | Pending |
 | PR 3 | Setup wizard provider page, settings UI provider group, README update. | Pending |
 | PR 4 | Add `AnthropicCompatibleBackend` (optional, demand-driven). | Pending |
@@ -26,12 +26,20 @@ from jarvis.llm import (
     LLMBackend,            # provider-agnostic ABC
     OllamaBackend,         # only implementation in PR 1
     ToolsNotSupportedError,
-    get_llm_backend,       # factory: settings → backend
-    extract_text_from_response,  # response-shape helper, used by reply engine
+    get_llm_backend,       # factory: settings → backend (object-style)
+    call_llm_direct,       # function-style equivalents that take base_url
+    call_llm_streaming,
+    chat_with_messages,
+    extract_text_from_response,
 )
 ```
 
-New code uses `get_llm_backend(settings)`; legacy callers continue to use the free functions `call_llm_direct`, `call_llm_streaming`, `chat_with_messages` (re-exported for backwards compatibility, both paths route through `OllamaBackend` today).
+Two interchangeable styles dispatch to the same backend:
+
+- **Object-style** — `get_llm_backend(settings).direct(...)`. Use when a settings object is in scope; future-proof against `llm_provider` being added.
+- **Function-style** — `call_llm_direct(base_url, ...)`. Use when only a base URL is in scope. Constructs the right backend internally.
+
+Both produce the same HTTP request and response handling.
 
 ## `LLMBackend` interface
 
@@ -61,17 +69,17 @@ Each backend parses its own stream format internally (Ollama JSONL, OpenAI SSE, 
 
 `embed()` is part of the same backend interface so the same provider can serve both chat and embeddings when capable. PR 2 introduces an `embedding_provider` setting so users on backends without embeddings (e.g. some oMLX builds) can route only embeddings through Ollama while keeping chat on their preferred runtime. Until that lands, `src/jarvis/memory/embeddings.py` keeps its own POST against `/api/embeddings` for compatibility.
 
-## Backwards compatibility
+## Function-style helpers
 
-The legacy free functions are thin wrappers that construct a fresh `OllamaBackend(base_url)` and delegate. Their signatures match the previous `llm.py` exactly so the existing ~10 call sites under `src/jarvis/`, `tests/`, and `evals/` continue to import them unchanged.
+`call_llm_direct`, `call_llm_streaming`, and `chat_with_messages` construct a fresh `OllamaBackend(base_url)` and delegate to the matching method. Their signatures match the previous `llm.py` exactly so the existing ~10 call sites under `src/jarvis/`, `tests/`, and `evals/` import them unchanged.
 
-`import requests` is re-exported from the package `__init__.py` so existing tests that patch `jarvis.llm.requests.post` keep working after the package split.
+`import requests` is re-exported from the package `__init__.py` so tests that patch `jarvis.llm.requests.post` keep working after the package split.
 
 ## File layout
 
 ```
 src/jarvis/llm/
-├── __init__.py        # re-exports + legacy free functions
+├── __init__.py        # public re-exports + function-style helpers
 ├── backend.py         # LLMBackend ABC + ToolsNotSupportedError
 ├── ollama.py          # OllamaBackend + extract_text_from_response
 ├── factory.py         # get_llm_backend(settings)
