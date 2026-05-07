@@ -6,7 +6,7 @@ This specification documents only the reply flow that begins when a valid user q
 - Components:
   - Reply Engine (`src/jarvis/reply/engine.py`): Orchestrates conversation-memory enrichment, tool-use protocol, messages loop, output, and memory update.
   - System Prompt (`src/jarvis/system_prompt.py`): Provides a unified `SYSTEM_PROMPT` with adaptive guidance for all topics. Declares the assistant's persona — a British butler named Jarvis with dry wit and light, good-natured sarcasm — with explicit behavioural rules (answer-first/quip-second, at most one quip, skip the quip for serious topics, no butler clichés, sarcasm never aimed at the user). The rules are phrased concretely rather than as tone adjectives so small models can follow them. Persona behaviour is not currently covered by an eval; add one if the tone regresses or the rules evolve.
-  - LLM Gateway (`src/jarvis/llm.py`): `chat_with_messages` sends the messages array and returns raw JSON; `extract_text_from_response` normalizes content across providers.
+  - LLM Gateway (`src/jarvis/llm/`): pluggable backend abstraction (`LLMBackend` ABC + `OllamaBackend` impl, factory at `get_llm_backend(settings)`). New code uses the factory; existing call sites still use the legacy free functions `chat_with_messages` (sends the messages array and returns raw JSON) and `extract_text_from_response` (normalises content across providers). See `src/jarvis/llm/llm.spec.md`.
   - Conversation Memory (`src/jarvis/memory/conversation.py`): Supplies recent dialogue messages and keyword/time-bounded recall.
   - Enrichment LLM (`src/jarvis/reply/enrichment.py`): Extracts search params (keywords and optional time bounds) from the current query to drive conversation recall.
 

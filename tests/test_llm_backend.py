@@ -159,6 +159,204 @@ class TestOllamaBackendChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_http_500(self, mock_post):
+        import requests
+        from jarvis.llm import OllamaBackend
+
+        http_resp = MagicMock(status_code=500)
+        err = requests.exceptions.HTTPError(response=http_resp)
+        mock_post.return_value = _make_response(raise_http=err)
+        backend = OllamaBackend("http://localhost:11434")
+
+        # 500 must not raise ToolsNotSupportedError even when tools are passed
+        # — only 400 means "this model does not support native tools".
+        assert (
+            backend.chat(
+                "any",
+                [{"role": "user", "content": "hi"}],
+                tools=[{"type": "function", "function": {"name": "x"}}],
+            )
+            is None
+        )
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_connection_error(self, mock_post):
+        import requests
+        from jarvis.llm import OllamaBackend
+
+        mock_post.side_effect = requests.exceptions.ConnectionError("server down")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_timeout(self, mock_post):
+        import requests
+        from jarvis.llm import OllamaBackend
+
+        mock_post.side_effect = requests.exceptions.Timeout("slow")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_generic_exception(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.side_effect = RuntimeError("unexpected")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
+
+    @patch("jarvis.llm.requests.post")
+    def test_extra_options_merge_into_payload(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat(
+            "any",
+            [{"role": "user", "content": "hi"}],
+            extra_options={"temperature": 0.5, "num_ctx": 16384},
+        )
+
+        sent = mock_post.call_args.kwargs["json"]
+        # caller-supplied options merge over the default; both keys present
+        assert sent["options"]["temperature"] == 0.5
+        assert sent["options"]["num_ctx"] == 16384
+
+    @patch("jarvis.llm.requests.post")
+    def test_extra_options_none_keeps_defaults(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat("any", [{"role": "user", "content": "hi"}], extra_options=None)
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["options"] == {"num_ctx": 8192}
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — direct edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendDirectEdgeCases:
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_for_unknown_response_shape(self, mock_post):
+        """When the response carries no recognised content key, ``direct``
+        falls through to the empty-content debug log path and returns None."""
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"unexpected": "shape"})
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.direct("gemma4:e2b", "sys", "user") is None
+
+    @patch("jarvis.llm.requests.post")
+    def test_temperature_forwarded_when_set(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.direct("gemma4:e2b", "sys", "user", temperature=0.0)
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["options"]["temperature"] == 0.0
+
+    @patch("jarvis.llm.requests.post")
+    def test_temperature_omitted_when_none(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.direct("gemma4:e2b", "sys", "user")  # default temperature=None
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert "temperature" not in sent["options"]
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — streaming edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendStreamingEdgeCases:
+    @patch("jarvis.llm.requests.post")
+    def test_works_without_on_token_callback(self, mock_post):
+        """``streaming`` must accumulate the full text even when the caller
+        does not provide an ``on_token`` callback."""
+        from jarvis.llm import OllamaBackend
+
+        chunks = [
+            json.dumps({"message": {"content": "a"}}).encode(),
+            json.dumps({"message": {"content": "b"}}).encode(),
+        ]
+        mock_post.return_value = _make_response(iter_lines=chunks)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.streaming("gemma4:e2b", "sys", "user") == "ab"
+
+    @patch("jarvis.llm.requests.post")
+    def test_skips_lines_with_invalid_json(self, mock_post):
+        """Malformed JSONL lines must be skipped silently rather than aborting
+        the stream — Ollama occasionally interleaves keepalive frames."""
+        from jarvis.llm import OllamaBackend
+
+        chunks = [
+            b"not-json",
+            json.dumps({"message": {"content": "hi"}}).encode(),
+            b"",  # blank line
+        ]
+        mock_post.return_value = _make_response(iter_lines=chunks)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.streaming("gemma4:e2b", "sys", "user") == "hi"
+
+
+# ---------------------------------------------------------------------------
+# extract_text_from_response — fallback shapes
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTextFromResponse:
+    """The helper handles Ollama's native shape and three OpenAI-compatible
+    fallbacks so callers do not need to special-case proxied responses."""
+
+    def test_ollama_message_content(self):
+        from jarvis.llm import extract_text_from_response
+
+        assert extract_text_from_response({"message": {"content": "hi"}}) == "hi"
+
+    def test_openai_choices_message_content(self):
+        from jarvis.llm import extract_text_from_response
+
+        data = {"choices": [{"message": {"content": "hi"}}]}
+        assert extract_text_from_response(data) == "hi"
+
+    def test_openai_choices_text(self):
+        from jarvis.llm import extract_text_from_response
+
+        data = {"choices": [{"text": "hi"}]}
+        assert extract_text_from_response(data) == "hi"
+
+    def test_toplevel_content(self):
+        from jarvis.llm import extract_text_from_response
+
+        assert extract_text_from_response({"content": "hi"}) == "hi"
+
+    def test_returns_none_for_unknown_shape(self):
+        from jarvis.llm import extract_text_from_response
+
+        assert extract_text_from_response({"unexpected": "shape"}) is None
+        assert extract_text_from_response({"choices": []}) is None
+
 
 # ---------------------------------------------------------------------------
 # OllamaBackend — embeddings & model listing

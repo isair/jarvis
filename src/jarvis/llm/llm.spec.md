@@ -45,6 +45,8 @@ Each method maps onto a well-defined wire shape. Implementations translate the g
 | `embed(text, model, *, timeout_sec)` | `Optional[List[float]]` | Vector embedding. Returns `None` on error or when the runtime does not expose embeddings. |
 | `list_models(*, timeout_sec)` | `List[str]` | Names of locally available models. Returns `[]` on error. |
 
+`direct()` and `streaming()` are convenience methods over `chat()`: they construct the `[system, user]` messages array internally so callers running classification-shaped passes (planner, intent judge, evaluator, enrichment extractor) do not have to. `chat()` is the low-level primitive for arbitrary message arrays — multi-turn dialogue, native tool calls, and anything that needs custom roles. Use the convenience methods when you have a single system + single user; reach for `chat()` whenever the message array is non-trivial.
+
 ### Tool calling
 
 The `tools` parameter accepts the OpenAI-compatible JSON-schema format produced by `jarvis.tools.registry.generate_tools_json_schema()`. Ollama 0.4+ adopts that exact format, so no translation layer is needed for the Ollama backend; future OpenAI-compatible and Anthropic-compatible backends translate inside their `chat()` methods so the reply engine sees a single shape.
