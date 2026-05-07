@@ -1,0 +1,280 @@
+"""Behaviour tests for the pluggable LLM backend abstraction.
+
+PR 1 covers the Ollama backend only. These tests pin the
+provider-agnostic ``LLMBackend`` interface against the ``OllamaBackend``
+implementation, and confirm that the legacy top-level functions
+(``call_llm_direct``, ``call_llm_streaming``, ``chat_with_messages``)
+continue to work so existing call sites do not need to change in this
+PR.
+
+The tests intentionally exercise observable behaviour (return values,
+``on_token`` callbacks, raised errors) rather than implementation
+details such as which exact URL was hit.
+"""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_http=None):
+    """Build a MagicMock that behaves like a ``requests.Response`` with
+    context-manager support, since the real code uses ``with requests.post(...)``.
+    """
+    resp = MagicMock()
+    resp.status_code = status_code
+    if json_data is not None:
+        resp.json.return_value = json_data
+    if iter_lines is not None:
+        resp.iter_lines.return_value = iter_lines
+    if raise_http is not None:
+        resp.raise_for_status.side_effect = raise_http
+    else:
+        resp.raise_for_status = MagicMock()
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=None)
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — chat / direct / streaming
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendDirect:
+    @patch("jarvis.llm.requests.post")
+    def test_returns_assistant_text(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "hello"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        result = backend.direct("gemma4:e2b", "sys", "user")
+
+        assert result == "hello"
+
+    @patch("jarvis.llm.requests.post")
+    def test_strips_trailing_slash_from_base_url(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434/")
+        backend.direct("gemma4:e2b", "sys", "user")
+
+        url = mock_post.call_args[0][0]
+        assert url == "http://localhost:11434/api/chat"
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_empty_content(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "   "}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.direct("gemma4:e2b", "sys", "user") is None
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_request_failure(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.side_effect = RuntimeError("boom")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.direct("gemma4:e2b", "sys", "user") is None
+
+
+class TestOllamaBackendStreaming:
+    @patch("jarvis.llm.requests.post")
+    def test_invokes_on_token_per_chunk_and_returns_full_text(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        chunks = [
+            json.dumps({"message": {"content": "hel"}}).encode(),
+            json.dumps({"message": {"content": "lo"}}).encode(),
+            json.dumps({"message": {"content": " world"}}).encode(),
+        ]
+        mock_post.return_value = _make_response(iter_lines=chunks)
+        backend = OllamaBackend("http://localhost:11434")
+
+        seen: list[str] = []
+        result = backend.streaming(
+            "gemma4:e2b", "sys", "user", on_token=seen.append
+        )
+
+        assert seen == ["hel", "lo", " world"]
+        assert result == "hello world"
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_when_stream_is_empty(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(iter_lines=[])
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.streaming("gemma4:e2b", "sys", "user") is None
+
+
+class TestOllamaBackendChat:
+    @patch("jarvis.llm.requests.post")
+    def test_returns_raw_response_dict(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        payload = {"message": {"content": "answer", "tool_calls": [{"function": {"name": "x"}}]}}
+        mock_post.return_value = _make_response(json_data=payload)
+        backend = OllamaBackend("http://localhost:11434")
+
+        result = backend.chat("gpt-oss:20b", [{"role": "user", "content": "hi"}])
+
+        assert result == payload
+
+    @patch("jarvis.llm.requests.post")
+    def test_raises_tools_not_supported_on_http_400_with_tools(self, mock_post):
+        import requests
+        from jarvis.llm import OllamaBackend, ToolsNotSupportedError
+
+        http_resp = MagicMock(status_code=400)
+        err = requests.exceptions.HTTPError(response=http_resp)
+        mock_post.return_value = _make_response(raise_http=err)
+        backend = OllamaBackend("http://localhost:11434")
+
+        with pytest.raises(ToolsNotSupportedError):
+            backend.chat(
+                "small-model",
+                [{"role": "user", "content": "hi"}],
+                tools=[{"type": "function", "function": {"name": "x"}}],
+            )
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_http_400_without_tools(self, mock_post):
+        import requests
+        from jarvis.llm import OllamaBackend
+
+        http_resp = MagicMock(status_code=400)
+        err = requests.exceptions.HTTPError(response=http_resp)
+        mock_post.return_value = _make_response(raise_http=err)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — embeddings & model listing
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendEmbed:
+    @patch("jarvis.llm.requests.post")
+    def test_returns_vector(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        resp = MagicMock()
+        resp.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        resp.raise_for_status = MagicMock()
+        mock_post.return_value = resp
+        backend = OllamaBackend("http://localhost:11434")
+
+        vec = backend.embed("hello", "nomic-embed-text")
+
+        assert vec == [0.1, 0.2, 0.3]
+
+    @patch("jarvis.llm.requests.post")
+    def test_returns_none_on_error(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.side_effect = RuntimeError("boom")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.embed("hello", "nomic-embed-text") is None
+
+
+class TestOllamaBackendListModels:
+    @patch("jarvis.llm.requests.get")
+    def test_returns_model_names(self, mock_get):
+        from jarvis.llm import OllamaBackend
+
+        resp = MagicMock()
+        resp.json.return_value = {
+            "models": [
+                {"name": "gemma4:e2b"},
+                {"name": "gpt-oss:20b"},
+            ]
+        }
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.list_models() == ["gemma4:e2b", "gpt-oss:20b"]
+
+    @patch("jarvis.llm.requests.get")
+    def test_returns_empty_list_on_failure(self, mock_get):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.side_effect = RuntimeError("boom")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.list_models() == []
+
+
+# ---------------------------------------------------------------------------
+# Factory dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestFactory:
+    def test_get_llm_backend_returns_ollama_backend_for_default_settings(self, mock_config):
+        from jarvis.llm import OllamaBackend, get_llm_backend
+
+        backend = get_llm_backend(mock_config)
+
+        assert isinstance(backend, OllamaBackend)
+
+
+# ---------------------------------------------------------------------------
+# Backwards compatibility — legacy top-level functions
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyFunctions:
+    @patch("jarvis.llm.requests.post")
+    def test_call_llm_direct_still_returns_text(self, mock_post):
+        from jarvis.llm import call_llm_direct
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "hello"}})
+
+        assert call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "u") == "hello"
+
+    @patch("jarvis.llm.requests.post")
+    def test_chat_with_messages_still_returns_dict(self, mock_post):
+        from jarvis.llm import chat_with_messages
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+
+        result = chat_with_messages(
+            "http://localhost:11434", "gemma4:e2b", [{"role": "user", "content": "hi"}]
+        )
+
+        assert isinstance(result, dict)
+        assert result["message"]["content"] == "ok"
+
+    @patch("jarvis.llm.requests.post")
+    def test_call_llm_streaming_still_invokes_callback(self, mock_post):
+        from jarvis.llm import call_llm_streaming
+
+        chunks = [json.dumps({"message": {"content": "x"}}).encode()]
+        mock_post.return_value = _make_response(iter_lines=chunks)
+        seen: list[str] = []
+
+        result = call_llm_streaming(
+            "http://localhost:11434", "gemma4:e2b", "sys", "u", on_token=seen.append
+        )
+
+        assert seen == ["x"]
+        assert result == "x"
+
+    def test_extract_text_from_response_still_importable(self):
+        from jarvis.llm import extract_text_from_response
+
+        assert extract_text_from_response({"message": {"content": "hi"}}) == "hi"
