@@ -133,8 +133,8 @@ def test_extractor_wraps_user_text_in_untrusted_fence():
 
     captured: Dict[str, Any] = {}
 
-    def fake_call_llm(base_url, model, sys_prompt, user_prompt, **kw):
-        captured["user_prompt"] = user_prompt
+    def fake_call_llm(*args, **kw):
+        captured["user_prompt"] = kw.get("user_content")
         return "NONE"
 
     with patch(

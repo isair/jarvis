@@ -37,14 +37,14 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
     model = (
         getattr(cfg, "tool_router_model", "")
         or getattr(cfg, "intent_judge_model", "")
+        or getattr(cfg, "llm_chat_model", "")
         or getattr(cfg, "ollama_chat_model", "")
     )
-    base_url = getattr(cfg, "ollama_base_url", "")
-    if not model or not base_url:
+    if not model:
         return None
 
     try:
-        from ...llm import call_llm_direct
+        from ...llm import get_llm_backend
     except Exception:
         return None
 
@@ -57,8 +57,8 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
     user_prompt = f"User utterance: {text}\n\nPlace:"
 
     try:
-        resp = call_llm_direct(
-            base_url, model, sys_prompt, user_prompt,
+        resp = get_llm_backend(cfg).direct(
+            model, sys_prompt, user_prompt,
             timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
         )
     except Exception as e:
