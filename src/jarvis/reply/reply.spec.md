@@ -285,7 +285,7 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
 - Timeouts (seconds):
 
   - `llm_tools_timeout_sec` (enrichment extraction)
-  - `llm_embed_timeout_sec` (vector search)
+  - `llm_embedding_timeout_sec` (vector search)
   - `llm_chat_timeout_sec` (messages loop turn)
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.

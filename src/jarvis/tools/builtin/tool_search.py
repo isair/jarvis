@@ -99,7 +99,7 @@ class ToolSearchTool(Tool):
                 llm_model=_resolve_router_model(cfg),
                 llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
                 embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-                embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+                embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             )
         except Exception as e:
             debug_log(f"toolSearchTool: select_tools failed: {e}", "tools")

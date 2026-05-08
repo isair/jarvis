@@ -77,7 +77,7 @@ class MockConfig:
     brave_search_api_key: str = ""
     wikipedia_fallback_enabled: bool = True
     llm_tools_timeout_sec: float = 8.0
-    llm_embed_timeout_sec: float = 10.0
+    llm_embedding_timeout_sec: float = 10.0
     llm_chat_timeout_sec: float = 45.0
     agentic_max_turns: int = 8
     tool_selection_strategy: str = "embedding"
