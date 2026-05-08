@@ -606,8 +606,8 @@ def _maybe_digest_tool_result(
             query=query,
             tool_name=tool_name,
             tool_result=raw_tool_result,
-            ollama_base_url=cfg.ollama_base_url,
-            ollama_chat_model=cfg.ollama_chat_model,
+            cfg=cfg,
+            chat_model=getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", ""),
             timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
@@ -1175,7 +1175,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log("memory extractor served from hot-window cache", "memory")
             else:
                 search_params = extract_search_params_for_memory(
-                    _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
+                    _extractor_query, cfg, resolve_tool_router_model(cfg),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
                     context_hint=context_hint,
@@ -1316,8 +1316,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 query=redacted,
                 diary_entries=raw_diary_entries,
                 graph_parts=raw_graph_parts,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
+                chat_model=getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", ""),
                 timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )

@@ -118,7 +118,7 @@ class TestExtractorPromptRendering:
 
         with patch("jarvis.reply.enrichment.call_llm_direct", side_effect=fake_call):
             extract_search_params_for_memory(
-                "dummy query", "http://x", "m", timeout_sec=1.0, **kwargs
+                "dummy query", _cfg(), "m", timeout_sec=1.0, **kwargs
             )
         return captured["system_prompt"]
 
@@ -147,7 +147,7 @@ class TestExtractorPromptRendering:
     def test_extract_returns_empty_dict_when_no_usable_response(self):
         with patch("jarvis.reply.enrichment.call_llm_direct", return_value=""):
             result = extract_search_params_for_memory(
-                "q", "http://x", "m", timeout_sec=0.1,
+                "q", _cfg(), "m", timeout_sec=0.1,
             )
         assert result == {}
 
@@ -350,8 +350,8 @@ class TestDigestMemoryForQuery:
     def _base_kwargs(self):
         return dict(
             query="what did we discuss about cooking?",
-            ollama_base_url="http://x",
-            ollama_chat_model="gemma4",
+            cfg=_cfg(),
+            chat_model="gemma4",
             timeout_sec=1.0,
             thinking=False,
         )
@@ -511,8 +511,8 @@ class TestDigestToolResultForQuery:
         return dict(
             query="tell me about the movie Possessor",
             tool_name="webSearch",
-            ollama_base_url="http://x",
-            ollama_chat_model="gemma4",
+            cfg=_cfg(),
+            chat_model="gemma4",
             timeout_sec=1.0,
             thinking=False,
         )
@@ -860,11 +860,10 @@ class TestDigestLoopForMaxTurns:
 
         captured = {}
 
-        def fake_call(base_url, chat_model, system_prompt, user_content,
-                      timeout_sec, thinking):
-            captured["system_prompt"] = system_prompt
-            captured["user_content"] = user_content
-            captured["timeout_sec"] = timeout_sec
+        def fake_call(**kwargs):
+            captured["system_prompt"] = kwargs["system_prompt"]
+            captured["user_content"] = kwargs["user_content"]
+            captured["timeout_sec"] = kwargs["timeout_sec"]
             return "I couldn't fully finish this. I found the London forecast looks cloudy today."
 
         loop_messages = [
@@ -954,7 +953,11 @@ class TestDigestLoopForMaxTurns:
         assert out is None
         mock_llm.assert_not_called()
 
-    def test_missing_base_url_returns_none(self):
+    def test_missing_chat_model_returns_none(self):
+        """Without a resolvable chat model, the digest cannot run at all —
+        it must short-circuit to None rather than calling the backend with
+        an empty model name. The factory itself is fail-soft (it always
+        builds a backend), so the chat_model gate is what guards the call."""
         from jarvis.reply.enrichment import digest_loop_for_max_turns
 
         with patch(
@@ -963,7 +966,7 @@ class TestDigestLoopForMaxTurns:
             out = digest_loop_for_max_turns(
                 user_query="hello",
                 loop_messages=[{"role": "assistant", "content": "x"}],
-                cfg=self._cfg(ollama_base_url=""),
+                cfg=self._cfg(ollama_chat_model=""),
             )
 
         assert out is None
