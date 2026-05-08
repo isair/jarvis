@@ -3,6 +3,15 @@ REM Run script for the Jarvis Desktop App on Windows
 REM Uses the project's mamba environment
 REM Usage: run_desktop_app.bat [--voice-debug]
 
+REM Resolve PROJECT_ROOT directly from %~dp0 without relying on `..`
+REM expansion, which can resolve against the cwd rather than the bat's
+REM directory under some launchers (e.g. Claude Preview's preview tool).
+REM Strip trailing backslash, then take the parent directory using ~dp.
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+for %%I in ("%SCRIPT_DIR%") do set "PROJECT_ROOT=%%~dpI"
+if "%PROJECT_ROOT:~-1%"=="\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
+
 REM Parse arguments
 set "VOICE_DEBUG=0"
 :parse_args
@@ -22,8 +31,6 @@ if "%VOICE_DEBUG%"=="1" (
 )
 echo.
 
-REM Navigate to project root (use for-loop to resolve .. reliably across shells)
-for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
 cd /d "%PROJECT_ROOT%"
 set "PYTHONPATH=%PROJECT_ROOT%\src;%PYTHONPATH%"
 

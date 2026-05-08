@@ -64,7 +64,8 @@ After transcription, text passes through these stages in order:
 
 ## Architecture
 
-- **`pynput`** for global hotkey detection (cross-platform).
+- **`pynput`** for global hotkey detection (cross-platform), running in an
+  isolated child process — see "Subprocess isolation" below.
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
@@ -73,6 +74,53 @@ After transcription, text passes through these stages in order:
   modifying the complex listener code.
 - **Pause flag** on the main listener to prevent dictation speech being
   interpreted as commands.
+
+### Subprocess isolation (pynput Listener)
+
+The `pynput` keyboard `Listener` owns native event taps that have repeatedly
+crashed the daemon with `Fatal Python error: Illegal instruction` /
+`Aborted` from C-level code (`pynput/_util/darwin.py:keycode_context` on
+macOS, `pynput/_util/win32.py:__iter__` on Windows). These signals cannot be
+caught from Python — they tear down the whole process.
+
+To stop a single failing event tap from killing Jarvis, the Listener runs in
+a dedicated child process spawned via `multiprocessing.spawn` from
+`src/jarvis/dictation/listener_proc.py`. The child relays `press`/`release`
+events to the parent over a `Pipe`, where they are reconstructed into pynput
+`Key`/`KeyCode` objects and fed to the same `_on_key_press` /
+`_on_key_release` handlers as before.
+
+If the child crashes:
+
+- The parent's reader thread detects the dead process via `proc.is_alive()`
+  and exits.
+- A supervisor thread in the parent transparently respawns the child after
+  a short backoff (1 s, 2 s, 5 s). Up to `_MAX_CONSECUTIVE_FAILURES`
+  consecutive crashes are tolerated before the supervisor gives up — past
+  that point we'd just be burning CPU spawning into a deterministic crash
+  loop.
+- A spawn that ran longer than `_CLEAN_RUN_WINDOW` (60 s) resets the failure
+  counter, so an occasional hiccup over a long session doesn't accumulate.
+- When the supervisor gives up it prints a one-line warning to the console;
+  the daemon stays up and dictation can be re-enabled by restarting the
+  engine (calling `start()` again resets the counter for a fresh session).
+
+Side effect: the Windows low-level keyboard hook timeout (Windows silently
+removes hooks whose callbacks take more than ~5 s) now applies inside the
+child process only. The parent's reader thread can take its time without
+risking the hook being torn down. Existing off-thread dispatch in
+`_stop_recording` is kept anyway because the contract still belongs to the
+listener wire.
+
+The macOS 26+ guard (see "Edge Cases") still short-circuits before spawning
+the child — subprocess isolation only contains crashes, it does not enable
+Tahoe support, so there is no point starting a process we know will crash
+on its first key event.
+
+If `multiprocessing.spawn` itself fails (rare; e.g. a starved system or a
+broken frozen build), the wrapper logs the failure, leaves itself in the
+unstarted state, and the daemon stays up. Dictation will retry on the next
+engine restart.
 
 ### Audio Device Handling
 
@@ -129,3 +177,8 @@ Location steps) that allows users to:
 ## Dependencies
 
 - `pynput>=1.7.6` — global hotkey detection and keyboard simulation.
+- `multiprocessing` (stdlib, `spawn` context) — used to isolate the pynput
+  Listener in a child process so native crashes can't take down the daemon.
+  PyInstaller frozen builds rely on `multiprocessing.freeze_support()` being
+  called early in `app.py`; the spec file lists `jarvis.dictation.listener_proc`
+  as a hidden import so the spawned child can re-import it.

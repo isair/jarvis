@@ -129,6 +129,81 @@ class TestHotkeyParsing:
         assert trigger is not None
 
 
+class TestModifierFamilyMatching:
+    """Modifier keys should match regardless of handedness.
+
+    pynput may report ``ctrl`` (generic, VK 0x11) or ``ctrl_l`` (VK 0xA2)
+    depending on the platform and whether the Listener runs in a subprocess.
+    The engine must treat these as equivalent when checking the hotkey.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_pynput(self):
+        try:
+            import pynput  # noqa: F401
+        except ImportError:
+            pytest.skip("pynput not installed")
+
+    def _make_engine_with_hotkey(self, hotkey):
+        from src.jarvis.dictation.dictation_engine import DictationEngine
+        import threading
+        return DictationEngine(
+            whisper_model_ref=lambda: None,
+            whisper_backend_ref=lambda: None,
+            mlx_repo_ref=lambda: None,
+            hotkey=hotkey,
+            sample_rate=16000,
+            transcribe_lock=threading.Lock(),
+        )
+
+    def test_generic_ctrl_satisfies_ctrl_l_requirement(self):
+        """Key.ctrl (VK 0x11) must satisfy a hotkey that requires Key.ctrl_l."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        # Simulate: pynput emits the generic Key.ctrl instead of Key.ctrl_l
+        assert engine._key_matches(pk.Key.ctrl, pk.Key.ctrl, pk.Key.ctrl_l)
+
+    def test_ctrl_l_satisfies_ctrl_requirement(self):
+        """Key.ctrl_l must satisfy a hotkey that requires the generic Key.ctrl."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert engine._key_matches(pk.Key.ctrl_l, pk.Key.ctrl_l, pk.Key.ctrl)
+
+    def test_ctrl_r_satisfies_ctrl_l_requirement(self):
+        """Right Ctrl must satisfy a left-Ctrl requirement (hotkey says 'ctrl')."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert engine._key_matches(pk.Key.ctrl_r, pk.Key.ctrl_r, pk.Key.ctrl_l)
+
+    def test_cmd_r_satisfies_cmd_requirement(self):
+        """Right Win / Cmd must satisfy a hotkey that requires generic Key.cmd."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert engine._key_matches(pk.Key.cmd_r, pk.Key.cmd_r, pk.Key.cmd)
+
+    def test_all_modifiers_held_with_generic_ctrl(self):
+        """_all_modifiers_held must return True when generic Key.ctrl is pressed
+        but the hotkey requires Key.ctrl_l."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        # Simulate pressing generic ctrl + cmd
+        engine._pressed_modifiers = {pk.Key.ctrl, pk.Key.cmd}
+        assert engine._all_modifiers_held()
+
+    def test_all_modifiers_held_with_sided_keys(self):
+        """Sided modifier keys (ctrl_l + cmd) must satisfy the hotkey requirement."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        engine._pressed_modifiers = {pk.Key.ctrl_l, pk.Key.cmd}
+        assert engine._all_modifiers_held()
+
+    def test_wrong_modifier_family_does_not_match(self):
+        """Alt must NOT satisfy a ctrl requirement."""
+        from pynput import keyboard as pk
+        engine = self._make_engine_with_hotkey("ctrl+cmd")
+        assert not engine._key_matches(pk.Key.alt_l, pk.Key.alt_l, pk.Key.ctrl_l)
+
+
 # ---------------------------------------------------------------------------
 # Engine lifecycle
 # ---------------------------------------------------------------------------
@@ -144,27 +219,32 @@ class TestEngineLifecycle:
         except ImportError:
             pytest.skip("pynput or sounddevice not installed")
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_creates_listener(self, mock_kb, mock_sys, mock_platform):
+    def test_start_creates_listener(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
         # Force a platform where pynput is allowed (avoid macOS 26+ guard)
         mock_sys.platform = "linux"
-        mock_listener_instance = MagicMock()
-        mock_kb.Listener.return_value = mock_listener_instance
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
         mock_kb.Key.ctrl_l = MagicMock()
         mock_kb.Key.shift = MagicMock()
+        mock_listener_instance = MagicMock()
+        mock_sub_cls.return_value = mock_listener_instance
 
         engine = _make_engine()
         engine.start()
 
         assert engine._started is True
+        # Listener now lives in a child process — engine drives it via the
+        # SubprocessKeyboardListener wrapper, never pynput.Listener directly.
+        mock_kb.Listener.assert_not_called()
         mock_listener_instance.start.assert_called_once()
 
         engine.stop()
         assert engine._started is False
+        mock_listener_instance.stop.assert_called_once()
 
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard", None)
     def test_start_without_pynput_is_noop(self):
@@ -192,11 +272,14 @@ class TestEngineLifecycle:
         engine.start()
         assert engine._started is False
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_skips_on_macos_26(self, mock_kb, mock_sys, mock_platform):
-        """pynput crashes on macOS 26+ (TSM thread assertion). Engine must skip."""
+    def test_start_skips_on_macos_26(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
+        """pynput crashes on macOS 26+ (TSM thread assertion). Engine must skip
+        even spawning the subprocess — no point starting a child we know will
+        crash on first key event."""
         mock_sys.platform = "darwin"
         mock_platform.mac_ver.return_value = ("26.2", ("", "", ""), "")
         mock_kb.Key = MagicMock()
@@ -207,21 +290,23 @@ class TestEngineLifecycle:
         engine = _make_engine()
         engine.start()
         assert engine._started is False
+        mock_sub_cls.assert_not_called()
         mock_kb.Listener.assert_not_called()
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_allowed_on_macos_15(self, mock_kb, mock_sys, mock_platform):
+    def test_start_allowed_on_macos_15(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
         """pynput should still work on macOS 15 (Sequoia) and earlier."""
         mock_sys.platform = "darwin"
         mock_platform.mac_ver.return_value = ("15.4", ("", "", ""), "")
-        mock_listener = MagicMock()
-        mock_kb.Listener.return_value = mock_listener
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
         mock_kb.Key.ctrl_l = MagicMock()
         mock_kb.Key.shift = MagicMock()
+        mock_listener = MagicMock()
+        mock_sub_cls.return_value = mock_listener
 
         engine = _make_engine()
         engine.start()
@@ -229,18 +314,19 @@ class TestEngineLifecycle:
         mock_listener.start.assert_called_once()
         engine.stop()
 
+    @patch("src.jarvis.dictation.listener_proc.SubprocessKeyboardListener")
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform):
+    def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform, mock_sub_cls):
         """Windows should not be affected by the macOS guard."""
         mock_sys.platform = "win32"
-        mock_listener = MagicMock()
-        mock_kb.Listener.return_value = mock_listener
         mock_kb.Key = MagicMock()
         mock_kb.KeyCode = MagicMock()
         mock_kb.Key.ctrl_l = MagicMock()
         mock_kb.Key.shift = MagicMock()
+        mock_listener = MagicMock()
+        mock_sub_cls.return_value = mock_listener
 
         engine = _make_engine()
         engine.start()
@@ -270,6 +356,49 @@ class TestRecordingStateMachine:
         engine = _make_engine(whisper_model_ref=lambda: None)
         engine._start_recording()
         assert engine._recording is False
+
+    def test_start_recording_plays_not_ready_beep_when_whisper_missing(self, capsys):
+        """Hotkey fired but Whisper not loaded → audible + visible feedback.
+
+        Without this the user just sees the hotkey doing nothing and assumes
+        dictation itself is broken.  The spec requires a "not ready" beep
+        and the user-facing console line gives a hint about what to do.
+        """
+        from src.jarvis.dictation.dictation_engine import _get_not_ready_beep
+
+        engine = _make_engine(whisper_model_ref=lambda: None)
+        with patch("src.jarvis.dictation.dictation_engine._play_beep") as mock_beep:
+            engine._start_recording()
+        mock_beep.assert_called_once_with(_get_not_ready_beep())
+        captured = capsys.readouterr()
+        assert "Whisper" in captured.out and "⚠️" in captured.out
+        assert engine._recording is False
+
+    def test_start_recording_surfaces_audio_stream_open_failure(self, capsys):
+        """Audio device unavailable → not-ready beep + console line, not silence."""
+        from src.jarvis.dictation.dictation_engine import _get_not_ready_beep
+
+        engine = _make_engine()
+        with patch("src.jarvis.dictation.dictation_engine.sd") as mock_sd, \
+             patch("src.jarvis.dictation.dictation_engine._play_beep") as mock_beep:
+            mock_sd.query_devices.return_value = {"default_samplerate": 16000}
+            mock_sd.InputStream.side_effect = RuntimeError("no audio device")
+            engine._start_recording()
+        # Start beep would have fired before the failure; the not-ready beep
+        # must follow so the user knows recording aborted.
+        called_with = [c.args[0] for c in mock_beep.call_args_list]
+        assert _get_not_ready_beep() in called_with
+        captured = capsys.readouterr()
+        assert "audio stream" in captured.out and "⚠️" in captured.out
+        assert engine._recording is False
+
+    def test_not_ready_beep_is_distinct_from_start_and_stop(self):
+        """Not-ready beep must sound different so the user can tell them apart."""
+        from src.jarvis.dictation.dictation_engine import (
+            _get_not_ready_beep, _get_start_beep, _get_stop_beep,
+        )
+        assert _get_not_ready_beep() != _get_start_beep()
+        assert _get_not_ready_beep() != _get_stop_beep()
 
     def test_start_recording_allows_mlx_without_model(self):
         """MLX backend uses repo reference, not model object."""
