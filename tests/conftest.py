@@ -43,6 +43,16 @@ if str(SRC) not in sys.path:
 @dataclass
 class MockConfig:
     """Minimal config object for unit tests that need a config."""
+    # Provider-aware fields. Default to Ollama at localhost so tests
+    # that don't care about providers keep the historical behaviour.
+    llm_provider: str = "ollama"
+    llm_base_url: str = "http://localhost:11434"
+    llm_api_key: str = ""
+    llm_chat_model: str = "gemma4:e2b"
+    embedding_provider: str = ""
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = "nomic-embed-text"
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "gemma4:e2b"
     ollama_embed_model: str = "nomic-embed-text"

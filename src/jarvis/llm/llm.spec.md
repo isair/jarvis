@@ -15,7 +15,8 @@ This spec covers the abstraction shape, the supported providers, and the two int
 | Phase | Scope | Status |
 |-------|-------|--------|
 | PR 1 | Extract `LLMBackend` ABC, `OllamaBackend`, factory, function-style helpers. Ollama-only. Zero behaviour change. | Done |
-| PR 2 | Add `OpenAICompatibleBackend`, `llm_provider` config key + migration, embedding routing override. | Pending |
+| PR 2 | Add `OpenAICompatibleBackend`, `llm_provider` / `llm_*` / `embedding_*` config keys + v2 migration, factory dispatch, `get_embedding_backend`. Foundation only — no call site uses the factory yet. | Done |
+| PR 2.5 | Migrate every LLM call site (reply engine, planner, evaluator, intent judge, enrichment, memory ops, tools, embeddings) to `get_llm_backend(settings)` / `get_embedding_backend(settings)`. After this PR, picking `llm_provider: openai_compatible` works end-to-end. | Pending |
 | PR 3 | Setup wizard provider page, settings UI provider group, README update. | Pending |
 | PR 4 | Add `AnthropicCompatibleBackend` (optional, demand-driven). | Pending |
 

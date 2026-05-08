@@ -73,6 +73,21 @@ class Settings:
     sqlite_vss_path: str | None
 
     # LLM & AI Models
+    # Provider-aware fields (see src/jarvis/llm/llm.spec.md). The
+    # `ollama_*` fields below are kept as aliases so any caller still
+    # reading them keeps working when the provider is Ollama.
+    llm_provider: str  # "ollama" | "openai_compatible"
+    llm_base_url: str
+    llm_api_key: str
+    llm_chat_model: str
+    embedding_provider: str  # "" (= same as llm_provider) | "ollama" | "openai_compatible"
+    embedding_base_url: str
+    embedding_api_key: str
+    embedding_model: str
+    # Compatibility aliases — populated alongside the provider-aware
+    # fields. Code paths that have not yet been migrated to the factory
+    # read these. `ollama_base_url`/`ollama_chat_model`/`ollama_embed_model`
+    # retain the same meaning they had before PR 2.
     ollama_base_url: str
     ollama_embed_model: str
     ollama_chat_model: str
@@ -308,6 +323,26 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
         cfg_json["_config_version"] = 1
         modified = True
 
+    # Migration v2: introduce provider-aware llm_* / embedding_* keys.
+    # Existing installs keep their behaviour: llm_provider defaults to
+    # "ollama" and the llm_* / embedding_* fields are filled from the
+    # ollama_* fields they already have. The old keys remain in place so
+    # any code path that still reads them works unchanged.
+    if migration_version < 2:
+        if "llm_provider" not in cfg_json:
+            cfg_json["llm_provider"] = "ollama"
+        ollama_url = cfg_json.get("ollama_base_url")
+        if ollama_url and not cfg_json.get("llm_base_url"):
+            cfg_json["llm_base_url"] = ollama_url
+        chat_model = cfg_json.get("ollama_chat_model")
+        if chat_model and not cfg_json.get("llm_chat_model"):
+            cfg_json["llm_chat_model"] = chat_model
+        embed_model = cfg_json.get("ollama_embed_model")
+        if embed_model and not cfg_json.get("embedding_model"):
+            cfg_json["embedding_model"] = embed_model
+        cfg_json["_config_version"] = 2
+        modified = True
+
     # Save migrated config
     if modified:
         if _save_json(cfg_path, cfg_json):
@@ -374,6 +409,18 @@ def get_default_config() -> Dict[str, Any]:
         "sqlite_vss_path": None,
 
         # LLM & AI Models
+        # Provider-aware fields (PR 2). Default provider is "ollama" so
+        # existing installs keep working without re-configuration. The
+        # `ollama_*` fields below are kept for backwards compatibility
+        # with code paths that have not yet been migrated to the factory.
+        "llm_provider": "ollama",
+        "llm_base_url": "",  # falls back to ollama_base_url when empty
+        "llm_api_key": "",
+        "llm_chat_model": "",  # falls back to ollama_chat_model when empty
+        "embedding_provider": "",  # "" = same as llm_provider
+        "embedding_base_url": "",
+        "embedding_api_key": "",
+        "embedding_model": "",  # falls back to ollama_embed_model when empty
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
         "ollama_chat_model": DEFAULT_CHAT_MODEL,
@@ -589,6 +636,24 @@ def load_settings() -> Settings:
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
+
+    # Provider-aware fields. Empty string in any of llm_base_url /
+    # llm_chat_model / embedding_model is treated as "use the
+    # corresponding ollama_* field" so existing configs keep working
+    # without a re-save (the v2 migration also fills them in on disk).
+    llm_provider = str(merged.get("llm_provider", "ollama") or "ollama").strip().lower()
+    if llm_provider not in ("ollama", "openai_compatible"):
+        llm_provider = "ollama"
+    llm_base_url = str(merged.get("llm_base_url", "") or "").strip() or ollama_base_url
+    llm_api_key = str(merged.get("llm_api_key", "") or "").strip()
+    llm_chat_model = str(merged.get("llm_chat_model", "") or "").strip() or ollama_chat_model
+    embedding_provider_raw = str(merged.get("embedding_provider", "") or "").strip().lower()
+    if embedding_provider_raw not in ("", "ollama", "openai_compatible"):
+        embedding_provider_raw = ""
+    embedding_provider = embedding_provider_raw
+    embedding_base_url = str(merged.get("embedding_base_url", "") or "").strip()
+    embedding_api_key = str(merged.get("embedding_api_key", "") or "").strip()
+    embedding_model = str(merged.get("embedding_model", "") or "").strip() or ollama_embed_model
     use_stdin = bool(merged.get("use_stdin", False))
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
@@ -742,7 +807,15 @@ def load_settings() -> Settings:
         db_path=db_path,
         sqlite_vss_path=sqlite_vss_path,
 
-        # LLM & AI Models
+        # LLM & AI Models — provider-aware
+        llm_provider=llm_provider,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_chat_model=llm_chat_model,
+        embedding_provider=embedding_provider,
+        embedding_base_url=embedding_base_url,
+        embedding_api_key=embedding_api_key,
+        embedding_model=embedding_model,
         ollama_base_url=ollama_base_url,
         ollama_embed_model=ollama_embed_model,
         ollama_chat_model=ollama_chat_model,
