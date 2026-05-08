@@ -920,7 +920,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             llm_model=resolve_tool_router_model(cfg),
             llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
             embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-            embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+            embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
         # Don't cache the router's "fall open to all tools" fallback. That
@@ -1181,7 +1181,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 to_time=to_time,
                 ollama_base_url=cfg.ollama_base_url,
                 ollama_embed_model=cfg.ollama_embed_model,
-                timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
+                timeout_sec=float(getattr(cfg, 'llm_embedding_timeout_sec', 10.0)),
                 voice_debug=cfg.voice_debug,
                 max_results=cfg.memory_enrichment_max_results
             )

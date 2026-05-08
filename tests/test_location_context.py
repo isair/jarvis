@@ -34,7 +34,7 @@ def _make_cfg(**overrides):
         'ollama_embed_model': 'nomic-embed-text',
         'llm_profile_select_timeout_sec': 0.1,
         'llm_tools_timeout_sec': 0.1,
-        'llm_embed_timeout_sec': 0.1,
+        'llm_embedding_timeout_sec': 0.1,
         'llm_chat_timeout_sec': 0.1,
         'agentic_max_turns': 1,
         'active_profiles': ['developer'],
