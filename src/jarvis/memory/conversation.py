@@ -5,7 +5,8 @@ import time
 import threading
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Iterator, Optional, List, Tuple, Union, Callable
+from types import SimpleNamespace
+from typing import Any, Iterator, Optional, List, Tuple, Union, Callable
 from .db import Database
 from ..llm import call_llm_direct
 from .embeddings import get_embedding
@@ -1629,6 +1630,7 @@ def update_diary_from_dialogue_memory(
     on_token: Optional[Callable[[str], None]] = None,
     thinking: bool = False,
     graph_picker_model: Optional[str] = None,
+    cfg: Any = None,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
@@ -1711,11 +1713,21 @@ def update_diary_from_dialogue_memory(
                     # placement (15s/fact), and split (45s) each have their own budgets
                     # inside update_graph_from_dialogue.
                     graph_timeout = min(timeout_sec, 30.0)
+                    # graph_ops resolves the active backend via the factory.
+                    # Callers who haven't migrated to passing ``cfg`` (legacy
+                    # daemon paths, tests stubbing the diary flush) get a
+                    # minimal namespace populated from the explicit ollama_*
+                    # args so the factory falls back to OllamaBackend at the
+                    # supplied URL — preserves Ollama-only behaviour.
+                    _graph_cfg = cfg if cfg is not None else SimpleNamespace(
+                        ollama_base_url=ollama_base_url,
+                        ollama_chat_model=ollama_chat_model,
+                    )
                     result = update_graph_from_dialogue(
                         store=graph_store,
                         summary=summary_text,
-                        ollama_base_url=ollama_base_url,
-                        ollama_chat_model=ollama_chat_model,
+                        cfg=_graph_cfg,
+                        chat_model=ollama_chat_model,
                         timeout_sec=graph_timeout,
                         thinking=thinking,
                         date_utc=today,

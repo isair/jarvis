@@ -547,8 +547,8 @@ class TestUpdateGraphFromDialogue:
         result = update_graph_from_dialogue(
             store=store,
             summary="User likes jazz; Acme Corp is in London",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert len(result.stored) == 2
@@ -575,8 +575,8 @@ class TestUpdateGraphFromDialogue:
         result = update_graph_from_dialogue(
             store=store,
             summary="User said hello and asked about the weather",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.stored == []
@@ -590,8 +590,8 @@ class TestUpdateGraphFromDialogue:
         result = update_graph_from_dialogue(
             store=store,
             summary="summary",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.stored == []
@@ -614,8 +614,8 @@ class TestUpdateGraphFromDialogue:
         result1 = update_graph_from_dialogue(
             store=store,
             summary="User asked about Justin Bieber.",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
         assert len(result1.stored) == 1
         assert result1.skipped == 0
@@ -627,8 +627,8 @@ class TestUpdateGraphFromDialogue:
         result2 = update_graph_from_dialogue(
             store=store,
             summary="User asked about Justin Bieber.",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
         assert result2.stored == [], "duplicate fact should not be reported as learned"
         assert result2.skipped == 1, "duplicate must be counted so the CLI can still log it"
@@ -647,8 +647,8 @@ class TestUpdateGraphFromDialogue:
         update_graph_from_dialogue(
             store=store,
             summary="s",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         mock_llm.return_value = (
@@ -657,8 +657,8 @@ class TestUpdateGraphFromDialogue:
         result = update_graph_from_dialogue(
             store=store,
             summary="s",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
         assert result.stored == [], "Turkish İ/i̇ variants should dedupe"
         assert result.skipped == 1
@@ -669,8 +669,8 @@ class TestUpdateGraphFromDialogue:
         update_graph_from_dialogue(
             store=store,
             summary="s",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         mock_llm.return_value = (
@@ -679,8 +679,8 @@ class TestUpdateGraphFromDialogue:
         result = update_graph_from_dialogue(
             store=store,
             summary="s",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
         assert result.stored == [], "German ß should casefold to ss for dedupe"
         assert result.skipped == 1
@@ -708,8 +708,8 @@ class TestUpdateGraphFromDialogue:
         result = update_graph_from_dialogue(
             store=store,
             summary="User asked about Justin Bieber.",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.stored == [], "duplicate on a child node should still dedupe"
@@ -742,8 +742,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=[new_fact],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -761,8 +761,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["any"],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is False
@@ -779,8 +779,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["any"],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is False
@@ -797,8 +797,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["any"],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is False
@@ -817,8 +817,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["C"],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is False
@@ -837,8 +837,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["x"],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -860,8 +860,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["A new fact."],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is False
@@ -883,8 +883,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["Fresh One.", "Fresh Two."],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -908,8 +908,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=[],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -931,8 +931,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["New."],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -963,7 +963,7 @@ class TestMergeNodeData:
         mock_llm.return_value = at_cap
         result = merge_node_data(
             store=store, node_id=node.id, new_facts=new_facts,
-            ollama_base_url="http://localhost", ollama_chat_model="model",
+            cfg=None, chat_model="model",
         )
         assert result.success is True
 
@@ -975,7 +975,7 @@ class TestMergeNodeData:
         mock_llm.return_value = over_cap
         result = merge_node_data(
             store=store, node_id=node2.id, new_facts=new_facts,
-            ollama_base_url="http://localhost", ollama_chat_model="model",
+            cfg=None, chat_model="model",
         )
         assert result.success is False
 
@@ -997,8 +997,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["The user has a dog."],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -1028,8 +1028,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=[],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         sent_user_content = mock_llm.call_args.kwargs["user_content"]
@@ -1055,8 +1055,8 @@ class TestMergeNodeData:
             store=store,
             node_id=node.id,
             new_facts=["User uses {placeholder} syntax in templates."],
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         assert result.success is True
@@ -1154,8 +1154,8 @@ class TestConsolidateAllPopulatedNodes:
 
         results = list(consolidate_all_populated_nodes(
             store=store,
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         ))
 
         names = {n for n, _, _ in results}
@@ -1177,8 +1177,8 @@ class TestConsolidateAllPopulatedNodes:
 
         results = list(consolidate_all_populated_nodes(
             store=store,
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         ))
 
         assert len(results) == 2
@@ -1197,8 +1197,8 @@ class TestConsolidateAllPopulatedNodes:
 
         gen = consolidate_all_populated_nodes(
             store=store,
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         # First call only triggers one LLM hit (the first node), which
@@ -1236,8 +1236,8 @@ class TestUpdateGraphMerge:
         result = update_graph_from_dialogue(
             store=store,
             summary="User clarified they do not need a check-in.",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         stored = result.stored
@@ -1261,8 +1261,8 @@ class TestUpdateGraphMerge:
         result = update_graph_from_dialogue(
             store=store,
             summary="s",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         stored = result.stored
@@ -1284,8 +1284,8 @@ class TestUpdateGraphMerge:
         result = update_graph_from_dialogue(
             store=store,
             summary="s",
-            ollama_base_url="http://localhost",
-            ollama_chat_model="model",
+            cfg=None,
+            chat_model="model",
         )
 
         stored = result.stored

@@ -271,6 +271,7 @@ def _check_and_update_diary(
                 on_token=on_token,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
                 graph_picker_model=graph_picker_model,
+                cfg=cfg,
             )
 
             # Flush any remaining tokens in IPC mode

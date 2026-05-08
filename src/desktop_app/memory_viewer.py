@@ -530,8 +530,8 @@ def graph_import_diary() -> Response:
                     result = update_graph_from_dialogue(
                         store=store,
                         summary=summary_text,
-                        ollama_base_url=settings.ollama_base_url,
-                        ollama_chat_model=settings.ollama_chat_model,
+                        cfg=settings,
+                        chat_model=settings.ollama_chat_model,
                         timeout_sec=settings.llm_chat_timeout_sec,
                         thinking=getattr(settings, 'llm_thinking_enabled', False),
                         date_utc=date_utc,
@@ -621,8 +621,8 @@ def graph_consolidate_all() -> Response:
             # nodes — buffering the full sweep would defeat NDJSON.
             for name, before, after in consolidate_all_populated_nodes(
                 store=store,
-                ollama_base_url=settings.ollama_base_url,
-                ollama_chat_model=settings.ollama_chat_model,
+                cfg=settings,
+                chat_model=settings.ollama_chat_model,
                 timeout_sec=20.0,
                 thinking=getattr(settings, 'llm_thinking_enabled', False),
                 picker_model=picker_model,
