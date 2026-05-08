@@ -2,7 +2,7 @@
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
-> **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) — function-style (`call_llm_direct`, `call_llm_streaming`, `chat_with_messages`) and object-style (`get_llm_backend(settings)`) entry points dispatch to the same backend. The only implementation today is `OllamaBackend`; the per-context model resolution, gating, timeouts, and prompts are unchanged by the abstraction.
+> **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)). The reply hot path (engine, planner, evaluator, enrichment, graph_ops, tool selection, weather + logMeal extractors) is migrated to `get_llm_backend(cfg)` factory dispatch — picking `llm_provider: openai_compatible` swaps the wire shape without touching call sites. Diary maintenance (`memory/conversation.py`) and the intent judge (`listening/intent_judge.py`) still call the Ollama-only paths directly; PR 2.5b / 2.5c will migrate them.
 
 ---
 
