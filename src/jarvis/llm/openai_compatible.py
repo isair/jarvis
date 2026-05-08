@@ -38,6 +38,12 @@ def _normalise_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
     If the server already returns Ollama's shape (some hybrid servers
     expose both endpoints), the response is passed through unchanged.
+
+    Scope: this helper is OpenAI-shape-specific. Other providers
+    (Anthropic, etc.) need their own normaliser inside their own
+    backend module — Anthropic's content-block + ``tool_use`` shape
+    diverges enough that sharing one normaliser would be more
+    confusing than useful. Keep one normaliser per backend.
     """
     if "message" in data and isinstance(data["message"], dict):
         return data

@@ -292,11 +292,22 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 
 def _save_json(path: Path, data: Dict[str, Any]) -> bool:
-    """Save config data to JSON file. Returns True on success."""
+    """Save config data to JSON file. Returns True on success.
+
+    Restricts the saved file to ``0o600`` on POSIX so credentials in
+    config (``llm_api_key``, ``embedding_api_key``, ``brave_search_api_key``)
+    are not readable by other users on multi-user systems. ``chmod`` is a
+    no-op on Windows but is wrapped in a try so platform quirks never
+    fail the save.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
         return True
     except Exception:
         return False
