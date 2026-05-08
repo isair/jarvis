@@ -16,7 +16,9 @@ This spec covers the abstraction shape, the supported providers, and the two int
 |-------|-------|--------|
 | PR 1 | Extract `LLMBackend` ABC, `OllamaBackend`, factory, function-style helpers. Ollama-only. Zero behaviour change. | Done |
 | PR 2 | Add `OpenAICompatibleBackend`, `llm_provider` / `llm_*` / `embedding_*` config keys + v2 migration, factory dispatch, `get_embedding_backend`. Foundation only — no call site uses the factory yet. | Done |
-| PR 2.5 | Migrate every LLM call site (reply engine, planner, evaluator, intent judge, enrichment, memory ops, tools, embeddings) to `get_llm_backend(settings)` / `get_embedding_backend(settings)`. After this PR, picking `llm_provider: openai_compatible` works end-to-end. | Pending |
+| PR 2.5a | Migrate the reply hot path to factory dispatch: tool selection (`select_tools`), `toolSearchTool`, reply engine (`chat_with_messages`), planner, evaluator, enrichment helpers, `memory/graph_ops` (knowledge extraction + traversal + auto-split + merge), `getWeather` place extractor, `logMeal` nutrition extractor + follow-ups. After this PR, picking `llm_provider: openai_compatible` produces a working main loop end-to-end on the reply path. | Done |
+| PR 2.5b | Migrate the diary maintenance + dialogue memory path: `memory/conversation.py` (`update_daily_conversation_summary`, `_rewrite_diary_summary`, `rewrite_all_diary_summaries`, `optimise_diary_topics`, dialogue embedding lookups) and `memory/embeddings.py` deletion. Threads ``cfg`` through `update_diary_from_dialogue_memory` so the daemon's diary-flush path uses the configured provider. | Pending |
+| PR 2.5c | Migrate `listening/intent_judge.py` from raw `requests.post` against `/api/generate` to the backend's `chat()` method, preserving Ollama-specific `keep_alive: "30m"` via `extra_options`. | Pending |
 | PR 3 | Setup wizard provider page, settings UI provider group, README update. | Pending |
 | PR 4 | Add `AnthropicCompatibleBackend` (optional, demand-driven). | Pending |
 
@@ -70,7 +72,7 @@ Each backend parses its own stream format internally (Ollama JSONL, OpenAI SSE, 
 
 ### Embeddings
 
-`embed()` is part of the same backend interface so the same provider can serve both chat and embeddings when capable. The `embedding_provider` config key lets users on runtimes without embeddings (e.g. some oMLX builds) route embeddings through Ollama while keeping chat on their preferred runtime. Until call sites migrate (PR 2.5), `src/jarvis/memory/embeddings.py` keeps its own POST against `/api/embeddings` for compatibility.
+`embed()` is part of the same backend interface so the same provider can serve both chat and embeddings when capable. The `embedding_provider` config key lets users on runtimes without embeddings (e.g. some oMLX builds) route embeddings through Ollama while keeping chat on their preferred runtime. The tool router's embedding strategy now resolves through `get_embedding_backend(cfg)`. The dialogue-memory and diary-update embedding callers in `src/jarvis/memory/conversation.py` migrate in PR 2.5b — until then they continue to call `src/jarvis/memory/embeddings.py:get_embedding(text, base_url, model, ...)`, which is Ollama-shape only.
 
 ## Configuration
 
@@ -126,7 +128,11 @@ Existing installs upgrade silently with no behaviour change.
 
 ## Function-style helpers
 
-`call_llm_direct`, `call_llm_streaming`, and `chat_with_messages` construct a fresh `OllamaBackend(base_url)` and delegate to the matching method. Their signatures match the previous `llm.py` exactly so the existing ~10 call sites under `src/jarvis/`, `tests/`, and `evals/` import them unchanged.
+`call_llm_direct`, `call_llm_streaming`, and `chat_with_messages` (in `jarvis.llm`) construct a fresh `OllamaBackend(base_url)` and delegate to the matching method. They are kept for callers that only have a base URL in scope (a few performance-recording shims in `tests/performance/` and external scripts under `evals/`). Internal call sites under `src/jarvis/` use the factory.
+
+Several modules also expose a **module-local** `call_llm_direct(*, cfg, chat_model, ...)` (in `jarvis.reply.planner`, `jarvis.reply.evaluator`, `jarvis.reply.enrichment`, `jarvis.memory.graph_ops`, `jarvis.tools.builtin.nutrition.log_meal`). These are thin wrappers that resolve `get_llm_backend(cfg).direct(...)` at call time. Tests patch the local symbol — `<module>.call_llm_direct` — so a single intercept catches every LLM round-trip from that module without reaching into the backend ABC.
+
+The reply engine has the same shape under a different name: `chat_with_messages(cfg, messages, ...)` lives in `jarvis.reply.engine` and routes through `get_llm_backend(cfg).chat(...)`. Tests patch `engine.chat_with_messages` to capture the agentic loop's chat calls.
 
 `import requests` is re-exported from the package `__init__.py` so tests that patch `jarvis.llm.requests.post` keep working after the package split.
 

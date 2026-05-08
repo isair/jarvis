@@ -3,6 +3,7 @@
 import requests
 from typing import Dict, Any, Optional
 from ...debug import debug_log
+from ...llm import get_llm_backend
 from ...utils.location import get_location_info
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
@@ -41,11 +42,6 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
         or getattr(cfg, "ollama_chat_model", "")
     )
     if not model:
-        return None
-
-    try:
-        from ...llm import get_llm_backend
-    except Exception:
         return None
 
     sys_prompt = (
