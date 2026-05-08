@@ -12,7 +12,34 @@ from ..system_prompt import build_system_prompt
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
-from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
+from ..llm import (
+    extract_text_from_response,
+    get_embedding_backend,
+    get_llm_backend,
+    ToolsNotSupportedError,
+)
+
+
+def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
+                       tools=None, thinking=False):
+    """Local indirection: route the engine's chat call through the active
+    backend (Ollama or OpenAI-compatible, per ``cfg.llm_provider``) so the
+    runtime swap is transparent to the rest of the engine.
+
+    Kept as a module-level function so tests can patch this single symbol
+    to capture every chat call rather than reaching into the backend ABC.
+    """
+    backend = get_llm_backend(cfg)
+    chat_model = (
+        getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", "")
+    )
+    return backend.chat(
+        chat_model, messages,
+        timeout_sec=timeout_sec,
+        extra_options=extra_options,
+        tools=tools,
+        thinking=thinking,
+    )
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -916,10 +943,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             builtin_tools=BUILTIN_TOOLS,
             mcp_tools=mcp_tools,
             strategy=strategy,
-            llm_base_url=cfg.ollama_base_url,
+            llm_backend=get_llm_backend(cfg),
             llm_model=resolve_tool_router_model(cfg),
             llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-            embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+            embedding_backend=get_embedding_backend(cfg),
+            embed_model=getattr(cfg, "embedding_model", "") or getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
@@ -1914,13 +1942,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 has_tool_calls = " (has tool_calls)" if msg.get("tool_calls") else ""
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
 
-        # Send messages to Ollama — try native tool calling first, fall back to text-based
-        # if the model returns HTTP 400 (native tools API not supported).
+        # Send messages to the configured chat backend — try native tool calling
+        # first, fall back to text-based if the model returns HTTP 400 (native
+        # tools API not supported).
         _dump_tools_schema = None if use_text_tools else tools_json_schema
+        _chat_model = (
+            getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", "")
+        )
         try:
             llm_resp = chat_with_messages(
-                base_url=cfg.ollama_base_url,
-                chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
@@ -1931,7 +1962,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 session_id=_dump_session_id,
                 turn=turn,
                 query=text,
-                model=cfg.ollama_chat_model,
+                model=_chat_model,
                 messages=messages,
                 tools_schema=_dump_tools_schema,
                 use_text_tools=use_text_tools,
@@ -1942,7 +1973,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # for the rest of this session and rebuild the system message to include tool
             # descriptions as plain text with markdown fence instructions.
             debug_log(
-                f"⚠️ Native tools API not supported by {cfg.ollama_chat_model!r}, "
+                f"⚠️ Native tools API not supported by {_chat_model!r}, "
                 "falling back to text-based tool calling (markdown fences)",
                 "planning",
             )
@@ -1950,8 +1981,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             messages[0] = {"role": "system", "content": _build_initial_system_message()}
             _update_system_message_with_context(messages)
             llm_resp = chat_with_messages(
-                base_url=cfg.ollama_base_url,
-                chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
@@ -1962,7 +1992,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 session_id=_dump_session_id,
                 turn=turn,
                 query=text,
-                model=cfg.ollama_chat_model,
+                model=_chat_model,
                 messages=messages,
                 tools_schema=None,
                 use_text_tools=True,
