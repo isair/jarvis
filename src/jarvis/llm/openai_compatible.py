@@ -238,8 +238,21 @@ class OpenAICompatibleBackend(LLMBackend):
         if extra_options and isinstance(extra_options, dict):
             # ``temperature``, ``max_tokens``, ``top_p`` etc. live at the
             # payload root in the OpenAI shape, not under an ``options``
-            # nest. Merge shallowly so callers can override any field.
-            payload.update(extra_options)
+            # nest. Ollama-only knobs (``keep_alive``, ``num_ctx``,
+            # ``num_predict``, ``think``) are silently dropped — they have
+            # no equivalent in the OpenAI shape and would 400 against most
+            # servers. Sampling fields nested under ``options`` are lifted
+            # to the payload root.
+            for key, value in extra_options.items():
+                if key in {"keep_alive", "num_ctx", "num_predict", "think"}:
+                    continue
+                if key == "options" and isinstance(value, dict):
+                    for inner_key, inner_value in value.items():
+                        if inner_key in {"num_ctx", "num_predict"}:
+                            continue
+                        payload[inner_key] = inner_value
+                else:
+                    payload[key] = value
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools
 
@@ -258,12 +271,13 @@ class OpenAICompatibleBackend(LLMBackend):
             print("  ⏱️ LLM request timed out", flush=True)
             return None
         except requests.exceptions.ConnectionError:
-            # Stringifying ConnectionError exposes the host and pool details
-            # (urllib3 embeds the configured URL in its exception message).
-            # Surface only the failure mode — diagnostic detail is in
-            # debug logs gated by ``voice_debug``.
+            # ConnectionError messages embed the configured URL via the
+            # underlying urllib3 exception, which can leak account-bearing
+            # query strings to stdout. Print only the failure mode and
+            # bubble the exception so callers (e.g. the intent judge) can
+            # distinguish "server unreachable" from a transient HTTP error.
             print("  ❌ LLM connection error", flush=True)
-            return None
+            raise
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 400 and tools:
                 raise ToolsNotSupportedError(

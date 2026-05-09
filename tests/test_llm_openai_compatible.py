@@ -319,14 +319,17 @@ class TestOpenAICompatibleChat:
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
     @patch("jarvis.llm.requests.post")
-    def test_returns_none_on_connection_error(self, mock_post):
+    def test_propagates_connection_error(self, mock_post):
+        """``chat`` re-raises ``ConnectionError`` so callers can distinguish
+        an unreachable server from a transient HTTP failure."""
         import requests
         from jarvis.llm import OpenAICompatibleBackend
 
         mock_post.side_effect = requests.exceptions.ConnectionError("server down")
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
 
-        assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
+        with pytest.raises(requests.exceptions.ConnectionError):
+            backend.chat("any", [{"role": "user", "content": "hi"}])
 
     @patch("jarvis.llm.requests.post")
     def test_returns_none_on_http_500_even_with_tools(self, mock_post):
@@ -419,7 +422,10 @@ class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
         )
         backend = OpenAICompatibleBackend(self._SECRET_URL, api_key="sk-secret")
 
-        backend.chat("any", [{"role": "user", "content": "hi"}])
+        # ``chat`` re-raises so the caller can detect "server unreachable";
+        # the printed log line must not carry the URL or the API key.
+        with pytest.raises(requests.exceptions.ConnectionError):
+            backend.chat("any", [{"role": "user", "content": "hi"}])
 
         captured = capsys.readouterr()
         assert "internal-server.example.com" not in captured.out, (

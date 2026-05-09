@@ -213,9 +213,9 @@ class OllamaBackend(LLMBackend):
 
         Main agentic chat uses ``num_ctx=8192`` so the system prompt
         (tool list + protocol guidance + memory context) does not
-        overflow and force Ollama to truncate — which previously
-        dropped the tool schema on smaller models like ``gemma4:e2b``,
-        tipping them into their pre-trained ``tool_code`` scaffolding.
+        overflow and force Ollama to truncate the tool schema — small
+        models like ``gemma4:e2b`` then fall back to pre-trained
+        ``tool_code`` scaffolding instead of producing valid tool calls.
         """
         payload: Dict[str, Any] = {
             "model": chat_model,
@@ -224,8 +224,18 @@ class OllamaBackend(LLMBackend):
             "options": {"num_ctx": 8192},
             "think": thinking,
         }
+        # ``extra_options`` keys land at the Ollama wire root for known
+        # request-level fields (``keep_alive``, ``format``, ``think``); the
+        # rest fold into the sampling-options dict. The split lets callers
+        # pin per-request keep-alive without learning Ollama's wire shape.
         if extra_options and isinstance(extra_options, dict):
-            payload["options"].update(extra_options)
+            for key, value in extra_options.items():
+                if key in {"keep_alive", "format", "think"}:
+                    payload[key] = value
+                elif key == "options" and isinstance(value, dict):
+                    payload["options"].update(value)
+                else:
+                    payload["options"][key] = value
 
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools
@@ -241,18 +251,22 @@ class OllamaBackend(LLMBackend):
         except requests.exceptions.Timeout:
             print("  ⏱️ LLM request timed out", flush=True)
             return None
-        except requests.exceptions.ConnectionError as e:
-            print(f"  ❌ LLM connection error: {e}", flush=True)
-            return None
+        except requests.exceptions.ConnectionError:
+            # Bubble out so callers (e.g. the intent judge) can distinguish
+            # "server unreachable" from a transient error and apply their own
+            # back-off policy.
+            print("  ❌ LLM connection error", flush=True)
+            raise
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 400 and tools:
                 raise ToolsNotSupportedError(
                     f"Model {chat_model!r} returned HTTP 400 — native tools API not supported"
                 )
-            print(f"  ❌ LLM HTTP error: {e}", flush=True)
+            status = e.response.status_code if e.response is not None else "?"
+            print(f"  ❌ LLM HTTP error (status {status})", flush=True)
             return None
         except Exception as e:
-            print(f"  ❌ LLM error: {e}", flush=True)
+            print(f"  ❌ LLM error ({type(e).__name__})", flush=True)
             return None
 
         return None
@@ -297,3 +311,25 @@ class OllamaBackend(LLMBackend):
             return names
         except Exception:
             return []
+
+    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+        """Issue a minimal ``/api/generate`` request so Ollama loads ``model``
+        into resident memory with a 30-minute ``keep_alive``. Best-effort:
+        errors are swallowed so callers never crash on warmup failure."""
+        if not self._base_url or not model:
+            return False
+        try:
+            resp = requests.post(
+                f"{self._base_url}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": "",
+                    "stream": False,
+                    "keep_alive": "30m",
+                    "options": {"num_predict": 1},
+                },
+                timeout=timeout_sec,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False

@@ -180,14 +180,18 @@ class TestOllamaBackendChat:
         )
 
     @patch("jarvis.llm.requests.post")
-    def test_returns_none_on_connection_error(self, mock_post):
+    def test_propagates_connection_error(self, mock_post):
+        """``chat`` re-raises ``ConnectionError`` so callers can distinguish
+        an unreachable server from a transient HTTP failure and apply their
+        own back-off (e.g. the intent judge's 30s cooldown)."""
         import requests
         from jarvis.llm import OllamaBackend
 
         mock_post.side_effect = requests.exceptions.ConnectionError("server down")
         backend = OllamaBackend("http://localhost:11434")
 
-        assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
+        with pytest.raises(requests.exceptions.ConnectionError):
+            backend.chat("any", [{"role": "user", "content": "hi"}])
 
     @patch("jarvis.llm.requests.post")
     def test_returns_none_on_timeout(self, mock_post):
