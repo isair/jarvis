@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from ....debug import debug_log
 from ....memory.db import Database
-from ....llm import get_llm_backend, resolve_chat_model
+from ....llm import get_llm_backend
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
 
@@ -79,7 +79,7 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     )
     raw = call_llm_direct(
         cfg=cfg,
-        chat_model=resolve_chat_model(cfg),
+        chat_model=cfg.llm_chat_model,
         system_prompt=NUTRITION_SYS,
         user_content=user_prompt,
         timeout_sec=cfg.llm_chat_timeout_sec,
@@ -149,7 +149,7 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
     follow_user = f"Logged meal: {description} | {approx}."
     follow_text = call_llm_direct(
         cfg=cfg,
-        chat_model=resolve_chat_model(cfg),
+        chat_model=cfg.llm_chat_model,
         system_prompt=follow_sys,
         user_content=follow_user,
         timeout_sec=cfg.llm_chat_timeout_sec,

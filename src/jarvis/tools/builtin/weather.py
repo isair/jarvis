@@ -3,7 +3,7 @@
 import requests
 from typing import Dict, Any, Optional
 from ...debug import debug_log
-from ...llm import get_llm_backend, resolve_chat_model
+from ...llm import get_llm_backend
 from ...utils.location import get_location_info
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
@@ -38,7 +38,7 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
     model = (
         getattr(cfg, "tool_router_model", "")
         or getattr(cfg, "intent_judge_model", "")
-        or resolve_chat_model(cfg)
+        or getattr(cfg, "llm_chat_model", "")
     )
     if not model:
         return None

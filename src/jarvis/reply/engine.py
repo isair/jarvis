@@ -16,7 +16,6 @@ from ..llm import (
     extract_text_from_response,
     get_embedding_backend,
     get_llm_backend,
-    resolve_chat_model,
     ToolsNotSupportedError,
 )
 
@@ -32,7 +31,7 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
     """
     backend = get_llm_backend(cfg)
     return backend.chat(
-        resolve_chat_model(cfg), messages,
+        cfg.llm_chat_model, messages,
         timeout_sec=timeout_sec,
         extra_options=extra_options,
         tools=tools,
@@ -186,7 +185,7 @@ def resolve_tool_router_model(cfg) -> str:
     for candidate in (
         getattr(cfg, "tool_router_model", ""),
         getattr(cfg, "intent_judge_model", ""),
-        resolve_chat_model(cfg),
+        getattr(cfg, "llm_chat_model", ""),
     ):
         if candidate:
             return candidate
@@ -591,7 +590,7 @@ def _maybe_digest_tool_result(
     tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
     if tool_digest_cfg is None:
         tool_digest_enabled = (
-            detect_model_size(resolve_chat_model(cfg)) == ModelSize.SMALL
+            detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL
         )
     else:
         tool_digest_enabled = bool(tool_digest_cfg)
@@ -605,7 +604,7 @@ def _maybe_digest_tool_result(
             tool_name=tool_name,
             tool_result=raw_tool_result,
             cfg=cfg,
-            chat_model=resolve_chat_model(cfg),
+            chat_model=cfg.llm_chat_model,
             timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
@@ -945,7 +944,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             llm_model=resolve_tool_router_model(cfg),
             llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
             embedding_backend=get_embedding_backend(cfg),
-            embed_model=getattr(cfg, "embedding_model", "") or getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+            embed_model=cfg.embedding_model,
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
@@ -1200,21 +1199,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"diary search: keywords={keywords}, from={from_time}, to={to_time}", "memory")
 
             from ..memory.conversation import search_conversation_memory_by_keywords
-            # TODO(PR 2.5b): pass ``cfg=cfg`` once
-            # ``search_conversation_memory_by_keywords`` migrates to the
-            # factory. Reading the legacy ``ollama_*`` aliases here is the
-            # reason ``memory/conversation.py`` is still listed as deferred
-            # in ``llm.spec.md``.
             context_results = search_conversation_memory_by_keywords(
                 db=db,
                 keywords=keywords,
+                cfg=cfg,
                 from_time=from_time,
                 to_time=to_time,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_embed_model=cfg.ollama_embed_model,
                 timeout_sec=float(getattr(cfg, 'llm_embedding_timeout_sec', 10.0)),
                 voice_debug=cfg.voice_debug,
-                max_results=cfg.memory_enrichment_max_results
+                max_results=cfg.memory_enrichment_max_results,
             )
             if context_results:
                 raw_diary_entries = list(context_results)
@@ -1309,7 +1302,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Opt-in/out via `memory_digest_enabled` (default: auto-on for SMALL).
     digest_cfg = getattr(cfg, "memory_digest_enabled", None)
     if digest_cfg is None:
-        digest_enabled = (detect_model_size(resolve_chat_model(cfg)) == ModelSize.SMALL)
+        digest_enabled = (detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL)
     else:
         digest_enabled = bool(digest_cfg)
 
@@ -1320,7 +1313,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 diary_entries=raw_diary_entries,
                 graph_parts=raw_graph_parts,
                 cfg=cfg,
-                chat_model=resolve_chat_model(cfg),
+                chat_model=cfg.llm_chat_model,
                 timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
@@ -1407,8 +1400,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 7: Messages-based loop with tool handling
     # Detect model size for prompt selection
-    _resolved_chat_model = resolve_chat_model(cfg)
-    model_size = detect_model_size(_resolved_chat_model)
+    model_size = detect_model_size(cfg.llm_chat_model)
     # Start with native tool calling. If the model returns HTTP 400 (tools not supported),
     # we automatically switch to text-based tool calling (markdown fences in system prompt).
     #
@@ -1420,7 +1412,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # the wasted round-trip and prompt confusion of starting native and falling back mid-turn.
     use_text_tools = (model_size == ModelSize.SMALL)
     prompts = get_system_prompts(model_size)
-    debug_log(f"Model size detected: {model_size.value} for {_resolved_chat_model} (use_text_tools={use_text_tools})", "planning")
+    debug_log(f"Model size detected: {model_size.value} for {cfg.llm_chat_model} (use_text_tools={use_text_tools})", "planning")
 
     # Compound-query decomposition for small models.
     # When a query contains a conjunction joining two question-clauses, the
@@ -1950,7 +1942,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # first, fall back to text-based if the model returns HTTP 400 (native
         # tools API not supported).
         _dump_tools_schema = None if use_text_tools else tools_json_schema
-        _chat_model = resolve_chat_model(cfg)
+        _chat_model = cfg.llm_chat_model
         try:
             llm_resp = chat_with_messages(
                 cfg=cfg,
@@ -2382,7 +2374,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             malformed_fallback = False
         elif _is_malformed_json_response(content):
             debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
-            model_name = resolve_chat_model(cfg).lower()
+            model_name = cfg.llm_chat_model.lower()
             is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
             candidate_reply = (
                 "I had trouble understanding that request. "

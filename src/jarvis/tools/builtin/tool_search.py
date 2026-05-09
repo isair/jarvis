@@ -13,14 +13,14 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..selection import select_tools, ToolSelectionStrategy
 from ...debug import debug_log
-from ...llm import get_embedding_backend, get_llm_backend, resolve_chat_model
+from ...llm import get_embedding_backend, get_llm_backend
 
 
 def _resolve_router_model(cfg) -> str:
     for candidate in (
         getattr(cfg, "tool_router_model", ""),
         getattr(cfg, "intent_judge_model", ""),
-        resolve_chat_model(cfg),
+        getattr(cfg, "llm_chat_model", ""),
     ):
         if candidate:
             return candidate
@@ -100,7 +100,7 @@ class ToolSearchTool(Tool):
                 llm_model=_resolve_router_model(cfg),
                 llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
                 embedding_backend=get_embedding_backend(cfg),
-                embed_model=getattr(cfg, "embedding_model", "") or getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+                embed_model=cfg.embedding_model,
                 embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             )
         except Exception as e:
