@@ -1719,6 +1719,10 @@ def update_diary_from_dialogue_memory(
                     # minimal namespace populated from the explicit ollama_*
                     # args so the factory falls back to OllamaBackend at the
                     # supplied URL — preserves Ollama-only behaviour.
+                    # TODO(PR 2.5b): drop this fallback once every caller of
+                    # ``update_diary_from_dialogue_memory`` passes ``cfg``.
+                    # Currently fragile: any new attribute the factory grows
+                    # without a getattr default would AttributeError here.
                     _graph_cfg = cfg if cfg is not None else SimpleNamespace(
                         ollama_base_url=ollama_base_url,
                         ollama_chat_model=ollama_chat_model,

@@ -32,6 +32,7 @@ from jarvis.llm import (
     ToolsNotSupportedError,
     get_llm_backend,             # factory: settings → chat backend
     get_embedding_backend,       # factory: settings → embedding backend
+    resolve_chat_model,          # cfg → resolved chat model (llm_chat_model → ollama_chat_model)
     call_llm_direct,             # function-style equivalents that take base_url
     call_llm_streaming,
     chat_with_messages,
@@ -133,6 +134,14 @@ Existing installs upgrade silently with no behaviour change.
 Several modules also expose a **module-local** `call_llm_direct(*, cfg, chat_model, ...)` (in `jarvis.reply.planner`, `jarvis.reply.evaluator`, `jarvis.reply.enrichment`, `jarvis.memory.graph_ops`, `jarvis.tools.builtin.nutrition.log_meal`). These are thin wrappers that resolve `get_llm_backend(cfg).direct(...)` at call time. Tests patch the local symbol — `<module>.call_llm_direct` — so a single intercept catches every LLM round-trip from that module without reaching into the backend ABC.
 
 The reply engine has the same shape under a different name: `chat_with_messages(cfg, messages, ...)` lives in `jarvis.reply.engine` and routes through `get_llm_backend(cfg).chat(...)`. Tests patch `engine.chat_with_messages` to capture the agentic loop's chat calls.
+
+## `resolve_chat_model(cfg)` — single source of truth for the active chat model
+
+`resolve_chat_model(cfg)` returns `cfg.llm_chat_model` when set (whitespace-stripped, non-empty) and falls back to `cfg.ollama_chat_model`. Every site that previously wrote `getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", "")` — including `detect_model_size(...)` calls in the reply engine, the `logMeal` extractor, the `getWeather` place extractor, and the engine's malformed-content fallback hint — now goes through this helper. Critical for provider switches: when a user picks `llm_provider: openai_compatible` and pins `llm_chat_model` to a small model served by LM Studio, `cfg.ollama_chat_model` is whatever stale Ollama default lived in the config. Reading the legacy alias directly would cause `detect_model_size` to misclassify the model size and break text-tool / digest auto-gating.
+
+The helper accepts any object exposing the two attributes (Settings, `SimpleNamespace`, mocks). When the caller is the diary maintenance fallback in `memory/conversation.py` and only the legacy alias is populated, the helper still returns the right value.
+
+A factory-dispatch wiring guard at `tests/test_factory_dispatch_wiring.py` parametrises over each migrated module (planner, evaluator, enrichment, graph_ops, log_meal, weather extractor, engine `chat_with_messages`) and asserts the wrapper actually constructs `OpenAICompatibleBackend` for `llm_provider: openai_compatible` and `OllamaBackend` for `ollama`. This closes the gap left by patching the module-local wrapper for unit tests: a regression that drops `get_llm_backend(cfg)` from a wrapper would bypass every unit test but trip this guard.
 
 `import requests` is re-exported from the package `__init__.py` so tests that patch `jarvis.llm.requests.post` keep working after the package split.
 
