@@ -47,11 +47,36 @@ __all__ = [
     "ToolsNotSupportedError",
     "get_llm_backend",
     "get_embedding_backend",
+    "resolve_chat_model",
     "extract_text_from_response",
     "call_llm_direct",
     "call_llm_streaming",
     "chat_with_messages",
 ]
+
+
+def resolve_chat_model(cfg: Any) -> str:
+    """Return the canonical chat model for ``cfg``.
+
+    Resolution order: ``llm_chat_model`` (the provider-aware field every
+    factory call dispatches on) before ``ollama_chat_model`` (the legacy
+    alias kept around for back-compat). Whitespace-only and ``None`` values
+    are treated as unset so a stale literal in one slot never masks a
+    populated value in the other.
+
+    Centralised so model-size detection, debug logs, and tool-router fallback
+    chains can stop reading ``cfg.ollama_chat_model`` directly. When a user
+    picks ``llm_provider: openai_compatible`` and sets ``llm_chat_model`` to
+    a small model, anything that resolved via the legacy alias would see the
+    stale Ollama default and route as if it were a large model.
+    """
+    raw_llm = getattr(cfg, "llm_chat_model", "") or ""
+    if isinstance(raw_llm, str) and raw_llm.strip():
+        return raw_llm.strip()
+    raw_ollama = getattr(cfg, "ollama_chat_model", "") or ""
+    if isinstance(raw_ollama, str):
+        return raw_ollama.strip()
+    return ""
 
 
 def call_llm_direct(
