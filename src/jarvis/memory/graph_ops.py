@@ -20,6 +20,17 @@ from typing import Iterator, NamedTuple, Optional
 
 from ..debug import debug_log
 from ..llm import get_llm_backend
+from .graph import (
+    BRANCH_DIRECTIVES,
+    BRANCH_USER,
+    BRANCH_WORLD,
+    FIXED_BRANCHES,
+    GraphMemoryStore,
+    MAX_TRAVERSAL_DEPTH,
+    MemoryNode,
+    SPLIT_THRESHOLD,
+    normalise_fact,
+)
 
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
@@ -33,17 +44,6 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
         num_ctx=num_ctx, temperature=temperature,
     )
-from .graph import (
-    BRANCH_DIRECTIVES,
-    BRANCH_USER,
-    BRANCH_WORLD,
-    FIXED_BRANCHES,
-    GraphMemoryStore,
-    MAX_TRAVERSAL_DEPTH,
-    MemoryNode,
-    SPLIT_THRESHOLD,
-    normalise_fact,
-)
 
 
 # Mapping from the branch id the extractor emits to its human-readable

@@ -151,6 +151,29 @@ class TestExtractorPromptRendering:
             )
         assert result == {}
 
+    def test_short_circuits_when_chat_model_is_empty(self):
+        """No chat model configured ⇒ no LLM call burned. A confused or
+        partially-configured user otherwise pays for an Ollama "model is
+        required" round-trip on every reply that passes through enrichment.
+        Other resolvers (planner, evaluator) gate explicitly; this one must
+        too for parity."""
+        with patch("jarvis.reply.enrichment.call_llm_direct") as mock_call:
+            result = extract_search_params_for_memory(
+                "q", _cfg(), "", timeout_sec=0.1,
+            )
+        assert result == {}
+        mock_call.assert_not_called()
+
+    def test_short_circuits_when_chat_model_is_whitespace(self):
+        """A whitespace-only model field is functionally unset; treat it as
+        the empty case so the extractor still skips cleanly."""
+        with patch("jarvis.reply.enrichment.call_llm_direct") as mock_call:
+            result = extract_search_params_for_memory(
+                "q", _cfg(), "   ", timeout_sec=0.1,
+            )
+        assert result == {}
+        mock_call.assert_not_called()
+
     def test_braces_in_hint_do_not_break_format(self):
         # User dialogue could contain literal '{' or '}'. The outer .format must
         # treat the hint as a literal string, not re-interpret placeholders.

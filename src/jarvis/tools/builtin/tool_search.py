@@ -13,15 +13,14 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..selection import select_tools, ToolSelectionStrategy
 from ...debug import debug_log
-from ...llm import get_embedding_backend, get_llm_backend
+from ...llm import get_embedding_backend, get_llm_backend, resolve_chat_model
 
 
 def _resolve_router_model(cfg) -> str:
     for candidate in (
         getattr(cfg, "tool_router_model", ""),
         getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "llm_chat_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
+        resolve_chat_model(cfg),
     ):
         if candidate:
             return candidate

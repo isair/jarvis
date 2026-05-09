@@ -33,6 +33,14 @@ def extract_search_params_for_memory(query: str, cfg, chat_model: str,
     long-term memory. When absent, the extractor gets a UTC timestamp fallback
     so it can still resolve relative time expressions.
     """
+    if not (chat_model or "").strip():
+        # Mirror the planner/evaluator gate: no model configured ⇒ skip the
+        # round-trip. Without this guard the OpenAI/Ollama backends would burn
+        # one HTTP call per reply that lands here, cost a "model is required"
+        # error, and silently fall through to ``return {}`` after the broad
+        # except below.
+        debug_log("search parameter extraction skipped: no chat model configured", "memory")
+        return {}
     try:
         if context_hint and context_hint.strip():
             hint_block = (

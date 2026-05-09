@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from ....debug import debug_log
 from ....memory.db import Database
-from ....llm import get_llm_backend
+from ....llm import get_llm_backend, resolve_chat_model
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
 
@@ -77,10 +77,9 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         + "\n<<<END UNTRUSTED USER TEXT>>>\n\n"
         "Return ONLY JSON or the exact string NONE."
     )
-    _chat_model = getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", "")
     raw = call_llm_direct(
         cfg=cfg,
-        chat_model=_chat_model,
+        chat_model=resolve_chat_model(cfg),
         system_prompt=NUTRITION_SYS,
         user_content=user_prompt,
         timeout_sec=cfg.llm_chat_timeout_sec,
@@ -148,10 +147,9 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
         "Be concise and specific."
     )
     follow_user = f"Logged meal: {description} | {approx}."
-    _chat_model = getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", "")
     follow_text = call_llm_direct(
         cfg=cfg,
-        chat_model=_chat_model,
+        chat_model=resolve_chat_model(cfg),
         system_prompt=follow_sys,
         user_content=follow_user,
         timeout_sec=cfg.llm_chat_timeout_sec,

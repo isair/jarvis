@@ -48,7 +48,14 @@ class MockConfig:
     llm_provider: str = "ollama"
     llm_base_url: str = "http://localhost:11434"
     llm_api_key: str = ""
-    llm_chat_model: str = "gemma4:e2b"
+    # Empty default mirrors the real config behaviour: ``llm_chat_model``
+    # falls through to ``ollama_chat_model`` via ``resolve_chat_model``
+    # whenever it isn't explicitly set. Tests that historically pinned
+    # ``ollama_chat_model = "gpt-oss:20b"`` to exercise the LARGE-model
+    # path keep working without also having to thread through the new
+    # provider-aware field. A test can still assert provider-aware
+    # routing by setting ``llm_chat_model`` directly.
+    llm_chat_model: str = ""
     embedding_provider: str = ""
     embedding_base_url: str = ""
     embedding_api_key: str = ""
