@@ -127,6 +127,7 @@ def test_extractor_wraps_user_text_in_untrusted_fence():
     cfg = Mock()
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.ollama_chat_model = "test-model"
+    cfg.llm_chat_model = "test-model"
     cfg.llm_chat_timeout_sec = 30
     cfg.llm_thinking_enabled = False
     db = Mock()

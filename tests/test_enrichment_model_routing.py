@@ -28,6 +28,7 @@ def test_enrichment_extractor_uses_router_model_chain():
     cfg = MagicMock()
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.ollama_chat_model = "big-chat"
+    cfg.llm_chat_model = "big-chat"
     cfg.intent_judge_model = "small-judge"
     cfg.tool_router_model = ""
     cfg.llm_tools_timeout_sec = 5.0

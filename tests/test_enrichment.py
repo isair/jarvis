@@ -67,6 +67,7 @@ class TestMatchQuestion:
 def _cfg(**over):
     base = dict(
         location_enabled=False,
+        llm_chat_model="m",
         ollama_base_url="http://x",
         ollama_chat_model="m",
     )
@@ -203,8 +204,10 @@ class TestGraphEnrichmentGating:
             enabled = False
 
         cfg = SimpleNamespace(
+            llm_chat_model="m",
             ollama_base_url="http://x",
             ollama_chat_model="m",
+            embedding_model="e",
             ollama_embed_model="e",
             llm_tools_timeout_sec=0.1,
             llm_embedding_timeout_sec=0.1,
@@ -318,8 +321,10 @@ class TestGraphContextReachesSystemMessage:
                 pass
 
         cfg = SimpleNamespace(
+            llm_chat_model="m",
             ollama_base_url="http://x",
             ollama_chat_model="m",
+            embedding_model="e",
             ollama_embed_model="e",
             llm_tools_timeout_sec=0.1,
             llm_embedding_timeout_sec=0.1,
@@ -754,13 +759,19 @@ class TestMaybeDigestToolResult:
 
     def _cfg(self, **overrides):
         defaults = dict(
+            llm_chat_model="llama3.1:8b",  # LARGE by default
             ollama_base_url="http://x",
-            ollama_chat_model="llama3.1:8b",  # LARGE by default
+            ollama_chat_model="llama3.1:8b",
             llm_digest_timeout_sec=1.0,
             llm_thinking_enabled=False,
             tool_result_digest_enabled=None,  # auto
         )
         defaults.update(overrides)
+        # Mirror Settings.__post_init__ semantics: when an override changes
+        # only one of the chat-model fields, sync the other so internal
+        # ``cfg.llm_chat_model`` reads see what the test intended.
+        if "ollama_chat_model" in overrides and "llm_chat_model" not in overrides:
+            defaults["llm_chat_model"] = overrides["ollama_chat_model"]
         return SimpleNamespace(**defaults)
 
     def test_disabled_passes_through_raw(self):
@@ -868,6 +879,7 @@ class TestDigestLoopForMaxTurns:
 
     def _cfg(self, **over):
         base = dict(
+            llm_chat_model="m",
             ollama_base_url="http://x",
             ollama_chat_model="m",
             evaluator_model="",
@@ -876,6 +888,8 @@ class TestDigestLoopForMaxTurns:
             llm_thinking_enabled=False,
         )
         base.update(over)
+        if "ollama_chat_model" in over and "llm_chat_model" not in over:
+            base["llm_chat_model"] = over["ollama_chat_model"]
         return SimpleNamespace(**base)
 
     def test_happy_path_returns_cleaned_reply_and_prompt_includes_query(self):

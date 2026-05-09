@@ -155,6 +155,7 @@ class TestImportDiaryEndpoint:
         cfg = MagicMock()
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.ollama_chat_model = "test-model"
+        cfg.llm_chat_model = "test-model"
         cfg.llm_chat_timeout_sec = 10.0
         cfg.llm_thinking_enabled = False
         mock_settings.return_value = cfg
@@ -213,6 +214,7 @@ class TestImportDiaryEndpoint:
         cfg = MagicMock()
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.ollama_chat_model = "test-model"
+        cfg.llm_chat_model = "test-model"
         cfg.llm_chat_timeout_sec = 10.0
         cfg.llm_thinking_enabled = False
         mock_settings.return_value = cfg

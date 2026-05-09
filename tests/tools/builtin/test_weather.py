@@ -28,6 +28,7 @@ class TestWeatherTool:
         self.context.redacted_text = ""
         self.context.cfg.ollama_base_url = ""
         self.context.cfg.ollama_chat_model = ""
+        self.context.cfg.llm_chat_model = ""
         self.context.cfg.tool_router_model = ""
         self.context.cfg.intent_judge_model = ""
 
@@ -416,6 +417,7 @@ class TestExtractPlaceFromUserText:
         cfg = Mock()
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.ollama_chat_model = "gemma4:e2b"
+        cfg.llm_chat_model = "gemma4:e2b"
         cfg.tool_router_model = ""
         cfg.intent_judge_model = ""
         cfg.llm_tools_timeout_sec = 8.0

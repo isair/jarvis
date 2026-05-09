@@ -29,6 +29,10 @@ class DummyTTS:
 def _make_cfg(**overrides):
     # Minimal settings object with required attributes referenced in engine
     base = {
+        'llm_provider': 'ollama',
+        'llm_base_url': 'http://127.0.0.1:11434',
+        'llm_chat_model': 'gemma4',
+        'embedding_model': 'nomic-embed-text',
         'ollama_base_url': 'http://127.0.0.1:11434',
         'ollama_chat_model': 'gemma4',
         'ollama_embed_model': 'nomic-embed-text',

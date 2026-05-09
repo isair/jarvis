@@ -40,6 +40,8 @@ def test_loop_merges_toolsearchtool_results_into_allowlist(
 
     mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → no forced text tools
 
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → no forced text tools
+
     invoked_tools: list[tuple[str, dict]] = []
 
     def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
@@ -122,6 +124,8 @@ def test_initial_allowlist_always_includes_toolsearchtool(
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
 
+    mock_config.llm_chat_model = "gpt-oss:20b"
+
     captured_allow_lists: list[list[str]] = []
 
     def fake_chat(*args, **kwargs):
@@ -177,6 +181,8 @@ def test_schema_regenerated_after_toolsearchtool_merge(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools
+
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → native tools
 
     def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
         if tool_name == "toolSearchTool":
@@ -244,6 +250,8 @@ def test_tool_search_max_calls_cap(mock_config, db, dialogue_memory):
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.tool_search_max_calls = 2
 
     dispatch_count = {"toolSearchTool": 0}
@@ -344,6 +352,8 @@ def test_max_turns_produces_digest(mock_config, db, dialogue_memory):
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.agentic_max_turns = 3
 
     # The model keeps calling toolSearchTool every turn — no content is
@@ -401,6 +411,8 @@ def test_max_turns_digest_failure_falls_back_to_generic_error(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.agentic_max_turns = 2
 
     # Pure tool-call loop — no content, so last_candidate_reply stays None.
@@ -455,6 +467,8 @@ def test_toolsearchtool_empty_result_does_not_register_sentence_as_tool(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    mock_config.llm_chat_model = "gpt-oss:20b"
 
     def fake_tool_runner(db, cfg, tool_name, tool_args, **kwargs):
         if tool_name == "toolSearchTool":

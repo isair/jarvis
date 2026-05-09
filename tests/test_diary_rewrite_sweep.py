@@ -21,6 +21,7 @@ The contract under test:
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,6 +38,22 @@ def _seed(db: Database, rows: list[tuple[str, str, str | None]]) -> None:
         )
 
 
+def _cfg(*, embedding_model: str = "") -> SimpleNamespace:
+    return SimpleNamespace(
+        llm_provider="ollama",
+        llm_base_url="http://localhost",
+        llm_api_key="",
+        llm_chat_model="test",
+        embedding_provider="",
+        embedding_base_url="",
+        embedding_api_key="",
+        embedding_model=embedding_model,
+        ollama_base_url="http://localhost",
+        ollama_chat_model="test",
+        ollama_embed_model=embedding_model,
+    )
+
+
 class TestRewriteSweepBehaviour:
     def test_walks_every_row_and_rewrites_only_dirty_ones(self, tmp_path, monkeypatch):
         db = Database(tmp_path / "jarvis.db")
@@ -47,19 +64,17 @@ class TestRewriteSweepBehaviour:
         ])
 
         # Fake LLM: drop any sentence containing "the assistant".
-        def fake_call(*args, **kwargs):
-            text = args[3] if len(args) >= 4 else kwargs.get("user_prompt", "")
+        def fake_call(cfg, system_prompt, user_content, **kwargs):
+            text = user_content
             for marker in ("<<<BEGIN UNTRUSTED WEB EXTRACT>>>", "<<<END UNTRUSTED WEB EXTRACT>>>"):
                 text = text.replace(marker, "")
             text = text.replace("Return the cleaned text only.", "").strip()
             kept = [s.strip() for s in text.split(".") if s.strip() and "the assistant" not in s.lower()]
             return ". ".join(kept) + ("." if kept else "")
 
-        monkeypatch.setattr(cmod, "call_llm_direct", fake_call)
+        monkeypatch.setattr(cmod, "_direct_llm", fake_call)
 
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
         assert len(events) == 3
         rewritten = [e for e in events if e["rewritten"]]
         assert len(rewritten) == 2
@@ -84,12 +99,10 @@ class TestRewriteSweepBehaviour:
         time.sleep(1.1)
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: "User asked X.",
         )
-        list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        list(rewrite_all_diary_summaries(db, _cfg()))
 
         new_ts = db.get_all_conversation_summaries()[0]["ts_utc"]
         assert new_ts == original_ts, (
@@ -105,10 +118,8 @@ class TestRewriteSweepBehaviour:
             ("2026-04-10", "The assistant could not help. The assistant offered to search.", None),
         ])
 
-        monkeypatch.setattr(cmod, "call_llm_direct", lambda *a, **k: "")
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        monkeypatch.setattr(cmod, "_direct_llm", lambda *a, **k: "")
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         assert len(events) == 1
         assert events[0]["would_empty"] is True
@@ -136,10 +147,8 @@ class TestRewriteSweepBehaviour:
                 raise RuntimeError("ollama timeout")
             return "User asked something."
 
-        monkeypatch.setattr(cmod, "call_llm_direct", flaky)
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        monkeypatch.setattr(cmod, "_direct_llm", flaky)
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         assert len(events) == 3
         errors = [e for e in events if e.get("error")]
@@ -158,12 +167,10 @@ class TestRewriteSweepBehaviour:
         ])
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: f"User said {sentinel}.",
         )
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         for ev in events:
             for v in ev.values():
@@ -183,10 +190,8 @@ class TestRewriteSweepBehaviour:
         def boom(*a, **k):
             raise ValueError(f"oops {sentinel}")
 
-        monkeypatch.setattr(cmod, "call_llm_direct", boom)
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        monkeypatch.setattr(cmod, "_direct_llm", boom)
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         assert len(events) == 1
         assert events[0]["error"] == "RewriteFailed"
@@ -206,12 +211,10 @@ class TestRewriteSweepBehaviour:
         time.sleep(1.1)
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: "The user prefers Celsius.",
         )
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         assert events[0]["rewritten"] is False
         # ts_utc must not have changed since no write happened.
@@ -226,10 +229,8 @@ class TestRewriteSweepBehaviour:
             called["n"] += 1
             return ""
 
-        monkeypatch.setattr(cmod, "call_llm_direct", tracker)
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        monkeypatch.setattr(cmod, "_direct_llm", tracker)
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         assert events == []
         assert called["n"] == 0
@@ -243,12 +244,10 @@ class TestRewriteSweepBehaviour:
         ])
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: "```\nUser asked X.\n```",
         )
-        list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        list(rewrite_all_diary_summaries(db, _cfg()))
 
         persisted = db.get_all_conversation_summaries()[0]["summary"]
         assert persisted == "User asked X."
@@ -265,12 +264,10 @@ class TestRewriteSweepBehaviour:
         ])
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: "```User asked X.```",
         )
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         # The rewrite must land — not get dropped via the would_empty guard.
         assert events[0]["rewritten"] is True
@@ -288,12 +285,10 @@ class TestRewriteSweepBehaviour:
         ])
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: "```text\nUser asked X.\n```",
         )
-        list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        list(rewrite_all_diary_summaries(db, _cfg()))
 
         persisted = db.get_all_conversation_summaries()[0]["summary"]
         assert persisted == "User asked X."
@@ -309,16 +304,14 @@ class TestRewriteSweepBehaviour:
         ])
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: (
                 "<<<BEGIN UNTRUSTED WEB EXTRACT>>>\n"
                 "User asked X.\n"
                 "<<<END UNTRUSTED WEB EXTRACT>>>"
             ),
         )
-        list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        list(rewrite_all_diary_summaries(db, _cfg()))
 
         persisted = db.get_all_conversation_summaries()[0]["summary"]
         assert persisted == "User asked X."
@@ -338,12 +331,10 @@ class TestRewriteSweepBehaviour:
         time.sleep(1.1)
 
         monkeypatch.setattr(
-            cmod, "call_llm_direct",
+            cmod, "_direct_llm",
             lambda *a, **k: "  The user prefers Celsius.  \n",
         )
-        events = list(rewrite_all_diary_summaries(
-            db, ollama_base_url="http://localhost", ollama_chat_model="test",
-        ))
+        events = list(rewrite_all_diary_summaries(db, _cfg()))
 
         assert events[0]["rewritten"] is False
         assert db.get_all_conversation_summaries()[0]["ts_utc"] == original_ts

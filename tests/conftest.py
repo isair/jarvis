@@ -48,13 +48,10 @@ class MockConfig:
     llm_provider: str = "ollama"
     llm_base_url: str = "http://localhost:11434"
     llm_api_key: str = ""
-    # Empty default mirrors the real config behaviour: ``llm_chat_model``
-    # falls through to ``ollama_chat_model`` via ``resolve_chat_model``
-    # whenever it isn't explicitly set. Tests that historically pinned
+    # ``llm_chat_model`` defaults to empty so tests that pin
     # ``ollama_chat_model = "gpt-oss:20b"`` to exercise the LARGE-model
-    # path keep working without also having to thread through the new
-    # provider-aware field. A test can still assert provider-aware
-    # routing by setting ``llm_chat_model`` directly.
+    # branch get the legacy alias promoted into ``llm_chat_model`` by
+    # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
     embedding_provider: str = ""
     embedding_base_url: str = ""
@@ -101,6 +98,17 @@ class MockConfig:
     dictation_thinking_enabled: bool = False
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
+
+    def __post_init__(self) -> None:
+        # Mirror ``load_settings``: when the provider-aware fields are
+        # left empty, promote the legacy ``ollama_*`` aliases. Tests can
+        # set either pair and end up with consistent reads on either side.
+        if not self.llm_chat_model:
+            self.llm_chat_model = self.ollama_chat_model
+        if not self.llm_base_url:
+            self.llm_base_url = self.ollama_base_url
+        if not self.embedding_model:
+            self.embedding_model = self.ollama_embed_model
 
 
 @pytest.fixture
