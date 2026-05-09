@@ -257,18 +257,28 @@ class OpenAICompatibleBackend(LLMBackend):
         except requests.exceptions.Timeout:
             print("  ⏱️ LLM request timed out", flush=True)
             return None
-        except requests.exceptions.ConnectionError as e:
-            print(f"  ❌ LLM connection error: {e}", flush=True)
+        except requests.exceptions.ConnectionError:
+            # Stringifying ConnectionError exposes the host and pool details
+            # (urllib3 embeds the configured URL in its exception message).
+            # Surface only the failure mode — diagnostic detail is in
+            # debug logs gated by ``voice_debug``.
+            print("  ❌ LLM connection error", flush=True)
             return None
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 400 and tools:
                 raise ToolsNotSupportedError(
                     f"Model {chat_model!r} returned HTTP 400 — native tools API not supported"
                 )
-            print(f"  ❌ LLM HTTP error: {e}", flush=True)
+            # ``str(e)`` includes "for url: <full URL>" — keep the status code
+            # for diagnosis and drop the URL.
+            status = e.response.status_code if e.response is not None else "?"
+            print(f"  ❌ LLM HTTP error (status {status})", flush=True)
             return None
         except Exception as e:
-            print(f"  ❌ LLM error: {e}", flush=True)
+            # Generic exception messages can carry whatever the caller embedded
+            # (URLs, tokens). Print only the exception class so the user knows
+            # *something* failed without leaking what.
+            print(f"  ❌ LLM error ({type(e).__name__})", flush=True)
             return None
 
         return None

@@ -368,6 +368,80 @@ class TestOpenAICompatibleChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
+
+class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
+    """``requests.exceptions.HTTPError`` and ``ConnectionError`` ``str()``s
+    typically embed the request URL — and the request URL can carry sensitive
+    query strings (e.g. some hosted providers accept ``?api_key=…`` literally,
+    and configured endpoints may include team/account identifiers). The chat
+    backend prints these errors to stdout, which surfaces in the desktop log
+    pane and any captured terminal session. The error message must include
+    enough information for diagnosis (status code, exception class) without
+    echoing the URL the user configured."""
+
+    _SECRET_URL = "http://internal-server.example.com:1234/v1"
+
+    @patch("jarvis.llm.requests.post")
+    def test_http_error_message_does_not_leak_endpoint_url(self, mock_post, capsys):
+        import requests
+        from jarvis.llm import OpenAICompatibleBackend
+
+        # Construct an HTTPError whose str() embeds the URL — exactly what
+        # ``requests`` does in real failures.
+        http_resp = MagicMock(status_code=401)
+        http_resp.url = f"{self._SECRET_URL}/chat/completions"
+        err = requests.exceptions.HTTPError(
+            f"401 Client Error: Unauthorized for url: {self._SECRET_URL}/chat/completions",
+            response=http_resp,
+        )
+        mock_post.return_value = _make_response(raise_http=err)
+        backend = OpenAICompatibleBackend(self._SECRET_URL, api_key="sk-secret")
+
+        backend.chat("any", [{"role": "user", "content": "hi"}])
+
+        captured = capsys.readouterr()
+        assert self._SECRET_URL not in captured.out, (
+            "HTTPError message must not echo the configured endpoint URL"
+        )
+        # Status code must still be visible so users can diagnose 401 vs 5xx.
+        assert "401" in captured.out
+
+    @patch("jarvis.llm.requests.post")
+    def test_connection_error_message_does_not_leak_endpoint_url(self, mock_post, capsys):
+        import requests
+        from jarvis.llm import OpenAICompatibleBackend
+
+        # Real-world ConnectionError messages include the URL via the
+        # underlying urllib3 exception.
+        mock_post.side_effect = requests.exceptions.ConnectionError(
+            f"HTTPConnectionPool(host='internal-server.example.com', port=1234): "
+            f"Max retries exceeded with url: /v1/chat/completions"
+        )
+        backend = OpenAICompatibleBackend(self._SECRET_URL, api_key="sk-secret")
+
+        backend.chat("any", [{"role": "user", "content": "hi"}])
+
+        captured = capsys.readouterr()
+        assert "internal-server.example.com" not in captured.out, (
+            "ConnectionError message must not echo the configured host"
+        )
+        assert "sk-secret" not in captured.out
+
+    @patch("jarvis.llm.requests.post")
+    def test_generic_exception_message_does_not_leak_url_or_key(self, mock_post, capsys):
+        from jarvis.llm import OpenAICompatibleBackend
+
+        mock_post.side_effect = RuntimeError(
+            f"unexpected: {self._SECRET_URL}?api_key=sk-secret"
+        )
+        backend = OpenAICompatibleBackend(self._SECRET_URL, api_key="sk-secret")
+
+        backend.chat("any", [{"role": "user", "content": "hi"}])
+
+        captured = capsys.readouterr()
+        assert self._SECRET_URL not in captured.out
+        assert "sk-secret" not in captured.out
+
     @patch("jarvis.llm.requests.post")
     def test_extra_options_merge_at_payload_root(self, mock_post):
         """OpenAI takes ``temperature`` / ``max_tokens`` at the payload
