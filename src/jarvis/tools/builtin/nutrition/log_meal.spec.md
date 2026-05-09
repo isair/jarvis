@@ -72,7 +72,7 @@ trivial "ignore previous instructions" injections in meal descriptions.
 
 ### LLM passes
 
-Two passes against the chat model (`cfg.ollama_chat_model`):
+Two passes against the chat model (`cfg.llm_chat_model`):
 
 1. **Extraction** (`extract_and_log_meal` → `NUTRITION_SYS`): returns either
    a JSON object with the nutrition fields above OR the literal string
