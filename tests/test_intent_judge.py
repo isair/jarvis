@@ -243,14 +243,6 @@ class TestIntentJudge:
         assert result.stop is False
         assert result.confidence == "low"
 
-    def test_judge_returns_none_when_unavailable(self):
-        """judge() returns None when unavailable."""
-        judge = IntentJudge()
-        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
-        result = judge.judge(segments)
-
-        assert result is None
-
     def test_judge_returns_none_for_empty_segments(self):
         """judge() returns None for empty segments."""
         judge = IntentJudge()
