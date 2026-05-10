@@ -28,6 +28,7 @@ class TestWeatherTool:
         self.context.redacted_text = ""
         self.context.cfg.ollama_base_url = ""
         self.context.cfg.ollama_chat_model = ""
+        self.context.cfg.llm_chat_model = ""
         self.context.cfg.tool_router_model = ""
         self.context.cfg.intent_judge_model = ""
 
@@ -416,6 +417,7 @@ class TestExtractPlaceFromUserText:
         cfg = Mock()
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.ollama_chat_model = "gemma4:e2b"
+        cfg.llm_chat_model = "gemma4:e2b"
         cfg.tool_router_model = ""
         cfg.intent_judge_model = ""
         cfg.llm_tools_timeout_sec = 8.0
@@ -432,41 +434,46 @@ class TestExtractPlaceFromUserText:
         cfg = Mock()
         cfg.ollama_base_url = ""
         cfg.ollama_chat_model = ""
+        cfg.llm_chat_model = ""
         cfg.tool_router_model = ""
         cfg.intent_judge_model = ""
         assert _extract_place_from_user_text("weather in London", cfg) is None
 
-    @patch("src.jarvis.tools.builtin.weather.call_llm_direct", create=True)
-    def test_extracts_clean_place_name(self, _mock_direct):
-        """Patch the import inside the function by intercepting call_llm_direct."""
-        from src.jarvis.llm import call_llm_direct as real_fn  # noqa: F401
+    def _patched_backend(self, return_value):
+        """Build a context manager that patches ``get_llm_backend`` at the
+        weather module import site so the place extractor sees a stubbed
+        backend whose ``.direct()`` returns ``return_value``."""
+        backend = Mock()
+        backend.direct.return_value = return_value
+        return patch(
+            "src.jarvis.tools.builtin.weather.get_llm_backend",
+            return_value=backend,
+        )
 
-        with patch("src.jarvis.llm.call_llm_direct", return_value="London"):
+    def test_extracts_clean_place_name(self):
+        with self._patched_backend("London"):
             got = _extract_place_from_user_text("I need it for London", self._cfg())
         assert got == "London"
 
     def test_strips_quotes_and_punctuation(self):
-        with patch("src.jarvis.llm.call_llm_direct", return_value="'Paris'."):
+        with self._patched_backend("'Paris'."):
             got = _extract_place_from_user_text("weather paris?", self._cfg())
         assert got == "Paris"
 
     def test_none_sentinel_returns_none(self):
         for sentinel in ("none", "None", "NONE", "n/a", "unknown"):
-            with patch("src.jarvis.llm.call_llm_direct", return_value=sentinel):
+            with self._patched_backend(sentinel):
                 assert _extract_place_from_user_text(
                     "what's the weather", self._cfg()
                 ) is None
 
     def test_sentence_response_rejected(self):
         """If the model explains instead of answering, treat it as no-place."""
-        with patch(
-            "src.jarvis.llm.call_llm_direct",
-            return_value="The user did not name a place.",
-        ):
+        with self._patched_backend("The user did not name a place."):
             got = _extract_place_from_user_text("weather today", self._cfg())
         assert got is None
 
     def test_overlong_response_rejected(self):
-        with patch("src.jarvis.llm.call_llm_direct", return_value="x" * 200):
+        with self._patched_backend("x" * 200):
             got = _extract_place_from_user_text("weather", self._cfg())
         assert got is None

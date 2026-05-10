@@ -2,32 +2,25 @@
 
 Two interchangeable entry points for the same functionality:
 
-- **Object-style:** :func:`get_llm_backend` returns the
-  :class:`LLMBackend` configured for the active settings; call
-  ``.direct(...)``, ``.streaming(...)``, ``.chat(...)`` on it. Use this
-  when you have a settings object available — typical for code on the
-  reply path. Backends will dispatch on ``llm_provider`` once that
-  setting lands; today every settings object resolves to
-  :class:`OllamaBackend`.
-- **Function-style:** :func:`call_llm_direct`, :func:`call_llm_streaming`,
-  :func:`chat_with_messages` take ``base_url`` directly and construct
-  the right backend internally. Use this when you only have a base URL
-  in scope.
+- **Object-style** (preferred for production code): :func:`get_llm_backend`
+  returns the :class:`LLMBackend` configured for the active settings; call
+  ``.direct(...)``, ``.streaming(...)``, ``.chat(...)`` on it. The factory
+  dispatches on ``cfg.llm_provider`` so swapping providers does not touch
+  call sites.
+- **Function-style** (helper for code with only a base URL in scope, used
+  by ``tests/performance/`` and ``evals/``): :func:`call_llm_direct`,
+  :func:`call_llm_streaming`, :func:`chat_with_messages` take a base URL
+  and construct an :class:`OllamaBackend` internally.
 
-Both styles are first-class. The function-style API takes ``base_url``
-because it predates the provider abstraction; once ``llm_provider``
-lands these helpers will dispatch through the factory so the wire shape
-follows whatever the user has configured.
-
-Other public names: :class:`OllamaBackend` (the implementation today),
-:class:`ToolsNotSupportedError` (raised when a model rejects native
-tool calling so the reply engine can fall back to text-based), and
-:func:`extract_text_from_response` (normalises content across the
-known response shapes).
+Other public names: :class:`OllamaBackend`, :class:`OpenAICompatibleBackend`,
+:class:`ToolsNotSupportedError` (raised when a model rejects native tool
+calling so the reply engine can fall back to text-based), and
+:func:`extract_text_from_response` (normalises content across known
+response shapes).
 
 ``import requests`` is re-exported so tests that patch
-``jarvis.llm.requests.post`` to intercept HTTP traffic continue to work
-after the package split.
+``jarvis.llm.requests.post`` to intercept HTTP traffic work without
+reaching into the per-backend modules.
 """
 
 from __future__ import annotations
@@ -64,11 +57,9 @@ def call_llm_direct(
     num_ctx: int = 4096,
     temperature: Optional[float] = None,
 ) -> Optional[str]:
-    """Function-style entry point for a single-shot system+user call.
-
-    Equivalent to ``get_llm_backend(settings).direct(...)`` when
-    ``base_url`` matches the settings; useful when only a base URL is in
-    scope.
+    """Single-shot system+user call against an Ollama instance at
+    ``base_url``. Convenience helper for callers that only have a base
+    URL in scope (performance shims, eval scripts).
     """
     return OllamaBackend(base_url).direct(
         chat_model,
@@ -90,11 +81,7 @@ def call_llm_streaming(
     timeout_sec: float = 30.0,
     thinking: bool = False,
 ) -> Optional[str]:
-    """Function-style entry point for a streaming system+user call.
-
-    Equivalent to ``get_llm_backend(settings).streaming(...)`` when
-    ``base_url`` matches the settings.
-    """
+    """Streaming system+user call against an Ollama instance at ``base_url``."""
     return OllamaBackend(base_url).streaming(
         chat_model,
         system_prompt,
@@ -114,11 +101,7 @@ def chat_with_messages(
     tools: Optional[List[Dict[str, Any]]] = None,
     thinking: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """Function-style entry point for an arbitrary-messages chat call.
-
-    Equivalent to ``get_llm_backend(settings).chat(...)`` when
-    ``base_url`` matches the settings.
-    """
+    """Arbitrary-messages chat call against an Ollama instance at ``base_url``."""
     return OllamaBackend(base_url).chat(
         chat_model,
         messages,

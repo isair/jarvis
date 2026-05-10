@@ -107,6 +107,23 @@ Always use British English everywhere (e.g. "colour" not "color", "behaviour" no
 
 Do not use em dashes (—) in GitHub issue/PR/discussion replies or any user-facing writing. Prefer a comma, a full stop, a colon, or parentheses depending on the clause. This applies to replies you post on the user's behalf and to text generated for them.
 
+## Code, comments, specs, docs: describe the current state, not the history
+
+The codebase is ours and releases are versioned. Git carries the history; the code carries the present. Anything you write that lives in a file (code comments, docstrings, `*.spec.md`, `docs/*`, READMEs) should describe what the system *is*, not what it *was* or how it *changed*. Avoid:
+
+- "previously did X", "used to be Y", "this fixes the regression where…"
+- "refactored to", "migrated from", "now uses", "no longer reads"
+- "PR 2.5b will…", "deferred to follow-up", "TODO(PR X): drop this once…"
+- Phases tables, migration rollouts, "Done / Pending" status columns inside specs
+
+Commit messages and PR descriptions are the right place for "what changed and why" — they exist to be read in sequence. Files under `src/`, `docs/`, and `*.spec.md` are read as the present-day reference; historical narrative there ages badly and confuses future readers.
+
+## Refactor completely or not at all
+
+If you're touching every legacy call site, finish the job. Don't leave compat shims, fallback parameters, `SimpleNamespace` defaults, or `TODO(PR X)` markers for paths you are also rewriting in the same change. The whole point of doing the refactor is that the legacy shape goes away — keeping a half-converted state means future readers have to figure out which version of the contract is canonical, and the reasoning behind the old shape sits in the codebase as dead weight.
+
+The exception is genuinely external boundaries the codebase does not own: on-disk config files written by a previous release, third-party API shapes, persisted database rows. Those need migration paths because users depend on them. Internal function signatures, helper modules, and call patterns inside `src/` are ours to change cleanly.
+
 ## Prompt-engineering: denial-template mirroring
 
 When a small model keeps producing a canonical denial ("I only have access to the information you have shared in our current conversation", "I don't have any personal information about you", etc.), don't argue against the denial in the system prompt — that rarely wins against strong priors. Instead, phrase the injected context so it literally occupies the semantic slot the denial refers to. If the model denies having "information the user has shared in prior conversations", label the block exactly that. The denial stops triggering because the thing it claims to lack is now visibly present in the prompt. Arguing with the model's priors is expensive; feeding the denial its own words with the data pre-filled is cheap.

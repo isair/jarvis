@@ -12,7 +12,31 @@ from ..system_prompt import build_system_prompt
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
-from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
+from ..llm import (
+    extract_text_from_response,
+    get_embedding_backend,
+    get_llm_backend,
+    ToolsNotSupportedError,
+)
+
+
+def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
+                       tools=None, thinking=False):
+    """Local indirection: route the engine's chat call through the active
+    backend (Ollama or OpenAI-compatible, per ``cfg.llm_provider``) so the
+    runtime swap is transparent to the rest of the engine.
+
+    Kept as a module-level function so tests can patch this single symbol
+    to capture every chat call rather than reaching into the backend ABC.
+    """
+    backend = get_llm_backend(cfg)
+    return backend.chat(
+        cfg.llm_chat_model, messages,
+        timeout_sec=timeout_sec,
+        extra_options=extra_options,
+        tools=tools,
+        thinking=thinking,
+    )
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -161,7 +185,7 @@ def resolve_tool_router_model(cfg) -> str:
     for candidate in (
         getattr(cfg, "tool_router_model", ""),
         getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
+        getattr(cfg, "llm_chat_model", ""),
     ):
         if candidate:
             return candidate
@@ -566,7 +590,7 @@ def _maybe_digest_tool_result(
     tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
     if tool_digest_cfg is None:
         tool_digest_enabled = (
-            detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL
+            detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL
         )
     else:
         tool_digest_enabled = bool(tool_digest_cfg)
@@ -579,8 +603,8 @@ def _maybe_digest_tool_result(
             query=query,
             tool_name=tool_name,
             tool_result=raw_tool_result,
-            ollama_base_url=cfg.ollama_base_url,
-            ollama_chat_model=cfg.ollama_chat_model,
+            cfg=cfg,
+            chat_model=cfg.llm_chat_model,
             timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
@@ -916,10 +940,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             builtin_tools=BUILTIN_TOOLS,
             mcp_tools=mcp_tools,
             strategy=strategy,
-            llm_base_url=cfg.ollama_base_url,
+            llm_backend=get_llm_backend(cfg),
             llm_model=resolve_tool_router_model(cfg),
             llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-            embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+            embedding_backend=get_embedding_backend(cfg),
+            embed_model=cfg.embedding_model,
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
@@ -1147,7 +1172,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log("memory extractor served from hot-window cache", "memory")
             else:
                 search_params = extract_search_params_for_memory(
-                    _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
+                    _extractor_query, cfg, resolve_tool_router_model(cfg),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
                     context_hint=context_hint,
@@ -1177,13 +1202,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             context_results = search_conversation_memory_by_keywords(
                 db=db,
                 keywords=keywords,
+                cfg=cfg,
                 from_time=from_time,
                 to_time=to_time,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_embed_model=cfg.ollama_embed_model,
                 timeout_sec=float(getattr(cfg, 'llm_embedding_timeout_sec', 10.0)),
                 voice_debug=cfg.voice_debug,
-                max_results=cfg.memory_enrichment_max_results
+                max_results=cfg.memory_enrichment_max_results,
             )
             if context_results:
                 raw_diary_entries = list(context_results)
@@ -1278,7 +1302,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Opt-in/out via `memory_digest_enabled` (default: auto-on for SMALL).
     digest_cfg = getattr(cfg, "memory_digest_enabled", None)
     if digest_cfg is None:
-        digest_enabled = (detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL)
+        digest_enabled = (detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL)
     else:
         digest_enabled = bool(digest_cfg)
 
@@ -1288,8 +1312,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 query=redacted,
                 diary_entries=raw_diary_entries,
                 graph_parts=raw_graph_parts,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
+                chat_model=cfg.llm_chat_model,
                 timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
@@ -1376,7 +1400,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 7: Messages-based loop with tool handling
     # Detect model size for prompt selection
-    model_size = detect_model_size(cfg.ollama_chat_model)
+    model_size = detect_model_size(cfg.llm_chat_model)
     # Start with native tool calling. If the model returns HTTP 400 (tools not supported),
     # we automatically switch to text-based tool calling (markdown fences in system prompt).
     #
@@ -1388,7 +1412,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # the wasted round-trip and prompt confusion of starting native and falling back mid-turn.
     use_text_tools = (model_size == ModelSize.SMALL)
     prompts = get_system_prompts(model_size)
-    debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model} (use_text_tools={use_text_tools})", "planning")
+    debug_log(f"Model size detected: {model_size.value} for {cfg.llm_chat_model} (use_text_tools={use_text_tools})", "planning")
 
     # Compound-query decomposition for small models.
     # When a query contains a conjunction joining two question-clauses, the
@@ -1914,13 +1938,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 has_tool_calls = " (has tool_calls)" if msg.get("tool_calls") else ""
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
 
-        # Send messages to Ollama — try native tool calling first, fall back to text-based
-        # if the model returns HTTP 400 (native tools API not supported).
+        # Send messages to the configured chat backend — try native tool calling
+        # first, fall back to text-based if the model returns HTTP 400 (native
+        # tools API not supported).
         _dump_tools_schema = None if use_text_tools else tools_json_schema
+        _chat_model = cfg.llm_chat_model
         try:
             llm_resp = chat_with_messages(
-                base_url=cfg.ollama_base_url,
-                chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
@@ -1931,7 +1956,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 session_id=_dump_session_id,
                 turn=turn,
                 query=text,
-                model=cfg.ollama_chat_model,
+                model=_chat_model,
                 messages=messages,
                 tools_schema=_dump_tools_schema,
                 use_text_tools=use_text_tools,
@@ -1942,7 +1967,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # for the rest of this session and rebuild the system message to include tool
             # descriptions as plain text with markdown fence instructions.
             debug_log(
-                f"⚠️ Native tools API not supported by {cfg.ollama_chat_model!r}, "
+                f"⚠️ Native tools API not supported by {_chat_model!r}, "
                 "falling back to text-based tool calling (markdown fences)",
                 "planning",
             )
@@ -1950,8 +1975,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             messages[0] = {"role": "system", "content": _build_initial_system_message()}
             _update_system_message_with_context(messages)
             llm_resp = chat_with_messages(
-                base_url=cfg.ollama_base_url,
-                chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
@@ -1962,7 +1986,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 session_id=_dump_session_id,
                 turn=turn,
                 query=text,
-                model=cfg.ollama_chat_model,
+                model=_chat_model,
                 messages=messages,
                 tools_schema=None,
                 use_text_tools=True,
@@ -2350,7 +2374,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             malformed_fallback = False
         elif _is_malformed_json_response(content):
             debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
-            model_name = (cfg.ollama_chat_model or "").lower()
+            model_name = cfg.llm_chat_model.lower()
             is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
             candidate_reply = (
                 "I had trouble understanding that request. "

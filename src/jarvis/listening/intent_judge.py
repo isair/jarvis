@@ -1,59 +1,42 @@
 """LLM-based intent judge for voice assistant.
 
-This module provides intelligent intent classification and query extraction
-using a larger LLM model. It receives full context (transcript buffer,
-TTS history, state) and makes informed decisions about whether speech
-is directed at the assistant and what the actual query is.
+Receives full context (transcript buffer, TTS history, state) and makes
+informed decisions about whether speech is directed at the assistant and
+what the actual query is. Routes through ``jarvis.llm.get_llm_backend``
+so the active provider (Ollama, OpenAI-compatible) handles the call.
 """
 
 import json
 import re
 import time
-from dataclasses import dataclass
-from typing import Optional, List
+from dataclasses import dataclass, field
+from typing import Any, Optional, List
 
 from ..debug import debug_log
+from ..llm import get_llm_backend
 from .transcript_buffer import TranscriptSegment
 
-try:
-    import requests
-    REQUESTS_AVAILABLE = True
-except ImportError:
-    requests = None
-    REQUESTS_AVAILABLE = False
 
+def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
+    """Page ``model`` into the active backend's resident memory.
 
-def warm_up_ollama_model(base_url: str, model: str, timeout: float) -> bool:
-    """Ask Ollama to load ``model`` into memory with a 30m keep_alive.
-
-    Issues a minimal ``/api/generate`` request so the weights are resident
-    before the first real request. Best-effort — errors are logged and
-    swallowed so callers never crash on warmup failure.
+    Thin wrapper over :meth:`LLMBackend.warm_up` so callers don't need to
+    construct a backend just to ask for a warmup. Returns whatever the
+    backend's warmup result is — for runtimes without an unloading model
+    (OpenAI-compatible servers) this is always ``True``.
     """
-    if not REQUESTS_AVAILABLE or not base_url or not model:
+    if not model:
         return False
     try:
-        response = requests.post(
-            f"{base_url}/api/generate",
-            json={
-                "model": model,
-                "prompt": "",
-                "stream": False,
-                "keep_alive": "30m",
-                "options": {"num_predict": 1},
-            },
-            timeout=timeout,
-        )
-        ok = response.status_code == 200
-        debug_log(
-            f"ollama warmup {'ok' if ok else f'failed HTTP {response.status_code}'} "
-            f"(model={model})",
-            "voice",
-        )
-        return ok
+        ok = get_llm_backend(cfg).warm_up(model, timeout_sec=timeout)
     except Exception as e:
-        debug_log(f"ollama warmup error (model={model}): {e}", "voice")
+        debug_log(f"warmup error (model={model}): {e}", "voice")
         return False
+    debug_log(
+        f"warmup {'ok' if ok else 'failed'} (model={model})",
+        "voice",
+    )
+    return ok
 
 
 def _extract_json_object(text: str) -> str:
@@ -105,18 +88,20 @@ class IntentJudgment:
 
 @dataclass
 class IntentJudgeConfig:
-    """Configuration for the intent judge."""
+    """Configuration for the intent judge.
+
+    ``cfg`` is the Jarvis Settings object (or any duck-type with the same
+    LLM provider attributes); the judge dispatches every chat call through
+    ``get_llm_backend(cfg)``. ``model`` carries the per-call model name
+    (typically ``cfg.intent_judge_model``).
+    """
 
     assistant_name: str = "Jarvis"
-    aliases: list = None
+    aliases: list = field(default_factory=list)
     model: str = "gemma4:e2b"
-    ollama_base_url: str = "http://127.0.0.1:11434"
+    cfg: Any = None
     timeout_sec: float = 15.0
     thinking: bool = False
-
-    def __post_init__(self):
-        if self.aliases is None:
-            self.aliases = []
 
 
 class IntentJudge:
@@ -200,13 +185,9 @@ Examples:
             config: Configuration for the judge
         """
         self.config = config or IntentJudgeConfig()
-        self._available = REQUESTS_AVAILABLE
         self._last_error_time: float = 0.0
         self._error_cooldown: float = 30.0
         self._last_failure_reason: str = ""
-
-        if not self._available:
-            debug_log("intent judge disabled: requests not available", "voice")
 
     @property
     def last_failure_reason(self) -> str:
@@ -216,8 +197,6 @@ Examples:
     @property
     def available(self) -> bool:
         """Check if intent judge is available."""
-        if not self._available:
-            return False
         if time.time() - self._last_error_time < self._error_cooldown:
             return False
         return True
@@ -360,11 +339,9 @@ Examples:
             return None
 
     def warm_up(self) -> bool:
-        """Trigger Ollama to load the model into memory ahead of first use."""
-        if not self._available:
-            return False
-        return warm_up_ollama_model(
-            self.config.ollama_base_url,
+        """Page the configured judge model into the active backend."""
+        return warm_up_chat_model(
+            self.config.cfg,
             self.config.model,
             timeout=max(self.config.timeout_sec, 60.0),
         )
@@ -413,47 +390,58 @@ Examples:
             transcript_preview = "; ".join(s.text[:30] for s in segments[-3:])
             debug_log(f"🧠 Intent judge [{mode}]: \"{transcript_preview}...\"", "voice")
 
-            # Call Ollama API. keep_alive keeps the model resident between
-            # calls so we don't pay the ~5s cold-reload on each engagement
-            # (which was the original timeout culprit). Ollama's default is
-            # 5m; we pin to 30m because voice sessions can have long quiet
-            # stretches and reloading mid-conversation is a bad experience.
-            response = requests.post(
-                f"{self.config.ollama_base_url}/api/generate",
-                json={
-                    "model": self.config.model,
-                    "prompt": user_prompt,
-                    "system": system_prompt,
-                    "stream": False,
-                    "think": self.config.thinking,
-                    "keep_alive": "30m",
-                    "options": {
+            # Voice sessions can have long quiet stretches; the Ollama
+            # ``keep_alive: "30m"`` keeps the judge model resident between
+            # engagements so we don't pay the cold-reload tax on each one.
+            # ``num_ctx: 8192`` covers a ~2k-token system prompt plus up to
+            # ~2 minutes of multi-speaker transcript without truncating the
+            # prompt tail. Both knobs are silently dropped on backends
+            # without an unloading concept (OpenAI-compatible servers).
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            try:
+                resp = get_llm_backend(self.config.cfg).chat(
+                    self.config.model,
+                    messages,
+                    timeout_sec=self.config.timeout_sec,
+                    extra_options={
                         "temperature": 0.0,
                         "num_predict": 200,
-                        # Headroom for: ~2k-token system prompt + up to 2 minutes
-                        # of chatty multi-speaker transcript (default
-                        # transcript_buffer_duration_sec=120 in listener.py).
-                        # 4096 was cutting close to 90% utilisation in the
-                        # worst case after the prompt grew in PR #362, which
-                        # risks silent ollama truncation of the system
-                        # prompt's tail.
                         "num_ctx": 8192,
+                        "keep_alive": "30m",
                     },
-                },
-                timeout=self.config.timeout_sec,
-            )
-
-            if response.status_code != 200:
-                # Don't back off on transient HTTP errors — voice is high-turn
-                # and a 503 from an overloaded Ollama shouldn't kill the next
-                # 30s of intent judging. Retry on the next engagement signal.
-                reason = f"HTTP {response.status_code} from Ollama"
-                debug_log(f"intent judge: {reason}", "voice")
-                self._last_failure_reason = reason
+                    thinking=self.config.thinking,
+                )
+            except Exception as e:
+                self._last_failure_reason = f"request error: {type(e).__name__}"
+                debug_log(f"intent judge: {self._last_failure_reason}", "voice")
+                self._last_error_time = time.time()
                 return None
 
-            result = response.json()
-            response_text = result.get("response", "")
+            if not isinstance(resp, dict):
+                # ``chat()`` returns ``None`` on transient HTTP errors and
+                # timeouts. Don't back off — voice is high-turn and a single
+                # 503 must not kill the next 30s of intent judging.
+                self._last_failure_reason = "no response from backend"
+                debug_log(f"intent judge: {self._last_failure_reason}", "voice")
+                return None
+
+            message = resp.get("message")
+            response_text = ""
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    response_text = content
+            if not response_text:
+                # Ollama's /api/generate returned ``response``; chat() shape
+                # surfaces content under ``message.content``. Some adapters
+                # may still expose a top-level ``response`` field — accept
+                # it as a fallback rather than reject the call.
+                fallback = resp.get("response")
+                if isinstance(fallback, str):
+                    response_text = fallback
 
             judgment = self._parse_response(response_text)
 
@@ -473,47 +461,25 @@ Examples:
 
             return judgment
 
-        except requests.Timeout:
-            # Do NOT back off on timeout. Voice is high-turn: a single slow
-            # call must not lock out intent judging for the next 30s. The
-            # engagement-signal gate upstream already prevents calling the
-            # judge on ambient speech, so timeouts don't hammer Ollama.
-            self._last_failure_reason = f"timeout after {self.config.timeout_sec}s"
-            debug_log(f"intent judge: {self._last_failure_reason}", "voice")
-            return None
-        except requests.RequestException as e:
-            self._last_failure_reason = f"request error: {e}"
-            debug_log(f"intent judge: {self._last_failure_reason}", "voice")
-            self._last_error_time = time.time()
-            return None
         except Exception as e:
-            self._last_failure_reason = f"error: {e}"
+            self._last_failure_reason = f"error: {type(e).__name__}"
             debug_log(f"intent judge: {self._last_failure_reason}", "voice")
             return None
 
 
-def create_intent_judge(cfg) -> Optional[IntentJudge]:
-    """Create an intent judge from Jarvis configuration.
+def create_intent_judge(cfg) -> IntentJudge:
+    """Build an :class:`IntentJudge` bound to the Jarvis settings.
 
-    The intent judge is always used when available (per spec). Falls back to
-    simple wake word detection only when Ollama is unavailable.
-
-    Args:
-        cfg: Jarvis Settings object
-
-    Returns:
-        IntentJudge instance or None if requests library unavailable
+    The judge dispatches every chat call through ``get_llm_backend(cfg)``,
+    so the active provider (Ollama / OpenAI-compatible) handles the wire
+    shape automatically.
     """
-    model = str(getattr(cfg, "intent_judge_model", "gemma4:e2b"))
-    ollama_base_url = str(getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"))
-
     config = IntentJudgeConfig(
         assistant_name=str(getattr(cfg, "wake_word", "jarvis")).capitalize(),
         aliases=list(getattr(cfg, "wake_aliases", [])),
-        model=model,
-        ollama_base_url=ollama_base_url,
+        model=str(getattr(cfg, "intent_judge_model", "gemma4:e2b")),
+        cfg=cfg,
         timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
         thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
-
     return IntentJudge(config)

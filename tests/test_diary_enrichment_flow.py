@@ -11,7 +11,20 @@ FTS pipeline successfully retrieves just-saved diary entries.
 
 import time
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch
+
+
+def _cfg() -> SimpleNamespace:
+    return SimpleNamespace(
+        llm_provider="ollama",
+        llm_base_url="http://localhost:11434",
+        llm_chat_model="test",
+        embedding_model="test",
+        ollama_base_url="http://localhost:11434",
+        ollama_chat_model="test",
+        ollama_embed_model="test",
+    )
 
 
 @pytest.mark.integration
@@ -72,9 +85,7 @@ class TestDiaryToEnrichmentFlow:
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
                 dialogue_memory=dm,
-                ollama_base_url="http://localhost:11434",
-                ollama_chat_model="test",
-                ollama_embed_model="test",
+                cfg=_cfg(),
                 force=True,
                 timeout_sec=5.0,
             )
@@ -94,6 +105,7 @@ class TestDiaryToEnrichmentFlow:
         # Step 4: Search via FTS (no embeddings — simulates fallback path)
         results = search_conversation_memory_by_keywords(
             db=db,
+            cfg=_cfg(),
             keywords=["asyncio", "database", "migration"],
             max_results=5,
         )
@@ -151,9 +163,7 @@ class TestDiaryToEnrichmentFlow:
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
                 dialogue_memory=dm,
-                ollama_base_url="http://localhost:11434",
-                ollama_chat_model="test",
-                ollama_embed_model="test",
+                cfg=_cfg(),
                 force=True,
             )
 
@@ -170,6 +180,7 @@ class TestDiaryToEnrichmentFlow:
 
         results = search_conversation_memory_by_keywords(
             db=db,
+            cfg=_cfg(),
             keywords=followup_keywords,
             max_results=5,
         )
@@ -212,8 +223,7 @@ class TestDiaryToEnrichmentFlow:
         ):
             id1 = update_diary_from_dialogue_memory(
                 db=db, dialogue_memory=dm,
-                ollama_base_url="http://localhost:11434",
-                ollama_chat_model="test", ollama_embed_model="test",
+                cfg=_cfg(),
                 force=True,
             )
 
@@ -236,8 +246,7 @@ class TestDiaryToEnrichmentFlow:
         ):
             id2 = update_diary_from_dialogue_memory(
                 db=db, dialogue_memory=dm,
-                ollama_base_url="http://localhost:11434",
-                ollama_chat_model="test", ollama_embed_model="test",
+                cfg=_cfg(),
                 force=True,
             )
 
@@ -250,14 +259,16 @@ class TestDiaryToEnrichmentFlow:
 
         # Search for cooking — should find first entry
         cooking_results = search_conversation_memory_by_keywords(
-            db=db, keywords=["pasta", "recipe", "cooking"], max_results=5,
+            db=db,
+            cfg=_cfg(), keywords=["pasta", "recipe", "cooking"], max_results=5,
         )
         assert len(cooking_results) > 0, "Should find cooking diary entry"
         assert "carbonara" in " ".join(cooking_results).lower()
 
         # Search for fitness — should find second entry
         fitness_results = search_conversation_memory_by_keywords(
-            db=db, keywords=["strength", "training", "exercise"], max_results=5,
+            db=db,
+            cfg=_cfg(), keywords=["strength", "training", "exercise"], max_results=5,
         )
         assert len(fitness_results) > 0, "Should find fitness diary entry"
         assert any(kw in " ".join(fitness_results).lower() for kw in ["squat", "deadlift", "bench"])
@@ -304,9 +315,7 @@ class TestDiaryToEnrichmentFlow:
             summary_id = update_daily_conversation_summary(
                 db=db,
                 new_chunks=pending_chunks,
-                ollama_base_url="http://localhost:11434",
-                ollama_chat_model="test",
-                ollama_embed_model="test",
+                cfg=_cfg(),
             )
 
         assert summary_id is not None

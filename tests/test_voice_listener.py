@@ -1516,6 +1516,7 @@ def _make_listener_for_warmup(
 
                 mock_cfg = _create_mock_config()
                 mock_cfg.ollama_chat_model = chat_model
+                mock_cfg.llm_chat_model = chat_model
                 mock_cfg.ollama_base_url = base_url
                 mock_cfg.llm_tools_timeout_sec = 8.0
                 mock_cfg.intent_judge_model = judge_model or ""
@@ -1528,7 +1529,7 @@ def _make_listener_for_warmup(
 
                 if judge_model is not None:
                     listener._intent_judge = IntentJudge(
-                        IntentJudgeConfig(model=judge_model, ollama_base_url=base_url)
+                        IntentJudgeConfig(model=judge_model, cfg=mock_cfg)
                     )
                 else:
                     listener._intent_judge = None
@@ -1544,9 +1545,9 @@ class TestLlmWarmup:
             chat_model="llama3.1", judge_model="gemma4:e2b"
         )
         with patch(
-            "jarvis.listening.listener.warm_up_ollama_model", return_value=True
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
         ) as chat_warm, patch(
-            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
         ) as judge_warm:
             threads = listener._start_llm_warmup()
             for t in threads:
@@ -1563,7 +1564,7 @@ class TestLlmWarmup:
         listener = _make_listener_for_warmup(
             chat_model="llama3.1", judge_model="llama3.1"
         )
-        with patch("jarvis.listening.listener.warm_up_ollama_model", return_value=True) as warm:
+        with patch("jarvis.listening.listener.warm_up_chat_model", return_value=True) as warm:
             threads = listener._start_llm_warmup()
             for t in threads:
                 t.join(timeout=2.0)
@@ -1577,7 +1578,7 @@ class TestLlmWarmup:
         """Judge still warms when chat model is absent."""
         listener = _make_listener_for_warmup(chat_model="", judge_model="gemma4:e2b")
         with patch(
-            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
         ) as warm:
             threads = listener._start_llm_warmup()
             for t in threads:
@@ -1601,9 +1602,9 @@ class TestLlmWarmup:
             chat_model="llama3.1", judge_model="gemma4:e2b"
         )
         with patch(
-            "jarvis.listening.listener.warm_up_ollama_model", return_value=False
+            "jarvis.listening.listener.warm_up_chat_model", return_value=False
         ), patch(
-            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=False
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=False
         ):
             threads = listener._start_llm_warmup()
             for t in threads:
@@ -1640,6 +1641,7 @@ class TestWhisperWarmup:
 
                             mock_cfg = _create_mock_config()
                             mock_cfg.ollama_chat_model = ""
+                            mock_cfg.llm_chat_model = ""
                             mock_cfg.ollama_base_url = ""
                             mock_cfg.intent_judge_model = ""
                             listener = VoiceListener(

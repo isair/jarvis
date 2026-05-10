@@ -21,7 +21,7 @@ from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
-from .intent_judge import IntentJudge, create_intent_judge, warm_up_ollama_model
+from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
 from ..debug import debug_log
 from ..utils.location import is_location_available
 
@@ -1497,8 +1497,7 @@ class VoiceListener(threading.Thread):
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
 
-        chat_model = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
-        base_url = str(getattr(self.cfg, "ollama_base_url", "") or "").strip()
+        chat_model = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
         chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)
         judge = self._intent_judge
         judge_model = judge.config.model if judge is not None else ""
@@ -1522,9 +1521,9 @@ class VoiceListener(threading.Thread):
 
         threads: list[threading.Thread] = []
 
-        if chat_model and base_url:
+        if chat_model:
             def _warm_chat() -> None:
-                ok = warm_up_ollama_model(base_url, chat_model, timeout=chat_timeout)
+                ok = warm_up_chat_model(self.cfg, chat_model, timeout=chat_timeout)
                 self._llm_warmup_results["chat"] = (chat_model, ok)
                 # When chat and judge share a model, one warmup covers both.
                 if shared_judge:
@@ -1544,9 +1543,9 @@ class VoiceListener(threading.Thread):
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
 
-        if router_model and base_url and not shared_router:
+        if router_model and not shared_router:
             def _warm_router() -> None:
-                ok = warm_up_ollama_model(base_url, router_model, timeout=chat_timeout)
+                ok = warm_up_chat_model(self.cfg, router_model, timeout=chat_timeout)
                 self._llm_warmup_results["router"] = (router_model, ok)
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
@@ -2127,7 +2126,7 @@ class VoiceListener(threading.Thread):
             # things out for it. Classification lives in model_variants so
             # it stays in sync when supported models change.
             from ..reply.prompts.model_variants import detect_model_size, ModelSize
-            chat_model_name = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
+            chat_model_name = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
             if chat_model_name and detect_model_size(chat_model_name) == ModelSize.SMALL:
                 print(
                     f"  ⚠️  Small model in use ({chat_model_name}). Assume it can't infer — spell out the steps for anything more involved:",

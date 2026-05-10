@@ -68,7 +68,7 @@ Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests.
 
 1. `cfg.evaluator_model` (explicit override)
 2. `cfg.intent_judge_model` (small, already warm from wake-word path)
-3. `cfg.ollama_chat_model` (last resort)
+3. `cfg.llm_chat_model` (last resort)
 
 ### Gating
 

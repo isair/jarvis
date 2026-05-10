@@ -13,9 +13,21 @@ Both were motivated by a field regression where the small model deflected on
 "the assistant offered to search the web" — which the model then imitated.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from jarvis.memory.conversation import generate_conversation_summary
+
+
+def _cfg() -> SimpleNamespace:
+    return SimpleNamespace(
+        llm_provider="ollama",
+        llm_base_url="http://localhost:11434",
+        llm_api_key="",
+        llm_chat_model="test-model",
+        ollama_base_url="http://localhost:11434",
+        ollama_chat_model="test-model",
+    )
 
 
 class TestSummariserForbidsDeflectionNarration:
@@ -25,16 +37,15 @@ class TestSummariserForbidsDeflectionNarration:
         """Invoke generate_conversation_summary with a mocked LLM and capture the system prompt."""
         captured = {}
 
-        def fake_call(base_url, model, system_prompt, user_prompt, **kwargs):
+        def fake_call(cfg, system_prompt, user_prompt, **kwargs):
             captured['system_prompt'] = system_prompt
             return "SUMMARY: x\nTOPICS: a, b"
 
-        with patch('jarvis.llm.call_llm_direct', side_effect=fake_call):
+        with patch('jarvis.memory.conversation._direct_llm', side_effect=fake_call):
             generate_conversation_summary(
                 recent_chunks=["User: hi", "Assistant: hello"],
                 previous_summary=None,
-                ollama_base_url="http://localhost:11434",
-                ollama_chat_model="test-model",
+                cfg=_cfg(),
             )
 
         return captured['system_prompt']

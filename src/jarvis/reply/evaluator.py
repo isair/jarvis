@@ -22,8 +22,21 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..debug import debug_log
-from ..llm import call_llm_direct
+from ..llm import get_llm_backend
 from ..utils.redact import redact
+
+
+def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
+                    timeout_sec=10.0, thinking=False, num_ctx=4096,
+                    temperature=None):
+    """Local indirection: route the evaluator's chat call through the
+    backend configured by ``cfg.llm_provider``. Tests patch this symbol
+    to intercept the single LLM call point."""
+    return get_llm_backend(cfg).direct(
+        chat_model, system_prompt, user_content,
+        timeout_sec=timeout_sec, thinking=thinking,
+        num_ctx=num_ctx, temperature=temperature,
+    )
 
 
 @dataclass
@@ -364,9 +377,8 @@ def evaluate_turn(
             for n, a, r in [entry]
         ]
 
-    base_url = getattr(cfg, "ollama_base_url", "")
     chat_model = _resolve_evaluator_model(cfg)
-    if not base_url or not chat_model:
+    if not chat_model:
         return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
     try:
@@ -388,7 +400,7 @@ def evaluate_turn(
 
     try:
         raw = call_llm_direct(
-            base_url=base_url,
+            cfg=cfg,
             chat_model=chat_model,
             system_prompt=_EVALUATOR_SYSTEM_PROMPT,
             user_content=user_content,

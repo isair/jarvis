@@ -7,9 +7,22 @@ from datetime import datetime, timezone
 
 from ....debug import debug_log
 from ....memory.db import Database
-from ....llm import call_llm_direct
+from ....llm import get_llm_backend
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
+
+
+def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
+                    timeout_sec=10.0, thinking=False, num_ctx=4096,
+                    temperature=None):
+    """Local indirection: route logMeal LLM calls through the backend
+    configured by ``cfg.llm_provider``. Tests patch this single symbol
+    to intercept the nutrition extractor and follow-up generator."""
+    return get_llm_backend(cfg).direct(
+        chat_model, system_prompt, user_content,
+        timeout_sec=timeout_sec, thinking=thinking,
+        num_ctx=num_ctx, temperature=temperature,
+    )
 
 
 NUTRITION_SYS = (
@@ -64,7 +77,14 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         + "\n<<<END UNTRUSTED USER TEXT>>>\n\n"
         "Return ONLY JSON or the exact string NONE."
     )
-    raw = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=cfg.llm_chat_timeout_sec, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
+    raw = call_llm_direct(
+        cfg=cfg,
+        chat_model=cfg.llm_chat_model,
+        system_prompt=NUTRITION_SYS,
+        user_content=user_prompt,
+        timeout_sec=cfg.llm_chat_timeout_sec,
+        thinking=getattr(cfg, 'llm_thinking_enabled', False),
+    ) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
         debug_log(f"logMeal extractor returned NONE for text={original_text[:120]!r}", "nutrition")
@@ -127,7 +147,14 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
         "Be concise and specific."
     )
     follow_user = f"Logged meal: {description} | {approx}."
-    follow_text = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, follow_sys, follow_user, timeout_sec=cfg.llm_chat_timeout_sec, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
+    follow_text = call_llm_direct(
+        cfg=cfg,
+        chat_model=cfg.llm_chat_model,
+        system_prompt=follow_sys,
+        user_content=follow_user,
+        timeout_sec=cfg.llm_chat_timeout_sec,
+        thinking=getattr(cfg, 'llm_thinking_enabled', False),
+    ) or ""
     return (follow_text or "").strip()
 
 

@@ -3,6 +3,7 @@
 import pytest
 import time
 import threading
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
@@ -97,6 +98,7 @@ class TestReplyEngineDialogueMemory:
         mock_cfg = Mock()
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.ollama_chat_model = "test"
+        mock_cfg.llm_chat_model = "test"
         mock_cfg.voice_debug = False
         mock_cfg.llm_tools_timeout_sec = 8.0
         mock_cfg.llm_embedding_timeout_sec = 10.0
@@ -160,6 +162,7 @@ class TestReplyEngineDialogueMemory:
         mock_cfg = Mock()
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.ollama_chat_model = "test"
+        mock_cfg.llm_chat_model = "test"
         mock_cfg.voice_debug = False
         mock_cfg.llm_tools_timeout_sec = 8.0
         mock_cfg.llm_embedding_timeout_sec = 10.0
@@ -226,15 +229,20 @@ class TestDiaryRedaction:
         ]
         
         # Call diary update function
+        cfg = SimpleNamespace(
+            llm_chat_model="test",
+            ollama_base_url="http://localhost:11434",
+            ollama_chat_model="test",
+            embedding_model="test",
+            ollama_embed_model="test",
+        )
         result = update_daily_conversation_summary(
             db=mock_db,
             new_chunks=sensitive_chunks,
-            ollama_base_url="http://localhost:11434",
-            ollama_chat_model="test",
-            ollama_embed_model="test",
-            source_app="test"
+            cfg=cfg,
+            source_app="test",
         )
-        
+
         # Verify summary was called with redacted chunks
         mock_summary.assert_called_once()
         redacted_chunks = mock_summary.call_args[0][0]  # First argument to generate_conversation_summary
@@ -266,13 +274,18 @@ class TestDiaryRedaction:
         ]
         
         # Call diary update function
+        cfg = SimpleNamespace(
+            llm_chat_model="test",
+            ollama_base_url="http://localhost:11434",
+            ollama_chat_model="test",
+            embedding_model="test",
+            ollama_embed_model="test",
+        )
         result = update_daily_conversation_summary(
             db=mock_db,
             new_chunks=chunks,
-            ollama_base_url="http://localhost:11434",
-            ollama_chat_model="test",
-            ollama_embed_model="test",
-            source_app="test"
+            cfg=cfg,
+            source_app="test",
         )
         
         # Verify summary was called with chunks in correct order
@@ -583,12 +596,17 @@ class TestDialogueMemoryEdgeCases:
         time.sleep(0.15)
 
         # Run diary update
+        cfg = SimpleNamespace(
+            llm_chat_model="test",
+            ollama_base_url="http://localhost",
+            ollama_chat_model="test",
+            embedding_model="test",
+            ollama_embed_model="test",
+        )
         result = update_diary_from_dialogue_memory(
             db=mock_db,
             dialogue_memory=dm,
-            ollama_base_url="http://localhost",
-            ollama_chat_model="test",
-            ollama_embed_model="test",
+            cfg=cfg,
             force=True,
         )
 

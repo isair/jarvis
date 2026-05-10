@@ -67,18 +67,16 @@ class TestIntentJudge:
         judge = IntentJudge(config)
         assert judge.config.assistant_name == "Friday"
 
-    def test_available_when_requests_installed(self):
-        """available is True when requests is installed."""
+    def test_available_outside_cooldown(self):
+        """``available`` is True when no recent backend failure has been recorded."""
         judge = IntentJudge()
-        judge._available = True
         judge._last_error_time = 0.0
         assert judge.available is True
 
     def test_unavailable_during_error_cooldown(self):
-        """available is False during error cooldown."""
+        """``available`` is False during the connection-error cooldown window."""
         import time
         judge = IntentJudge()
-        judge._available = True
         judge._last_error_time = time.time()
         judge._error_cooldown = 30.0
         assert judge.available is False
@@ -245,16 +243,6 @@ class TestIntentJudge:
         assert result.stop is False
         assert result.confidence == "low"
 
-    def test_judge_returns_none_when_unavailable(self):
-        """judge() returns None when unavailable."""
-        judge = IntentJudge()
-        judge._available = False
-
-        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
-        result = judge.judge(segments)
-
-        assert result is None
-
     def test_judge_returns_none_for_empty_segments(self):
         """judge() returns None for empty segments."""
         judge = IntentJudge()
@@ -264,19 +252,18 @@ class TestIntentJudge:
     def test_judge_with_mock_api(self):
         """judge() calls API and parses response."""
         judge = IntentJudge()
-        judge._available = True
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": '{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word detected"}'
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "message": {
+                "content": '{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word detected"}'
+            }
         }
 
         segments = [
             TranscriptSegment("jarvis what time is it", 1000.0, 1002.0),
         ]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+        with patch('jarvis.listening.intent_judge.get_llm_backend', return_value=backend):
             result = judge.judge(
                 segments,
                 wake_timestamp=1000.5,
@@ -292,14 +279,12 @@ class TestIntentJudge:
     def test_judge_handles_api_error(self):
         """judge() handles API errors gracefully."""
         judge = IntentJudge()
-        judge._available = True
-
-        mock_response = MagicMock()
-        mock_response.status_code = 500
+        backend = MagicMock()
+        backend.chat.return_value = None
 
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+        with patch('jarvis.listening.intent_judge.get_llm_backend', return_value=backend):
             result = judge.judge(segments)
 
         assert result is None
@@ -308,11 +293,10 @@ class TestIntentJudge:
         """judge() handles timeout gracefully."""
         import requests as real_requests
         judge = IntentJudge()
-        judge._available = True
-
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+        with patch('jarvis.listening.intent_judge.get_llm_backend') as _gb:
+            _gb.return_value.chat.return_value = None
             result = judge.judge(segments)
 
         assert result is None
@@ -328,12 +312,12 @@ class TestIntentJudge:
         """
         import requests as real_requests
         judge = IntentJudge()
-        judge._available = True
         judge._last_error_time = 0.0
 
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+        with patch('jarvis.listening.intent_judge.get_llm_backend') as _gb:
+            _gb.return_value.chat.return_value = None
             judge.judge(segments)
 
         assert judge._last_error_time == 0.0, "timeout must NOT lock out future calls"
@@ -346,14 +330,12 @@ class TestIntentJudge:
         signal, not lock out intent judging.
         """
         judge = IntentJudge()
-        judge._available = True
         judge._last_error_time = 0.0
 
-        mock_response = MagicMock()
-        mock_response.status_code = 503
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+        with patch('jarvis.listening.intent_judge.get_llm_backend') as _gb:
+            _gb.return_value.chat.return_value = None
             judge.judge(segments)
 
         assert judge._last_error_time == 0.0
@@ -368,63 +350,63 @@ class TestIntentJudge:
         """
         import requests as real_requests
         judge = IntentJudge()
-        judge._available = True
         judge._last_error_time = 0.0
 
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch(
-            'jarvis.listening.intent_judge.requests.post',
-            side_effect=real_requests.ConnectionError("refused"),
-        ):
+        with patch('jarvis.listening.intent_judge.get_llm_backend') as _gb:
+            import requests as _rq
+            _gb.return_value.chat.side_effect = _rq.ConnectionError("refused")
             judge.judge(segments)
 
         assert judge._last_error_time > 0.0
         assert judge.available is False
 
-    def test_last_failure_reason_recorded_on_timeout(self):
-        """Judge should remember why the last call failed so the listener can surface it."""
+    def test_last_failure_reason_recorded_when_backend_returns_none(self):
+        """Judge should remember why the last call failed so the listener can surface it.
+
+        The backend swallows transport errors and returns ``None``; the judge
+        records a generic "no response" reason rather than echoing exception
+        strings (which can carry URLs and account identifiers).
+        """
+        judge = IntentJudge()
+        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
+
+        with patch('jarvis.listening.intent_judge.get_llm_backend') as _gb:
+            _gb.return_value.chat.return_value = None
+            judge.judge(segments)
+
+        assert judge.last_failure_reason
+        assert "response" in judge.last_failure_reason.lower()
+
+    def test_last_failure_reason_records_exception_class_only(self):
+        """Connection errors propagate from the backend; the recorded reason
+        carries the exception class only — never the URL embedded in the
+        underlying urllib3 message."""
         import requests as real_requests
         judge = IntentJudge()
-        judge._available = True
-
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', side_effect=real_requests.Timeout()):
+        with patch('jarvis.listening.intent_judge.get_llm_backend') as _gb:
+            _gb.return_value.chat.side_effect = real_requests.ConnectionError(
+                "HTTPConnectionPool(host='internal-server.example.com', port=11434)"
+            )
             judge.judge(segments)
 
-        assert "timeout" in judge.last_failure_reason.lower()
-
-    def test_last_failure_reason_recorded_on_http_error(self):
-        """HTTP non-200 responses should be recorded as a failure reason."""
-        judge = IntentJudge()
-        judge._available = True
-        # Clear any stray _last_error_time from earlier test setup
-        judge._last_error_time = 0.0
-
-        mock_response = MagicMock()
-        mock_response.status_code = 503
-        segments = [TranscriptSegment("test", 1000.0, 1001.0)]
-
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
-            judge.judge(segments)
-
-        assert "503" in judge.last_failure_reason
+        reason = judge.last_failure_reason
+        assert "ConnectionError" in reason
+        assert "internal-server.example.com" not in reason
 
     def test_last_failure_reason_cleared_on_success(self):
         """Successful judgments clear the last failure reason."""
         judge = IntentJudge()
-        judge._available = True
         judge._last_failure_reason = "timeout"
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": '{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "ok"}'
-        }
+        backend = MagicMock()
+        backend.chat.return_value = {"message": {"content": '{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "ok"}'}}
         segments = [TranscriptSegment("test", 1000.0, 1001.0)]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+        with patch('jarvis.listening.intent_judge.get_llm_backend', return_value=backend):
             result = judge.judge(segments)
 
         assert result is not None
@@ -536,40 +518,56 @@ class TestCreateIntentJudge:
 
 
 class TestWarmUp:
-    """Tests for IntentJudge.warm_up()."""
+    """Tests for IntentJudge.warm_up() — delegates to the active backend."""
 
-    def test_warmup_posts_to_generate_with_keep_alive(self):
-        """Warmup issues a /api/generate request that pins the model in memory."""
-        judge = IntentJudge(IntentJudgeConfig(model="gemma4:e2b"))
-        with patch("jarvis.listening.intent_judge.requests") as mock_requests:
-            mock_requests.post.return_value = MagicMock(status_code=200)
+    def test_warmup_delegates_to_backend(self):
+        """Warmup forwards the model and a generous timeout to the backend."""
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(llm_provider="ollama", llm_base_url="http://x")
+        judge = IntentJudge(IntentJudgeConfig(model="gemma4:e2b", cfg=cfg))
+        backend = MagicMock()
+        backend.warm_up.return_value = True
+        with patch(
+            "jarvis.listening.intent_judge.get_llm_backend", return_value=backend
+        ) as gb:
             ok = judge.warm_up()
 
         assert ok is True
-        args, kwargs = mock_requests.post.call_args
-        assert args[0].endswith("/api/generate")
-        assert kwargs["json"]["model"] == "gemma4:e2b"
-        assert kwargs["json"]["keep_alive"] == "30m"
-        assert kwargs["json"]["stream"] is False
+        gb.assert_called_once_with(cfg)
+        args, kwargs = backend.warm_up.call_args
+        assert args[0] == "gemma4:e2b"
+        assert kwargs.get("timeout_sec") and kwargs["timeout_sec"] >= 60.0
 
-    def test_warmup_returns_false_on_http_error(self):
-        """Warmup reports failure when Ollama returns a non-200 status."""
-        judge = IntentJudge()
-        with patch("jarvis.listening.intent_judge.requests") as mock_requests:
-            mock_requests.post.return_value = MagicMock(status_code=500)
+    def test_warmup_returns_false_when_backend_fails(self):
+        """Backend returning False propagates as a failed warmup."""
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(llm_provider="ollama", llm_base_url="http://x")
+        judge = IntentJudge(IntentJudgeConfig(model="m", cfg=cfg))
+        backend = MagicMock()
+        backend.warm_up.return_value = False
+        with patch(
+            "jarvis.listening.intent_judge.get_llm_backend", return_value=backend
+        ):
             assert judge.warm_up() is False
 
     def test_warmup_swallows_exceptions(self):
         """Warmup never raises — transport errors return False."""
-        judge = IntentJudge()
-        with patch("jarvis.listening.intent_judge.requests") as mock_requests:
-            mock_requests.post.side_effect = RuntimeError("boom")
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(llm_provider="ollama", llm_base_url="http://x")
+        judge = IntentJudge(IntentJudgeConfig(model="m", cfg=cfg))
+        backend = MagicMock()
+        backend.warm_up.side_effect = RuntimeError("boom")
+        with patch(
+            "jarvis.listening.intent_judge.get_llm_backend", return_value=backend
+        ):
             assert judge.warm_up() is False
 
-    def test_warmup_skipped_when_unavailable(self):
-        """Warmup is a no-op when requests isn't installed."""
-        judge = IntentJudge()
-        judge._available = False
+    def test_warmup_returns_false_when_model_unset(self):
+        """Without a model name there is nothing to warm up."""
+        judge = IntentJudge(IntentJudgeConfig(model=""))
         assert judge.warm_up() is False
 
 
@@ -609,13 +607,11 @@ class TestEchoFollowUpPattern:
     def test_judge_extracts_followup_from_echo_mixed_transcript(self):
         """Judge correctly extracts follow-up from transcript containing echo."""
         judge = IntentJudge()
-        judge._available = True
-
-        # Simulate response where LLM correctly identifies echo + follow-up
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": '{"directed": true, "query": "that\'s cool tell me more", "stop": false, "confidence": "high", "reasoning": "first part matches TTS (echo), second part is user follow-up"}'
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "message": {
+                "content": '{"directed": true, "query": "that\'s cool tell me more", "stop": false, "confidence": "high", "reasoning": "first part matches TTS (echo), second part is user follow-up"}'
+            }
         }
 
         segments = [
@@ -625,7 +621,7 @@ class TestEchoFollowUpPattern:
             ),
         ]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response):
+        with patch('jarvis.listening.intent_judge.get_llm_backend', return_value=backend):
             result = judge.judge(
                 segments,
                 wake_timestamp=None,
@@ -703,20 +699,15 @@ class TestCurrentSegmentMarker:
     def test_judge_passes_current_text_to_prompt(self):
         """judge() method passes current_text parameter correctly."""
         judge = IntentJudge()
-        judge._available = True
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": '{"directed": true, "query": "no thank you", "stop": false, "confidence": "high", "reasoning": "user response"}'
-        }
+        backend = MagicMock()
+        backend.chat.return_value = {"message": {"content": '{"directed": true, "query": "no thank you", "stop": false, "confidence": "high", "reasoning": "user response"}'}}
 
         segments = [
             TranscriptSegment("old processed query", 1000.0, 1001.0),
             TranscriptSegment("no thank you", 1002.0, 1003.0),
         ]
 
-        with patch('jarvis.listening.intent_judge.requests.post', return_value=mock_response) as mock_post:
+        with patch('jarvis.listening.intent_judge.get_llm_backend', return_value=backend) as _gb:
             judge.judge(
                 segments,
                 wake_timestamp=None,
@@ -727,8 +718,8 @@ class TestCurrentSegmentMarker:
             )
 
             # Verify the prompt sent to the API contains the marker
-            call_args = mock_post.call_args
-            prompt = call_args[1]["json"]["prompt"]
+            messages = backend.chat.call_args.args[1]
+            prompt = messages[1]["content"]
             assert "CURRENT - JUDGE THIS" in prompt
 
     def test_system_prompt_includes_current_segment_guidance(self):

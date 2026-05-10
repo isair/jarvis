@@ -476,7 +476,8 @@ class TestPiperTTSConfig:
             "_config_version": 1
         }
 
-        with patch("src.jarvis.config._load_json", return_value=config_data):
+        with patch("src.jarvis.config._load_json", return_value=config_data), \
+             patch("src.jarvis.config._save_json", return_value=True):
             settings = load_settings()
             # Should fall back to piper
             assert settings.tts_engine == "piper"
@@ -491,7 +492,8 @@ class TestPiperTTSConfig:
             "_config_version": 1
         }
 
-        with patch("src.jarvis.config._load_json", return_value=config_data):
+        with patch("src.jarvis.config._load_json", return_value=config_data), \
+             patch("src.jarvis.config._save_json", return_value=True):
             settings = load_settings()
             assert settings.tts_engine == "chatterbox"
 

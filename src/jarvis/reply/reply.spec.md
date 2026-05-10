@@ -311,7 +311,7 @@ The reply engine automatically detects model size and adjusts prompts accordingl
 ```python
 from jarvis.reply.prompts import detect_model_size, get_system_prompts
 
-model_size = detect_model_size(cfg.ollama_chat_model)  # SMALL or LARGE
+model_size = detect_model_size(cfg.llm_chat_model)  # SMALL or LARGE
 prompts = get_system_prompts(model_size)
 ```
 

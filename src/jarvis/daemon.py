@@ -261,9 +261,7 @@ def _check_and_update_diary(
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
                 dialogue_memory=_global_dialogue_memory,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_chat_model=cfg.ollama_chat_model,
-                ollama_embed_model=cfg.ollama_embed_model,
+                cfg=cfg,
                 source_app=source_app,
                 voice_debug=cfg.voice_debug,
                 timeout_sec=effective_timeout,
@@ -316,7 +314,7 @@ def main() -> None:
 
     debug_log("daemon started", "jarvis")
     print("✓ Daemon started", flush=True)
-    print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
+    print(f"🧠 Using chat model: {cfg.llm_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
     # MCP preflight: discover and cache external MCP tools
@@ -527,8 +525,8 @@ def main() -> None:
                 voice_device=getattr(cfg, "voice_device", None),
                 filler_removal=getattr(cfg, "dictation_filler_removal", False),
                 custom_dictionary=getattr(cfg, "dictation_custom_dictionary", []),
-                ollama_base_url=getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"),
-                ollama_model=cfg.ollama_chat_model,
+                cfg=cfg,
+                chat_model=cfg.llm_chat_model,
                 thinking=getattr(cfg, "dictation_thinking_enabled", False),
             )
             dictation.start()

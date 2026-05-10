@@ -36,6 +36,7 @@ def _mock_cfg():
     cfg = Mock()
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.ollama_chat_model = "test-large"
+    cfg.llm_chat_model = "test-large"
     cfg.voice_debug = False
     cfg.llm_tools_timeout_sec = 8.0
     cfg.llm_embedding_timeout_sec = 10.0
@@ -491,6 +492,7 @@ def test_planner_direct_exec_stamps_tool_failed(
 
     cfg = _mock_cfg()
     cfg.ollama_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
+    cfg.llm_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
 
     # First reply: planner emits a getWeather step, direct-exec runs the
     # tool which returns success=False (no location), then the chat

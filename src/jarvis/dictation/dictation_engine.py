@@ -433,43 +433,32 @@ def _apply_custom_dictionary(text: str, dictionary: list) -> str:
     return text
 
 
-def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e2b", thinking: bool = False) -> str:
-    """Use the local LLM to remove filler words and tidy dictation output.
-
-    Falls back to the original text if the LLM is unreachable or slow.
-    """
-    try:
-        import requests
-    except ImportError:
+def _llm_clean_dictation(text: str, cfg, *, model: str = "gemma4:e2b", thinking: bool = False) -> str:
+    """Use the configured chat backend to remove filler words and tidy
+    dictation output. Falls back to the original text if the LLM is
+    unreachable, slow, or returns nothing usable."""
+    if cfg is None:
         return text
 
-    prompt = (
-        "Clean the following dictated text. Remove filler words, hesitations, "
-        "and false starts. Keep the meaning and language identical. Return ONLY "
-        "the cleaned text, nothing else.\n\n"
-        f"{text}"
-    )
+    from ..llm import get_llm_backend
 
+    system_prompt = (
+        "Clean dictated text by removing filler words, hesitations, and false "
+        "starts. Keep the meaning and language identical. Return ONLY the "
+        "cleaned text, nothing else."
+    )
     try:
-        resp = requests.post(
-            f"{ollama_base_url}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "think": thinking,
-            },
-            timeout=5,
+        cleaned = get_llm_backend(cfg).direct(
+            model, system_prompt, text,
+            timeout_sec=5.0,
+            thinking=thinking,
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            cleaned = data.get("response", "").strip()
-            if cleaned:
-                debug_log(f"LLM filler removal: {text!r} → {cleaned!r}", "dictation")
-                return cleaned
+        if cleaned and cleaned.strip():
+            cleaned = cleaned.strip()
+            debug_log(f"LLM filler removal: {text!r} → {cleaned!r}", "dictation")
+            return cleaned
     except Exception as exc:
         debug_log(f"LLM filler removal failed (using raw text): {exc}", "dictation")
-
     return text
 
 
@@ -625,8 +614,8 @@ class DictationEngine:
         voice_device: Optional[str] = None,
         filler_removal: bool = False,
         custom_dictionary: Optional[list] = None,
-        ollama_base_url: str = "http://127.0.0.1:11434",
-        ollama_model: str = "gemma4:e2b",
+        cfg: Any = None,
+        chat_model: str = "gemma4:e2b",
         thinking: bool = False,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
@@ -643,8 +632,8 @@ class DictationEngine:
         self._voice_device = voice_device
         self._filler_removal = filler_removal
         self._custom_dictionary = custom_dictionary or []
-        self._ollama_base_url = ollama_base_url
-        self._ollama_model = ollama_model
+        self._cfg = cfg
+        self._chat_model = chat_model
         self._thinking = thinking
 
         # Parse hotkey
@@ -1050,7 +1039,7 @@ class DictationEngine:
 
             # LLM-based filler word removal
             if text and self._filler_removal:
-                text = _llm_clean_dictation(text, self._ollama_base_url, self._ollama_model, thinking=self._thinking)
+                text = _llm_clean_dictation(text, self._cfg, model=self._chat_model, thinking=self._thinking)
 
             if text:
                 duration = len(audio) / self._target_sample_rate
