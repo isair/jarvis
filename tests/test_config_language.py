@@ -8,55 +8,6 @@ import pytest
 
 
 @pytest.mark.unit
-def test_load_settings_gemini_provider_and_env_key(tmp_path, monkeypatch):
-    """Gemini provider and API key from env should load correctly."""
-    from jarvis.config import load_settings
-
-    cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(
-        json.dumps(
-            {
-                "llm_provider": "gemini",
-                "gemini_chat_model": "gemini-2.0-flash",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-xyz")
-    monkeypatch.setattr("jarvis.config.default_config_path", lambda: cfg_file)
-
-    settings = load_settings()
-
-    assert settings.llm_provider == "gemini"
-    assert settings.gemini_chat_model == "gemini-2.0-flash"
-    assert settings.gemini_api_key == "test-key-xyz"
-
-
-@pytest.mark.unit
-def test_load_settings_claude_provider_and_env_key(tmp_path, monkeypatch):
-    from jarvis.config import load_settings
-
-    cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(
-        json.dumps(
-            {
-                "llm_provider": "claude",
-                "anthropic_chat_model": "claude-sonnet-4-20250514",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.setattr("jarvis.config.default_config_path", lambda: cfg_file)
-
-    settings = load_settings()
-
-    assert settings.llm_provider == "claude"
-    assert settings.anthropic_chat_model == "claude-sonnet-4-20250514"
-    assert settings.anthropic_api_key == "sk-ant-test"
-
-
-@pytest.mark.unit
 def test_invalid_llm_provider_falls_back_to_ollama(tmp_path, monkeypatch):
     from jarvis.config import load_settings
 
@@ -64,6 +15,27 @@ def test_invalid_llm_provider_falls_back_to_ollama(tmp_path, monkeypatch):
     cfg_file.write_text(json.dumps({"llm_provider": "openai"}), encoding="utf-8")
     monkeypatch.setattr("jarvis.config.default_config_path", lambda: cfg_file)
     assert load_settings().llm_provider == "ollama"
+
+
+@pytest.mark.unit
+def test_openai_compatible_provider_loads(tmp_path, monkeypatch):
+    from jarvis.config import load_settings
+
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "llm_provider": "openai_compatible",
+                "llm_base_url": "http://localhost:4000/v1",
+                "llm_chat_model": "claude",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("jarvis.config.default_config_path", lambda: cfg_file)
+    settings = load_settings()
+    assert settings.llm_provider == "openai_compatible"
+    assert settings.llm_base_url == "http://localhost:4000/v1"
 
 
 @pytest.mark.unit

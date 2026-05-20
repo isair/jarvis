@@ -12,7 +12,7 @@ Payroll and weekly schedule planning for the café Rust workspace.
 
 - Builds a 7-day draft from Monday (or `week_start` ISO date).
 - **Claude** (when `ANTHROPIC_API_KEY` / config key set): structured JSON week plan via `shared::json_extract`. API origin from `[anthropic].base_url` or `ANTHROPIC_BASE_URL` (local proxy on e.g. port 4000).
-- **Heuristic** fallback when Claude is absent or returns invalid JSON.
+- **Heuristic** fallback when Claude is absent, returns invalid JSON, or the API errors (fail-open).
 - Optional `persist: true` replaces all `shifts` rows from `week_start` through `week_start + 6 days` with the draft (transactional). Sulainis **Schedule** asks for confirmation then persists.
 - Response `data.planner` is `claude` or `heuristic`.
 

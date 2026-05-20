@@ -180,6 +180,22 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("voice_min_energy", "Min Energy",
       "Minimum audio energy to register voice",
       "voice_input", "float", min_val=0.0, max_val=1.0, step=0.005)
+    f("auto_start_listening", "Auto-Start Listening",
+      "Start the voice listener when the desktop app opens (loads Whisper). "
+      "Off is recommended for hotkey-only or shell-first use.",
+      "voice_input", "bool")
+    f("continuous_listening", "Continuous Listening",
+      "Always-on wake-word microphone loop. Off uses PTT or typed input only.",
+      "voice_input", "bool")
+    f("whisper_lazy_load", "Lazy Whisper Load",
+      "Defer loading the Whisper model until the first PTT, dictation, or utterance.",
+      "voice_input", "bool")
+    f("ptt_enabled", "Push-to-Talk (Jarvis)",
+      "Hold a hotkey to record, release to send the transcript to Jarvis (not paste).",
+      "voice_input", "bool")
+    f("ptt_hotkey", "PTT Hotkey",
+      "Key combination to hold for talking to Jarvis (separate from dictation).",
+      "voice_input", "choice", choices=_dictation_hotkey_choices())
 
     # --- Wake Word ---
     f("wake_word", "Wake Word",

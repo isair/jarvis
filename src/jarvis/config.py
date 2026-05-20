@@ -43,6 +43,11 @@ def get_supported_model_ids() -> set[str]:
     return set(SUPPORTED_CHAT_MODELS.keys())
 
 
+def _default_ptt_hotkey() -> str:
+    """Hold-to-talk hotkey for Jarvis (distinct from dictation paste)."""
+    return "ctrl+shift+j"
+
+
 def _default_dictation_hotkey() -> str:
     """Return the platform-appropriate default dictation hotkey.
 
@@ -131,6 +136,13 @@ class Settings:
     voice_device: str | None
     sample_rate: int
     voice_min_energy: float
+    auto_start_listening: bool
+    ptt_enabled: bool
+    ptt_hotkey: str
+    continuous_listening: bool
+    whisper_lazy_load: bool
+    spoken_language: str
+    reply_language: str
 
     # Voice Collection & Timing
     voice_block_seconds: float
@@ -266,6 +278,20 @@ class Settings:
     dictation_hotkey: str
     dictation_filler_removal: bool
     dictation_custom_dictionary: list
+
+    # Operator extensions (local-first)
+    operator_name: str
+    persona_style: str
+    operator_briefing_enabled: bool
+    data_live_roots: list[Any]
+    work_queue_enabled: bool
+    latvian_quality_enabled: bool
+    ollama_latvian_model: str
+    ledger_enabled: bool
+    ledger_path: str
+    background_sync_enabled: bool
+    background_sync_interval_sec: float
+    personal_pages: list[Any]
 
     # MCP Integration
     mcps: Dict[str, Any]
@@ -478,6 +504,13 @@ def get_default_config() -> Dict[str, Any]:
         "voice_device": None,
         "sample_rate": 16000,
         "voice_min_energy": 0.02,
+        "auto_start_listening": False,
+        "ptt_enabled": True,
+        "ptt_hotkey": _default_ptt_hotkey(),
+        "continuous_listening": True,
+        "whisper_lazy_load": False,
+        "spoken_language": "en",
+        "reply_language": "en",
 
         # Voice Collection & Timing
         "voice_block_seconds": 4.0,
@@ -597,6 +630,20 @@ def get_default_config() -> Dict[str, Any]:
         "dictation_thinking_enabled": False,  # Enable thinking for dictation filler removal (adds latency)
         "dictation_custom_dictionary": [],
 
+        # Operator (local work queue, data briefing, persona)
+        "operator_name": "",
+        "persona_style": "witty_butler",
+        "operator_briefing_enabled": True,
+        "data_live_roots": [],
+        "work_queue_enabled": True,
+        "latvian_quality_enabled": False,
+        "ollama_latvian_model": "",
+        "ledger_enabled": True,
+        "ledger_path": "",
+        "background_sync_enabled": True,
+        "background_sync_interval_sec": 900.0,
+        "personal_pages": [],
+
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
     }
@@ -671,6 +718,16 @@ def load_settings() -> Settings:
     tts_engine = str(merged.get("tts_engine", "piper")).lower()
     if tts_engine not in ("piper", "chatterbox"):
         tts_engine = "piper"  # Default to piper if invalid value
+    latvian_quality_enabled_early = bool(merged.get("latvian_quality_enabled", False))
+    reply_language = str(merged.get("reply_language") or "").strip().lower()
+    spoken_language = str(merged.get("spoken_language") or "").strip().lower()
+    if spoken_language not in ("en", "lv"):
+        if reply_language in ("en", "lv"):
+            spoken_language = reply_language
+        else:
+            spoken_language = "lv" if latvian_quality_enabled_early else "en"
+    if reply_language not in ("en", "lv"):
+        reply_language = spoken_language if spoken_language in ("en", "lv") else "en"
     tts_voice_val = merged.get("tts_voice")
     tts_voice = None if tts_voice_val in (None, "", "null") else str(tts_voice_val)
     tts_rate_val = merged.get("tts_rate")
@@ -717,6 +774,11 @@ def load_settings() -> Settings:
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
     whisper_vad = bool(merged.get("whisper_vad", True))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
+    auto_start_listening = bool(merged.get("auto_start_listening", False))
+    ptt_enabled = bool(merged.get("ptt_enabled", True))
+    ptt_hotkey = str(merged.get("ptt_hotkey", _default_ptt_hotkey())).strip()
+    continuous_listening = bool(merged.get("continuous_listening", True))
+    whisper_lazy_load = bool(merged.get("whisper_lazy_load", False))
     vad_enabled = bool(merged.get("vad_enabled", True))
     vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
     vad_frame_ms = int(merged.get("vad_frame_ms", 20))
@@ -802,6 +864,18 @@ def load_settings() -> Settings:
     dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
+    operator_name = str(merged.get("operator_name", "") or "").strip()
+    persona_style = str(merged.get("persona_style", "witty_butler") or "witty_butler").strip().lower()
+    operator_briefing_enabled = bool(merged.get("operator_briefing_enabled", True))
+    data_live_roots = _ensure_list(merged.get("data_live_roots"))
+    work_queue_enabled = bool(merged.get("work_queue_enabled", True))
+    latvian_quality_enabled = latvian_quality_enabled_early
+    ollama_latvian_model = str(merged.get("ollama_latvian_model", "") or "").strip()
+    ledger_enabled = bool(merged.get("ledger_enabled", True))
+    ledger_path = str(merged.get("ledger_path", "") or "").strip()
+    background_sync_enabled = bool(merged.get("background_sync_enabled", True))
+    background_sync_interval_sec = float(merged.get("background_sync_interval_sec", 900.0))
+    personal_pages = _ensure_list(merged.get("personal_pages"))
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
@@ -866,6 +940,13 @@ def load_settings() -> Settings:
         voice_device=voice_device,
         sample_rate=sample_rate,
         voice_min_energy=voice_min_energy,
+        auto_start_listening=auto_start_listening,
+        ptt_enabled=ptt_enabled,
+        ptt_hotkey=ptt_hotkey,
+        continuous_listening=continuous_listening,
+        whisper_lazy_load=whisper_lazy_load,
+        spoken_language=spoken_language,
+        reply_language=reply_language,
 
         # Voice Collection & Timing
         voice_block_seconds=voice_block_seconds,
@@ -946,6 +1027,19 @@ def load_settings() -> Settings:
         dictation_hotkey=dictation_hotkey,
         dictation_filler_removal=dictation_filler_removal,
         dictation_custom_dictionary=dictation_custom_dictionary,
+
+        operator_name=operator_name,
+        persona_style=persona_style,
+        operator_briefing_enabled=operator_briefing_enabled,
+        data_live_roots=data_live_roots,
+        work_queue_enabled=work_queue_enabled,
+        latvian_quality_enabled=latvian_quality_enabled,
+        ollama_latvian_model=ollama_latvian_model,
+        ledger_enabled=ledger_enabled,
+        ledger_path=ledger_path,
+        background_sync_enabled=background_sync_enabled,
+        background_sync_interval_sec=background_sync_interval_sec,
+        personal_pages=personal_pages,
 
         # MCP Integration
         mcps=mcps,

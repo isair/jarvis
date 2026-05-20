@@ -2,6 +2,9 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $env:JARVIS_ROOT = $Root
+$env:PYTHONPATH = "$Root\src"
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
 $env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
 
 $vcvars = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"

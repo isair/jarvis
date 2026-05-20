@@ -4721,10 +4721,10 @@ def main() -> None:
             pass
 
     print("\n" + "=" * 60)
-    print("🧠 Jarvis Memory Viewer")
+    print("Jarvis Memory Viewer")
     print("=" * 60)
-    print(f"\n  📂 Database: {_get_db_path()}")
-    print(f"  🌐 URL: http://localhost:{port}")
+    print(f"\n  Database: {_get_db_path()}")
+    print(f"  URL: http://localhost:{port}")
     print("\n  Press Ctrl+C to stop\n")
     print("=" * 60 + "\n")
 

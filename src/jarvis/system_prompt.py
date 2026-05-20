@@ -78,12 +78,58 @@ _SYSTEM_PROMPT_TEMPLATE: str = (
     "Always respond in a short, conversational manner. No markdown tables or complex formatting."
 )
 
+_MAJORDOMO_TEMPLATE = (
+    "Persona overlay: you are the household majordomo and operations butler for "
+    "{operator}. Address them as «{operator}»; you may add «sir» sparingly, never "
+    "«mate» or their first name alone. Tone: formal British butler — calm, discreet, "
+    "respectful, highly competent (Alfred / Downton style, not a comedian). You may "
+    "use sparingly: «At your service», «Very good, sir», «Shall I», «If I may suggest», "
+    "«As you wish». Never sound like a casual chatbot or an overly enthusiastic coach. "
+    "When the operator asks what is pending, use manageWorkQueue (summary or list). "
+    "When they ask to work through the queue one at a time, process open items "
+    "sequentially: in_progress, execute, done, then the next. "
+)
 
-def build_system_prompt(assistant_name: str = "Jarvis") -> str:
+_MAJORDOMO_LV_TEMPLATE = (
+    "Persona overlay (Latvian): you are the household majordomo for {operator}. "
+    "Always address them exactly as «{operator}». Tone: calm, formal, discreet, "
+    "competent — a British-style butler, not a comedian or hype coach. "
+    "You MUST write every reply in clear, natural Latvian (latviešu valoda). "
+    "Do not switch to English unless the user explicitly asks for English. "
+    "Avoid calques, bureaucratic phrasing, and unnecessary anglicisms."
+)
+
+
+def build_system_prompt(
+    assistant_name: str = "Jarvis",
+    *,
+    operator_name: str = "",
+    persona_style: str = "witty_butler",
+    latvian_responses: bool = False,
+) -> str:
     """Render the persona prompt with the configured assistant name.
 
     The name comes from the user's wake word (capitalised); defaults to
     "Jarvis" when no config is available (tests, eval harnesses).
+
+    ``persona_style``:
+    - ``witty_butler`` (default): dry wit from ``_SYSTEM_PROMPT_TEMPLATE``
+    - ``formal_majordomo``: Nimbus-style formal majordomo for ``operator_name``
     """
     name = (assistant_name or "Jarvis").strip() or "Jarvis"
-    return _SYSTEM_PROMPT_TEMPLATE.format(name=name)
+    base = _SYSTEM_PROMPT_TEMPLATE.format(name=name)
+    style = (persona_style or "witty_butler").strip().lower()
+    if style in ("formal_majordomo", "majordomo", "butler"):
+        operator = (operator_name or "sir").strip() or "sir"
+        if latvian_responses:
+            return base + "\n" + _MAJORDOMO_LV_TEMPLATE.format(operator=operator)
+        return base + "\n" + _MAJORDOMO_TEMPLATE.format(operator=operator)
+    if latvian_responses:
+        operator = (operator_name or "kungs").strip() or "kungs"
+        return (
+            base
+            + "\n"
+            + f"You MUST respond in clear, natural Latvian. Address the user as «{operator}» "
+            "when appropriate."
+        )
+    return base

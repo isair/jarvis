@@ -20,6 +20,9 @@ from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .builtin.weather import WeatherTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
+from .builtin.manage_work_queue import ManageWorkQueueTool
+from .builtin.get_mcp_integrations import GetMcpIntegrationsTool
+from .builtin.get_ledger_summary import GetLedgerSummaryTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -39,6 +42,9 @@ BUILTIN_TOOLS = {
     "getWeather": WeatherTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
+    "manageWorkQueue": ManageWorkQueueTool(),
+    "getMcpIntegrations": GetMcpIntegrationsTool(),
+    "getLedgerSummary": GetLedgerSummaryTool(),
 }
 
 # Global MCP tools cache

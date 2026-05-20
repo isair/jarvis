@@ -26,6 +26,6 @@ if ($env:ANTHROPIC_BASE_URL) {
 if ($env:ANTHROPIC_API_KEY) {
     Write-Host "  ANTHROPIC_API_KEY is set"
 } else {
-    Write-Host "  WARN  ANTHROPIC_API_KEY not set — schedule_plan uses heuristic only"
+    Write-Host "  WARN  ANTHROPIC_API_KEY not set - schedule_plan uses heuristic only"
 }
 cargo run -p orchestrator

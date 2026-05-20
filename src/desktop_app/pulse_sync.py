@@ -214,7 +214,7 @@ def build_whatsapp_comms_entry(msg: dict[str, Any]) -> dict[str, str]:
         str(msg.get("text") or msg.get("body") or msg.get("content") or "")
     )
     at = str(msg.get("timestamp") or msg.get("at") or "").strip()
-    chat_key = chat_label
+    chat_key = chat
     if not chat_key or _is_whatsapp_opaque_id(chat_key):
         chat_key = label
     return {

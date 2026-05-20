@@ -46,11 +46,12 @@ pub async fn run(
 
     let mut planner = "heuristic";
     let (days, draft_rows) = if let Some(client) = claude {
-        if let Some((d, rows)) = try_claude_plan(db, client, week_start, week_end).await? {
-            planner = "claude";
-            (d, rows)
-        } else {
-            build_heuristic_days(&employees, week_start)
+        match try_claude_plan(db, client, week_start, week_end).await {
+            Ok(Some((d, rows))) => {
+                planner = "claude";
+                (d, rows)
+            }
+            Ok(None) | Err(_) => build_heuristic_days(&employees, week_start),
         }
     } else {
         build_heuristic_days(&employees, week_start)
