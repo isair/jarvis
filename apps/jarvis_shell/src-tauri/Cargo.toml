@@ -1,0 +1,23 @@
+[package]
+name = "jarvis-shell"
+version = "0.1.0"
+description = "Jarvis unified desktop shell"
+authors = ["Jarvis"]
+edition = "2021"
+
+[lib]
+name = "jarvis_shell_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "jarvis-shell"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"

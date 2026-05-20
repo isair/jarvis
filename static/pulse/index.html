@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Jarvis Pulse</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Orbitron:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/pulse/assets/pulse.css">
+</head>
+<body>
+  <nav class="toolbar" aria-label="Pulse navigation">
+    <a href="/dashboard">Command Centre</a>
+    <a href="/">Memory</a>
+  </nav>
+
+  <main class="pulse-grid" aria-label="Jarvis Pulse dashboard">
+    <section class="panel clock-panel" aria-labelledby="clock-heading">
+      <header class="panel-header">
+        <h2 id="clock-heading">Clock</h2>
+        <span class="status-dot live" id="clock-status" title="Live"></span>
+      </header>
+      <div class="panel-body">
+        <p class="clock-value" id="clock-time">--:--:--</p>
+      </div>
+    </section>
+
+    <section class="panel date-panel" aria-labelledby="date-heading">
+      <header class="panel-header">
+        <h2 id="date-heading">Date</h2>
+      </header>
+      <div class="panel-body">
+        <p class="date-value" id="clock-date">Loading…</p>
+      </div>
+    </section>
+
+    <section class="panel weather-panel" aria-labelledby="weather-heading">
+      <header class="panel-header">
+        <h2 id="weather-heading">Weather · Baldone</h2>
+        <span class="status-dot" id="weather-status"></span>
+      </header>
+      <div class="panel-body" id="weather-body">
+        <p class="placeholder">Fetching wttr.in…</p>
+      </div>
+    </section>
+
+    <section class="panel news-panel news-panel--row1" aria-labelledby="news-heading">
+      <header class="panel-header">
+        <h2 id="news-heading">AI News</h2>
+        <span class="status-dot" id="news-status"></span>
+      </header>
+      <div class="panel-body panel-body--compact">
+        <ul class="news-list news-list--compact" id="news-list" aria-live="polite"></ul>
+        <p class="placeholder" id="news-hint"></p>
+      </div>
+    </section>
+
+    <section class="panel social-panel" aria-labelledby="social-heading">
+      <header class="panel-header">
+        <h2 id="social-heading">Business · Social feeds</h2>
+        <span class="status-dot" id="social-status"></span>
+      </header>
+      <div class="panel-body">
+        <p class="social-business-name" id="social-business-name"></p>
+        <div class="social-feed-columns" id="social-feed-columns" aria-live="polite"></div>
+        <p class="placeholder" id="social-hint"></p>
+      </div>
+    </section>
+
+    <section class="panel gmail-panel" aria-labelledby="gmail-heading">
+      <header class="panel-header">
+        <h2 id="gmail-heading">Gmail</h2>
+        <span class="status-dot" id="gmail-status"></span>
+      </header>
+      <div class="panel-body">
+        <ul class="mail-list" id="gmail-list" aria-live="polite"></ul>
+        <p class="placeholder" id="gmail-hint"></p>
+      </div>
+    </section>
+
+    <section class="panel comms-panel" aria-labelledby="comms-heading">
+      <header class="panel-header">
+        <h2 id="comms-heading">WhatsApp · Matrix</h2>
+        <span class="status-dot" id="comms-status"></span>
+      </header>
+      <div class="panel-body">
+        <ul class="comms-list" id="comms-list" aria-live="polite"></ul>
+        <p class="placeholder" id="comms-hint"></p>
+      </div>
+    </section>
+
+    <section class="panel stats-panel" aria-labelledby="stats-heading">
+      <header class="panel-header">
+        <h2 id="stats-heading">Miers · Venuefy stats</h2>
+        <span class="status-dot" id="stats-status"></span>
+      </header>
+      <div class="stats-frame-wrap">
+        <div class="stats-fallback" id="stats-fallback">
+          <p class="stats-fallback-msg" id="stats-fallback-msg">
+            Venuefy statistiku nevar iegult šeit (lapa bloķē iframe). Atver pilnā pārlūkā.
+          </p>
+          <div class="stats-actions">
+            <a class="stats-btn stats-btn-primary" id="stats-open-link" href="https://miers.venuefy.lv/stats" target="_blank" rel="noopener noreferrer">Atvērt statistiku</a>
+            <a class="stats-btn" id="stats-login-link" href="https://miers.venuefy.lv/login" target="_blank" rel="noopener noreferrer">Ielogoties Venuefy</a>
+          </div>
+          <p class="stats-cred-hint" id="stats-cred-hint"></p>
+        </div>
+        <iframe id="stats-frame" class="stats-frame-hidden" title="Miers Venuefy statistics" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"></iframe>
+        <div class="stats-overlay hidden" id="stats-overlay"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="pulse-status-bar" id="pulse-status-bar" aria-live="polite">
+    <span class="pulse-status-label">Status</span>
+    <span class="pulse-status-text" id="pulse-status-text">Initialising dashboard…</span>
+  </footer>
+
+  <script src="/pulse/assets/pulse.js" defer></script>
+</body>
+</html>

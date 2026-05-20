@@ -26,3 +26,41 @@ jobs:
         run: |
           python -m pytest -q -m unit
 
+  cafe-rust:
+    name: Cafe-agent (Rust workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cafe-agent
+      - name: cargo test
+        working-directory: cafe-agent
+        run: cargo test --workspace --all-features
+
+  jarvis-smoke:
+    name: Jarvis smoke (shell, cafe proxy, daemon lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libegl1 libxkbcommon0
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run smoke pytest modules
+        run: |
+          python -m pytest -q -m unit \
+            tests/test_daemon_lock.py \
+            tests/test_settings_api.py \
+            tests/test_shell_daemon.py \
+            tests/test_cafe_agent_proxy.py \
+            tests/test_cafe_jarvis_bridge.py \
+            tests/test_cafe_sample_csv.py

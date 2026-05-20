@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, send_from_directory
 
 from jarvis.config import load_settings
 from jarvis.debug import debug_log
@@ -25,6 +26,8 @@ app = Flask(__name__)
 # Global database connection
 _db_conn: Optional[sqlite3.Connection] = None
 _graph_store: Optional[GraphMemoryStore] = None
+_dashboard_logs: list[str] = []
+_MAX_DASHBOARD_LOGS = 200
 
 
 def _get_db_path() -> str:
@@ -51,6 +54,157 @@ def get_db() -> sqlite3.Connection:
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     """Convert sqlite3.Row to dictionary."""
     return {key: row[key] for key in row.keys()}
+
+
+def _redact_dashboard_log(text: str) -> str:
+    """Redact sensitive content before exposing logs in the local web UI."""
+    try:
+        from jarvis.utils.redact import scrub_secrets
+        return scrub_secrets(text)
+    except Exception:
+        return text
+
+
+def append_dashboard_log(text: str) -> None:
+    """Append a redacted log line for the dashboard diagnostics panel."""
+    redacted = _redact_dashboard_log(text).strip()
+    if not redacted:
+        return
+    _dashboard_logs.append(redacted)
+    del _dashboard_logs[:-_MAX_DASHBOARD_LOGS]
+
+
+def _normalise_model_name(name: str) -> str:
+    return name[:-len(":latest")] if name.endswith(":latest") else name
+
+
+def _get_installed_ollama_models() -> list[str]:
+    """Return installed Ollama model names, fail-open for dashboard display."""
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return []
+        models: list[str] = []
+        for line in result.stdout.splitlines()[1:]:
+            parts = line.split()
+            if parts:
+                models.append(parts[0])
+        return models
+    except Exception:
+        return []
+
+
+def _model_ready(model_id: str, installed_models: list[str]) -> bool:
+    installed = {_normalise_model_name(model) for model in installed_models}
+    return _normalise_model_name(model_id) in installed or model_id in installed_models
+
+
+def _language_mode(whisper_model: str) -> str:
+    return "english_only" if whisper_model.endswith(".en") else "multilingual"
+
+
+# Bump when dashboard HTML or status schema changes (used to detect stale servers).
+DASHBOARD_VERSION = 8
+
+_PULSE_ROOT = Path(__file__).resolve().parents[2] / "static" / "pulse"
+_SULAINIS_ROOT = Path(__file__).resolve().parents[2] / "static" / "sulainis"
+
+
+def _dashboard_status() -> dict[str, Any]:
+    """Build the Jarvis web dashboard status payload from existing config."""
+    from jarvis.operator.data_briefing import build_data_snapshot
+    from jarvis.operator import work_queue as wq
+    from jarvis.operator.latvian_quality import is_weak_latvian_model
+    from jarvis.operator.ledger import load_ledger_from_settings
+    from jarvis.operator.mcp_status import load_mcp_status
+    from jarvis.sulainis_bridge import is_daemon_listening
+
+    settings = load_settings()
+    installed_models = _get_installed_ollama_models()
+    mcps = getattr(settings, "mcps", {}) or {}
+    whisper_model = getattr(settings, "whisper_model", "medium")
+    work = wq.work_summary() if getattr(settings, "work_queue_enabled", True) else {}
+    data_snap = (
+        build_data_snapshot(settings)
+        if getattr(settings, "operator_briefing_enabled", True)
+        else {"root_count": 0, "sections": []}
+    )
+    lv_model = getattr(settings, "ollama_latvian_model", "") or ""
+    chat_model = settings.ollama_chat_model
+
+    return {
+        "dashboard_version": DASHBOARD_VERSION,
+        "listening": is_daemon_listening(),
+        "listener_active": is_daemon_listening(),
+        "presence": {
+            "mode": "passive_wake_word_monitoring",
+            "label": "Wake-word monitoring",
+            "copy": (
+                f'Say "{settings.wake_word.title()}" naturally, then ask me anything.'
+            ),
+        },
+        "privacy": {
+            "served_on": "127.0.0.1",
+            "public_exposure": "disabled_by_default",
+            "mic_control": "explicit_start_stop",
+            "iphone_access": "future_explicit_local_network_opt_in",
+        },
+        "models": {
+            "chat": {
+                "id": settings.ollama_chat_model,
+                "ready": _model_ready(settings.ollama_chat_model, installed_models),
+            },
+            "intent_judge": {
+                "id": settings.intent_judge_model,
+                "ready": _model_ready(settings.intent_judge_model, installed_models),
+            },
+            "embedding": {
+                "id": settings.ollama_embed_model,
+                "ready": _model_ready(settings.ollama_embed_model, installed_models),
+            },
+        },
+        "language": {
+            "whisper_model": whisper_model,
+            "mode": _language_mode(whisper_model),
+            "quality_note": (
+                "Multilingual speech recognition"
+                if _language_mode(whisper_model) == "multilingual"
+                else "English-optimised speech recognition"
+            ),
+        },
+        "conversation": {
+            "wake_word": settings.wake_word,
+            "hot_window_enabled": settings.hot_window_enabled,
+            "hot_window_seconds": settings.hot_window_seconds,
+            "transcript_buffer_duration_sec": settings.transcript_buffer_duration_sec,
+        },
+        "tools": {
+            "mcp_count": len(mcps),
+            "web_search_enabled": settings.web_search_enabled,
+        },
+        "operator": {
+            "name": getattr(settings, "operator_name", "") or "",
+            "persona_style": getattr(settings, "persona_style", "witty_butler"),
+            "briefing_enabled": getattr(settings, "operator_briefing_enabled", True),
+            "work_queue_enabled": getattr(settings, "work_queue_enabled", True),
+        },
+        "work_queue": work,
+        "data_live": data_snap,
+        "latvian": {
+            "quality_enabled": getattr(settings, "latvian_quality_enabled", False),
+            "recommended_model": lv_model,
+            "chat_model_weak_for_lv": is_weak_latvian_model(chat_model),
+        },
+        "ledger": load_ledger_from_settings(settings),
+        "mcp": load_mcp_status() or {"servers": {}, "server_count": len(mcps)},
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,6 +396,475 @@ def get_stats() -> Response:
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/settings/metadata")
+def settings_metadata() -> Response:
+    try:
+        from desktop_app.settings_api import export_settings_bundle
+
+        return jsonify(export_settings_bundle())
+    except Exception as e:
+        debug_log(f"settings metadata failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/settings/defaults")
+def settings_defaults() -> Response:
+    try:
+        from desktop_app.settings_api import build_default_values
+
+        return jsonify({"ok": True, "values": build_default_values()})
+    except Exception as e:
+        debug_log(f"settings defaults failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/settings/config", methods=["GET", "POST"])
+def settings_config() -> Response:
+    from desktop_app.settings_api import build_merged_values, save_settings_from_values
+
+    try:
+        if request.method == "GET":
+            return jsonify(
+                {
+                    "ok": True,
+                    "values": build_merged_values(),
+                }
+            )
+        body = request.get_json(silent=True) or {}
+        values = body.get("values")
+        if not isinstance(values, dict):
+            return jsonify({"ok": False, "error": "values object required"}), 400
+        ok, message = save_settings_from_values(values)
+        if not ok:
+            return jsonify({"ok": False, "error": message}), 500
+        return jsonify({"ok": True, "message": message})
+    except Exception as e:
+        debug_log(f"settings config failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/dashboard/voice-config")
+def dashboard_voice_config() -> Response:
+    """Voice/PTT settings for the Tauri shell Home panel."""
+    try:
+        from jarvis.dictation.dictation_engine import format_hotkey_display
+
+        settings = load_settings()
+        return jsonify(
+            {
+                "ok": True,
+                "auto_start_listening": bool(
+                    getattr(settings, "auto_start_listening", False)
+                ),
+                "ptt_enabled": bool(getattr(settings, "ptt_enabled", True)),
+                "ptt_hotkey": str(getattr(settings, "ptt_hotkey", "") or ""),
+                "ptt_hotkey_display": format_hotkey_display(
+                    str(getattr(settings, "ptt_hotkey", "") or "ctrl+shift+j")
+                ),
+                "continuous_listening": bool(
+                    getattr(settings, "continuous_listening", True)
+                ),
+                "whisper_lazy_load": bool(
+                    getattr(settings, "whisper_lazy_load", False)
+                ),
+                "whisper_model": str(getattr(settings, "whisper_model", "medium")),
+                "wake_word": str(getattr(settings, "wake_word", "Jarvis")),
+            }
+        )
+    except Exception as e:
+        debug_log(f"voice-config failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/dashboard/status")
+def dashboard_status() -> Response:
+    """Return local dashboard status for the Jarvis web interface."""
+    try:
+        return jsonify(_dashboard_status())
+    except Exception as e:
+        debug_log(f"dashboard status failed: {e}", "desktop")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/dashboard/logs")
+def dashboard_logs() -> Response:
+    """Return redacted recent logs captured by the desktop app."""
+    return jsonify({"logs": list(_dashboard_logs)})
+
+
+@app.route("/api/dashboard/query", methods=["POST"])
+def dashboard_query() -> Response:
+    """Accept a typed user message and queue it for the running daemon."""
+    try:
+        body = request.get_json(silent=True) or {}
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return jsonify({"ok": False, "error": "empty message"}), 400
+        if len(text) > 8000:
+            return jsonify({"ok": False, "error": "message too long"}), 400
+
+        from jarvis.text_input import deliver_text_query
+
+        delivery = deliver_text_query(text)
+        if not delivery:
+            return jsonify({"ok": False, "error": "empty message"}), 400
+
+        append_dashboard_log(f"✏️ Typed query queued ({len(text)} chars, {delivery})")
+        hint = (
+            "Queued in text inbox — click Start listening to process."
+            if delivery == "inbox"
+            else "Queued for Jarvis."
+        )
+        return jsonify({"ok": True, "queued": True, "delivery": delivery, "message": hint})
+    except Exception as e:
+        debug_log(f"dashboard query failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pulse fullscreen dashboard (static/pulse/)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _pulse_maybe_sync() -> None:
+    try:
+        from desktop_app.pulse_sync import ensure_pulse_cache_files, sync_all_pulse_caches
+
+        ensure_pulse_cache_files()
+        sync_all_pulse_caches()
+    except Exception as e:
+        debug_log(f"pulse background sync skipped: {e}", "desktop")
+
+
+@app.route("/pulse")
+@app.route("/pulse/")
+def pulse_index() -> Response:
+    """Serve the Pulse holographic dashboard."""
+    _pulse_maybe_sync()
+    return send_from_directory(_PULSE_ROOT, "index.html")
+
+
+@app.route("/pulse/assets/<path:filename>")
+def pulse_assets(filename: str) -> Response:
+    return send_from_directory(_PULSE_ROOT, filename)
+
+
+@app.route("/pulse/cafe-bridge.html")
+def pulse_cafe_bridge() -> Response:
+    return send_from_directory(_PULSE_ROOT, "cafe-bridge.html")
+
+
+@app.route("/pulse/venuefy-bridge.html")
+def pulse_venuefy_bridge() -> Response:
+    return send_from_directory(_PULSE_ROOT, "venuefy-bridge.html")
+
+
+@app.route("/api/pulse/weather")
+def pulse_weather() -> Response:
+    from desktop_app.pulse_api import fetch_wttr_weather, pulse_weather_url
+
+    try:
+        return jsonify(fetch_wttr_weather(pulse_weather_url()))
+    except Exception as e:
+        debug_log(f"pulse weather failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/pulse/gmail")
+def pulse_gmail() -> Response:
+    from desktop_app.pulse_api import load_gmail_preview
+
+    _pulse_maybe_sync()
+    return jsonify(load_gmail_preview())
+
+
+@app.route("/api/pulse/comms")
+def pulse_comms() -> Response:
+    from desktop_app.pulse_api import load_comms_log
+
+    _pulse_maybe_sync()
+    return jsonify(load_comms_log())
+
+
+@app.route("/api/pulse/news")
+def pulse_news() -> Response:
+    from desktop_app.pulse_api import load_strategist_feed
+
+    _pulse_maybe_sync()
+    return jsonify(load_strategist_feed())
+
+
+@app.route("/api/pulse/cafe-config")
+def pulse_cafe_config() -> Response:
+    from desktop_app.pulse_api import cafe_config_payload
+
+    return jsonify(cafe_config_payload())
+
+
+@app.route("/api/pulse/cafe-credentials")
+def pulse_cafe_credentials() -> Response:
+    from desktop_app.pulse_api import cafe_credentials_payload
+
+    payload = cafe_credentials_payload(request=request)
+    if not payload.get("ok"):
+        code = 403 if payload.get("error") == "forbidden" else 400
+        return jsonify(payload), code
+    return jsonify(payload)
+
+
+@app.route("/api/pulse/clock")
+def pulse_clock() -> Response:
+    from desktop_app.pulse_api import server_clock_payload
+
+    return jsonify(server_clock_payload())
+
+
+@app.route("/api/pulse/socials")
+def pulse_socials() -> Response:
+    from desktop_app.pulse_api import load_business_socials_payload
+
+    return jsonify(load_business_socials_payload())
+
+
+@app.route("/api/pulse/sync")
+def pulse_sync_now() -> Response:
+    from desktop_app.pulse_sync import sync_all_pulse_caches
+
+    ran = sync_all_pulse_caches(force=True)
+    return jsonify({"ok": True, "synced": ran})
+
+
+@app.route("/api/pulse/social-feed")
+def pulse_social_feed() -> Response:
+    from desktop_app.pulse_api import load_social_feed_payload
+
+    _pulse_maybe_sync()
+    try:
+        return jsonify(load_social_feed_payload())
+    except Exception as e:
+        debug_log(f"pulse social feed failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/pulse/cafe-stats-config")
+def pulse_cafe_stats_config() -> Response:
+    from desktop_app.pulse_api import cafe_stats_config_payload
+
+    return jsonify(cafe_stats_config_payload())
+
+
+@app.route("/api/pulse/status")
+def pulse_status() -> Response:
+    from desktop_app.pulse_api import build_pulse_status_summary
+
+    try:
+        return jsonify(build_pulse_status_summary())
+    except Exception as e:
+        debug_log(f"pulse status failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sulainis command centre (static/sulainis/)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _sulainis_maybe_sync() -> None:
+    try:
+        from desktop_app.sulainis_sync import ensure_sulainis_cache_files, sync_all_sulainis_caches
+
+        ensure_sulainis_cache_files()
+        sync_all_sulainis_caches()
+    except Exception as e:
+        debug_log(f"sulainis background sync skipped: {e}", "desktop")
+
+
+@app.route("/sulainis")
+@app.route("/sulainis/")
+def sulainis_index() -> Response:
+    """Serve the Sulainis personal command centre."""
+    _sulainis_maybe_sync()
+    return send_from_directory(_SULAINIS_ROOT, "index.html")
+
+
+@app.route("/sulainis/assets/<path:filename>")
+def sulainis_assets(filename: str) -> Response:
+    return send_from_directory(_SULAINIS_ROOT, filename)
+
+
+@app.route("/api/sulainis/overview")
+def sulainis_overview() -> Response:
+    from desktop_app.sulainis_api import build_sulainis_overview
+
+    _sulainis_maybe_sync()
+    try:
+        return jsonify(build_sulainis_overview())
+    except Exception as e:
+        debug_log(f"sulainis overview failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sulainis/sync")
+def sulainis_sync_now() -> Response:
+    from desktop_app.sulainis_sync import sync_all_sulainis_caches
+
+    ran = sync_all_sulainis_caches(force=True)
+    return jsonify({"ok": True, "synced": ran})
+
+
+@app.route("/api/sulainis/status")
+def sulainis_status() -> Response:
+    from desktop_app.sulainis_api import build_sulainis_status
+
+    try:
+        return jsonify(build_sulainis_status())
+    except Exception as e:
+        debug_log(f"sulainis status failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sulainis/action", methods=["POST"])
+def sulainis_action() -> Response:
+    from desktop_app.sulainis_api import queue_sulainis_action
+    from desktop_app.sulainis_sync import create_calendar_event_via_mcp
+    from jarvis.config import load_settings
+
+    try:
+        body = request.get_json(silent=True) or {}
+        action = str(body.get("action") or "").strip()
+        if not action:
+            return jsonify({"ok": False, "error": "missing action"}), 400
+        payload = body.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            return jsonify({"ok": False, "error": "payload must be object"}), 400
+        if action == "add_calendar_event":
+            pl = payload or {}
+            direct = create_calendar_event_via_mcp(
+                load_settings(),
+                title=str(pl.get("title") or ""),
+                start=str(pl.get("start") or ""),
+                end=str(pl.get("end") or ""),
+                description=str(pl.get("description") or ""),
+                location=str(pl.get("location") or ""),
+            )
+            if direct.get("ok"):
+                append_dashboard_log(
+                    f"📅 Sulainis calendar event created ({direct.get('tool')})"
+                )
+                return jsonify(
+                    {
+                        "ok": True,
+                        "queued": False,
+                        "delivery": "mcp",
+                        "calendar": direct,
+                    }
+                )
+            delivery = queue_sulainis_action(action, pl)
+            if not delivery:
+                return jsonify(
+                    {"ok": False, "error": direct.get("error") or "could not queue"},
+                    400,
+                )
+            append_dashboard_log(
+                f"📋 Sulainis calendar queued via Jarvis ({delivery}): "
+                f"{direct.get('error', '')[:80]}"
+            )
+            return jsonify(
+                {
+                    "ok": True,
+                    "queued": True,
+                    "delivery": delivery,
+                    "calendar_fallback": direct.get("error"),
+                }
+            )
+        delivery = queue_sulainis_action(action, payload or {})
+        if not delivery:
+            return jsonify({"ok": False, "error": "could not queue"}), 400
+        append_dashboard_log(f"📋 Sulainis action queued: {action} ({delivery})")
+        return jsonify({"ok": True, "queued": True, "delivery": delivery})
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        debug_log(f"sulainis action failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sulainis/work-queue", methods=["GET", "POST"])
+def sulainis_work_queue() -> Response:
+    from desktop_app.sulainis_api import load_work_queue_panel, mutate_work_queue
+    from jarvis.config import load_settings
+
+    try:
+        if request.method == "GET":
+            return jsonify({"ok": True, **load_work_queue_panel()})
+        body = request.get_json(silent=True) or {}
+        op = str(body.get("operation") or body.get("op") or "").strip()
+        pl = body.get("payload") if isinstance(body.get("payload"), dict) else dict(body)
+        for key in ("operation", "op", "payload"):
+            pl.pop(key, None)
+        result = mutate_work_queue(op, pl)
+        status = 200 if result.get("ok") else 400
+        return jsonify(result), status
+    except Exception as e:
+        debug_log(f"sulainis work-queue failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/cafe-agent/health")
+def cafe_agent_health() -> Response:
+    """Reachability of the Rust cafe-orchestrator."""
+    from desktop_app.cafe_agent_proxy import fetch_health
+
+    return jsonify(fetch_health())
+
+
+@app.route("/api/cafe-agent/jarvis-bridge", methods=["POST"])
+def cafe_agent_jarvis_bridge() -> Response:
+    """Forward email/WhatsApp cafe tasks to Sulainis MCP queue (no Rust comms)."""
+    from desktop_app.cafe_jarvis_bridge import handle_cafe_jarvis_bridge
+
+    try:
+        body = request.get_json(silent=True) or {}
+        channel = str(body.get("channel") or "").strip()
+        action = body.get("action")
+        if action is not None:
+            action = str(action).strip()
+        return jsonify(handle_cafe_jarvis_bridge(channel, action))
+    except Exception as e:
+        debug_log(f"cafe jarvis-bridge failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/cafe-agent/task", methods=["POST"])
+def cafe_agent_task() -> Response:
+    """Forward a cafe-agent task to the Rust orchestrator."""
+    from desktop_app.cafe_agent_proxy import post_task
+
+    try:
+        body = request.get_json(silent=True) or {}
+        task = body.get("task")
+        if not isinstance(task, dict):
+            return jsonify({"ok": False, "error": "task object required"}), 400
+        result = post_task(task)
+        if result.get("error") and "task_id" not in result:
+            return jsonify({"ok": False, **result}), 502
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        debug_log(f"cafe-agent proxy failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sulainis/draft")
+def sulainis_draft() -> Response:
+    try:
+        from jarvis.comms_state import load_assistant_draft
+
+        return jsonify({"ok": True, "draft": load_assistant_draft()})
+    except Exception as e:
+        debug_log(f"sulainis draft failed: {e}", "desktop")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/memory/<int:memory_id>")
@@ -848,6 +1471,286 @@ def diary_optimise_topics() -> Response:
 # ─────────────────────────────────────────────────────────────────────────────
 # Frontend
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/dashboard")
+def dashboard() -> str:
+    """Serve a mobile-friendly Jarvis command centre."""
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Jarvis Command Centre</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #05070d;
+      --panel: rgba(15, 23, 42, 0.86);
+      --border: rgba(103, 232, 249, 0.22);
+      --amber: #fbbf24;
+      --cyan: #67e8f9;
+      --green: #86efac;
+      --red: #fca5a5;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Outfit", Inter, ui-sans-serif, system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 20% 10%, rgba(103, 232, 249, 0.16), transparent 28rem),
+        radial-gradient(circle at 80% 0%, rgba(251, 191, 36, 0.12), transparent 24rem),
+        linear-gradient(135deg, #05070d 0%, #0a0f1c 48%, #030712 100%);
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(103, 232, 249, 0.04) 0px,
+        rgba(103, 232, 249, 0.04) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+      opacity: 0.28;
+      z-index: 0;
+    }
+    .shell { position: relative; z-index: 1; width: min(1440px, 100%); margin: 0 auto; padding: clamp(1rem, 2vw, 2rem); }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr); gap: 1rem; margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+    .span-2 { grid-column: span 2; }
+    .panel {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: linear-gradient(145deg, var(--panel), rgba(8, 13, 24, 0.88));
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      padding: clamp(1rem, 2vw, 1.35rem);
+      backdrop-filter: blur(18px);
+    }
+    .panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(103, 232, 249, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(103, 232, 249, 0.04) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(to bottom, black, transparent);
+    }
+    .panel::after {
+      content: "";
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      width: 28px;
+      height: 28px;
+      border-top: 2px solid rgba(103, 232, 249, 0.55);
+      border-left: 2px solid rgba(103, 232, 249, 0.55);
+      pointer-events: none;
+    }
+    .eyebrow { color: var(--cyan); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; }
+    h1 { margin: 0.35rem 0 0.5rem; font-size: clamp(2.3rem, 7vw, 5.4rem); line-height: 0.88; letter-spacing: -0.07em; }
+    h2 { margin: 0 0 0.85rem; color: #fef3c7; font-size: 0.9rem; letter-spacing: 0.12em; text-transform: uppercase; }
+    p { color: var(--muted); line-height: 1.6; }
+    .presence-orb {
+      width: min(56vw, 320px);
+      aspect-ratio: 1;
+      margin: 0 auto;
+      border-radius: 50%;
+      border: 1px solid rgba(103, 232, 249, 0.3);
+      background:
+        radial-gradient(circle, rgba(251, 191, 36, 0.94) 0 8%, transparent 9%),
+        repeating-radial-gradient(circle, rgba(103, 232, 249, 0.18) 0 2px, transparent 3px 24px),
+        radial-gradient(circle, rgba(103, 232, 249, 0.18), transparent 64%);
+      box-shadow: 0 0 42px rgba(103, 232, 249, 0.22), inset 0 0 60px rgba(251, 191, 36, 0.10);
+      animation: breathe 3.6s ease-in-out infinite;
+    }
+    @keyframes breathe { 0%, 100% { transform: scale(0.985); } 50% { transform: scale(1.025); } }
+    .metric { border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 18px; padding: 1rem; background: rgba(2, 6, 23, 0.42); }
+    .metric .label { color: var(--muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+    .metric .value { margin-top: 0.35rem; color: var(--cyan); font-size: clamp(1.25rem, 4vw, 2.1rem); font-weight: 800; overflow-wrap: anywhere; }
+    .pill { display: inline-flex; border: 1px solid rgba(103, 232, 249, 0.28); border-radius: 999px; color: var(--cyan); background: rgba(103, 232, 249, 0.1); padding: 0.35rem 0.7rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+    .ready { color: var(--green); border-color: rgba(134, 239, 172, 0.35); background: rgba(34, 197, 94, 0.1); }
+    .missing { color: var(--red); border-color: rgba(252, 165, 165, 0.35); background: rgba(239, 68, 68, 0.1); }
+    .log { max-height: 260px; overflow: auto; font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace; color: #cbd5e1; font-size: 0.8rem; white-space: pre-wrap; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
+    .actions a { color: #020617; background: linear-gradient(135deg, var(--amber), #f59e0b); border-radius: 999px; padding: 0.72rem 1rem; text-decoration: none; font-weight: 800; min-height: 44px; }
+    .compose { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem; }
+    .compose textarea {
+      width: 100%;
+      min-height: 5.5rem;
+      resize: vertical;
+      border-radius: 16px;
+      border: 1px solid rgba(103, 232, 249, 0.35);
+      background: rgba(2, 6, 23, 0.65);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 1rem;
+      padding: 0.85rem 1rem;
+      line-height: 1.45;
+    }
+    .compose textarea:focus { outline: 2px solid rgba(251, 191, 36, 0.45); }
+    .compose button {
+      align-self: flex-start;
+      border: none;
+      border-radius: 999px;
+      padding: 0.72rem 1.25rem;
+      font-weight: 800;
+      font-size: 0.95rem;
+      color: #020617;
+      background: linear-gradient(135deg, var(--amber), #f59e0b);
+      min-height: 44px;
+      cursor: pointer;
+    }
+    .compose button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .compose-status { min-height: 1.25rem; font-size: 0.9rem; color: var(--muted); }
+    @media (max-width: 860px) {
+      .hero, .grid { grid-template-columns: 1fr; }
+      .span-2 { grid-column: auto; }
+      .panel { border-radius: 20px; }
+      .shell { padding: 0.8rem; }
+      .actions a { width: 100%; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="panel">
+        <div class="eyebrow">Local Jarvis Interface · Command Centre v5</div>
+        <h1>Jarvis Command Centre</h1>
+        <p id="presence-copy">Loading local status...</p>
+        <div class="actions">
+          <a href="/">Open Memory Viewer</a>
+          <a href="/pulse">Pulse Dashboard</a>
+          <a href="/api/dashboard/status">Status JSON</a>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Presence</h2>
+        <div class="presence-orb" aria-label="Jarvis presence visual"></div>
+        <p><span id="presence-pill" class="pill">Scanning</span></p>
+        <p>This interface is local-only by default. iPhone and local-network access should be enabled only as an explicit future opt-in.</p>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="panel span-2"><h2>Model Readiness</h2><div id="models" class="grid"></div></div>
+      <div class="panel"><h2>Language Quality</h2><div class="metric"><div class="label">Whisper</div><div id="language-model" class="value">-</div></div><p id="language-note"></p></div>
+      <div class="panel span-2"><h2>Type to Jarvis</h2><p>Send a written message without the wake word. Jarvis must be listening (daemon running).</p><div class="compose"><textarea id="typed-message" placeholder="Write your message…" rows="3"></textarea><button type="button" id="send-typed">Send</button><p id="compose-status" class="compose-status"></p></div></div>
+      <div class="panel"><h2>Conversation</h2><div class="metric"><div class="label">Wake Word</div><div id="wake-word" class="value">-</div></div><p id="conversation-note"></p></div>
+      <div class="panel span-2"><h2>Memory & Tools</h2><div class="grid"><div class="metric"><div class="label">MCP Servers</div><div id="mcp-count" class="value">-</div></div><div class="metric"><div class="label">Web Search</div><div id="web-search" class="value">-</div></div></div></div>
+      <div class="panel"><h2>Work Queue</h2><div id="work-queue" class="log">Loading...</div></div>
+      <div class="panel"><h2>Data Roots</h2><div id="data-roots" class="log">Loading...</div></div>
+      <div class="panel"><h2>Operator & LV</h2><p id="operator-note"></p><p id="latvian-note"></p></div>
+      <div class="panel"><h2>Ledger</h2><p id="ledger-note"></p></div>
+      <div class="panel"><h2>MCP Integrations</h2><p id="mcp-note"></p></div>
+      <div class="panel span-2"><h2>Redacted Logs</h2><div id="logs" class="log">No recent dashboard logs.</div></div>
+    </section>
+  </main>
+  <script>
+    const modelNames = { chat: 'Chat', intent_judge: 'Intent Judge', embedding: 'Embedding' };
+    function modelCard(key, model) {
+      const status = model.ready ? 'ready' : 'missing';
+      return `<div class="metric"><div class="label">${modelNames[key]}</div><div class="value">${model.id}</div><p><span class="pill ${status}">${status}</span></p></div>`;
+    }
+    async function refresh() {
+      const status = await (await fetch('/api/dashboard/status')).json();
+      document.getElementById('presence-copy').textContent = status.presence.copy;
+      document.getElementById('presence-pill').textContent = status.presence.label;
+      document.getElementById('models').innerHTML = Object.entries(status.models).map(([k, v]) => modelCard(k, v)).join('');
+      document.getElementById('language-model').textContent = status.language.whisper_model;
+      document.getElementById('language-note').textContent = `${status.language.quality_note}. Mode: ${status.language.mode.replace('_', ' ')}.`;
+      document.getElementById('wake-word').textContent = status.conversation.wake_word;
+      document.getElementById('conversation-note').textContent = status.conversation.hot_window_enabled
+        ? `Follow-up window: ${status.conversation.hot_window_seconds}s. Transcript context: ${status.conversation.transcript_buffer_duration_sec}s.`
+        : 'Follow-up window disabled. Say the wake word for each turn.';
+      document.getElementById('mcp-count').textContent = status.tools.mcp_count;
+      document.getElementById('web-search').textContent = status.tools.web_search_enabled ? 'Enabled' : 'Disabled';
+      const wq = status.work_queue || {};
+      const wqLines = (wq.preview || []).map(i => `- [${i.status}] ${i.title} (${i.id})`);
+      document.getElementById('work-queue').textContent = wq.total_active
+        ? `Active: ${wq.total_active} (open ${wq.open}, in progress ${wq.in_progress})\\n` + (wqLines.join('\\n') || '')
+        : 'No active work items.';
+      const roots = (status.data_live && status.data_live.sections) || [];
+      document.getElementById('data-roots').textContent = roots.length
+        ? roots.map(s => `${s.label}: ${s.path}\\n  ${((s.entries || []).slice(0, 5).map(e => e.relative || e.name)).join(', ') || '(empty)'}`).join('\\n')
+        : 'No data_live_roots configured.';
+      const op = status.operator || {};
+      document.getElementById('operator-note').textContent = op.persona_style === 'formal_majordomo'
+        ? `Majordomo mode for ${op.name || 'operator'}.`
+        : `Persona: ${op.persona_style || 'witty_butler'}.`;
+      const lv = status.latvian || {};
+      document.getElementById('latvian-note').textContent = lv.quality_enabled
+        ? (lv.chat_model_weak_for_lv
+          ? `LV quality on; chat model may be weak for Latvian. Recommended: ${lv.recommended_model || 'install a LV model'}.`
+          : `LV quality on; recommended model: ${lv.recommended_model || 'n/a'}.`)
+        : 'Latvian quality gate disabled.';
+      const led = status.ledger || {};
+      document.getElementById('ledger-note').textContent = led.ok
+        ? `${led.detail} Purchases €${led.purchase_total_eur || 0}, sales €${led.sales_revenue_eur || 0} (${led.source}).`
+        : (led.detail || 'No ledger data — set ledger_path or data_live_roots.');
+      const mcp = status.mcp || {};
+      const srv = mcp.servers || {};
+      const lines = Object.entries(srv).map(([n, i]) => `${n}: ${i.state} (${i.tool_count || 0} tools) — ${i.detail || ''}`);
+      document.getElementById('mcp-note').textContent = lines.length
+        ? lines.join('\\n')
+        : 'No MCP status yet — restart Jarvis daemon or say refresh MCP tools.';
+      const logs = await (await fetch('/api/dashboard/logs')).json();
+      document.getElementById('logs').textContent = logs.logs.length ? logs.logs.join('\\n') : 'No recent dashboard logs.';
+    }
+    async function sendTypedMessage() {
+      const field = document.getElementById('typed-message');
+      const status = document.getElementById('compose-status');
+      const btn = document.getElementById('send-typed');
+      const text = (field.value || '').trim();
+      if (!text) {
+        status.textContent = 'Enter a message first.';
+        return;
+      }
+      btn.disabled = true;
+      status.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/dashboard/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          field.value = '';
+          status.textContent = 'Queued — Jarvis will reply (check logs or listen for TTS).';
+        } else {
+          status.textContent = data.error || 'Send failed.';
+        }
+      } catch (e) {
+        status.textContent = 'Send failed — is the dashboard server running?';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    document.getElementById('send-typed').addEventListener('click', sendTypedMessage);
+    document.getElementById('typed-message').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        sendTypedMessage();
+      }
+    });
+    refresh();
+    setInterval(refresh, 2500);
+  </script>
+</body>
+</html>"""
+
 
 @app.route("/")
 def index() -> str:
@@ -2562,6 +3465,14 @@ def index() -> str:
         tabs.forEach(tab => {
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
+
+        function applyRouteFromUrl() {
+            const tab = new URLSearchParams(window.location.search).get('tab');
+            if (tab === 'graph' || tab === 'meals' || tab === 'memories') {
+                switchTab(tab);
+            }
+        }
+        applyRouteFromUrl();
 
         // Diary maintenance button lives in the diary tab's sidebar, which
         // renders on page load (diary is the default tab). Wire its handler

@@ -5,6 +5,7 @@ Main orchestrator that coordinates listening, reply generation, and output.
 """
 
 from __future__ import annotations
+import json
 import sys
 import os
 import time
@@ -306,12 +307,30 @@ def main() -> None:
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener
 
+    from .daemon_lock import acquire_daemon_lock, read_lock_pid, release_daemon_lock
+
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
+
+    if not acquire_daemon_lock():
+        holder = read_lock_pid()
+        msg = (
+            f"Another Jarvis daemon is already running (PID {holder})."
+            if holder
+            else "Another Jarvis daemon is already running."
+        )
+        print(f"❌ {msg}", flush=True)
+        sys.exit(2)
 
     _install_signal_handlers()
 
     cfg = load_settings()
+    try:
+        from .ollama_lifecycle import configure_from_settings
+
+        configure_from_settings(cfg)
+    except Exception as exc:
+        debug_log(f"ollama lifecycle config skipped: {exc}", "jarvis")
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
     debug_log("daemon started", "jarvis")
@@ -524,6 +543,7 @@ def main() -> None:
                 on_dictation_processing_start=_on_dictation_processing_start,
                 on_dictation_end=_on_dictation_end,
                 transcribe_lock=voice_thread.transcribe_lock,
+                ensure_whisper_loaded=voice_thread.ensure_whisper_loaded,
                 voice_device=getattr(cfg, "voice_device", None),
                 filler_removal=getattr(cfg, "dictation_filler_removal", False),
                 custom_dictionary=getattr(cfg, "dictation_custom_dictionary", []),
@@ -543,20 +563,93 @@ def main() -> None:
     else:
         print("🎙️ Dictation disabled", flush=True)
 
+    # Push-to-talk → Jarvis (hold hotkey, release to queue query; no paste)
+    if bool(getattr(cfg, "ptt_enabled", True)):
+        try:
+            from .dictation.dictation_engine import DictationEngine as _DE  # noqa: F811
+            from .dictation.dictation_engine import format_hotkey_display
+
+            def _on_ptt_start():
+                voice_thread._dictation_active = True
+                try:
+                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+
+                    get_jarvis_state().set_state(JarvisState.LISTENING)
+                except Exception:
+                    pass
+                debug_log("PTT recording started — wake loop paused", "ptt")
+
+            def _on_ptt_processing():
+                try:
+                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+
+                    get_jarvis_state().set_state(JarvisState.THINKING)
+                except Exception:
+                    pass
+                debug_log("PTT processing — transcribing for Jarvis", "ptt")
+
+            def _on_ptt_end():
+                voice_thread._dictation_active = False
+                try:
+                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+
+                    get_jarvis_state().set_state(JarvisState.IDLE)
+                except Exception:
+                    pass
+                debug_log("PTT ended — wake loop resumed", "ptt")
+
+            ptt = _DE(
+                whisper_model_ref=lambda: voice_thread.model,
+                whisper_backend_ref=lambda: voice_thread._whisper_backend,
+                mlx_repo_ref=lambda: voice_thread._mlx_model_repo,
+                hotkey=cfg.ptt_hotkey,
+                sample_rate=int(getattr(cfg, "sample_rate", 16000)),
+                on_dictation_start=_on_ptt_start,
+                on_dictation_processing_start=_on_ptt_processing,
+                on_dictation_end=_on_ptt_end,
+                transcribe_lock=voice_thread.transcribe_lock,
+                ensure_whisper_loaded=voice_thread.ensure_whisper_loaded,
+                voice_device=getattr(cfg, "voice_device", None),
+                filler_removal=False,
+                delivery_mode="jarvis",
+            )
+            ptt.start()
+            if ptt._started:
+                ptt_display = format_hotkey_display(cfg.ptt_hotkey)
+                print(
+                    f"🎤 PTT enabled (hold {ptt_display} to talk to Jarvis)",
+                    flush=True,
+                )
+        except Exception as e:
+            debug_log(f"PTT engine init failed: {e}", "ptt")
+            print(f"  ⚠ PTT not available: {e}", flush=True)
+    else:
+        print("🎤 PTT disabled", flush=True)
+
     # Periodic diary update checking
     last_diary_check = time.time()
     diary_check_interval = 60.0
+
+    # Operator background sync (weather, files, ledger cache)
+    if getattr(cfg, "background_sync_enabled", True):
+        try:
+            from .operator.background_sync import maybe_run_background_sync
+
+            maybe_run_background_sync(cfg, force=True)
+        except Exception as exc:
+            debug_log(f"initial background sync failed (non-fatal): {exc}", "operator")
 
     # Start stdin monitor thread for Windows shutdown signal
     # On Windows, CTRL_BREAK_EVENT doesn't work reliably with CREATE_NO_WINDOW
     # So we also check for stdin being closed as a shutdown signal
     def stdin_monitor():
         global _global_stop_requested
+        from .text_input import submit_text_query
+
         try:
-            # When parent closes our stdin, readline returns empty
             while True:
                 line = sys.stdin.readline()
-                if not line:  # EOF - stdin closed
+                if not line:
                     debug_log("stdin closed, requesting stop", "jarvis")
                     _global_stop_requested = True
                     break
@@ -565,23 +658,53 @@ def main() -> None:
                     debug_log("SHUTDOWN command received, requesting stop", "jarvis")
                     _global_stop_requested = True
                     break
+                if line.startswith("__QUERY__:"):
+                    payload = line[len("__QUERY__:"):]
+                    try:
+                        data = json.loads(payload)
+                        text = str(data.get("text") or "")
+                        raw_images = data.get("images") or []
+                        image_paths = (
+                            [str(p) for p in raw_images if p]
+                            if isinstance(raw_images, list)
+                            else []
+                        )
+                    except json.JSONDecodeError:
+                        text = payload
+                        image_paths = []
+                    submit_text_query(text, image_paths=image_paths)
+                    continue
         except Exception:
-            pass  # stdin might not be available
+            pass
 
-    if sys.platform == "win32" and not getattr(sys, 'frozen', False):
+    if not getattr(sys, "frozen", False) and hasattr(sys.stdin, "isatty") and not sys.stdin.isatty():
         stdin_thread = threading.Thread(target=stdin_monitor, daemon=True)
         stdin_thread.start()
 
     try:
         # Main daemon loop
+        from .text_input import process_inbox_file
+
         while not _global_stop_requested:
             time.sleep(1.0)
             now = time.time()
+            try:
+                process_inbox_file()
+            except Exception as exc:
+                debug_log(f"text inbox drain failed: {exc}", "text_input")
 
             # Periodically check if diary should be updated
             if now - last_diary_check >= diary_check_interval:
                 _check_and_update_diary(db, cfg, verbose=False)
                 last_diary_check = now
+
+            if getattr(cfg, "background_sync_enabled", True):
+                try:
+                    from .operator.background_sync import maybe_run_background_sync
+
+                    maybe_run_background_sync(cfg)
+                except Exception as exc:
+                    debug_log(f"background sync failed (non-fatal): {exc}", "operator")
 
         # Keep voice thread alive (unless stop requested)
         if voice_thread is not None:
@@ -592,6 +715,8 @@ def main() -> None:
     except KeyboardInterrupt:
         debug_log("daemon received KeyboardInterrupt", "jarvis")
     finally:
+        from .daemon_lock import release_daemon_lock
+
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
 
@@ -655,6 +780,7 @@ def main() -> None:
                 pass
             _warm_profile_graph_listener = None
 
+        release_daemon_lock()
         debug_log("daemon stopped", "jarvis")
         print("👋 Daemon stopped", flush=True)
 

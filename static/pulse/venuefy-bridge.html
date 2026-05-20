@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+  <meta charset="UTF-8">
+  <title>Venuefy — statistika</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0a0b0f; color: #e2e8f0; padding: 2rem; text-align: center; }
+    a { color: #67e8f9; }
+    .btn { display: inline-block; margin: 0.5rem; padding: 0.75rem 1.25rem; border-radius: 8px;
+      background: rgba(103,232,249,0.15); border: 1px solid #67e8f9; color: #67e8f9; text-decoration: none; font-weight: 600; }
+    .btn:hover { border-color: #fbbf24; color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <p id="status">Novirzu uz Venuefy…</p>
+  <p><a class="btn" id="stats-link" href="https://miers.venuefy.lv/stats">Atvērt statistiku</a></p>
+  <script>
+    (async () => {
+      const status = document.getElementById("status");
+      const link = document.getElementById("stats-link");
+      try {
+        const cfg = await (await fetch("/api/pulse/cafe-stats-config")).json();
+        if (cfg.url) link.href = cfg.url;
+        status.textContent = "Atver login, tad stats…";
+        const login = cfg.login_url || "https://miers.venuefy.lv/login";
+        window.location.replace(login);
+      } catch (e) {
+        status.textContent = "Kļūda: " + e;
+      }
+    })();
+  </script>
+</body>
+</html>

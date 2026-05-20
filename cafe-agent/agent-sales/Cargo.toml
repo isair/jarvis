@@ -1,0 +1,12 @@
+[package]
+name = "agent-sales"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+shared.workspace = true
+sqlx.workspace = true
+tracing.workspace = true

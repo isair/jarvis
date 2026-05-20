@@ -1,0 +1,15 @@
+{
+  "name": "jarvis-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jarvis unified desktop shell (Tauri 2)",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "python scripts/gen_icons.py"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

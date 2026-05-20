@@ -1,0 +1,26 @@
+[package]
+name = "orchestrator"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "cafe-orchestrator"
+path = "src/main.rs"
+
+[dependencies]
+agent-sales = { path = "../agent-sales" }
+agent-schedule = { path = "../agent-schedule" }
+agent-weather = { path = "../agent-weather" }
+anyhow.workspace = true
+axum.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+serde_json.workspace = true
+shared.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }
+tempfile = "3"

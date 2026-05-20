@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <nav class="activity-bar" aria-label="Activity bar">
+        <button type="button" class="activity-btn active" data-activity="explorer" title="Explorer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h6l2 2h10v12H3V5z"/></svg>
+        </button>
+        <button type="button" class="activity-btn" data-activity="assistant" title="Assistant">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/></svg>
+        </button>
+        <button type="button" class="activity-btn" data-activity="operator" title="Operator">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v3H4zm0 5h10v3H4zm0 5h16v3H4z"/></svg>
+        </button>
+        <div class="activity-spacer"></div>
+        <button type="button" class="activity-btn" id="btn-settings-activity" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1-1.4 1.4-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V19h-2v-.6a1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.8.3l-.1.1-1.4-1.4.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H5v-2h.6a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1 1.4-1.4.1.1a1.7 1.7 0 001.8.3 1.7 1.7 0 001-1.5V5h2v.6a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1 1.4 1.4-.1.1a1.7 1.7 0 00-.3 1.8 1.7 1.7 0 001.5 1H19v2h-.6a1.7 1.7 0 00-1.5 1z"/></svg>
+        </button>
+      </nav>
+
+      <aside class="side-bar">
+        <header class="side-bar-head">
+          <span class="side-bar-title" id="side-bar-title">Explorer</span>
+          <span class="status-dot" id="status-dot" title="Backend status"></span>
+        </header>
+        <div id="nav" class="side-nav"></div>
+        <footer class="side-bar-foot">
+          <button type="button" id="btn-toggle-listener" class="listener-btn">
+            Start listening
+          </button>
+          <button type="button" id="btn-cafe-orchestrator" class="text-btn">
+            Start café agent
+          </button>
+          <button type="button" id="btn-refresh-backend" class="text-btn">
+            Restart dashboard
+          </button>
+        </footer>
+      </aside>
+
+      <div class="workspace">
+        <header class="title-bar">
+          <div class="tabs-strip">
+            <button type="button" class="editor-tab active" id="active-tab-label">Home</button>
+          </div>
+          <div class="title-actions">
+            <button type="button" id="btn-open-browser" class="icon-text-btn" hidden>
+              Open in browser
+            </button>
+          </div>
+        </header>
+        <section class="editor-area">
+          <iframe
+            id="content-frame"
+            title="Jarvis view"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          ></iframe>
+          <div id="settings-panel" class="settings-panel" hidden>
+            <header class="settings-head">
+              <div>
+                <h2>Settings</h2>
+                <p class="settings-lede">
+                  Metadata-driven panel (same rules as PyQt). Only non-default values are written to
+                  <code id="settings-config-path">config.json</code>.
+                </p>
+              </div>
+              <div class="settings-head-actions">
+                <button type="button" class="btn btn-sm" id="btn-settings-back">Back</button>
+                <button type="button" class="btn btn-sm" id="btn-settings-reset">Reset</button>
+                <button type="button" class="btn btn-sm" id="btn-settings-legacy">MCP (PyQt)</button>
+                <button type="button" class="btn btn-sm btn-primary" id="btn-settings-save">Save</button>
+              </div>
+            </header>
+            <div class="settings-layout">
+              <nav class="settings-categories" id="settings-categories" aria-label="Categories"></nav>
+              <div class="settings-form-scroll">
+                <form id="settings-form" class="settings-form" autocomplete="off"></form>
+              </div>
+            </div>
+            <p class="settings-status" id="settings-status"></p>
+          </div>
+          <div id="home-panel" class="home-panel">
+            <h2>Jarvis</h2>
+            <p class="lede">
+              Local-first assistant shell. Voice and models run in Python; this window embeds your
+              dashboard at <code>127.0.0.1:5050</code>. Use <strong>Start listening</strong>, then
+              hold your PTT hotkey (default <code>Ctrl+Shift+J</code>) to talk to Jarvis.
+            </p>
+            <p class="home-alert hidden" id="home-alert" role="alert"></p>
+            <div class="home-query" id="home-query">
+              <label class="home-query-label" for="home-query-input">Quick message (no voice)</label>
+              <div class="home-query-row">
+                <input
+                  type="text"
+                  id="home-query-input"
+                  class="home-query-input"
+                  placeholder="Type a question for Jarvis…"
+                  autocomplete="off"
+                />
+                <button type="button" class="btn btn-primary" id="btn-home-query">Send</button>
+              </div>
+              <p class="home-query-hint" id="home-query-status"></p>
+            </div>
+            <div class="metric-grid" id="home-metrics"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

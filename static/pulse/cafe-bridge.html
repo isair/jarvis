@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Jarvis Café login bridge</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0a0b0f; color: #94a3b8; padding: 1rem; }
+    code { color: #67e8f9; }
+  </style>
+</head>
+<body>
+  <p>Local-only bridge. Fetches credentials from <code>/api/pulse/cafe-credentials</code> and redirects to your café URL.</p>
+  <p id="status">Loading…</p>
+  <script>
+    (async () => {
+      const status = document.getElementById('status');
+      try {
+        const creds = await (await fetch('/api/pulse/cafe-credentials')).json();
+        if (!creds.ok) {
+          status.textContent = creds.error || 'Credentials not configured.';
+          return;
+        }
+        sessionStorage.setItem('jarvis-cafe-user', creds.username);
+        sessionStorage.setItem('jarvis-cafe-pass', creds.password);
+        status.textContent = 'Redirecting to café…';
+        window.location.href = creds.url;
+      } catch (e) {
+        status.textContent = 'Bridge failed: ' + e;
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -14,6 +14,10 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
 | `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
 | `src/jarvis/dictation/dictation.spec.md` | Hold-to-dictate engine, hotkey, clipboard paste | Independent from assistant pipeline; shared Whisper model; pause flag on listener |
+| `src/jarvis/ptt/ptt.spec.md` | Push-to-talk to Jarvis (`delivery_mode=jarvis`) | Hold hotkey → Whisper → `submit_text_query`; pairs with `continuous_listening` |
+| `cafe-agent/orchestrator/orchestrator.spec.md` | Rust cafe multi-agent HTTP API | `POST /task`, weather/sales agents; Flask `/api/cafe-agent/*` proxy |
+| `cafe-agent/agent-schedule/agent-schedule.spec.md` | Schedule + payroll (LV tax rates, demo seed) | `schedule_plan`, `payroll_calc`; Sulainis Café ops buttons |
+| `cafe-agent/orchestrator/jarvis_bridge.spec.md` | Email/WhatsApp → Flask Sulainis MCP | No Rust IMAP; `POST /api/cafe-agent/jarvis-bridge` |
 | `src/jarvis/listening/listening.spec.md` | Voice listener, wake word detection, audio pipeline | — |
 | `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
 | `src/jarvis/reply/evaluator.spec.md` | **Deprecated** — evaluator no longer runs in the reply engine; preserved for reference | Replaced by the planner; see planner.spec.md |
@@ -27,7 +31,8 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
 | `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract, hygiene rules (deflection, attribution, topic separation), post-process scrub, and bulk-sweep clean button | Two-layer defence: prompt + deterministic scrub; corrupted summaries poison every downstream consumer |
 | `src/jarvis/memory/recall_gate.spec.md` | Deterministic skip-enrichment heuristic when the hot window covers a follow-up | Fail-open; language-agnostic via `\w{3,}` + `re.UNICODE`; planner intent always wins |
-| `src/jarvis/llm/llm.spec.md` | Pluggable LLM backend abstraction: `LLMBackend` ABC, `OllamaBackend`, `OpenAICompatibleBackend`, factory dispatch on `llm_provider`, `get_embedding_backend` override, v2 config migration, function-style helpers | Provider-agnostic interface so Jarvis can run on Ollama, OpenAI-compatible (LM Studio / oMLX / llama.cpp / vLLM / LocalAI), or Anthropic-compatible servers; phased rollout; PR 1 abstraction landed Ollama-only, PR 2 adds the OpenAI shape and config plumbing, PR 2.5 migrates call sites |
+| `src/jarvis/operator/operator.spec.md` | Work queue, `data_live_roots` briefing, majordomo persona, Latvian quality hints | Local JSON queue; briefing is read-only fenced data; `manageWorkQueue` tool |
+| `src/jarvis/operator/mcp_integrations.spec.md` | MCP discovery status, WhatsApp/Gmail setup | `getMcpIntegrations`; `mcp_status.json`; no fake “connected” state |
 
 The LLM contexts graph at `docs/llm_contexts.md` maps every LLM call in the app (model, gating, inputs, outputs, limits, flow). Keep it up-to-date at all times: any change that adds, removes, or alters an LLM context (model resolution, timeout, cap, prompt source, gating flag, data-flow edge) must update `docs/llm_contexts.md` in the same PR.
 
@@ -54,6 +59,51 @@ Use the `/triage` skill for triaging open issues and discussions. It owns the fu
 ## Releases
 
 "Release" means fast-forwarding `main` to the current tip of `develop` and pushing it. First sync local `develop` with `origin/develop` so you ship the real head. No merge commit, no force push — just `git checkout main && git merge --ff-only develop && git push origin main`. This is what triggers the release workflow and the auto-close of issues referenced by `Closes #NNN` in the develop commits.
+
+## Claude Code orchestrator (this repo)
+
+Use **Claude Code** with Ollama as the lead agent for this tree. Global how-to: `%USERPROFILE%\CLAUDE-ORCHESTRATOR.md`. Launcher accepts a project path: `"%USERPROFILE%\launch-claude-local.bat" "<path-to-this-repo>"` (optional second arg: model, e.g. `qwen2.5-coder:14b`).
+
+### Stack (Jarvis)
+
+- Python 3.11+ (`src/jarvis`, `src/desktop_app`), PyQt tray, Flask `memory_viewer` :5050
+- Tauri shell `apps/jarvis_shell/` (embeds dashboard, native settings, daemon control)
+- Rust `cafe-agent/` sidecar :8787 (weather, sales, schedule, payroll; not imported by Python)
+- Specs: `*.spec.md` next to code; café plan: `docs/cursor_brief_rust_cafe_agents.md`
+
+### Commands (orchestrator should run)
+
+| Task | Command |
+|------|---------|
+| Python unit tests | `pytest -q -m unit` (from repo root, venv active) |
+| Café Rust tests | `cd cafe-agent && cargo test --workspace` |
+| Smoke (stack up) | `scripts/smoke_jarvis_stack.ps1` |
+| Smoke (offline) | `scripts/smoke_jarvis_stack.ps1 -AllowOffline` |
+| Shell dev | `scripts/run_jarvis_shell.ps1` |
+| Café orchestrator | `scripts/run_cafe_orchestrator.ps1` |
+| Evals (manual) | `pytest evals/ -v` or `scripts/run_evals.sh` |
+| PR prep | `scripts/prepare_release_pr.ps1` (requires git clone) |
+
+Activate env before Python work: `.venv\Scripts\activate` (Windows) or micromamba per **Development Environment** below.
+
+### Orchestration rules (Jarvis)
+
+- Plan before large changes; one step at a time; run tests after each step.
+- Search and update related `*.spec.md` and `docs/llm_contexts.md` when behaviour or LLM contexts change.
+- Do not commit secrets (`config.toml`, API keys) or force-push `main`.
+- PRs target `develop`; run `/review-pr` after opening a PR.
+- Do not rewrite `jarvis` reply engine in Rust or remove PyQt tray until shell parity is explicit.
+- Monorepo extras: `claude --add-dir cafe-agent --add-dir apps/jarvis_shell` when cwd is repo root.
+
+### Default orchestrator prompt (paste in Claude Code)
+
+```text
+You are the orchestrator for the Jarvis repo. Before coding:
+1. Scan README, docs/cursor_brief_rust_cafe_agents.md, and relevant *.spec.md
+2. Propose a short ordered plan
+3. Execute one step at a time; run pytest -m unit and cafe-agent cargo test after changes
+4. Summarise done vs remaining
+```
 
 ## Development Environment
 

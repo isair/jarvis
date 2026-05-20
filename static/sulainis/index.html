@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sulainis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/sulainis/assets/sulainis.css">
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+  </div>
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <h1 id="product-title">Sulainis</h1>
+      <span class="topbar-greet" id="hero-greeting">Good day.</span>
+    </div>
+    <div class="topbar-center">
+      <span class="clock" id="hero-clock">--:--</span>
+      <span class="meta" id="hero-date">—</span>
+      <span class="meta" id="hero-weather">—</span>
+      <span class="meta parents-weather hidden" id="hero-parents-weather" title="Parents weather"></span>
+    </div>
+    <div class="topbar-kpis" id="topbar-kpis" aria-label="Venuefy KPIs"></div>
+    <div class="topbar-right">
+      <button type="button" class="btn btn-sm" id="btn-venuefy" title="Venuefy stats in this window">Venuefy</button>
+      <button type="button" class="btn btn-sm btn-primary" id="btn-briefing">Briefing</button>
+      <button type="button" class="btn btn-sm" id="btn-sync">Sync</button>
+    </div>
+  </header>
+
+  <section class="ticker-bar" aria-label="Status feed" aria-live="polite">
+    <div class="ticker-viewport">
+      <div class="ticker-track" id="ticker-track"></div>
+    </div>
+  </section>
+
+  <main class="workspace">
+    <aside class="inbox" aria-label="Inbox">
+      <div class="inbox-search-wrap">
+        <input type="search" class="inbox-search" id="inbox-search" placeholder="Search inbox…" autocomplete="off">
+        <span class="unread-pill hidden" id="unread-pill"></span>
+      </div>
+      <div class="inbox-tabs">
+        <button type="button" class="tab active" data-filter="all">All</button>
+        <button type="button" class="tab" data-filter="gmail">Email</button>
+        <button type="button" class="tab" data-filter="whatsapp">WhatsApp</button>
+      </div>
+      <ul class="inbox-list" id="inbox-list"></ul>
+      <p class="hint" id="inbox-hint"></p>
+    </aside>
+
+    <section class="detail" aria-label="Message detail">
+      <div class="detail-empty" id="detail-empty">
+        <p>Select a message to read and reply.</p>
+      </div>
+      <article class="detail-body hidden" id="detail-body">
+        <header class="detail-head">
+          <span class="detail-channel" id="detail-channel"></span>
+          <h2 id="detail-title"></h2>
+          <p class="detail-meta" id="detail-meta"></p>
+        </header>
+        <div class="detail-text" id="detail-text"></div>
+        <section class="draft-suggestions hidden" id="draft-suggestions" aria-label="Suggested replies">
+          <h3 class="draft-suggestions-title" id="draft-suggestions-title">Suggested replies</h3>
+          <div class="suggestion-chips" id="suggestion-chips"></div>
+        </section>
+        <div class="detail-actions">
+          <button type="button" class="btn btn-primary" id="btn-reply">Draft reply</button>
+          <button type="button" class="btn" id="btn-ask">Ask Sulainis</button>
+        </div>
+        <section class="draft-panel hidden" id="draft-panel" aria-label="Assistant draft">
+          <div class="draft-head">
+            <h3 id="draft-panel-title">Assistant draft</h3>
+            <span class="draft-age" id="draft-age"></span>
+          </div>
+          <textarea class="draft-text" id="draft-text" rows="6" placeholder="Draft will appear here after Sulainis replies…"></textarea>
+          <div class="draft-actions">
+            <button type="button" class="btn btn-primary" id="btn-send">Send</button>
+            <button type="button" class="btn" id="btn-edit-draft">Keep editing</button>
+            <button type="button" class="btn btn-ghost" id="btn-cancel-draft">Cancel</button>
+          </div>
+        </section>
+      </article>
+    </section>
+
+    <aside class="sidebar" aria-label="Day at a glance">
+      <section class="sidebar-block calendar-block">
+        <h3>Calendar <span class="pill" id="calendar-status">—</span></h3>
+        <div class="calendar-week" id="calendar-week" role="tablist" aria-label="Calendar days"></div>
+        <ul class="calendar-events" id="calendar-events"></ul>
+        <p class="hint" id="calendar-hint"></p>
+        <form class="calendar-form" id="calendar-form">
+          <input type="text" id="cal-title" placeholder="Task or event title" required maxlength="200">
+          <input type="date" id="cal-date" required>
+          <div class="cal-row">
+            <input type="time" id="cal-start" value="09:00" required>
+            <input type="time" id="cal-end" value="10:00" required>
+          </div>
+          <input type="text" id="cal-location" placeholder="Location (optional)" maxlength="120">
+          <textarea id="cal-notes" rows="2" placeholder="Notes (optional)" maxlength="500"></textarea>
+          <button type="submit" class="btn btn-primary btn-sm">Add via Jarvis</button>
+          <button type="button" class="btn btn-sm" id="btn-cal-plan">Plan day with Jarvis</button>
+        </form>
+      </section>
+
+      <section class="sidebar-block cafe-agent-block">
+        <h3>Café ops <span class="pill" id="cafe-agent-pill">—</span></h3>
+        <p class="hint cafe-agent-hint" id="cafe-agent-hint">Rust agents on localhost:8787</p>
+        <div class="cafe-agent-actions">
+          <button type="button" class="btn btn-sm" id="btn-cafe-weather">Weather</button>
+          <button type="button" class="btn btn-sm" id="btn-cafe-sales">Sales</button>
+          <button type="button" class="btn btn-sm" id="btn-cafe-schedule">Schedule</button>
+          <button type="button" class="btn btn-sm btn-primary" id="btn-cafe-payroll">Payroll</button>
+          <button type="button" class="btn btn-sm" id="btn-cafe-email" title="Queue Gmail briefing via Jarvis MCP">Email</button>
+          <button type="button" class="btn btn-sm" id="btn-cafe-whatsapp" title="Queue WhatsApp briefing via Jarvis MCP">WhatsApp</button>
+        </div>
+        <div class="cafe-agent-result hidden" id="cafe-agent-result" aria-live="polite"></div>
+      </section>
+
+      <section class="sidebar-block beach-ops-block">
+        <h3>Beach café <span class="pill" id="beach-ops-pill">—</span></h3>
+        <p class="beach-strategic" id="beach-strategic"></p>
+        <ul class="beach-plan-list" id="beach-plan-list"></ul>
+        <p class="hint" id="beach-ops-hint"></p>
+      </section>
+
+      <section class="sidebar-block task-queue-block">
+        <h3>Task queue <span class="pill" id="task-queue-pill">0</span></h3>
+        <ul class="task-queue-list" id="task-queue-list"></ul>
+        <form class="task-queue-form" id="task-queue-form">
+          <input type="text" id="tq-title" placeholder="New task…" maxlength="120" required>
+          <button type="submit" class="btn btn-sm btn-primary">Add</button>
+          <button type="button" class="btn btn-sm" id="btn-run-queue">Run via Jarvis</button>
+        </form>
+        <p class="hint task-queue-hint" id="task-queue-hint"></p>
+      </section>
+    </aside>
+  </main>
+
+  <div class="integrations-bar" aria-label="Integrations">
+    <span class="integrations-label">Integrations</span>
+    <div class="integrations-row" id="integrations-row"></div>
+    <span class="pill integrations-pill" id="integrations-pill">—</span>
+  </div>
+
+  <footer class="status-bar">
+    <span id="status-text">Loading…</span>
+    <span class="cache-ages" id="cache-ages"></span>
+  </footer>
+
+  <div class="overlay hidden" id="venuefy-overlay" role="dialog" aria-modal="true" aria-label="Venuefy statistics">
+    <div class="overlay-panel">
+      <header class="overlay-head">
+        <h2>Miers · Venuefy</h2>
+        <button type="button" class="btn btn-sm" id="venuefy-close">Close</button>
+      </header>
+      <p class="hint" id="venuefy-note"></p>
+      <iframe id="venuefy-frame" title="Venuefy statistics" class="overlay-frame"></iframe>
+      <p class="hint overlay-fallback hidden" id="venuefy-fallback"></p>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="/sulainis/assets/sulainis.js" defer></script>
+</body>
+</html>

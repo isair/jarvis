@@ -1,0 +1,24 @@
+[server]
+host = "127.0.0.1"
+port = 8787
+
+[anthropic]
+api_key = ""  # or set ANTHROPIC_API_KEY in the environment
+base_url = ""  # or ANTHROPIC_BASE_URL (e.g. http://localhost:4000 for a local proxy)
+model = "claude-sonnet-4-20250514"
+
+[weather]
+latitude = 56.9496
+longitude = 24.1052
+city = "Riga"
+
+[database]
+path = "./cafe_agent.db"
+
+[email]
+# Phase 2 — IMAP/SMTP
+imap_host = "imap.gmail.com"
+imap_port = 993
+smtp_host = "smtp.gmail.com"
+username = ""
+password = ""
