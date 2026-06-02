@@ -44,8 +44,10 @@ flowchart TD
     B -->|OK| C[Show Splash Screen]
     C --> D{Setup Completed Before?}
     D -->|No| E[Show Setup Wizard]
-    D -->|Yes| F{Ollama Running?}
-    E --> F
+    D -->|Yes| PR{Ollama in use?}
+    E --> PR
+    PR -->|No, OpenAI-compatible| M[Initialize Tray]
+    PR -->|Yes| F{Ollama Running?}
     F -->|No| G[Auto-Start Ollama]
     G --> H[Wait for Ollama]
     H --> I{Started?}
@@ -64,9 +66,10 @@ flowchart TD
 ### Key Startup Features
 
 1. **Splash Screen**: Shows immediately to provide visual feedback while loading
-2. **Ollama Auto-Start**: If Ollama isn't running, automatically starts it (up to 15s wait)
-3. **Single Instance Lock**: Prevents multiple copies from running simultaneously. If another instance is detected, shows a dialog offering to close the existing instance and start fresh.
-4. **Crash Detection**: Detects previous crashes and offers to submit bug reports
+2. **Provider-aware Ollama gating**: The Ollama server-start and model-verification steps run only when a local provider actually uses Ollama (`_ollama_runtime_flags` in `app.py`). A pure OpenAI-compatible setup (chat and embeddings both remote) skips them entirely. When only embeddings run on Ollama, the server is still started but the chat-model checks are skipped (the chat model isn't an Ollama model). `should_show_setup_wizard()` likewise returns False for an OpenAI-compatible user.
+3. **Ollama Auto-Start**: When Ollama is in use and not running, automatically starts it (up to 15s wait)
+4. **Single Instance Lock**: Prevents multiple copies from running simultaneously. If another instance is detected, shows a dialog offering to close the existing instance and start fresh.
+5. **Crash Detection**: Detects previous crashes and offers to submit bug reports
 
 ## Main Components
 
