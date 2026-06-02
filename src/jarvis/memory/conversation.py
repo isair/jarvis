@@ -1343,8 +1343,10 @@ def update_daily_conversation_summary(
             source_app=source_app,
         )
 
-        # Generate and store embedding for semantic search
-        if db.is_vss_enabled:
+        # Generate and store embedding for semantic search. Gate on a
+        # configured embedding model too (matching the search paths) so an
+        # empty model never burns a doomed embed round-trip.
+        if db.is_vss_enabled and cfg.embedding_model:
             # Combine summary and topics for embedding
             text_for_embedding = f"{summary} {topics}"
             vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0)
