@@ -47,15 +47,18 @@ def _build(provider: str, base_url: str, api_key: Optional[str]) -> LLMBackend:
 def get_llm_backend(settings: Any) -> LLMBackend:
     """Return the configured chat backend.
 
-    Reads ``llm_provider`` and the new ``llm_base_url`` / ``llm_api_key``
-    fields. Falls back to the legacy ``ollama_base_url`` when the new
-    base-URL field is unset, so existing configs keep working without a
-    re-save.
+    ``llm_base_url`` is the OpenAI-compatible server's URL; the Ollama path
+    uses ``ollama_base_url``. Keeping each provider on its own URL field
+    means toggling ``llm_provider`` back to Ollama can never leave the
+    backend pointed at a stale OpenAI-compatible URL.
     """
     provider = _resolve_provider(getattr(settings, "llm_provider", None))
-    base_url = _str_attr(settings, "llm_base_url") or _str_attr(
-        settings, "ollama_base_url", _DEFAULT_OLLAMA_URL
-    )
+    if provider == _OPENAI_COMPATIBLE:
+        base_url = _str_attr(settings, "llm_base_url") or _str_attr(
+            settings, "ollama_base_url", _DEFAULT_OLLAMA_URL
+        )
+    else:
+        base_url = _str_attr(settings, "ollama_base_url", _DEFAULT_OLLAMA_URL)
     api_key = _str_attr(settings, "llm_api_key") or None
     return _build(provider, base_url, api_key)
 

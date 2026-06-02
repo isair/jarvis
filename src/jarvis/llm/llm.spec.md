@@ -64,7 +64,7 @@ Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `llm_provider` | `"ollama"` | `"ollama"` or `"openai_compatible"`. Unknown values fall back to `"ollama"`. |
-| `llm_base_url` | falls back to `ollama_base_url` | Active provider base URL. For Ollama, `http://127.0.0.1:11434`. For OpenAI-compatible, `http://localhost:1234/v1` (LM Studio default) or whatever your runtime exposes. |
+| `llm_base_url` | (OpenAI-compatible only) | The OpenAI-compatible server's URL, e.g. `http://localhost:1234/v1` (LM Studio default). Read only when `llm_provider == openai_compatible`; the Ollama path always uses `ollama_base_url`. |
 | `llm_api_key` | `""` | Optional bearer token. Sent only when non-empty. |
 | `llm_chat_model` | falls back to `ollama_chat_model` | Active chat model name. Every internal call site reads this directly — `Settings.__post_init__` and `_load_settings` populate it from the legacy alias when left empty. |
 | `embedding_provider` | inherits `llm_provider` | `"ollama"` / `"openai_compatible"`. Override for runtimes without embeddings. |
@@ -76,7 +76,7 @@ The legacy `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys r
 
 ### Factory dispatch
 
-- `get_llm_backend(cfg)` reads `llm_provider`, then resolves `llm_base_url` (falling back to `ollama_base_url`) and `llm_api_key`.
+- `get_llm_backend(cfg)` reads `llm_provider`. For `openai_compatible` it resolves `llm_base_url` (falling back to `ollama_base_url`); for `ollama` it uses `ollama_base_url` directly so a stale `llm_base_url` from a previous OpenAI-compatible config cannot leak into the Ollama backend. `llm_api_key` is read regardless (sent only when non-empty).
 - `get_embedding_backend(cfg)` reads `embedding_provider` (falls back to `llm_provider` when unset), resolves `embedding_base_url` (falls back per-provider: `llm_base_url` for OpenAI-compatible, `ollama_base_url` for Ollama), and `embedding_api_key` (falls back to `llm_api_key`).
 - Construction is fail-soft: an unset URL becomes the default Ollama URL, so `get_*_backend` never raises. Errors surface at request time, not construction time.
 

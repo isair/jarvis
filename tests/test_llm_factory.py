@@ -70,6 +70,26 @@ class TestGetLLMBackend:
 
         assert backend.base_url == "http://1.2.3.4:11434"
 
+    def test_ollama_provider_ignores_stale_llm_base_url(self):
+        """``llm_base_url`` is the OpenAI-compatible server's URL. When the
+        provider is Ollama, the backend must use ``ollama_base_url`` and
+        ignore any ``llm_base_url`` left over from a previous
+        OpenAI-compatible configuration — otherwise toggling the provider
+        back to Ollama would silently point OllamaBackend at the old
+        LM Studio URL."""
+        from jarvis.llm import OllamaBackend, get_llm_backend
+
+        cfg = _Cfg(
+            llm_provider="ollama",
+            llm_base_url="http://lmstudio:1234/v1",  # stale from a prior switch
+            ollama_base_url="http://127.0.0.1:11434",
+        )
+
+        backend = get_llm_backend(cfg)
+
+        assert isinstance(backend, OllamaBackend)
+        assert backend.base_url == "http://127.0.0.1:11434"
+
 
 class TestGetEmbeddingBackend:
     def test_defaults_to_llm_provider(self):
