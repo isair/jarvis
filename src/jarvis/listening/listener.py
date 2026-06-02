@@ -1484,12 +1484,14 @@ class VoiceListener(threading.Thread):
         return resolved_device
 
     def _start_llm_warmup(self) -> list[threading.Thread]:
-        """Pre-load chat and intent judge models into Ollama memory.
+        """Pre-load chat and intent judge models via the active backend.
 
-        Starts up to two daemon threads concurrently so warmup overlaps
-        with Whisper initialisation. When both models point at the same
-        Ollama model, a single warmup covers both (Ollama loads the
-        weights once; ``keep_alive`` keeps them resident for every caller).
+        Warmup goes through ``warm_up_chat_model`` → ``LLMBackend.warm_up``,
+        so it pages models into Ollama's resident memory on the Ollama path
+        and is a no-op for an OpenAI-compatible server (which keeps models
+        warm at load time). Starts up to two daemon threads concurrently so
+        warmup overlaps with Whisper initialisation. When both models point
+        at the same model, a single warmup covers both.
 
         Results land in ``self._llm_warmup_results`` keyed by role. The
         caller joins the returned threads with a shared deadline before
