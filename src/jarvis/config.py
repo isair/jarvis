@@ -649,23 +649,35 @@ def load_settings() -> Settings:
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
 
-    # Provider-aware fields. Empty string in any of llm_base_url /
-    # llm_chat_model / embedding_model is treated as "use the
-    # corresponding ollama_* field" so existing configs keep working
-    # without a re-save (the v2 migration also fills them in on disk).
+    # Provider-aware fields. The two field sets are per-provider: the
+    # ``ollama_*`` fields are authoritative when the provider is Ollama,
+    # the ``llm_*`` / ``embedding_*`` fields when it is OpenAI-compatible.
+    # Resolving the active model this way (rather than a blanket
+    # ``llm_chat_model or ollama_chat_model``) keeps the Ollama model
+    # picker — which writes ``ollama_chat_model`` — authoritative on the
+    # Ollama path, so a stale ``llm_chat_model`` (e.g. promoted by the v2
+    # migration) can never shadow it.
     llm_provider = str(merged.get("llm_provider", "ollama") or "ollama").strip().lower()
     if llm_provider not in ("ollama", "openai_compatible"):
         llm_provider = "ollama"
     llm_base_url = str(merged.get("llm_base_url", "") or "").strip() or ollama_base_url
     llm_api_key = str(merged.get("llm_api_key", "") or "").strip()
-    llm_chat_model = str(merged.get("llm_chat_model", "") or "").strip() or ollama_chat_model
+    if llm_provider == "openai_compatible":
+        llm_chat_model = str(merged.get("llm_chat_model", "") or "").strip() or ollama_chat_model
+    else:
+        llm_chat_model = ollama_chat_model
     embedding_provider_raw = str(merged.get("embedding_provider", "") or "").strip().lower()
     if embedding_provider_raw not in ("", "ollama", "openai_compatible"):
         embedding_provider_raw = ""
     embedding_provider = embedding_provider_raw
     embedding_base_url = str(merged.get("embedding_base_url", "") or "").strip()
     embedding_api_key = str(merged.get("embedding_api_key", "") or "").strip()
-    embedding_model = str(merged.get("embedding_model", "") or "").strip() or ollama_embed_model
+    # Effective embedding provider inherits the chat provider when unset.
+    _effective_embed_provider = embedding_provider or llm_provider
+    if _effective_embed_provider == "openai_compatible":
+        embedding_model = str(merged.get("embedding_model", "") or "").strip() or ollama_embed_model
+    else:
+        embedding_model = ollama_embed_model
     use_stdin = bool(merged.get("use_stdin", False))
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))

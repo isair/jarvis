@@ -187,6 +187,69 @@ class TestGetEmbeddingBackend:
         assert backend.base_url == "http://127.0.0.1:11434"
 
 
+class TestPerProviderModelResolution:
+    """``cfg.llm_chat_model`` / ``cfg.embedding_model`` resolve per-provider:
+    the Ollama models are authoritative on the Ollama path, the
+    OpenAI-compatible models on that path. This mirrors the factory's
+    per-provider base-URL resolution and stops a stale ``llm_chat_model``
+    (e.g. promoted by the v2 migration) from shadowing the Ollama model
+    picker, which writes ``ollama_chat_model``."""
+
+    def _load(self, tmp_path, monkeypatch, cfg: dict):
+        import json
+        cfg_path = tmp_path / "config.json"
+        cfg.setdefault("_config_version", 2)  # skip migration noise
+        cfg_path.write_text(json.dumps(cfg))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+        from jarvis.config import load_settings
+        return load_settings()
+
+    def test_ollama_chat_model_not_shadowed_by_stale_llm_chat_model(self, tmp_path, monkeypatch):
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "ollama",
+            "ollama_chat_model": "new-pick:7b",
+            "llm_chat_model": "stale-migrated:70b",
+        })
+        assert settings.llm_chat_model == "new-pick:7b"
+
+    def test_openai_compatible_uses_llm_chat_model(self, tmp_path, monkeypatch):
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "openai_compatible",
+            "llm_base_url": "http://localhost:1234/v1",
+            "llm_chat_model": "lmstudio/gemma",
+            "ollama_chat_model": "gemma4:e2b",
+        })
+        assert settings.llm_chat_model == "lmstudio/gemma"
+
+    def test_openai_compatible_falls_back_to_ollama_model_when_unset(self, tmp_path, monkeypatch):
+        """If the user picked openai_compatible but left the model blank,
+        fall back to the Ollama model name rather than the empty string."""
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "openai_compatible",
+            "llm_base_url": "http://localhost:1234/v1",
+            "ollama_chat_model": "gemma4:e2b",
+        })
+        assert settings.llm_chat_model == "gemma4:e2b"
+
+    def test_embedding_model_not_shadowed_on_ollama_path(self, tmp_path, monkeypatch):
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "ollama",
+            "ollama_embed_model": "nomic-embed-text",
+            "embedding_model": "stale-openai-embed",
+        })
+        assert settings.embedding_model == "nomic-embed-text"
+
+    def test_embedding_model_used_when_embedding_provider_openai(self, tmp_path, monkeypatch):
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "ollama",
+            "embedding_provider": "openai_compatible",
+            "embedding_base_url": "http://embed:9000/v1",
+            "embedding_model": "text-embedding-3-small",
+            "ollama_embed_model": "nomic-embed-text",
+        })
+        assert settings.embedding_model == "text-embedding-3-small"
+
+
 class TestConfigMigration:
     def test_v1_config_promotes_ollama_fields_to_new_keys(self, tmp_path, monkeypatch):
         """A pre-PR-2 (v1) config on disk should auto-fill the new

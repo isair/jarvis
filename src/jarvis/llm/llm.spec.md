@@ -66,13 +66,13 @@ Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):
 | `llm_provider` | `"ollama"` | `"ollama"` or `"openai_compatible"`. Unknown values fall back to `"ollama"`. |
 | `llm_base_url` | (OpenAI-compatible only) | The OpenAI-compatible server's URL, e.g. `http://localhost:1234/v1` (LM Studio default). Read only when `llm_provider == openai_compatible`; the Ollama path always uses `ollama_base_url`. |
 | `llm_api_key` | `""` | Optional bearer token. Sent only when non-empty. |
-| `llm_chat_model` | falls back to `ollama_chat_model` | Active chat model name. Every internal call site reads this directly — `Settings.__post_init__` and `_load_settings` populate it from the legacy alias when left empty. |
+| `llm_chat_model` | (OpenAI-compatible only) | The model name the OpenAI-compatible server exposes. Read only when `llm_provider == openai_compatible` (falling back to `ollama_chat_model` if blank); the Ollama path uses `ollama_chat_model`. |
 | `embedding_provider` | inherits `llm_provider` | `"ollama"` / `"openai_compatible"`. Override for runtimes without embeddings. |
 | `embedding_base_url` | inherits from llm config | Override per-provider URL. |
 | `embedding_api_key` | inherits `llm_api_key` | Override per-provider key. |
-| `embedding_model` | falls back to `ollama_embed_model` | Active embedding model name. |
+| `embedding_model` | (OpenAI-compatible only) | The OpenAI-compatible embedding model. Read only when the effective embedding provider is `openai_compatible` (falling back to `ollama_embed_model` if blank); the Ollama path uses `ollama_embed_model`. |
 
-The legacy `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys remain on the `Settings` object as compatibility aliases. They keep older config files on disk loadable; the v1 → v2 config migration promotes their values into the provider-aware fields so internal code only ever reads the new keys.
+The `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys hold the Ollama configuration and are authoritative whenever the active (chat or embedding) provider is Ollama. `_load_settings` resolves `cfg.llm_chat_model` and `cfg.embedding_model` per-provider — the Ollama keys win on the Ollama path, the provider-aware keys win on the OpenAI-compatible path — so the codebase reads a single resolved field (`cfg.llm_chat_model`) while each provider keeps its own on-disk model name. The v1 → v2 migration promotes any explicitly-set `ollama_*` values into the provider-aware keys; per-provider resolution means a promoted value never shadows the Ollama picker.
 
 ### Factory dispatch
 
