@@ -449,6 +449,37 @@ class TestProviderChoicePage:
         with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
             assert page.nextId() == 42
 
+    def test_preselects_openai_from_existing_config(self, qapp):
+        """Re-running the wizard reflects the saved provider: an existing
+        openai_compatible config preselects the OpenAI card."""
+        import tempfile, json
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"llm_provider": "openai_compatible"}, f)
+            cfg_path = Path(f.name)
+        try:
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page = ProviderChoicePage()  # __init__ calls _preselect_from_config
+            assert page._selected == "openai_compatible"
+            assert page._openai_radio.isChecked() is True
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_preselects_ollama_by_default(self, qapp):
+        """A config without llm_provider (the default install) preselects Ollama."""
+        import tempfile, json
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            cfg_path = Path(f.name)
+        try:
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page = ProviderChoicePage()
+            assert page._selected == "ollama"
+            assert page._ollama_radio.isChecked() is True
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
 
 class TestOpenAICompatiblePage:
     """Collects the OpenAI-compatible connection details."""
@@ -517,6 +548,34 @@ class TestOpenAICompatiblePage:
         page.wizard = MagicMock(return_value=wizard)
         with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
             assert page.nextId() == 7
+
+    def test_initialize_page_prefills_from_existing_config(self, qapp):
+        """Re-running the wizard restores the user's saved connection
+        details into the form fields so they are not re-typed."""
+        import tempfile, json
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({
+                "llm_provider": "openai_compatible",
+                "llm_base_url": "http://lmstudio:1234/v1",
+                "llm_api_key": "sk-saved",
+                "llm_chat_model": "lmstudio/gemma",
+                "embedding_model": "text-embed-3",
+            }, f)
+            cfg_path = Path(f.name)
+        try:
+            page = OpenAICompatiblePage()
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.initializePage()
+            assert page._base_url_input.text() == "http://lmstudio:1234/v1"
+            assert page._api_key_input.text() == "sk-saved"
+            assert page._chat_model_input.text() == "lmstudio/gemma"
+            assert page._embed_model_input.text() == "text-embed-3"
+            # The API key field stays masked even when pre-filled.
+            from PyQt6.QtWidgets import QLineEdit
+            assert page._api_key_input.echoMode() == QLineEdit.EchoMode.Password
+        finally:
+            cfg_path.unlink(missing_ok=True)
 
 
 class TestOllamaStatusDataclass:

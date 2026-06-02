@@ -79,6 +79,15 @@ back to the Ollama settings on the "LLM & AI Models" page. A default Ollama
 install therefore never needs to open this page, and the minimal-config save
 behaviour keeps these keys out of `config.json` until the user sets them.
 
+Unlike the setup wizard's provider page, the settings window does **not**
+clear the OpenAI-compatible fields when the user switches `llm_provider` back
+to Ollama: it is metadata-driven with no cross-field logic, and a blanket
+clear would wipe the supported "Ollama chat + remote embeddings" split
+(`llm_provider: ollama` with `embedding_provider: openai_compatible`). Stale
+values are harmless because the backend resolves per-provider: the Ollama path
+uses `ollama_base_url` / `ollama_chat_model` and `OllamaBackend` ignores any
+API key. To drop a leftover value, clear that field and save.
+
 ## Hardware Device Selection
 
 The Voice Input tab includes a device dropdown populated at window open time via `sounddevice.query_devices()`. It lists all input-capable devices with their index and name. The stored value is the device index as a string, or empty string for system default.

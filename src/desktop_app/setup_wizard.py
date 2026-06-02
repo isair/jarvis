@@ -1690,21 +1690,18 @@ class ModelsPage(QWizardPage):
     def _save_model_to_config(self):
         """Save the selected chat model to config file."""
         try:
+            from jarvis.config import _load_json, _save_json
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-
+            config = _load_json(config_path) or {}
             config["ollama_chat_model"] = self._selected_model
 
-            with config_path.open("w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-
-            return True
+            # _save_json restricts the file to 0o600 on POSIX. The config can
+            # hold llm_api_key (set via the OpenAI-compatible page), so every
+            # write must preserve those perms rather than recreate the file
+            # with the default umask.
+            return _save_json(config_path, config)
         except Exception:
             return False
 
@@ -2311,21 +2308,15 @@ class WhisperSetupPage(QWizardPage):
     def _save_whisper_model_to_config(self):
         """Save the selected whisper model to config file."""
         try:
+            from jarvis.config import _load_json, _save_json
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-
+            config = _load_json(config_path) or {}
             config["whisper_model"] = self._selected_whisper_model
 
-            with config_path.open("w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-
-            return True
+            # _save_json keeps the file at 0o600 (it can hold llm_api_key).
+            return _save_json(config_path, config)
         except Exception:
             return False
 
@@ -2756,21 +2747,16 @@ class LocationPage(QWizardPage):
             return
 
         try:
-            import json
+            from jarvis.config import _load_json, _save_json
 
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-
+            config = _load_json(config_path) or {}
             config["location_ip_address"] = self._validated_ip
 
-            with config_path.open("w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
+            # _save_json keeps the file at 0o600 (it can hold llm_api_key).
+            _save_json(config_path, config)
 
             self.save_status_label.setText(f"✅ Saved to {config_path}")
             self.save_status_label.setStyleSheet("color: #4ade80;")
