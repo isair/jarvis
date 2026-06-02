@@ -55,6 +55,7 @@ class FieldMeta:
 # Categories and their display order
 CATEGORIES = [
     ("llm", "🤖 LLM & AI Models"),
+    ("llm_provider", "🔌 LLM Provider"),
     ("tts", "🔊 Text-to-Speech"),
     ("piper", "🎵 Piper TTS"),
     ("chatterbox", "🎭 Chatterbox TTS"),
@@ -69,6 +70,20 @@ CATEGORIES = [
     ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
+
+
+def _is_default_value(val: Any, default_val: Any) -> bool:
+    """True when ``val`` should be treated as the default and omitted from
+    ``config.json`` (the minimal-config invariant).
+
+    A value equal to the default is omitted. An emptied nullable field reads
+    back as ``None``; treat that as the default when the default is itself
+    empty (``""`` or ``None``) so we never persist a ``null`` for a field
+    that would just fall back anyway.
+    """
+    if val == default_val:
+        return True
+    return val is None and default_val in (None, "")
 
 
 def _dictation_hotkey_choices() -> list:
@@ -125,6 +140,43 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("intent_judge_thinking_enabled", "Intent Judge Thinking Mode",
       "Let the intent judge think before classifying (adds latency to wake detection)",
       "llm", "bool")
+
+    # --- LLM Provider ---
+    # Selects which local runtime serves the LLM. The connection and model
+    # fields below are nullable: leaving them empty falls back to the Ollama
+    # settings on the "LLM & AI Models" page, so a default (Ollama) install
+    # never needs to touch this page.
+    f("llm_provider", "Provider", "Which local runtime serves the LLM",
+      "llm_provider", "choice",
+      choices=[("ollama", "Ollama (local)"),
+               ("openai_compatible", "OpenAI-compatible server")])
+    f("llm_base_url", "Base URL",
+      "Provider API base URL (e.g. http://localhost:1234/v1 for LM Studio). "
+      "Leave empty to use the Ollama URL.",
+      "llm_provider", "str", nullable=True)
+    f("llm_api_key", "API Key",
+      "Bearer token for the provider, if it requires one. Leave empty for none.",
+      "llm_provider", "password", nullable=True)
+    f("llm_chat_model", "Chat Model",
+      "Model name the provider exposes. Leave empty to use the Ollama chat model.",
+      "llm_provider", "str", nullable=True)
+    f("embedding_provider", "Embedding Provider",
+      "Runtime for embeddings. Leave on 'Same as chat provider' unless your "
+      "chat runtime has no embeddings endpoint (then route them to Ollama).",
+      "llm_provider", "choice",
+      choices=[("", "Same as chat provider"),
+               ("ollama", "Ollama (local)"),
+               ("openai_compatible", "OpenAI-compatible server")])
+    f("embedding_base_url", "Embedding Base URL",
+      "Override base URL for embeddings. Leave empty to inherit from the "
+      "chat provider (or the Ollama URL).",
+      "llm_provider", "str", nullable=True)
+    f("embedding_api_key", "Embedding API Key",
+      "Override bearer token for embeddings. Leave empty to inherit the chat key.",
+      "llm_provider", "password", nullable=True)
+    f("embedding_model", "Embedding Model",
+      "Embedding model name. Leave empty to use the Ollama embedding model.",
+      "llm_provider", "str", nullable=True)
 
     # --- Text-to-Speech ---
     f("tts_enabled", "Enable TTS", "Enable text-to-speech output",
@@ -555,6 +607,15 @@ class SettingsWindow(QDialog):
         if fm.field_type == "list":
             return self._create_list_widget(fm, current)
 
+        if fm.field_type == "password":
+            w = QLineEdit()
+            w.setEchoMode(QLineEdit.EchoMode.Password)
+            w.setText(str(current) if current not in (None, "") else "")
+            if fm.nullable:
+                w.setPlaceholderText("Leave empty for none")
+            w.setToolTip(fm.description)
+            return w
+
         # Default: string field
         w = QLineEdit()
         w.setText(str(current) if current not in (None, "") else "")
@@ -870,8 +931,8 @@ class SettingsWindow(QDialog):
             val = self._get_value(fm)
             default_val = self._defaults.get(fm.key)
 
-            # Only write non-default values to keep config.json clean
-            if val == default_val or (val is None and default_val is None):
+            # Only write non-default values to keep config.json clean.
+            if _is_default_value(val, default_val):
                 config.pop(fm.key, None)
             else:
                 config[fm.key] = val

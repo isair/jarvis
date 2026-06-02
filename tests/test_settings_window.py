@@ -18,6 +18,7 @@ from desktop_app.settings_window import (
     FieldMeta,
     get_input_devices,
     _build_field_metadata,
+    _is_default_value,
     _MCPCatalogueDialog,
     _MCPEditDialog,
 )
@@ -53,7 +54,7 @@ class TestFieldMetadata:
 
     def test_field_types_are_valid(self):
         """All field_type values must be from the allowed set."""
-        valid_types = {"bool", "int", "float", "str", "choice", "device", "list"}
+        valid_types = {"bool", "int", "float", "str", "choice", "device", "list", "password"}
         for fm in FIELD_METADATA:
             assert fm.field_type in valid_types, (
                 f"Field '{fm.key}' has invalid type '{fm.field_type}'"
@@ -96,6 +97,119 @@ class TestFieldMetadata:
         for fa, fb in zip(a, b):
             assert fa.key == fb.key
             assert fa.category == fb.category
+
+
+class TestLLMProviderFields:
+    """The settings UI must expose the provider-aware LLM config so a user
+    can select an OpenAI-compatible backend without editing config.json by
+    hand."""
+
+    def _field(self, key):
+        for fm in FIELD_METADATA:
+            if fm.key == key:
+                return fm
+        return None
+
+    def test_provider_category_present(self):
+        """A dedicated 'LLM Provider' category must exist in the sidebar."""
+        cat_keys = [k for k, _ in CATEGORIES]
+        assert "llm_provider" in cat_keys
+
+    def test_provider_fields_present(self):
+        """All eight provider-aware config keys are surfaced."""
+        expected = {
+            "llm_provider", "llm_base_url", "llm_api_key", "llm_chat_model",
+            "embedding_provider", "embedding_base_url", "embedding_api_key",
+            "embedding_model",
+        }
+        present = {fm.key for fm in FIELD_METADATA}
+        missing = expected - present
+        assert not missing, f"Provider fields missing from settings UI: {missing}"
+
+    def test_provider_fields_live_in_provider_category(self):
+        """The provider connection/credential fields group under the
+        'LLM Provider' category, not scattered across 'llm'."""
+        for key in (
+            "llm_provider", "llm_base_url", "llm_api_key", "llm_chat_model",
+            "embedding_provider", "embedding_base_url", "embedding_api_key",
+            "embedding_model",
+        ):
+            fm = self._field(key)
+            assert fm is not None and fm.category == "llm_provider", (
+                f"'{key}' should be in the 'llm_provider' category"
+            )
+
+    def test_llm_provider_choices_match_config(self):
+        """The provider dropdown offers exactly the values the config loader
+        accepts ('ollama', 'openai_compatible')."""
+        fm = self._field("llm_provider")
+        assert fm is not None and fm.field_type == "choice"
+        values = {v for v, _ in (fm.choices or [])}
+        assert values == {"ollama", "openai_compatible"}
+
+    def test_embedding_provider_offers_inherit_option(self):
+        """embedding_provider includes the empty 'same as chat provider'
+        option plus the two concrete providers."""
+        fm = self._field("embedding_provider")
+        assert fm is not None and fm.field_type == "choice"
+        values = {v for v, _ in (fm.choices or [])}
+        assert "" in values, "must offer an inherit-from-chat-provider option"
+        assert {"ollama", "openai_compatible"} <= values
+
+    def test_api_key_fields_are_password_type(self):
+        """API keys must use the password field type so they render masked."""
+        for key in ("llm_api_key", "embedding_api_key"):
+            fm = self._field(key)
+            assert fm is not None and fm.field_type == "password", (
+                f"'{key}' should be a password field"
+            )
+
+    def test_model_fields_are_freetext(self):
+        """The provider model fields are free text — an OpenAI-compatible
+        server's model name is not in the Ollama SUPPORTED_CHAT_MODELS
+        catalogue, so a choice dropdown would be wrong."""
+        for key in ("llm_chat_model", "embedding_model"):
+            fm = self._field(key)
+            assert fm is not None and fm.field_type == "str", (
+                f"'{key}' should be a free-text str field"
+            )
+
+    def test_connection_fields_are_nullable(self):
+        """Connection/credential/model fields are nullable so leaving them
+        empty falls back to the Ollama settings and keeps config.json minimal."""
+        for key in (
+            "llm_base_url", "llm_api_key", "llm_chat_model",
+            "embedding_base_url", "embedding_api_key", "embedding_model",
+        ):
+            fm = self._field(key)
+            assert fm is not None and fm.nullable, f"'{key}' should be nullable"
+
+
+class TestMinimalConfigInvariant:
+    """``_is_default_value`` decides whether a field is omitted from
+    config.json. An emptied nullable provider field (reads back as None)
+    whose default is an empty string must be omitted, not persisted as null."""
+
+    def test_value_equal_to_default_is_omitted(self):
+        assert _is_default_value("ollama", "ollama") is True
+
+    def test_changed_value_is_kept(self):
+        assert _is_default_value("openai_compatible", "ollama") is False
+
+    def test_emptied_field_with_empty_string_default_is_omitted(self):
+        # llm_base_url etc.: default "", user clears it -> _get_value returns None
+        assert _is_default_value(None, "") is True
+
+    def test_emptied_field_with_none_default_is_omitted(self):
+        assert _is_default_value(None, None) is True
+
+    def test_set_value_over_empty_default_is_kept(self):
+        assert _is_default_value("http://localhost:1234/v1", "") is False
+
+    def test_none_over_nonempty_default_is_kept(self):
+        # A nullable field whose default is a real value, cleared by the user,
+        # is a genuine change and must be written.
+        assert _is_default_value(None, "gemma4:e2b") is False
 
 
 class TestCategories:
