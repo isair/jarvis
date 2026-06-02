@@ -141,6 +141,58 @@ class TestGetRequiredModels:
             assert "gemma4:e2b" in models
             assert "nomic-embed-text" in models
 
+    def _cfg(self, **over):
+        from types import SimpleNamespace
+        base = dict(
+            llm_provider="ollama",
+            embedding_provider="",
+            ollama_chat_model="gemma4:e2b",
+            ollama_embed_model="nomic-embed-text",
+            intent_judge_model="gemma4:e2b",
+        )
+        base.update(over)
+        return SimpleNamespace(**base)
+
+    def test_pure_ollama_requires_chat_embed_judge(self):
+        """The default local setup needs the chat model, embed model, and
+        (distinct) intent-judge model — all pulled from Ollama."""
+        cfg = self._cfg(llm_provider="ollama", ollama_chat_model="gpt-oss:20b")
+        with patch("desktop_app.setup_wizard.load_settings", return_value=cfg):
+            models = get_required_models()
+        assert models == ["gpt-oss:20b", "nomic-embed-text", "gemma4:e2b"]
+
+    def test_pure_openai_requires_no_ollama_models(self):
+        """Chat, judge, and embeddings all remote: nothing to pull locally."""
+        cfg = self._cfg(llm_provider="openai_compatible", embedding_provider="")
+        with patch("desktop_app.setup_wizard.load_settings", return_value=cfg):
+            models = get_required_models()
+        assert models == []
+
+    def test_openai_chat_with_ollama_embeddings_requires_only_embed_model(self):
+        """The advanced split: chat/judge remote, embeddings on Ollama. Only
+        the embedding model must be present locally — not the remote chat
+        model name, not the intent-judge model."""
+        cfg = self._cfg(
+            llm_provider="openai_compatible",
+            embedding_provider="ollama",
+            ollama_chat_model="some-remote-model",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=cfg):
+            models = get_required_models()
+        assert models == ["nomic-embed-text"]
+
+    def test_ollama_chat_with_openai_embeddings_skips_embed_model(self):
+        """Chat/judge on Ollama, embeddings remote: pull chat + judge, not
+        the Ollama embed model."""
+        cfg = self._cfg(
+            llm_provider="ollama",
+            embedding_provider="openai_compatible",
+            ollama_chat_model="gpt-oss:20b",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=cfg):
+            models = get_required_models()
+        assert models == ["gpt-oss:20b", "gemma4:e2b"]
+
 
 class TestCheckInstalledModels:
     """Tests for checking installed Ollama models."""

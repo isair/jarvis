@@ -2606,9 +2606,12 @@ def main() -> int:
             else:
                 print(f"✅ Ollama server is running (version {version})", flush=True)
 
-        if _chat_on_ollama:
-            # Check for missing required models (important for users upgrading from older versions)
-            # This catches the case where server wasn't running at initial check but models are missing
+        if _ollama_needed:
+            # Verify the required Ollama models are present. get_required_models()
+            # is provider-aware: it lists only models that actually run on Ollama
+            # (chat + judge when chat is local; the embed model when embeddings
+            # are local), so this covers the chat-on-Ollama path and the advanced
+            # "remote chat + local embeddings" split alike.
             splash.set_status("Verifying required models...")
             app.processEvents()
 
@@ -2625,7 +2628,9 @@ def main() -> int:
                 if normalize_model(m) not in installed_normalized and m not in installed_models
             ]
 
-            if missing_models:
+            if missing_models and _chat_on_ollama:
+                # Chat runs on Ollama: the setup wizard lets the user pick and
+                # install the chat model along with the embed + judge models.
                 splash.hide()
                 print(f"⚠️ Missing required models: {missing_models}", flush=True)
                 print("🔧 Opening setup wizard to install missing models...", flush=True)
@@ -2643,10 +2648,25 @@ def main() -> int:
                 splash.show()
                 splash.set_status("Models installed!")
                 app.processEvents()
+            elif missing_models:
+                # Only embeddings run on Ollama (chat is remote), so the
+                # chat-model wizard does not apply. The embedding model is a
+                # fixed name; surface a clear, non-blocking instruction rather
+                # than silently degrading — memory search falls back to keyword
+                # matching until the model is pulled.
+                pull_cmd = "; ".join(f"ollama pull {m}" for m in missing_models)
+                print(
+                    f"⚠️ Ollama embedding model(s) not installed: {missing_models}. "
+                    f"Memory search will use keyword matching until you run: {pull_cmd}",
+                    flush=True,
+                )
             else:
                 print("✅ All required models are installed", flush=True)
 
-            # Check if user is using an unsupported model
+        if _chat_on_ollama:
+            # Check if the user is on an unsupported chat model. Only meaningful
+            # on the Ollama path — an OpenAI-compatible model name is not in the
+            # Ollama catalogue and must not be flagged here.
             splash.set_status("Checking model compatibility...")
             unsupported_model = check_model_support()
             if unsupported_model:

@@ -180,30 +180,41 @@ def check_ollama_server() -> Tuple[bool, Optional[str]]:
 
 
 def get_required_models() -> List[str]:
-    """Get list of required Ollama models from config.
+    """Get the Ollama models that must be present locally, given the active
+    providers.
 
-    Always includes:
-    - Chat model (user-selectable)
-    - Embedding model
-    - Intent judge model (gemma4 - required for voice intent classification)
+    Only models that actually run on Ollama are required:
+    - Chat model + intent-judge model — when the chat provider is Ollama
+      (both run through the chat backend). Skipped for an OpenAI-compatible
+      chat provider, where those are remote model names, not Ollama pulls.
+    - Embedding model — when the effective embedding provider is Ollama
+      (covers the advanced split where chat is remote but embeddings are
+      local). Skipped when embeddings are remote.
+
+    A pure OpenAI-compatible setup therefore requires nothing locally.
     """
     try:
         cfg = load_settings()
+        llm_provider = getattr(cfg, "llm_provider", "ollama") or "ollama"
+        embed_provider = getattr(cfg, "embedding_provider", "") or llm_provider
         models = []
 
-        # Chat model
-        if cfg.ollama_chat_model:
-            models.append(cfg.ollama_chat_model)
+        # Chat model runs on the chat provider's backend.
+        if llm_provider != "openai_compatible":
+            if cfg.ollama_chat_model:
+                models.append(cfg.ollama_chat_model)
 
-        # Embedding model
-        if cfg.ollama_embed_model:
-            models.append(cfg.ollama_embed_model)
+        # Embedding model runs on the embedding provider's backend.
+        if embed_provider != "openai_compatible":
+            if cfg.ollama_embed_model and cfg.ollama_embed_model not in models:
+                models.append(cfg.ollama_embed_model)
 
-        # Intent judge model - always required for voice intent classification
-        # This is separate from the chat model and cannot be changed by users
-        intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
-        if intent_judge_model and intent_judge_model not in models:
-            models.append(intent_judge_model)
+        # Intent judge is always needed for voice intent classification, but
+        # only as an Ollama pull when the chat provider is Ollama.
+        if llm_provider != "openai_compatible":
+            intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
+            if intent_judge_model and intent_judge_model not in models:
+                models.append(intent_judge_model)
 
         return models
     except Exception:
