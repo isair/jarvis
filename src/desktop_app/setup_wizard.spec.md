@@ -4,10 +4,12 @@ First-run wizard that ensures Ollama, required models, and Whisper are ready bef
 
 ## Overview
 
-The setup wizard is shown only when **user action is required** — it is not shown merely because the Ollama server isn't running (Jarvis can auto-start it). The two triggers are:
+The setup wizard is shown only when **user action is required** — it is not shown merely because the Ollama server isn't running (Jarvis can auto-start it). The triggers are:
 
 1. Ollama CLI is not installed.
 2. Ollama server is running but required models are missing.
+
+An OpenAI-compatible user has opted out of the local Ollama stack, so `should_show_setup_wizard()` returns `False` for them regardless of Ollama state. They can still open the wizard manually from the tray to switch providers.
 
 ## Design Principles
 
@@ -19,29 +21,40 @@ The setup wizard is shown only when **user action is required** — it is not sh
 ## Page Flow
 
 ```
-Welcome → [Ollama Install] → [Ollama Server] → Models → [Whisper] → Dictation → MCP Servers → Search Providers → [Location] → Complete
+Welcome → Provider Choice ─┬─ Ollama ───────→ [Ollama Install] → [Ollama Server] → Models ─┐
+                           └─ OpenAI-compat → OpenAI-compatible config ──────────────────────┤
+                                                                                              ▼
+       [Whisper] → Dictation → MCP Servers → Search Providers → [Location] → Complete
 ```
 
-Pages in brackets are conditional — skipped when their prerequisite is already satisfied.
+Pages in brackets are conditional — skipped when their prerequisite is already satisfied. The Provider Choice page branches the middle of the flow: the Ollama path keeps the install/server/models pages; the OpenAI-compatible path replaces them with a single connection-config page.
 
 ### Pages
 
 | # | Page | Condition to show | Config written |
 |---|------|-------------------|----------------|
 | 1 | **Welcome** | Always | — |
-| 2 | **Ollama Install** | CLI not found | — |
-| 3 | **Ollama Server** | Server not running | — |
-| 4 | **Models** | Always (user selects chat model) | `ollama_chat_model` |
-| 5 | **Whisper Setup** | Always (user selects Whisper model) | `whisper_model` |
-| 6 | **Dictation** | Always | `dictation_enabled`, `dictation_hotkey`, `dictation_filler_removal` |
-| 7 | **MCP Servers** | Always | `mcps` |
-| 8 | **Search Providers** | Always | `brave_search_api_key`, `wikipedia_fallback_enabled` |
-| 9 | **Location** | Location enabled but detection failing | `location_ip_address` |
-| 10 | **Complete** | Always | — |
+| 2 | **Provider Choice** | Always | `llm_provider` (Ollama clears the OpenAI-compatible overrides) |
+| 3 | **OpenAI-compatible** | Provider Choice = OpenAI-compatible | `llm_provider`, `llm_base_url`, `llm_chat_model`, `llm_api_key`?, `embedding_model`? |
+| 4 | **Ollama Install** | Ollama path + CLI not found | — |
+| 5 | **Ollama Server** | Ollama path + server not running | — |
+| 6 | **Models** | Ollama path | `ollama_chat_model` |
+| 7 | **Whisper Setup** | Always (user selects Whisper model) | `whisper_model` |
+| 8 | **Dictation** | Always | `dictation_enabled`, `dictation_hotkey`, `dictation_filler_removal` |
+| 9 | **MCP Servers** | Always | `mcps` |
+| 10 | **Search Providers** | Always | `brave_search_api_key`, `wikipedia_fallback_enabled` |
+| 11 | **Location** | Location enabled but detection failing | `location_ip_address` |
+| 12 | **Complete** | Always | — |
+
+Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 ### Page Details
 
-**WelcomePage** — Status dashboard showing CLI, server, models, location, and MLX Whisper (Apple Silicon) readiness. Refresh button triggers a background `StatusCheckWorker`.
+**WelcomePage** — Status dashboard showing CLI, server, models, location, and MLX Whisper (Apple Silicon) readiness. Refresh button triggers a background `StatusCheckWorker`. Always leads to the Provider Choice page.
+
+**ProviderChoicePage** — Two cards (radio buttons): Ollama (local, recommended) and OpenAI-compatible server. Preselects from the current `llm_provider`. On validate, writes `llm_provider`; selecting Ollama omits the key and clears the OpenAI-compatible overrides (`llm_base_url`, `llm_api_key`, `llm_chat_model`, `embedding_*`) so the Ollama settings become authoritative again. `nextId` routes to the OpenAI-compatible page or to the first applicable Ollama page (`SetupWizard.ollama_entry_page_id()`).
+
+**OpenAICompatiblePage** — Shown only on the OpenAI-compatible path. Form fields: base URL (required), chat model (required), API key (optional, password-masked), embedding model (optional). `isComplete` gates Next on base URL + chat model. On validate, writes `llm_provider="openai_compatible"`, `llm_base_url`, `llm_chat_model`, and the optional `llm_api_key` / `embedding_model` only when non-empty. `nextId` skips the Ollama install/server/models pages and goes straight to Whisper setup.
 
 **OllamaInstallPage** — Platform-specific download instructions. Opens official download page. Verify button re-checks `check_ollama_cli()`.
 

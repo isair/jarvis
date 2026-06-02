@@ -321,6 +321,16 @@ def should_show_setup_wizard() -> bool:
     Does NOT return True just because server isn't running,
     since the app can auto-start the server if CLI is installed.
     """
+    # An OpenAI-compatible user has opted out of the local Ollama stack,
+    # so the Ollama-centric prerequisites don't apply — never auto-show.
+    # (The wizard can still be opened manually from the tray to switch back.)
+    try:
+        cfg = load_settings()
+        if getattr(cfg, "llm_provider", "ollama") == "openai_compatible":
+            return False
+    except Exception:
+        pass
+
     status = check_ollama_status()
 
     # If CLI not installed, user needs to install Ollama
@@ -346,7 +356,8 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
-        QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox
+        QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox,
+        QRadioButton
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
@@ -473,6 +484,8 @@ class SetupWizard(QWizard):
 
         # Add pages and store their IDs
         self.welcome_page = WelcomePage(self)
+        self.provider_choice_page = ProviderChoicePage(self)
+        self.openai_compat_page = OpenAICompatiblePage(self)
         self.ollama_install_page = OllamaInstallPage(self)
         self.ollama_server_page = OllamaServerPage(self)
         self.models_page = ModelsPage(self)
@@ -484,6 +497,8 @@ class SetupWizard(QWizard):
         self.complete_page = CompletePage(self)
 
         self.welcome_page_id = self.addPage(self.welcome_page)
+        self.provider_choice_page_id = self.addPage(self.provider_choice_page)
+        self.openai_compat_page_id = self.addPage(self.openai_compat_page)
         self.ollama_install_page_id = self.addPage(self.ollama_install_page)
         self.ollama_server_page_id = self.addPage(self.ollama_server_page)
         self.models_page_id = self.addPage(self.models_page)
@@ -504,6 +519,17 @@ class SetupWizard(QWizard):
         self.ollama_status: Optional[OllamaStatus] = None
         self.mlx_whisper_status: Optional[MLXWhisperStatus] = None
         self._location_working: Optional[bool] = None
+
+    def ollama_entry_page_id(self) -> int:
+        """First Ollama-flow page to show, based on detection status:
+        install (CLI missing) → server (not running) → models. Shared by the
+        provider-choice page so the Ollama branch lands on the right step."""
+        status = self.ollama_status
+        if status is None or not status.is_cli_installed:
+            return self.ollama_install_page_id
+        if not status.is_server_running:
+            return self.ollama_server_page_id
+        return self.models_page_id
 
     def is_location_working(self) -> bool:
         """Check if location detection is working (cached)."""
@@ -782,21 +808,287 @@ class WelcomePage(QWizardPage):
         return True
 
     def nextId(self) -> int:
-        """Determine next page based on status."""
+        """Welcome always leads to the provider choice; the provider page
+        then branches to the Ollama flow or the OpenAI-compatible page."""
         wizard = self.wizard()
-        if not isinstance(wizard, SetupWizard) or wizard.ollama_status is None:
-            return wizard.ollama_install_page_id
+        if not isinstance(wizard, SetupWizard):
+            return super().nextId()
+        return wizard.provider_choice_page_id
 
-        status = wizard.ollama_status
 
-        # Skip to appropriate page based on what's missing
-        if not status.is_cli_installed:
-            return wizard.ollama_install_page_id
-        elif not status.is_server_running:
-            return wizard.ollama_server_page_id
+class ProviderChoicePage(QWizardPage):
+    """Choose which local runtime serves the LLM: Ollama (the bundled
+    default) or an OpenAI-compatible server (LM Studio, oMLX, llama.cpp's
+    ``llama-server``, vLLM, LocalAI). The choice branches the rest of the
+    wizard — Ollama continues to the install/server/models flow, while
+    OpenAI-compatible jumps to a connection-config page and skips the
+    Ollama-specific pages entirely."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+        self._selected = "ollama"
+
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🔌 Choose Your LLM Provider")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Jarvis runs entirely on local models by default via Ollama. "
+            "If you already run an OpenAI-compatible server, point Jarvis at "
+            "it instead — your data still never leaves the machines you control."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        self._ollama_radio = QRadioButton("  🦙  Ollama (local, recommended)")
+        self._ollama_radio.setChecked(True)
+        ollama_card = self._provider_card(
+            self._ollama_radio,
+            "Runs open models on this machine. Fully offline. The wizard will "
+            "help you install Ollama and download the models.",
+        )
+        layout.addWidget(ollama_card)
+
+        self._openai_radio = QRadioButton("  🔗  OpenAI-compatible server")
+        openai_card = self._provider_card(
+            self._openai_radio,
+            "LM Studio, oMLX, llama.cpp's llama-server, vLLM, LocalAI, or any "
+            "server speaking the OpenAI API. You'll enter its URL and the "
+            "model name on the next page.",
+        )
+        layout.addWidget(openai_card)
+
+        self._ollama_radio.toggled.connect(self._on_toggle)
+        self._openai_radio.toggled.connect(self._on_toggle)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+        self._preselect_from_config()
+
+    def _provider_card(self, radio, desc_text):
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(6)
+        radio.setStyleSheet("font-size: 15px; font-weight: bold;")
+        card_layout.addWidget(radio)
+        desc = QLabel(desc_text)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        card_layout.addWidget(desc)
+        return card
+
+    def _preselect_from_config(self):
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path()) or {}
+            provider = str(config.get("llm_provider", "ollama") or "ollama")
+        except Exception:
+            provider = "ollama"
+        if provider == "openai_compatible":
+            self._openai_radio.setChecked(True)
+            self._selected = "openai_compatible"
         else:
-            # Always show models page so users can change their model selection
-            return wizard.models_page_id
+            self._ollama_radio.setChecked(True)
+            self._selected = "ollama"
+
+    def _on_toggle(self):
+        self._selected = (
+            "openai_compatible" if self._openai_radio.isChecked() else "ollama"
+        )
+
+    def validatePage(self) -> bool:
+        """Persist the provider choice. Selecting Ollama clears any
+        OpenAI-compatible overrides so the Ollama settings become
+        authoritative again — no stale base URL / key / model is left
+        pointing at a former remote server."""
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            if self._selected == "openai_compatible":
+                config["llm_provider"] = "openai_compatible"
+            else:
+                # Ollama is the default; omit the key and drop the
+                # OpenAI-compatible connection overrides.
+                config.pop("llm_provider", None)
+                for stale in (
+                    "llm_base_url", "llm_api_key", "llm_chat_model",
+                    "embedding_provider", "embedding_base_url",
+                    "embedding_api_key", "embedding_model",
+                ):
+                    config.pop(stale, None)
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def isComplete(self) -> bool:
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if not isinstance(wizard, SetupWizard):
+            return super().nextId()
+        if self._selected == "openai_compatible":
+            return wizard.openai_compat_page_id
+        return wizard.ollama_entry_page_id()
+
+
+class OpenAICompatiblePage(QWizardPage):
+    """Collect the OpenAI-compatible server's connection details. Shown only
+    when the user picked that provider on the previous page; it writes the
+    ``llm_*`` / ``embedding_model`` config keys and then skips straight to
+    Whisper setup."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(14)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🔗 OpenAI-compatible Server")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Enter the connection details for your server. The base URL and "
+            "chat model are required; the API key and a separate embedding "
+            "model are optional."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        form_card = QFrame()
+        form_card.setObjectName("card")
+        form = QVBoxLayout(form_card)
+        form.setContentsMargins(16, 14, 16, 14)
+        form.setSpacing(10)
+
+        self._base_url_input = self._labelled(
+            form, "Base URL",
+            "e.g. http://localhost:1234/v1 (LM Studio default)")
+        self._chat_model_input = self._labelled(
+            form, "Chat model", "the model name the server exposes")
+        self._api_key_input = self._labelled(
+            form, "API key (optional)", "leave empty if your server needs none",
+            password=True)
+        self._embed_model_input = self._labelled(
+            form, "Embedding model (optional)",
+            "leave empty to fall back to the Ollama embedding model")
+
+        layout.addWidget(form_card)
+
+        tip = QLabel(
+            "💡  Memory search uses embeddings. If your server has no "
+            "embeddings endpoint, leave the embedding model empty and Jarvis "
+            "falls back to keyword search."
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet(
+            "background: rgba(245, 158, 11, 0.10);"
+            "border: 1px solid rgba(245, 158, 11, 0.25);"
+            "border-radius: 8px; padding: 12px 16px; color: #fbbf24; font-size: 13px;"
+        )
+        layout.addWidget(tip)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+    def _labelled(self, form, label_text, placeholder, password=False):
+        label = QLabel(label_text)
+        label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        form.addWidget(label)
+        field = QLineEdit()
+        field.setPlaceholderText(placeholder)
+        if password:
+            field.setEchoMode(QLineEdit.EchoMode.Password)
+        field.textChanged.connect(lambda *_: self.completeChanged.emit())
+        form.addWidget(field)
+        return field
+
+    def initializePage(self):
+        """Pre-fill from any existing config so re-running the wizard keeps
+        the user's values."""
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path()) or {}
+        except Exception:
+            config = {}
+        self._base_url_input.setText(str(config.get("llm_base_url", "") or ""))
+        self._chat_model_input.setText(str(config.get("llm_chat_model", "") or ""))
+        self._api_key_input.setText(str(config.get("llm_api_key", "") or ""))
+        self._embed_model_input.setText(str(config.get("embedding_model", "") or ""))
+
+    @staticmethod
+    def _is_ready(base_url: str, chat_model: str) -> bool:
+        return bool((base_url or "").strip()) and bool((chat_model or "").strip())
+
+    def _read_inputs(self):
+        return (
+            (self._base_url_input.text() or "").strip(),
+            (self._api_key_input.text() or "").strip(),
+            (self._chat_model_input.text() or "").strip(),
+            (self._embed_model_input.text() or "").strip(),
+        )
+
+    def isComplete(self) -> bool:
+        base_url, _, chat_model, _ = self._read_inputs()
+        return self._is_ready(base_url, chat_model)
+
+    def validatePage(self) -> bool:
+        """Persist the connection details. Required fields are always
+        written; optional ones (API key, embedding model) are omitted when
+        empty to keep config.json minimal."""
+        base_url, api_key, chat_model, embed_model = self._read_inputs()
+        if not self._is_ready(base_url, chat_model):
+            return False
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            config["llm_provider"] = "openai_compatible"
+            config["llm_base_url"] = base_url
+            config["llm_chat_model"] = chat_model
+            if api_key:
+                config["llm_api_key"] = api_key
+            else:
+                config.pop("llm_api_key", None)
+            if embed_model:
+                config["embedding_model"] = embed_model
+            else:
+                config.pop("embedding_model", None)
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if isinstance(wizard, SetupWizard):
+            return wizard.mlx_whisper_page_id
+        return super().nextId()
 
 
 class OllamaInstallPage(QWizardPage):
