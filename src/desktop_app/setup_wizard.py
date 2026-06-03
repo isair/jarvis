@@ -368,7 +368,7 @@ try:
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
         QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox,
-        QRadioButton
+        QRadioButton, QButtonGroup
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
@@ -519,6 +519,12 @@ class SetupWizard(QWizard):
         self.search_providers_page_id = self.addPage(self.search_providers_page)
         self.location_page_id = self.addPage(self.location_page)
         self.complete_page_id = self.addPage(self.complete_page)
+
+        # The provider choice is the first step: Ollama is optional now, so
+        # the wizard must ask which runtime the user wants before running any
+        # Ollama-specific checks. The Welcome/status page and the Ollama
+        # install/server/models pages are only reached on the Ollama branch.
+        self.setStartId(self.provider_choice_page_id)
 
         # Custom button labels
         self.setButtonText(QWizard.WizardButton.NextButton, "Next →")
@@ -819,12 +825,13 @@ class WelcomePage(QWizardPage):
         return True
 
     def nextId(self) -> int:
-        """Welcome always leads to the provider choice; the provider page
-        then branches to the Ollama flow or the OpenAI-compatible page."""
+        """The Welcome/status page is reached only on the Ollama branch (after
+        the provider choice), so it leads into the Ollama install/server/models
+        flow based on the detected status."""
         wizard = self.wizard()
         if not isinstance(wizard, SetupWizard):
             return super().nextId()
-        return wizard.provider_choice_page_id
+        return wizard.ollama_entry_page_id()
 
 
 class ProviderChoicePage(QWizardPage):
@@ -849,9 +856,9 @@ class ProviderChoicePage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Jarvis runs entirely on local models by default via Ollama. "
-            "If you already run an OpenAI-compatible server, point Jarvis at "
-            "it instead — your data still never leaves the machines you control."
+            "Welcome to Jarvis. Choose how it runs its language model. Both "
+            "options keep everything on machines you control, never a "
+            "third-party cloud."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -859,21 +866,30 @@ class ProviderChoicePage(QWizardPage):
 
         layout.addSpacing(4)
 
-        self._ollama_radio = QRadioButton("  🦙  Ollama (local, recommended)")
+        # A QButtonGroup makes the radios mutually exclusive even though each
+        # lives in its own card (Qt's auto-exclusivity only applies to radios
+        # sharing a direct parent, which these do not).
+        self._button_group = QButtonGroup(self)
+
+        self._ollama_radio = QRadioButton("  🦙  Ollama (recommended)")
         self._ollama_radio.setChecked(True)
+        self._button_group.addButton(self._ollama_radio)
         ollama_card = self._provider_card(
             self._ollama_radio,
-            "Runs open models on this machine. Fully offline. The wizard will "
-            "help you install Ollama and download the models.",
+            "Runs open models locally on this machine. The wizard installs "
+            "Ollama and downloads the models for you. Best if you have no "
+            "model server already.",
         )
         layout.addWidget(ollama_card)
 
         self._openai_radio = QRadioButton("  🔗  OpenAI-compatible server")
+        self._button_group.addButton(self._openai_radio)
         openai_card = self._provider_card(
             self._openai_radio,
-            "LM Studio, oMLX, llama.cpp's llama-server, vLLM, LocalAI, or any "
-            "server speaking the OpenAI API. You'll enter its URL and the "
-            "model name on the next page.",
+            "Point Jarvis at a server that speaks the OpenAI API. This is "
+            "usually another local app (LM Studio, oMLX, llama.cpp, vLLM, "
+            "LocalAI) running on your own machine or network. You provide its "
+            "URL and model name on the next step.",
         )
         layout.addWidget(openai_card)
 
@@ -956,7 +972,10 @@ class ProviderChoicePage(QWizardPage):
             return super().nextId()
         if self._selected == "openai_compatible":
             return wizard.openai_compat_page_id
-        return wizard.ollama_entry_page_id()
+        # Ollama branch: show the Welcome/status dashboard first (it populates
+        # the detected Ollama status), which then leads into install/server/
+        # models. Status is only surfaced once the user has chosen Ollama.
+        return wizard.welcome_page_id
 
 
 class OpenAICompatiblePage(QWizardPage):

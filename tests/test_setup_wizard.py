@@ -480,6 +480,90 @@ class TestProviderChoicePage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
+    def test_radios_are_mutually_exclusive(self, qapp):
+        """The two provider radios live in separate cards, so they need a
+        shared QButtonGroup to be mutually exclusive — checking one must
+        uncheck the other (and update the selection)."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            cfg_path = Path(f.name)
+        try:
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page = ProviderChoicePage()
+            # Default: Ollama selected, OpenAI not.
+            assert page._ollama_radio.isChecked() and not page._openai_radio.isChecked()
+            page._openai_radio.setChecked(True)
+            assert page._openai_radio.isChecked()
+            assert not page._ollama_radio.isChecked(), "radios must be mutually exclusive"
+            assert page._selected == "openai_compatible"
+            page._ollama_radio.setChecked(True)
+            assert not page._openai_radio.isChecked()
+            assert page._selected == "ollama"
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_openai_card_describes_a_local_server(self, qapp):
+        """The OpenAI-compatible card must not imply the option is cloud /
+        less private: its copy clarifies it points at a local server."""
+        import tempfile
+        from pathlib import Path
+        from PyQt6.QtWidgets import QLabel
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            cfg_path = Path(f.name)
+        try:
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page = ProviderChoicePage()
+            blob = " ".join(lbl.text().lower() for lbl in page.findChildren(QLabel))
+            assert "local" in blob and "network" in blob, (
+                "provider copy should make clear the OpenAI-compatible option "
+                "is also local"
+            )
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_nextid_ollama_routes_through_welcome_status(self):
+        """Ollama selection goes to the Welcome/status page (which surfaces
+        Ollama readiness only after the user has chosen Ollama)."""
+        page = ProviderChoicePage.__new__(ProviderChoicePage)
+        page._selected = "ollama"
+        wizard = MagicMock()
+        wizard.welcome_page_id = 5
+        page.wizard = MagicMock(return_value=wizard)
+        with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
+            assert page.nextId() == 5
+
+    def test_wizard_starts_on_provider_choice(self, qapp):
+        """Ollama is optional, so the wizard's first step is the provider
+        choice — not the Ollama-centric Welcome/status page."""
+        import tempfile
+        from pathlib import Path
+        from desktop_app.setup_wizard import SetupWizard
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            cfg_path = Path(f.name)
+        try:
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                wiz = SetupWizard()
+            assert wiz.startId() == wiz.provider_choice_page_id
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+
+class TestWelcomePageFlow:
+    """The Welcome/status page is reached only on the Ollama branch."""
+
+    def test_nextid_enters_ollama_flow(self):
+        from desktop_app.setup_wizard import WelcomePage
+        page = WelcomePage.__new__(WelcomePage)
+        wizard = MagicMock()
+        wizard.ollama_entry_page_id = MagicMock(return_value=9)
+        page.wizard = MagicMock(return_value=wizard)
+        with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
+            assert page.nextId() == 9
+
 
 class TestOpenAICompatiblePage:
     """Collects the OpenAI-compatible connection details."""
