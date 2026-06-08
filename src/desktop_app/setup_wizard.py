@@ -978,15 +978,40 @@ class ProviderChoicePage(QWizardPage):
         return wizard.welcome_page_id
 
 
+class _ModelFetchWorker(QThread):
+    """Fetches the model list from an OpenAI-compatible server off the UI
+    thread so the wizard never freezes while connecting."""
+
+    done = pyqtSignal(bool, list)  # (reached, model_ids)
+
+    def __init__(self, base_url: str, api_key: str):
+        super().__init__()
+        self._base_url = base_url
+        self._api_key = api_key
+
+    def run(self):
+        models = OpenAICompatiblePage._fetch_models(self._base_url, self._api_key)
+        self.done.emit(bool(models), models)
+
+
 class OpenAICompatiblePage(QWizardPage):
     """Collect the OpenAI-compatible server's connection details. Shown only
-    when the user picked that provider on the previous page; it writes the
-    ``llm_*`` / ``embedding_model`` config keys and then skips straight to
-    Whisper setup."""
+    on the OpenAI-compatible branch; it writes the ``llm_*`` /
+    ``embedding_model`` config keys and then skips straight to Whisper setup.
+
+    Guided rather than freeform: the user enters the base URL (and optional
+    key), clicks Connect, and the page fetches the server's actual model list
+    into editable dropdowns. Picking from the list stops users pasting a URL
+    or a wrong id as the model name (a common mistake), while the editable
+    combo still lets power users type a model the listing omits.
+    """
+
+    _DEFAULT_BASE_URL = "http://localhost:1234/v1"  # LM Studio default
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
+        self._fetch_worker = None
 
         layout = QVBoxLayout()
         layout.setSpacing(14)
@@ -997,9 +1022,9 @@ class OpenAICompatiblePage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Enter the connection details for your server. The base URL and "
-            "chat model are required; the API key and a separate embedding "
-            "model are optional."
+            "Enter your server's address, then Connect to load its models. "
+            "The base URL and chat model are required; the API key and a "
+            "separate embedding model are optional."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -1013,15 +1038,26 @@ class OpenAICompatiblePage(QWizardPage):
         form.setContentsMargins(16, 14, 16, 14)
         form.setSpacing(10)
 
-        self._base_url_input = self._labelled(
+        self._base_url_input = self._labelled_edit(
             form, "Base URL",
             "e.g. http://localhost:1234/v1 (LM Studio default)")
-        self._chat_model_input = self._labelled(
-            form, "Chat model", "the model name the server exposes")
-        self._api_key_input = self._labelled(
+        self._api_key_input = self._labelled_edit(
             form, "API key (optional)", "leave empty if your server needs none",
             password=True)
-        self._embed_model_input = self._labelled(
+
+        # Connect button + status: fetch the model list to populate the dropdowns.
+        self._connect_btn = QPushButton("🔌 Connect & load models")
+        self._connect_btn.setObjectName("secondary")
+        self._connect_btn.clicked.connect(self._on_connect)
+        form.addWidget(self._connect_btn)
+        self._connect_status = QLabel("")
+        self._connect_status.setWordWrap(True)
+        self._connect_status.setStyleSheet("font-size: 12px; color: #a1a1aa;")
+        form.addWidget(self._connect_status)
+
+        self._chat_model_combo = self._labelled_combo(
+            form, "Chat model", "pick after connecting, or type the model id")
+        self._embed_model_combo = self._labelled_combo(
             form, "Embedding model (optional)",
             "leave empty to fall back to the Ollama embedding model")
 
@@ -1043,7 +1079,7 @@ class OpenAICompatiblePage(QWizardPage):
         layout.addStretch()
         self.setLayout(layout)
 
-    def _labelled(self, form, label_text, placeholder, password=False):
+    def _labelled_edit(self, form, label_text, placeholder, password=False):
         label = QLabel(label_text)
         label.setStyleSheet("font-size: 13px; font-weight: bold;")
         form.addWidget(label)
@@ -1051,22 +1087,88 @@ class OpenAICompatiblePage(QWizardPage):
         field.setPlaceholderText(placeholder)
         if password:
             field.setEchoMode(QLineEdit.EchoMode.Password)
-        field.textChanged.connect(lambda *_: self.completeChanged.emit())
         form.addWidget(field)
         return field
 
+    def _labelled_combo(self, form, label_text, placeholder):
+        label = QLabel(label_text)
+        label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        form.addWidget(label)
+        combo = QComboBox()
+        combo.setEditable(True)  # power users can type a model the listing omits
+        combo.lineEdit().setPlaceholderText(placeholder)
+        combo.currentTextChanged.connect(lambda *_: self.completeChanged.emit())
+        form.addWidget(combo)
+        return combo
+
+    @staticmethod
+    def _fetch_models(base_url: str, api_key: str, timeout: float = 6.0) -> list:
+        """Return the model ids the server advertises at ``/v1/models``, or
+        an empty list if it is unreachable. Fail-soft: never raises, so the
+        user can still type a model id by hand."""
+        base_url = (base_url or "").strip()
+        if not base_url:
+            return []
+        try:
+            from jarvis.llm import OpenAICompatibleBackend
+            backend = OpenAICompatibleBackend(base_url, api_key=(api_key or "").strip() or None)
+            return list(backend.list_models(timeout_sec=timeout))
+        except Exception:
+            return []
+
+    def _on_connect(self):
+        base_url = (self._base_url_input.text() or "").strip()
+        if not base_url:
+            self._connect_status.setText("⚠️ Enter a base URL first.")
+            return
+        self._connect_btn.setEnabled(False)
+        self._connect_status.setText("⏳ Connecting…")
+        worker = _ModelFetchWorker(base_url, (self._api_key_input.text() or "").strip())
+        worker.done.connect(self._on_models_fetched)
+        self._fetch_worker = worker  # keep a reference so it isn't GC'd
+        worker.start()
+
+    def _on_models_fetched(self, reached: bool, models: list):
+        self._connect_btn.setEnabled(True)
+        self._populate_models(models)
+        if reached and models:
+            self._connect_status.setText(f"✅ Connected — {len(models)} model(s) found.")
+        else:
+            self._connect_status.setText(
+                "⚠️ Couldn't load models. Check the URL/key and that the server "
+                "is running, or type the model id manually below.")
+        self.completeChanged.emit()
+
+    def _populate_models(self, models: list):
+        """Fill the dropdowns with fetched model ids, preserving whatever the
+        user had typed/selected as the current value."""
+        for combo, include_blank in ((self._chat_model_combo, False),
+                                      (self._embed_model_combo, True)):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            if include_blank:
+                combo.addItem("")  # "(none)" — embeddings optional
+            for m in models:
+                combo.addItem(m)
+            combo.setCurrentText(current)
+            combo.blockSignals(False)
+
     def initializePage(self):
         """Pre-fill from any existing config so re-running the wizard keeps
-        the user's values."""
+        the user's values. Defaults the base URL to the common LM Studio
+        address so a first-time user can just click Connect."""
         try:
             from jarvis.config import default_config_path, _load_json
             config = _load_json(default_config_path()) or {}
         except Exception:
             config = {}
-        self._base_url_input.setText(str(config.get("llm_base_url", "") or ""))
-        self._chat_model_input.setText(str(config.get("llm_chat_model", "") or ""))
+        self._base_url_input.setText(
+            str(config.get("llm_base_url", "") or "") or self._DEFAULT_BASE_URL)
         self._api_key_input.setText(str(config.get("llm_api_key", "") or ""))
-        self._embed_model_input.setText(str(config.get("embedding_model", "") or ""))
+        self._chat_model_combo.setCurrentText(str(config.get("llm_chat_model", "") or ""))
+        self._embed_model_combo.setCurrentText(str(config.get("embedding_model", "") or ""))
+        self._connect_status.setText("")
 
     @staticmethod
     def _is_ready(base_url: str, chat_model: str) -> bool:
@@ -1076,8 +1178,8 @@ class OpenAICompatiblePage(QWizardPage):
         return (
             (self._base_url_input.text() or "").strip(),
             (self._api_key_input.text() or "").strip(),
-            (self._chat_model_input.text() or "").strip(),
-            (self._embed_model_input.text() or "").strip(),
+            (self._chat_model_combo.currentText() or "").strip(),
+            (self._embed_model_combo.currentText() or "").strip(),
         )
 
     def isComplete(self) -> bool:

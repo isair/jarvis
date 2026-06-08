@@ -32,6 +32,41 @@ from jarvis.utils.location import (
 )
 
 
+@pytest.fixture
+def stub_openai_server():
+    """A minimal in-process server answering GET /v1/models, for exercising
+    the wizard's model-fetch against a real HTTP endpoint."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_GET(self):
+            if self.path.endswith("/models"):
+                body = json.dumps({"data": [{"id": "stub-chat"}, {"id": "stub-embed"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    httpd = HTTPServer(("127.0.0.1", 0), Handler)
+    base = f"http://127.0.0.1:{httpd.server_address[1]}/v1"
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield base, httpd
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 class TestCheckOllamaCli:
     """Tests for Ollama CLI detection."""
 
@@ -653,13 +688,75 @@ class TestOpenAICompatiblePage:
                 page.initializePage()
             assert page._base_url_input.text() == "http://lmstudio:1234/v1"
             assert page._api_key_input.text() == "sk-saved"
-            assert page._chat_model_input.text() == "lmstudio/gemma"
-            assert page._embed_model_input.text() == "text-embed-3"
+            assert page._chat_model_combo.currentText() == "lmstudio/gemma"
+            assert page._embed_model_combo.currentText() == "text-embed-3"
             # The API key field stays masked even when pre-filled.
             from PyQt6.QtWidgets import QLineEdit
             assert page._api_key_input.echoMode() == QLineEdit.EchoMode.Password
         finally:
             cfg_path.unlink(missing_ok=True)
+
+    def test_initialize_page_defaults_base_url_for_first_run(self, qapp):
+        """A first-time user (empty config) gets the common LM Studio base
+        URL prefilled so they can just click Connect."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            cfg_path = Path(f.name)
+        try:
+            page = OpenAICompatiblePage()
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page.initializePage()
+            assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
+            assert page._chat_model_combo.currentText() == ""
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_model_fields_are_editable_dropdowns(self, qapp):
+        """Chat + embedding models are editable combo boxes: a guided list to
+        pick from, but power users can still type a model id."""
+        from PyQt6.QtWidgets import QComboBox
+        page = OpenAICompatiblePage()
+        assert isinstance(page._chat_model_combo, QComboBox)
+        assert isinstance(page._embed_model_combo, QComboBox)
+        assert page._chat_model_combo.isEditable()
+        assert page._embed_model_combo.isEditable()
+
+    def test_fetch_models_returns_server_model_ids(self, stub_openai_server):
+        """_fetch_models hits /v1/models on the configured server."""
+        base, _ = stub_openai_server
+        models = OpenAICompatiblePage._fetch_models(base, "", timeout=3)
+        assert "stub-chat" in models and "stub-embed" in models
+
+    def test_fetch_models_failsoft_on_unreachable_server(self):
+        """An unreachable server yields an empty list (never raises), so the
+        user can still type a model id by hand."""
+        models = OpenAICompatiblePage._fetch_models("http://127.0.0.1:1/v1", "", timeout=1)
+        assert models == []
+
+    def test_populate_models_fills_dropdowns_preserving_current(self, qapp):
+        """Fetched models populate the dropdowns; a value the user already
+        typed is preserved as the current selection. Embedding combo gets a
+        blank '(none)' entry."""
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("my-typed-model")
+        page._populate_models(["a-model", "b-model"])
+        chat_items = [page._chat_model_combo.itemText(i)
+                      for i in range(page._chat_model_combo.count())]
+        embed_items = [page._embed_model_combo.itemText(i)
+                       for i in range(page._embed_model_combo.count())]
+        assert chat_items == ["a-model", "b-model"]
+        assert embed_items[0] == "" and "a-model" in embed_items
+        assert page._chat_model_combo.currentText() == "my-typed-model"
+
+    def test_on_models_fetched_status_messages(self, qapp):
+        """The status line reflects success vs failure honestly."""
+        page = OpenAICompatiblePage()
+        page._on_models_fetched(True, ["m1", "m2"])
+        assert "Connected" in page._connect_status.text() and "2" in page._connect_status.text()
+        page._on_models_fetched(False, [])
+        assert "Couldn't load models" in page._connect_status.text()
 
 
 class TestOllamaStatusDataclass:
