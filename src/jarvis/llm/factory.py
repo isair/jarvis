@@ -18,17 +18,19 @@ from typing import Any, Optional
 from .backend import LLMBackend
 from .ollama import OllamaBackend
 from .openai_compatible import OpenAICompatibleBackend
+from .litellm_backend import LiteLLMBackend
 
 
 _OLLAMA = "ollama"
 _OPENAI_COMPATIBLE = "openai_compatible"
+_LITELLM = "litellm"
 _DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
 
 def _resolve_provider(value: Any) -> str:
     if isinstance(value, str):
         v = value.strip().lower()
-        if v in (_OLLAMA, _OPENAI_COMPATIBLE):
+        if v in (_OLLAMA, _OPENAI_COMPATIBLE, _LITELLM):
             return v
     return _OLLAMA
 
@@ -39,6 +41,8 @@ def _str_attr(settings: Any, name: str, default: str = "") -> str:
 
 
 def _build(provider: str, base_url: str, api_key: Optional[str]) -> LLMBackend:
+    if provider == _LITELLM:
+        return LiteLLMBackend(api_key=api_key)
     if provider == _OPENAI_COMPATIBLE:
         return OpenAICompatibleBackend(base_url, api_key=api_key)
     return OllamaBackend(base_url)
