@@ -1059,7 +1059,7 @@ class OpenAICompatiblePage(QWizardPage):
             form, "Chat model", "pick after connecting, or type the model id")
         self._embed_model_combo = self._labelled_combo(
             form, "Embedding model (optional)",
-            "leave empty to fall back to the Ollama embedding model")
+            "leave empty to skip embeddings (memory uses keyword search)")
 
         layout.addWidget(form_card)
 
