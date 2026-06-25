@@ -1087,6 +1087,9 @@ class OpenAICompatiblePage(QWizardPage):
         field.setPlaceholderText(placeholder)
         if password:
             field.setEchoMode(QLineEdit.EchoMode.Password)
+        # Re-evaluate Next: the base URL is half of isComplete, so editing it
+        # must refresh the button (the chat-model combo does the same).
+        field.textChanged.connect(lambda *_: self.completeChanged.emit())
         form.addWidget(field)
         return field
 

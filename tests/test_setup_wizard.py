@@ -758,6 +758,22 @@ class TestOpenAICompatiblePage:
         page._on_models_fetched(False, [])
         assert "Couldn't load models" in page._connect_status.text()
 
+    def test_editing_base_url_refreshes_completeness(self, qapp):
+        """Editing the base URL must re-evaluate the Next button: the base URL
+        is half of isComplete, so a change to it (not just the chat model) has
+        to fire completeChanged, otherwise Next can stick in a stale state."""
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("some-model")
+        page._base_url_input.setText("")  # incomplete: no base URL
+        assert page.isComplete() is False
+
+        fired = []
+        page.completeChanged.connect(lambda: fired.append(True))
+        page._base_url_input.setText("http://localhost:1234/v1")
+
+        assert fired, "editing the base URL should emit completeChanged"
+        assert page.isComplete() is True
+
 
 class TestOllamaStatusDataclass:
     """Tests for OllamaStatus dataclass behavior."""
