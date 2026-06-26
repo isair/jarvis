@@ -187,6 +187,105 @@ class TestOpenAICompatibleEndToEnd:
         assert "stub-chat" in models and "stub-embed" in models
 
 
+class _ConfigurableServer:
+    """An OpenAI-compatible stub whose feature support can be toggled, for
+    exercising capability probing against degraded servers."""
+
+    def __init__(self, *, tools=True, embeddings=True):
+        srv = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_a):
+                pass
+
+            def _send(self, code, obj=None):
+                body = json.dumps(obj).encode() if obj is not None else b""
+                self.send_response(code)
+                if obj is not None:
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path.endswith("/models"):
+                    self._send(200, {"data": [{"id": "m-chat"}, {"id": "m-embed"}]})
+                else:
+                    self._send(404)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(n) or b"{}")
+                if self.path.endswith("/chat/completions"):
+                    if req.get("tools") and not srv.tools:
+                        self._send(400, {"error": "tools not supported"})
+                        return
+                    self._send(200, {"choices": [{"message": {
+                        "role": "assistant", "content": "ok"}, "finish_reason": "stop"}]})
+                elif self.path.endswith("/embeddings"):
+                    if not srv.embeddings:
+                        self._send(404)
+                        return
+                    self._send(200, {"data": [{"embedding": [0.1, 0.2]}]})
+                else:
+                    self._send(404)
+
+        self.tools = tools
+        self.embeddings = embeddings
+        self._httpd = HTTPServer(("127.0.0.1", 0), Handler)
+        self.base_url = f"http://127.0.0.1:{self._httpd.server_address[1]}/v1"
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+
+
+class TestCheckCapabilities:
+    """``check_capabilities`` probes the real endpoints and reports honestly."""
+
+    def test_full_featured_server(self, stub):
+        from jarvis.llm import OpenAICompatibleBackend
+        backend = OpenAICompatibleBackend(stub.base_url, api_key="sk-stub")
+        caps = backend.check_capabilities("stub-chat", "stub-embed", timeout_sec=5)
+        assert caps.reachable and caps.chat and caps.tools and caps.embeddings
+        assert "stub-chat" in caps.models
+
+    def test_server_without_tools(self):
+        from jarvis.llm import OpenAICompatibleBackend
+        srv = _ConfigurableServer(tools=False).start()
+        try:
+            caps = OpenAICompatibleBackend(srv.base_url).check_capabilities(
+                "m-chat", "m-embed", timeout_sec=3)
+            assert caps.reachable and caps.chat and caps.embeddings
+            assert caps.tools is False
+        finally:
+            srv.stop()
+
+    def test_server_without_embeddings(self):
+        from jarvis.llm import OpenAICompatibleBackend
+        srv = _ConfigurableServer(embeddings=False).start()
+        try:
+            caps = OpenAICompatibleBackend(srv.base_url).check_capabilities(
+                "m-chat", "m-embed", timeout_sec=3)
+            assert caps.reachable and caps.chat and caps.tools
+            assert caps.embeddings is False
+        finally:
+            srv.stop()
+
+    def test_unreachable_server_is_not_reachable(self):
+        from jarvis.llm import OpenAICompatibleBackend
+        caps = OpenAICompatibleBackend("http://127.0.0.1:1/v1").check_capabilities(
+            "x", timeout_sec=1)
+        assert caps.reachable is False
+        assert not (caps.chat or caps.tools or caps.embeddings)
+
+
 class TestConfigRoundTrip:
     """A config.json pointing at an OpenAI-compatible server must load and
     dispatch correctly through the real ``load_settings`` path."""
