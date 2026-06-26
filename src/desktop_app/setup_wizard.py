@@ -1302,8 +1302,11 @@ class OpenAICompatiblePage(QWizardPage):
         typed/selected is preserved, otherwise a sensible default is applied so
         the common case is just Connect then Next."""
         chat_models, embed_models = self._classify_models(models)
+        # The chat box lists chat models (or the full list if the heuristic
+        # found none), but only auto-selects a real chat model — never an
+        # embedding model, which would be a wrong default.
         self._fill_combo(self._chat_model_combo, chat_models or models, blank=False,
-                         default=(chat_models or models or [""])[0])
+                         default=(chat_models[0] if chat_models else ""))
         self._fill_combo(self._embed_model_combo, embed_models or models, blank=True,
                          default=(embed_models[0] if embed_models else ""))
 

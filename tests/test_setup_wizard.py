@@ -861,6 +861,61 @@ class TestOpenAICompatiblePage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
+    def test_connect_with_empty_base_url_warns_without_starting_worker(self, qapp):
+        page = OpenAICompatiblePage()
+        page._base_url_input.setText("")
+        page._on_connect()
+        assert "base URL" in page._connect_status.text()
+        assert page._fetch_worker is None
+
+    def test_populate_models_all_embeddings_does_not_default_chat_to_embed(self, qapp):
+        """A server that only lists embedding models must not auto-select an
+        embedding model as the chat model."""
+        page = OpenAICompatiblePage()
+        page._populate_models(["nomic-embed-text", "text-embedding-3-small"])
+        assert page._chat_model_combo.currentText() == ""
+
+    def test_initialize_page_starts_discovery_only_without_saved_url(self, qapp):
+        import tempfile, json
+        from pathlib import Path
+        page = OpenAICompatiblePage()
+
+        # Empty config (no saved URL) -> discovery runs.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            empty_cfg = Path(f.name)
+        # Saved custom URL -> discovery is skipped, saved value kept.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"llm_base_url": "http://saved:9/v1"}, f)
+            saved_cfg = Path(f.name)
+        try:
+            page._start_discovery = MagicMock()
+            with patch("jarvis.config.default_config_path", return_value=empty_cfg):
+                page.initializePage()
+            assert page._start_discovery.call_count == 1
+
+            page._start_discovery.reset_mock()
+            with patch("jarvis.config.default_config_path", return_value=saved_cfg):
+                page.initializePage()
+            assert page._start_discovery.call_count == 0
+            assert page._base_url_input.text() == "http://saved:9/v1"
+        finally:
+            empty_cfg.unlink(missing_ok=True)
+            saved_cfg.unlink(missing_ok=True)
+
+    def test_on_discovered_prefills_default_but_not_a_custom_url(self, qapp):
+        page = OpenAICompatiblePage()
+        # Still on the default URL -> discovery prefills the found server.
+        page._base_url_input.setText(OpenAICompatiblePage._DEFAULT_BASE_URL)
+        page._on_discovered([("Jan", "http://localhost:1337/v1")])
+        assert page._base_url_input.text() == "http://localhost:1337/v1"
+        assert "Found" in page._connect_status.text()
+
+        # User typed a custom URL -> discovery must not clobber it.
+        page._base_url_input.setText("http://mine:5/v1")
+        page._on_discovered([("Jan", "http://localhost:1337/v1")])
+        assert page._base_url_input.text() == "http://mine:5/v1"
+
 
 class TestOllamaStatusDataclass:
     """Tests for OllamaStatus dataclass behavior."""

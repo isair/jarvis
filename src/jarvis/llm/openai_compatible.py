@@ -378,9 +378,13 @@ class OpenAICompatibleBackend(LLMBackend):
         if caps.models:
             caps.reachable = True
 
+        # Cap generation: we only need to know the endpoint answers, so a short
+        # reply keeps the probe fast on large models and avoids a long
+        # generation tripping the timeout and reporting a false "chat broken".
         probe = [{"role": "user", "content": "ping"}]
+        probe_opts = {"max_tokens": 16}
         try:
-            resp = self.chat(chat_model, probe, timeout_sec=timeout_sec)
+            resp = self.chat(chat_model, probe, timeout_sec=timeout_sec, extra_options=probe_opts)
             if isinstance(resp, dict):
                 caps.reachable = True
                 msg = resp.get("message")
@@ -403,7 +407,8 @@ class OpenAICompatibleBackend(LLMBackend):
                 },
             }]
             try:
-                tool_resp = self.chat(chat_model, probe, tools=trivial_tool, timeout_sec=timeout_sec)
+                tool_resp = self.chat(chat_model, probe, tools=trivial_tool,
+                                       timeout_sec=timeout_sec, extra_options=probe_opts)
                 caps.tools = isinstance(tool_resp, dict)
             except ToolsNotSupportedError:
                 caps.tools = False

@@ -2287,13 +2287,15 @@ def _check_openai_compat_reachable(cfg, timeout_sec: float = 4.0) -> bool:
 
 
 def _openai_compat_unreachable_message(cfg) -> str:
-    """Friendly heads-up shown when the OpenAI-compatible server is down at
-    startup. Names the address but never the API key."""
+    """Friendly heads-up shown when the OpenAI-compatible server isn't ready at
+    startup (unreachable, or reachable with no model loaded: the model listing
+    is empty in both cases). Names the address but never the API key."""
     base = (getattr(cfg, "llm_base_url", "") or "").strip() or "your configured server"
     return (
-        f"⚠️ Jarvis couldn't reach your LLM server at {base}.\n\n"
-        "Start your local server (for example LM Studio, Ollama, llama.cpp, "
-        "vLLM) and Jarvis will connect automatically.\n\n"
+        f"⚠️ Jarvis couldn't reach a ready LLM server at {base}.\n\n"
+        "Make sure your local server (for example LM Studio, Ollama, llama.cpp, "
+        "vLLM) is running with a model loaded, and Jarvis will connect "
+        "automatically.\n\n"
         "You can change the server any time in Settings → LLM Provider."
     )
 
