@@ -62,11 +62,11 @@ After transcription, text passes through these stages in order:
    assistant) with a prompt to remove filler words (um, uh, like, you know,
    etc.) while preserving meaning. Uses a 5-second timeout; falls back to the
    unprocessed text on failure.
-3. **Markdown formatting** (optional) — when `dictation_markdown_mode` is
-   enabled, spoken structural cues are converted into Markdown. See
-   `markdown.spec.md` for the full cue table. Whole-utterance cues only
-   (inline cues are left untouched); the stage is fail-open and returns the
-   original text on any error.
+ 3. **Markdown formatting** (optional) - when `dictation_markdown_mode` is
+    enabled, spoken structural cues are converted into Markdown. See
+    `markdown.spec.md` for the full cue table. Whole-utterance cues only
+    (inline cues are left untouched); the stage is fail-open and returns the
+    original text on any error.
 
 ## Architecture
 

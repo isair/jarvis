@@ -1,4 +1,4 @@
-"""Screen awareness — expose what the user is currently looking at.
+"""Screen awareness - expose what the user is currently looking at.
 
 Privacy-first and fully opt-in. When ``screen_awareness_enabled`` is set, the
 reply engine can see a short, structured snapshot of the user's screen so it
@@ -6,10 +6,10 @@ can answer "what does this button do", "summarise what's on my screen", etc.
 
 Two layers, independently toggleable:
 
-1. **Active window title** (cheap, no image processing) — the name of the
+1. **Active window title** (cheap, no image processing) - the name of the
    front-most app and window. This is the default and carries almost no
    privacy surface beyond "the user is in app X".
-2. **OCR of visible text** (opt-in via ``screen_awareness_ocr``) — when
+2. **OCR of visible text** (opt-in via ``screen_awareness_ocr``) - when
    enabled, a screenshot is taken and the visible text is extracted locally
    with Tesseract. No image ever leaves the machine.
 
@@ -77,7 +77,7 @@ def _get_active_window_windows() -> Optional[Tuple[str, str]]:
             import pygetwindow as gw  # type: ignore
             win = gw.getActiveWindow()
             if win:
-                return (win.title or "Unknown", win.title or "")
+                return (None, win.title or "")
         except Exception:
             pass
         return None
