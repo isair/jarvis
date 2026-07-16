@@ -192,7 +192,14 @@ def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_to
         }
     ]
     """
-    names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
+    # When no explicit allow-list is given, the caller wants the full
+    # catalogue (built-in + plugin tools). A None allow-list must therefore
+    # include plugin tool names too, otherwise ``generate_tools_json_schema()``
+    # would silently drop every discovered plugin tool.
+    if allowed_tools is None:
+        names = list(BUILTIN_TOOLS.keys()) + list(PLUGIN_TOOLS.keys())
+    else:
+        names = list(allowed_tools)
     tools: List[Dict[str, Any]] = []
 
     # Add built-in tools
@@ -244,7 +251,10 @@ def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_to
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
     """Produce a compact tool help string for the system prompt using OpenAI standard format."""
-    names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
+    if allowed_tools is None:
+        names = list(BUILTIN_TOOLS.keys()) + list(PLUGIN_TOOLS.keys())
+    else:
+        names = list(allowed_tools)
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
     lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": "<json_string>"}}]')

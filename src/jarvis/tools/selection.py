@@ -30,11 +30,15 @@ class ToolSelectionStrategy(Enum):
 
 
 # Tools that must always be available regardless of selection strategy.
-try:
-    from .plugin import get_plugin_always_included
-    _ALWAYS_INCLUDED = {"stop"} | get_plugin_always_included()
-except Exception:
-    _ALWAYS_INCLUDED = {"stop"}
+# Computed lazily (not frozen at import) so plugin tools flagged
+# ``always_include`` are picked up even when they are discovered at runtime,
+# after this module has already been imported.
+def _always_included() -> set:
+    try:
+        from .plugin import get_plugin_always_included
+        return {"stop"} | get_plugin_always_included()
+    except Exception:
+        return {"stop"}
 
 # Minimum number of tools to return from similarity-based strategies.
 # Prevents overly aggressive filtering that would leave the model with nothing useful.
@@ -107,7 +111,7 @@ def _ensure_always_included(
     mcp_tools: Dict[str, "ToolSpec"],
 ) -> List[str]:
     """Append always-included tools if missing."""
-    for t in _ALWAYS_INCLUDED:
+    for t in _always_included():
         if t not in selected and (t in builtin_tools or t in mcp_tools):
             selected.append(t)
     return selected
@@ -149,7 +153,7 @@ def _select_keyword(
     matched = [name for name, score in scored if score > 0]
     matched = _ensure_always_included(matched, builtin_tools, mcp_tools)
 
-    if len(matched) <= len(_ALWAYS_INCLUDED):
+    if len(matched) <= len(_always_included()):
         debug_log("Keyword tool selection found no matches, falling back to all tools", "planning")
         return _all_tool_names(builtin_tools, mcp_tools)
 
@@ -188,7 +192,7 @@ def _select_embedding(
 
     all_tools: Dict[str, str] = {}
     for name, tool in builtin_tools.items():
-        if name in _ALWAYS_INCLUDED:
+        if name in _always_included():
             continue
         all_tools[name] = _tool_summary(name, tool.description)
     for name, spec in mcp_tools.items():
@@ -261,7 +265,7 @@ def _select_llm(
     """
     catalogue_lines: List[str] = []
     for name, tool in builtin_tools.items():
-        if name in _ALWAYS_INCLUDED:
+        if name in _always_included():
             continue
         catalogue_lines.append(f"- {name}: {tool.description[:120]}")
     for name, spec in mcp_tools.items():
@@ -345,7 +349,7 @@ def _select_llm(
     resp_lower = resp.strip().lower()
     if resp_lower == "none":
         debug_log("LLM tool selection returned 'none' — including only mandatory tools", "planning")
-        return [t for t in _ALWAYS_INCLUDED if t in builtin_tools or t in mcp_tools]
+        return [t for t in _always_included() if t in builtin_tools or t in mcp_tools]
 
     known = set(builtin_tools.keys()) | set(mcp_tools.keys())
     selected: List[str] = []
@@ -365,7 +369,7 @@ def _select_llm(
 
     selected = _ensure_always_included(selected, builtin_tools, mcp_tools)
 
-    if len(selected) <= len(_ALWAYS_INCLUDED):
+    if len(selected) <= len(_always_included()):
         debug_log("LLM tool selection matched nothing, falling back to keyword strategy", "planning")
         return _select_keyword(query, builtin_tools, mcp_tools)
 

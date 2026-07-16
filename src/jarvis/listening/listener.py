@@ -517,14 +517,25 @@ class VoiceListener(threading.Thread):
         # Instant commands: cheap regex fast-path that bypasses the LLM for
         # high-frequency, latency-sensitive phrases (stop, repeat, mute, etc.).
         # Runs before any other processing so these never wait on the model.
+        #
+        # IMPORTANT: this is gated on an engagement signal (TTS playing or an
+        # active hot window). Without the gate, every ambient utterance would be
+        # matched against the instant-command registry and could trigger
+        # unsolicited TTS replies to background chatter (the same class of bug
+        # the intent judge's `has_engagement_signal` guard fixes below).
         text_stripped = (text or "").strip()
         if text_stripped:
-            handled, reply = try_handle_instant_command(text_stripped, self)
-            if handled:
-                debug_log(f"instant command handled: {text_stripped!r}", "voice")
-                if reply:
-                    self._speak_instant_reply(reply)
-                return
+            is_speaking_now = self.tts and self.tts.is_speaking()
+            could_be_hot_window = self.state_manager.was_speech_during_hot_window(
+                utterance_start_time, utterance_end_time
+            )
+            if is_speaking_now or could_be_hot_window:
+                handled, reply = try_handle_instant_command(text_stripped, self)
+                if handled:
+                    debug_log(f"instant command handled: {text_stripped!r}", "voice")
+                    if reply:
+                        self._speak_instant_reply(reply)
+                    return
 
         if not text or not text.strip():
             # Check for timeouts
