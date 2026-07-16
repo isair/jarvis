@@ -370,6 +370,9 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("dictation_thinking_enabled", "Dictation Thinking Mode",
       "Let the LLM think when cleaning dictation (adds latency after each dictation)",
       "features", "bool")
+    f("dictation_markdown_mode", "Markdown Voice Notes",
+      "Convert spoken structural cues (heading, bullet, numbered list, code, quote, link) into Markdown",
+      "features", "bool")
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
       "features", "list")

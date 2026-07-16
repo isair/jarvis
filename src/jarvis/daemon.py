@@ -30,6 +30,7 @@ if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         pass
 
 from typing import Optional
+from pathlib import Path
 from faster_whisper import WhisperModel
 
 from .config import load_settings
@@ -349,6 +350,16 @@ def main() -> None:
     else:
         print("📡 No MCP servers configured", flush=True)
 
+    # Plugin tools: discover user plugins from ~/.jarvis/plugins/
+    try:
+        from .tools.plugin import discover_plugins
+        _plugins_dir = Path(os.path.expanduser("~/.jarvis/plugins"))
+        _loaded = discover_plugins(_plugins_dir)
+        if _loaded:
+            debug_log(f"loaded {_loaded} plugin module(s) from {_plugins_dir}", "tools")
+    except Exception as e:
+        debug_log(f"plugin discovery failed: {e}", "tools")
+
     # Initialize dialogue memory with timeout
     print("💾 Initializing dialogue memory...", flush=True)
     _global_dialogue_memory = DialogueMemory(
@@ -528,6 +539,7 @@ def main() -> None:
                 cfg=cfg,
                 chat_model=cfg.llm_chat_model,
                 thinking=getattr(cfg, "dictation_thinking_enabled", False),
+                markdown_mode=getattr(cfg, "dictation_markdown_mode", False),
             )
             dictation.start()
             _global_dictation_engine = dictation

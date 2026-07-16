@@ -14,6 +14,7 @@ assistant pipeline (no wake words, intent judge, profiles, or TTS).
 | `dictation_hotkey`            | string | Win: `"ctrl+cmd"`, macOS/Linux: `"ctrl+alt"`   | Hold-to-record hotkey combination               |
 | `dictation_filler_removal`    | bool   | `false`                                        | LLM-based filler word removal via Ollama        |
 | `dictation_custom_dictionary` | list   | `[]`                                           | Custom replacements in `"wrong -> right"` format|
+| `dictation_markdown_mode`     | bool   | `false`                                        | Convert spoken structural cues into Markdown    |
 
 Defaults are aligned with WisprFlow. Modifier-only combos are supported
 (e.g. `"ctrl+cmd"` activates when both keys are held, with no extra trigger
@@ -61,6 +62,11 @@ After transcription, text passes through these stages in order:
    assistant) with a prompt to remove filler words (um, uh, like, you know,
    etc.) while preserving meaning. Uses a 5-second timeout; falls back to the
    unprocessed text on failure.
+3. **Markdown formatting** (optional) — when `dictation_markdown_mode` is
+   enabled, spoken structural cues are converted into Markdown. See
+   `markdown.spec.md` for the full cue table. Whole-utterance cues only
+   (inline cues are left untouched); the stage is fail-open and returns the
+   original text on any error.
 
 ## Architecture
 

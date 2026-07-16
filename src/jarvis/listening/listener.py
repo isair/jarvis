@@ -21,6 +21,7 @@ from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
+from ..commands.instant_commands import try_handle_instant_command
 from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
 from ..debug import debug_log
 from ..utils.location import is_location_available
@@ -386,6 +387,7 @@ class VoiceListener(threading.Thread):
 
         # Voice activity detection
         self.is_speech_active = False
+        self._barge_in_occurred = False
         self._silence_frames = 0
         self._utterance_frames: list = []
         self._frame_samples = 0
@@ -509,6 +511,21 @@ class VoiceListener(threading.Thread):
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
         """
+        # Reset barge-in flag at the start of each utterance.
+        self._barge_in_occurred = False
+
+        # Instant commands: cheap regex fast-path that bypasses the LLM for
+        # high-frequency, latency-sensitive phrases (stop, repeat, mute, etc.).
+        # Runs before any other processing so these never wait on the model.
+        text_stripped = (text or "").strip()
+        if text_stripped:
+            handled, reply = try_handle_instant_command(text_stripped, self)
+            if handled:
+                debug_log(f"instant command handled: {text_stripped!r}", "voice")
+                if reply:
+                    self._speak_instant_reply(reply)
+                return
+
         if not text or not text.strip():
             # Check for timeouts
             if self.state_manager.check_collection_timeout():
@@ -1226,6 +1243,22 @@ class VoiceListener(threading.Thread):
             debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response
             self._stop_thinking_tune()
+
+    def _speak_instant_reply(self, reply: str) -> None:
+        """Speak an instant-command reply without going through the LLM loop."""
+        if not reply:
+            return
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            get_jarvis_state().set_state(JarvisState.THINKING)
+        except Exception:
+            pass
+        self._stop_thinking_tune()
+        self.track_tts_start(reply)
+        if self.tts and self.tts.enabled:
+            self.tts.speak(reply, completion_callback=self.activate_hot_window)
+        else:
+            self.activate_hot_window()
 
     def _calculate_audio_energy(self, frames: list) -> float:
         """Calculate RMS energy from audio frames."""
@@ -2221,6 +2254,18 @@ class VoiceListener(threading.Thread):
                     if not self.is_speech_active:
                         if is_voice:
                             self.is_speech_active = True
+
+                            # Barge-in: interrupt TTS the instant speech onset is
+                            # detected, so the user never waits for the current
+                            # utterance to finish before being heard. Echo from
+                            # the assistant's own voice is caught by the echo
+                            # detector later in _process_transcript; here we only
+                            # react to genuine local mic onset, which is exactly
+                            # the barge-in signal we want.
+                            if self.tts and self.tts.enabled and self.tts.is_speaking():
+                                debug_log("barge-in: speech onset during TTS, interrupting", "voice")
+                                self.tts.interrupt()
+                                self._barge_in_occurred = True
 
                             # Backdate start time by pre-roll duration — the
                             # actual speech onset was before VAD triggered.

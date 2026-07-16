@@ -108,6 +108,9 @@ class Settings:
 
     # Screen Capture
     allowlist_bundles: list[str]
+    screen_awareness_enabled: bool  # Expose active window / OCR context to the assistant
+    screen_awareness_ocr: bool  # Include OCR'd visible text (requires Tesseract)
+    screen_awareness_max_text_chars: int  # Max OCR characters included in context
 
     # Text-to-Speech
     tts_enabled: bool
@@ -266,6 +269,7 @@ class Settings:
     dictation_hotkey: str
     dictation_filler_removal: bool
     dictation_custom_dictionary: list
+    dictation_markdown_mode: bool  # Convert spoken structural cues into Markdown
 
     # MCP Integration
     mcps: Dict[str, Any]
@@ -455,6 +459,9 @@ def get_default_config() -> Dict[str, Any]:
             "com.microsoft.VSCode",
             "com.jetbrains.intellij",
         ],
+        "screen_awareness_enabled": False,  # Expose active window / OCR context to the assistant
+        "screen_awareness_ocr": False,  # Include OCR'd visible text (requires Tesseract)
+        "screen_awareness_max_text_chars": 500,  # Max OCR characters included in context
 
 
         # Text-to-Speech
@@ -597,6 +604,7 @@ def get_default_config() -> Dict[str, Any]:
         "dictation_filler_removal": False,
         "dictation_thinking_enabled": False,  # Enable thinking for dictation filler removal (adds latency)
         "dictation_custom_dictionary": [],
+        "dictation_markdown_mode": False,  # Convert spoken structural cues into Markdown
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
@@ -644,6 +652,12 @@ def load_settings() -> Settings:
     db_path = str(merged.get("db_path") or _default_db_path())
     sqlite_vss_path = merged.get("sqlite_vss_path")
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
+    screen_awareness_enabled = bool(merged.get("screen_awareness_enabled", False))
+    screen_awareness_ocr = bool(merged.get("screen_awareness_ocr", False))
+    try:
+        screen_awareness_max_text_chars = int(merged.get("screen_awareness_max_text_chars", 500))
+    except (TypeError, ValueError):
+        screen_awareness_max_text_chars = 500
 
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
@@ -815,6 +829,7 @@ def load_settings() -> Settings:
     dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
+    dictation_markdown_mode = bool(merged.get("dictation_markdown_mode", False))
     mcps = _ensure_dict(merged.get("mcps"))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
@@ -856,6 +871,9 @@ def load_settings() -> Settings:
 
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
+        screen_awareness_enabled=screen_awareness_enabled,
+        screen_awareness_ocr=screen_awareness_ocr,
+        screen_awareness_max_text_chars=screen_awareness_max_text_chars,
 
         # Text-to-Speech
         tts_enabled=tts_enabled,
@@ -959,6 +977,7 @@ def load_settings() -> Settings:
         dictation_hotkey=dictation_hotkey,
         dictation_filler_removal=dictation_filler_removal,
         dictation_custom_dictionary=dictation_custom_dictionary,
+        dictation_markdown_mode=dictation_markdown_mode,
 
         # MCP Integration
         mcps=mcps,

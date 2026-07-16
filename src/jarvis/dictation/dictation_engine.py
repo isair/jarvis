@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 
 from ..debug import debug_log
 from .history import DictationHistory
+from .markdown import format_markdown_text
 
 # Optional imports — graceful degradation when dependencies are missing.
 try:
@@ -617,6 +618,7 @@ class DictationEngine:
         cfg: Any = None,
         chat_model: str = "gemma4:e2b",
         thinking: bool = False,
+        markdown_mode: bool = False,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
@@ -635,6 +637,7 @@ class DictationEngine:
         self._cfg = cfg
         self._chat_model = chat_model
         self._thinking = thinking
+        self._markdown_mode = markdown_mode
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -1041,6 +1044,10 @@ class DictationEngine:
             if text and self._filler_removal:
                 text = _llm_clean_dictation(text, self._cfg, model=self._chat_model, thinking=self._thinking)
 
+            # Markdown voice-note formatting (convert spoken structural cues)
+            if text and self._markdown_mode:
+                text = self._format_markdown(text)
+
             if text:
                 duration = len(audio) / self._target_sample_rate
                 debug_log(f"dictation result: {text!r}", "dictation")
@@ -1062,6 +1069,18 @@ class DictationEngine:
                     self._on_dictation_end()
                 except Exception:
                     pass
+
+    def _format_markdown(self, text: str) -> str:
+        """Convert spoken structural cues into Markdown when markdown mode is on.
+
+        Fail-open: any exception returns the original text untouched so dictation
+        never loses audio. See ``src/jarvis/dictation/markdown.spec.md``.
+        """
+        try:
+            return format_markdown_text(text)
+        except Exception as exc:
+            debug_log(f"markdown format failed: {exc}", "dictation")
+            return text
 
     def _transcribe(self, audio) -> str:
         """Transcribe audio using the shared Whisper model."""

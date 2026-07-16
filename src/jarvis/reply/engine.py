@@ -10,6 +10,7 @@ from typing import Optional, TYPE_CHECKING
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
+from ..tools.plugin import PLUGIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import (
@@ -60,6 +61,7 @@ from .planner import (
     resolve_next_tool_call as _resolve_plan_step,
 )
 from ..tools.selection import select_tools, ToolSelectionStrategy
+from ..screen.awareness import ScreenContextProvider
 import json
 import re
 import uuid
@@ -76,6 +78,36 @@ if TYPE_CHECKING:
 
 def _indent_text(text: str, prefix: str = "  ") -> str:
     return f"\n{prefix}".join(text.splitlines())
+
+
+# ── Screen awareness ───────────────────────────────────────────────────────
+# Lazily-instantiated singleton provider. Built from cfg on first use so we
+# don't pay for window/OCR library imports unless the feature is enabled.
+_screen_provider: Optional[ScreenContextProvider] = None
+_screen_provider_lock = __import__("threading").Lock()
+
+
+def _get_screen_provider(cfg) -> Optional[ScreenContextProvider]:
+    """Return the (lazily built) screen-context provider, or ``None`` if disabled."""
+    global _screen_provider
+    if not getattr(cfg, "screen_awareness_enabled", False):
+        return None
+    with _screen_provider_lock:
+        if _screen_provider is None:
+            _screen_provider = ScreenContextProvider(
+                enabled=True,
+                ocr_enabled=getattr(cfg, "screen_awareness_ocr", False),
+                allowlist=getattr(cfg, "allowlist_bundles", []),
+                max_text_chars=int(getattr(cfg, "screen_awareness_max_text_chars", 500)),
+            )
+    return _screen_provider
+
+
+def reset_screen_provider() -> None:
+    """Drop the cached provider (e.g. on config reload / new conversation)."""
+    global _screen_provider
+    with _screen_provider_lock:
+        _screen_provider = None
 
 
 def _get_tool_input_schema(
@@ -794,6 +826,15 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
                 lines.append(f"- {role}: {content[:_HINT_MESSAGE_CHAR_LIMIT]}")
         if lines:
             parts.append("Recent dialogue (short-term memory):\n" + "\n".join(lines))
+
+    # Screen awareness: what the user is currently looking at. Opt-in and
+    # privacy-gated by allowlist + OCR flag inside the provider.
+    provider = _get_screen_provider(cfg)
+    if provider is not None:
+        screen_ctx = provider.get_context()
+        if screen_ctx:
+            parts.append(screen_ctx)
+
     return "\n\n".join(parts) if parts else None
 
 
@@ -861,6 +902,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
+    # Drop any cached screen snapshot when a new conversation begins.
+    if is_new_conversation:
+        try:
+            reset_screen_provider()
+        except Exception as e:
+            debug_log(f"screen provider reset failed: {e}", "screen")
+
     # Load MCP tools cache now so the planner sees the full catalog.
     mcp_tools: dict = {}
     if getattr(cfg, "mcps", {}):
@@ -890,7 +938,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # A positive single-step ``["Reply to the user."]`` plan is NOT the
     # same as ``[]``: it's the planner deciding no memory or tools are
     # needed. Both cases are preserved for the engine to distinguish.
-    _all_builtin_names = list(BUILTIN_TOOLS.keys())
+    _all_builtin_names = list(BUILTIN_TOOLS.keys()) + list(PLUGIN_TOOLS.keys())
     _all_mcp_names = list(mcp_tools.keys())
     _full_catalog_names = _all_builtin_names + _all_mcp_names
 
@@ -924,7 +972,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _router_cache_key = (
         f"router:{redacted}|"
         f"{strategy.value}|"
-        f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
+        f"{','.join(sorted(BUILTIN_TOOLS.keys() + list(PLUGIN_TOOLS.keys())))}|"
         f"{','.join(sorted((mcp_tools or {}).keys()))}"
     )
     _cached_routed = (
@@ -935,9 +983,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         routed_tools = list(_cached_routed)
         debug_log("tool router served from hot-window cache", "planning")
     else:
+        # Merge plugin tools into the built-in catalogue so the router can
+        # select them exactly like built-ins. Plugin tools expose the same
+        # Tool interface.
+        _builtin_with_plugins = {**BUILTIN_TOOLS, **PLUGIN_TOOLS}
         routed_tools = select_tools(
             query=redacted,
-            builtin_tools=BUILTIN_TOOLS,
+            builtin_tools=_builtin_with_plugins,
             mcp_tools=mcp_tools,
             strategy=strategy,
             llm_backend=get_llm_backend(cfg),
@@ -2197,7 +2249,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     # tool in the registry; otherwise stray prose lines
                     # like "No additional tools found for that description."
                     # get treated as tool names and pollute the allow-list.
-                    _valid_names = set(BUILTIN_TOOLS.keys())
+                    _valid_names = set(BUILTIN_TOOLS.keys()) | set(PLUGIN_TOOLS.keys())
                     if mcp_tools:
                         _valid_names.update(mcp_tools.keys())
                     for line in (result.reply_text or "").splitlines():

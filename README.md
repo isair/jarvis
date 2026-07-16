@@ -169,6 +169,11 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Knowledge Graph Memory** - Self-organising memory that learns from conversations, auto-splits by topic, and surfaces relevant knowledge automatically
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
+- **Markdown Voice Notes** - Dictation auto-converts spoken structural cues ("heading", "bullet", "numbered list", "code", "quote", "link") into Markdown
+- **Interruptible Voice** - Barge in at any time: start speaking and Jarvis stops talking immediately, then responds
+- **Instant Commands** - Time, date, greetings, thanks, repeat-last-reply and similar high-frequency phrases are answered instantly without invoking the LLM
+- **Plugin Command System** - Extend Jarvis with your own tools via a simple ``@tool`` decorator; plugins are auto-discovered from ``~/.jarvis/plugins/``
+- **Screen Awareness** - Opt-in context from the active window title and (optionally) OCR'd screen text, so Jarvis can see what you're looking at
 - **MCP Integration** - Connect to thousands of external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements
@@ -326,6 +331,7 @@ Hold a hotkey to record speech, release to paste the transcription into any app.
 - 📖 **Custom dictionary** — define `"wrong -> right"` replacements for jargon, names, and technical terms
 - 📜 **History window** — browse, copy, or delete past dictations from the system tray
 - 🎛️ **Easy setup** — configure dictation during the setup wizard or anytime in Settings (hotkey dropdown, filler removal toggle, custom dictionary editor)
+- ✍️ **Markdown voice notes** — when enabled, spoken structural cues are turned into Markdown (a "heading" line becomes `# …`, "bullet"/"listed" items become `- …`, "numbered" items become `1. …`, "code" becomes a fenced block, "quote" becomes `> …`, and "link" becomes `[text](url)`). Toggle it in Settings or via `dictation_markdown_mode: true`.
 
 Customise the hotkey in Settings or `config.json`:
 ```json

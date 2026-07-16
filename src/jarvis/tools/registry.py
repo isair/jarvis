@@ -24,6 +24,7 @@ from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
 from ..debug import debug_log
+from .plugin import PLUGIN_TOOLS
 
 
 # Registry of all builtin tools
@@ -224,6 +225,20 @@ def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_to
                 }
                 tools.append(tool_def)
 
+    # Add discovered plugin tools
+    for tool_name, tool in PLUGIN_TOOLS.items():
+        if tool_name not in names:
+            continue
+        tool_def = {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema or {"type": "object", "properties": {}, "required": []},
+            }
+        }
+        tools.append(tool_def)
+
     return tools
 
 
@@ -271,6 +286,23 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
                         param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
                     if param_descriptions:
                         lines.append(f"Input: {', '.join(param_descriptions)}")
+
+    # Add discovered plugin tools
+    for tool_name, tool in PLUGIN_TOOLS.items():
+        if tool_name not in names:
+            continue
+        lines.append(f"\n{tool.name}: {tool.description}")
+        if tool.inputSchema:
+            props = tool.inputSchema.get("properties", {})
+            required = tool.inputSchema.get("required", [])
+            param_descriptions = []
+            for prop_name, prop_def in props.items():
+                prop_type = prop_def.get("type", "any")
+                is_required = prop_name in required
+                req_marker = " (required)" if is_required else ""
+                param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
+            if param_descriptions:
+                lines.append(f"Input: {', '.join(param_descriptions)}")
 
     return "\n".join(lines)
 
@@ -350,6 +382,21 @@ def run_tool_with_retries(
     # Check builtin tools first
     if name in BUILTIN_TOOLS:
         tool = BUILTIN_TOOLS[name]
+        return tool.execute(
+            db=db,
+            cfg=cfg,
+            tool_args=tool_args,
+            system_prompt=system_prompt,
+            original_prompt=original_prompt,
+            redacted_text=redacted_text,
+            max_retries=max_retries,
+            user_print=_user_print,
+            language=language,
+        )
+
+    # Check discovered plugin tools
+    if name in PLUGIN_TOOLS:
+        tool = PLUGIN_TOOLS[name]
         return tool.execute(
             db=db,
             cfg=cfg,
