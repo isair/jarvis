@@ -164,7 +164,7 @@ class TestIntentJudgeThinking:
         cfg = MagicMock()
         cfg.wake_word = "jarvis"
         cfg.wake_aliases = []
-        cfg.intent_judge_model = "gemma4:e2b"
+        cfg.fast_model = "gemma4:e2b"
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.intent_judge_timeout_sec = 10.0
         cfg.intent_judge_thinking_enabled = True
@@ -180,7 +180,7 @@ class TestIntentJudgeThinking:
         cfg = MagicMock()
         cfg.wake_word = "jarvis"
         cfg.wake_aliases = []
-        cfg.intent_judge_model = "gemma4:e2b"
+        cfg.fast_model = "gemma4:e2b"
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.intent_judge_timeout_sec = 10.0
         cfg.llm_thinking_enabled = True

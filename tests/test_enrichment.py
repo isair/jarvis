@@ -882,8 +882,7 @@ class TestDigestLoopForMaxTurns:
             llm_chat_model="m",
             ollama_base_url="http://x",
             ollama_chat_model="m",
-            evaluator_model="",
-            intent_judge_model="",
+            fast_model="",
             llm_digest_timeout_sec=8.0,
             llm_thinking_enabled=False,
         )

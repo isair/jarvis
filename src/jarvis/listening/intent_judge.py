@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, List
 
 from ..debug import debug_log
-from ..llm import get_llm_backend
+from ..llm import get_llm_backend, resolve_model, Tier
 from .transcript_buffer import TranscriptSegment
 
 
@@ -93,7 +93,7 @@ class IntentJudgeConfig:
     ``cfg`` is the Jarvis Settings object (or any duck-type with the same
     LLM provider attributes); the judge dispatches every chat call through
     ``get_llm_backend(cfg)``. ``model`` carries the per-call model name
-    (typically ``cfg.intent_judge_model``).
+    (the fast tier: ``resolve_model(cfg, Tier.FAST)``).
     """
 
     assistant_name: str = "Jarvis"
@@ -477,7 +477,7 @@ def create_intent_judge(cfg) -> IntentJudge:
     config = IntentJudgeConfig(
         assistant_name=str(getattr(cfg, "wake_word", "jarvis")).capitalize(),
         aliases=list(getattr(cfg, "wake_aliases", [])),
-        model=str(getattr(cfg, "intent_judge_model", "gemma4:e2b")),
+        model=resolve_model(cfg, Tier.FAST),
         cfg=cfg,
         timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
         thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),

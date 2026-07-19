@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..debug import debug_log
-from ..llm import get_llm_backend
+from ..llm import get_llm_backend, resolve_model, Tier
 from ..utils.redact import redact
 
 
@@ -230,24 +230,6 @@ def _parse_result(raw: str) -> EvaluatorResult:
     )
 
 
-def _resolve_evaluator_model(cfg) -> str:
-    """Pick the LLM model for the evaluator pass.
-
-    Resolution order: explicit ``evaluator_model`` → ``intent_judge_model`` →
-    ``llm_chat_model`` (the resolved active chat model on both providers).
-    The evaluator is a small classification job; reusing the judge model
-    keeps it on a small, already-warm model.
-    """
-    for candidate in (
-        getattr(cfg, "evaluator_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "llm_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
-
-
 def _format_param_schema(schema: Optional[dict]) -> str:
     """Render a JSON schema as a compact ``(arg: type [required], ...)`` summary.
 
@@ -378,7 +360,8 @@ def evaluate_turn(
             for n, a, r in [entry]
         ]
 
-    chat_model = _resolve_evaluator_model(cfg)
+    # The evaluator is a small classification job: a fast-tier pass.
+    chat_model = resolve_model(cfg, Tier.FAST)
     if not chat_model:
         return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 

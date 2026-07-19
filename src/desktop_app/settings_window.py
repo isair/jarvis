@@ -128,9 +128,10 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("llm_profile_select_timeout_sec", "Profile Select Timeout",
       "Max seconds for profile selection",
       "llm", "float", min_val=5, max_val=120, step=5, suffix="s")
-    f("intent_judge_model", "Intent Judge Model",
-      "Model for intent classification",
-      "llm", "choice", choices=model_choices)
+    f("fast_model", "Fast Model",
+      "Small, quick model for real-time work: voice intent, tool routing, "
+      "quick classifications. Automatic picks the right default for your provider",
+      "llm", "choice", choices=[("", "Automatic (recommended)")] + model_choices)
     f("intent_judge_timeout_sec", "Intent Judge Timeout",
       "Max seconds for intent judgement",
       "llm", "float", min_val=1, max_val=30, step=0.5, suffix="s")

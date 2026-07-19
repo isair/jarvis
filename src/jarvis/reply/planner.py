@@ -40,7 +40,7 @@ import re
 from typing import List, Optional, Sequence, Tuple
 
 from ..debug import debug_log
-from ..llm import get_llm_backend
+from ..llm import get_llm_backend, resolve_model, Tier
 
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
@@ -148,28 +148,6 @@ def _normalise_url_args(args: dict) -> dict:
         if isinstance(v, str) and _URL_KEY_RE.match(str(k)):
             out[k] = _normalise_url_value(v)
     return out
-
-
-def resolve_planner_model(cfg) -> str:
-    """Pick the LLM for planning.
-
-    Planning quality scales directly with the chat model: the plan is
-    the scaffolding the chat model then follows, so the two must be
-    matched. A weaker planner on top of a stronger chat model produces
-    bad scaffolding the chat model then has to fight against; and the
-    chat model is the one the user picked during setup as their
-    quality target. An explicit `planner_model` override still wins —
-    useful for benchmarking a dedicated planner — but the default is
-    to track the chat model verbatim so upgrading the chat model
-    automatically upgrades the plans.
-    """
-    override = getattr(cfg, "planner_model", "") or ""
-    if override:
-        return override
-    # llm_chat_model always carries the resolved active chat model — the
-    # Ollama pick on the Ollama path, the served model on an OpenAI-compatible
-    # provider — so tracking it keeps the planner valid on both.
-    return getattr(cfg, "llm_chat_model", "") or ""
 
 
 _PROMPT_TEMPLATE = (
@@ -438,7 +416,10 @@ def plan_query(
     if not getattr(cfg, "planner_enabled", True):
         return []
 
-    model = resolve_planner_model(cfg)
+    # Planning runs on the CHAT tier: the plan is the scaffolding the chat
+    # model then follows, so the two must be matched — a weaker planner on a
+    # stronger chat model produces scaffolding the chat model fights against.
+    model = resolve_model(cfg, Tier.CHAT)
     if not model:
         return []
 
@@ -707,7 +688,7 @@ def resolve_next_tool_call(
         )
         return fast
 
-    model = resolve_planner_model(cfg)
+    model = resolve_model(cfg, Tier.CHAT)
     if not model:
         return None
 
@@ -805,7 +786,6 @@ __all__ = [
     "MAX_STEPS",
     "MIN_QUERY_CHARS",
     "SEARCH_MEMORY_DIRECTIVE",
-    "resolve_planner_model",
     "plan_query",
     "format_plan_block",
     "progress_nudge",

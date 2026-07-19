@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 from datetime import datetime, timezone
 
-from ..llm import get_llm_backend
+from ..llm import get_llm_backend, resolve_model, Tier
 from ..debug import debug_log
 
 
@@ -778,24 +778,6 @@ def _format_loop_activity(loop_messages: list[dict]) -> str:
     return "\n".join(kept)
 
 
-def _resolve_loop_digest_model(cfg) -> str:
-    """Pick the LLM model for the max-turn digest pass.
-
-    Mirrors ``_resolve_evaluator_model``: explicit ``evaluator_model`` →
-    ``intent_judge_model`` → ``llm_chat_model`` (the resolved active chat
-    model on both providers). The digest is a cheap classification-adjacent
-    pass so reusing an already-warm small model is preferred.
-    """
-    for candidate in (
-        getattr(cfg, "evaluator_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "llm_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
-
-
 def _strip_digest_artifacts(text: str) -> str:
     """Scrub markdown fences, surrounding quotes, and em dashes.
 
@@ -847,7 +829,8 @@ def digest_loop_for_max_turns(
     if not activity:
         return None
 
-    chat_model = _resolve_loop_digest_model(cfg)
+    # The max-turn digest is a cheap classification-adjacent pass: fast tier.
+    chat_model = resolve_model(cfg, Tier.FAST)
     if not chat_model:
         return None
 

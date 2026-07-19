@@ -29,8 +29,7 @@ class TestWeatherTool:
         self.context.cfg.ollama_base_url = ""
         self.context.cfg.ollama_chat_model = ""
         self.context.cfg.llm_chat_model = ""
-        self.context.cfg.tool_router_model = ""
-        self.context.cfg.intent_judge_model = ""
+        self.context.cfg.fast_model = ""
 
     def test_tool_properties(self):
         """Test tool metadata properties."""
@@ -418,8 +417,7 @@ class TestExtractPlaceFromUserText:
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.ollama_chat_model = "gemma4:e2b"
         cfg.llm_chat_model = "gemma4:e2b"
-        cfg.tool_router_model = ""
-        cfg.intent_judge_model = ""
+        cfg.fast_model = ""
         cfg.llm_tools_timeout_sec = 8.0
         return cfg
 
@@ -435,8 +433,7 @@ class TestExtractPlaceFromUserText:
         cfg.ollama_base_url = ""
         cfg.ollama_chat_model = ""
         cfg.llm_chat_model = ""
-        cfg.tool_router_model = ""
-        cfg.intent_judge_model = ""
+        cfg.fast_model = ""
         assert _extract_place_from_user_text("weather in London", cfg) is None
 
     def _patched_backend(self, return_value):

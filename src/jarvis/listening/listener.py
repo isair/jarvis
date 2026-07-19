@@ -1534,18 +1534,14 @@ class VoiceListener(threading.Thread):
         shared_judge = bool(chat_model) and judge_model == chat_model
 
         # Tool router — only warmed when the LLM selection strategy is active
-        # AND the router points at a model distinct from chat/judge. An empty
-        # `tool_router_model` means "reuse the intent-judge model (small, fast,
-        # already loaded for wake-word paths) or the chat model as a last
-        # resort". Resolve the same way the reply engine does so warmup targets
-        # whatever the engine will actually call. Skipping warmup for non-LLM
-        # strategies avoids loading a model that won't be used this session.
+        # AND it points at a model distinct from chat/judge. Routing runs on
+        # the fast tier; resolving through the same tier helper the reply
+        # engine uses keeps warmup targeting whatever the engine will actually
+        # call. Skipping warmup for non-LLM strategies avoids loading a model
+        # that won't be used this session.
         strategy = str(getattr(self.cfg, "tool_selection_strategy", "") or "").lower()
-        # Use the same resolution helper the reply engine uses so warmup
-        # targets the model the engine will actually call. Keeping a single
-        # source of truth prevents drift between warmup and runtime.
-        from ..reply.engine import resolve_tool_router_model
-        router_model_effective = resolve_tool_router_model(self.cfg)
+        from ..llm import resolve_model, Tier
+        router_model_effective = resolve_model(self.cfg, Tier.FAST)
         router_model = router_model_effective if strategy == "llm" else ""
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
