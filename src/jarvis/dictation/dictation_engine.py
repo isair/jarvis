@@ -19,6 +19,7 @@ import time
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
+from ..utils.audio_lock import portaudio_lock
 from .history import DictationHistory
 
 # Optional imports — graceful degradation when dependencies are missing.
@@ -128,8 +129,11 @@ def _play_beep_sd(wav_data: bytes) -> None:
     data_start = idx + 8  # skip 'data' + size u32
     pcm = wav_data[data_start:]
     samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-    with _suppress_stderr():
-        sd.play(samples, samplerate=44100, blocking=True)
+    # sd.play opens and closes a stream internally — lifecycle work that
+    # must be serialised with every other PortAudio user (see audio_lock).
+    with portaudio_lock:
+        with _suppress_stderr():
+            sd.play(samples, samplerate=44100, blocking=True)
 
 
 # ---------------------------------------------------------------------------
@@ -555,14 +559,15 @@ def _close_stream(stream: Any) -> None:
     """Stop and close a sounddevice InputStream, swallowing errors."""
     if stream is None:
         return
-    try:
-        stream.stop()
-    except Exception as exc:
-        debug_log(f"stream.stop() failed: {exc}", "dictation")
-    try:
-        stream.close()
-    except Exception as exc:
-        debug_log(f"stream.close() failed: {exc}", "dictation")
+    with portaudio_lock:
+        try:
+            stream.stop()
+        except Exception as exc:
+            debug_log(f"stream.stop() failed: {exc}", "dictation")
+        try:
+            stream.close()
+        except Exception as exc:
+            debug_log(f"stream.close() failed: {exc}", "dictation")
 
 
 # ---------------------------------------------------------------------------
@@ -842,11 +847,20 @@ class DictationEngine:
     # ------------------------------------------------------------------
 
     def _start_recording(self) -> None:
+        # Flip state only, then hand the heavy work (device query, stream
+        # open/start, beep) to a worker thread. This runs on the pynput
+        # hook thread: Windows silently unhooks callbacks that take too
+        # long, and opening PortAudio streams there raced the listener's
+        # audio threads into a native abort (#462).
         with self._lock:
             if self._recording:
                 return
             self._recording = True
 
+        threading.Thread(target=self._begin_recording, daemon=True).start()
+
+    def _begin_recording(self) -> None:
+        """Worker: open the audio stream and start capturing."""
         # Check Whisper readiness
         model = self._whisper_model_ref()
         backend = self._whisper_backend_ref()
@@ -891,15 +905,16 @@ class DictationEngine:
             native_rate = self._target_sample_rate
 
         try:
-            with _suppress_stderr():
-                self._stream = sd.InputStream(
-                    samplerate=native_rate,
-                    channels=1,
-                    dtype="float32",
-                    blocksize=int(native_rate * 0.1),
-                    callback=self._audio_callback,
-                    **stream_kwargs,
-                )
+            with portaudio_lock:
+                with _suppress_stderr():
+                    stream = sd.InputStream(
+                        samplerate=native_rate,
+                        channels=1,
+                        dtype="float32",
+                        blocksize=int(native_rate * 0.1),
+                        callback=self._audio_callback,
+                        **stream_kwargs,
+                    )
             self._stream_sample_rate = native_rate
             if native_rate != self._target_sample_rate:
                 debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
@@ -911,12 +926,26 @@ class DictationEngine:
             return
 
         try:
-            self._stream.start()
+            with portaudio_lock:
+                stream.start()
         except Exception as exc:
             debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
+            _close_stream(stream)
             self._recording = False
             if self._on_dictation_end:
                 self._on_dictation_end()
+            return
+
+        # The hotkey may have been released while the stream was opening
+        # (this now runs on a worker thread). If recording already stopped,
+        # tear the stream down instead of leaking a live capture.
+        with self._lock:
+            if self._recording:
+                self._stream = stream
+                stream = None
+        if stream is not None:
+            debug_log("dictation stopped before stream opened — closing", "dictation")
+            _close_stream(stream)
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
         """sounddevice callback — accumulate audio frames."""
