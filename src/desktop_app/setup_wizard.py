@@ -14,7 +14,7 @@ import platform
 import webbrowser
 import json
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict
+from typing import ClassVar, Optional, List, Tuple, Dict
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -429,19 +429,45 @@ except ImportError:
     GEOIP2_AVAILABLE = False
 
 
-class StatusCheckWorker(QThread):
+class _KeepAliveWorker(QThread):
+    """QThread that keeps itself referenced until its OS thread has fully
+    finished.
+
+    Wizard pages rebind their worker attribute inside completion slots
+    (model install chains, refresh buttons, test-connection buttons). The
+    completion signal is emitted at the end of run(), so the slot can run
+    while the OS thread is still winding down; dropping the last Python
+    reference at that point destroys a running QThread and Qt aborts the
+    whole app ("Fatal Python error: Aborted" — #509, #407, #239).
+
+    Subclasses must NOT shadow the built-in ``finished`` signal — the
+    keep-alive registry relies on it to know when release is safe.
+    """
+
+    _active: ClassVar[set] = set()
+
+    def start(self, *args, **kwargs):
+        _KeepAliveWorker._active.add(self)
+        self.finished.connect(self._retire)
+        super().start(*args, **kwargs)
+
+    def _retire(self) -> None:
+        _KeepAliveWorker._active.discard(self)
+
+
+class StatusCheckWorker(_KeepAliveWorker):
     """Worker thread for checking Ollama status."""
-    finished = pyqtSignal(OllamaStatus)
+    status_ready = pyqtSignal(OllamaStatus)
 
     def run(self):
         status = check_ollama_status()
-        self.finished.emit(status)
+        self.status_ready.emit(status)
 
 
-class CommandWorker(QThread):
+class CommandWorker(_KeepAliveWorker):
     """Worker thread for running commands."""
     output = pyqtSignal(str)
-    finished = pyqtSignal(bool, str)
+    completed = pyqtSignal(bool, str)
 
     def __init__(self, command: List[str], parent=None):
         super().__init__(parent)
@@ -474,11 +500,11 @@ class CommandWorker(QThread):
             process.wait()
 
             if process.returncode == 0:
-                self.finished.emit(True, "✅ Command completed successfully")
+                self.completed.emit(True, "✅ Command completed successfully")
             else:
-                self.finished.emit(False, f"❌ Command failed with exit code {process.returncode}")
+                self.completed.emit(False, f"❌ Command failed with exit code {process.returncode}")
         except Exception as e:
-            self.finished.emit(False, f"❌ Error: {str(e)}")
+            self.completed.emit(False, f"❌ Error: {str(e)}")
 
 
 class SetupWizard(QWizard):
@@ -751,7 +777,7 @@ class WelcomePage(QWizardPage):
 
         # Start background check
         self.worker = StatusCheckWorker()
-        self.worker.finished.connect(self._on_status_checked)
+        self.worker.status_ready.connect(self._on_status_checked)
         self.worker.start()
 
     def _on_status_checked(self, status: OllamaStatus):
@@ -978,7 +1004,7 @@ class ProviderChoicePage(QWizardPage):
         return wizard.welcome_page_id
 
 
-class _ModelFetchWorker(QThread):
+class _ModelFetchWorker(_KeepAliveWorker):
     """Fetches the model list from an OpenAI-compatible server off the UI
     thread so the wizard never freezes while connecting."""
 
@@ -1902,7 +1928,7 @@ class ModelsPage(QWizardPage):
 
         self._worker = CommandWorker([ollama_path, "pull", model])
         self._worker.output.connect(self._on_install_output)
-        self._worker.finished.connect(self._on_install_finished)
+        self._worker.completed.connect(self._on_install_finished)
         self._worker.start()
 
     def _on_install_output(self, text: str):
@@ -2545,7 +2571,7 @@ class WhisperSetupPage(QWizardPage):
 
         self._worker = CommandWorker([brew_path, "install", "ffmpeg"])
         self._worker.output.connect(self._on_output)
-        self._worker.finished.connect(self._on_ffmpeg_installed)
+        self._worker.completed.connect(self._on_ffmpeg_installed)
         self._worker.start()
 
     def _install_mlx_whisper(self):
@@ -2561,7 +2587,7 @@ class WhisperSetupPage(QWizardPage):
         python_path = sys.executable
         self._worker = CommandWorker([python_path, "-m", "pip", "install", "mlx-whisper"])
         self._worker.output.connect(self._on_output)
-        self._worker.finished.connect(self._on_mlx_installed)
+        self._worker.completed.connect(self._on_mlx_installed)
         self._worker.start()
 
     def _on_output(self, text: str):
