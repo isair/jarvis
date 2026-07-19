@@ -52,8 +52,7 @@ integration in `src/jarvis/reply/engine.py`.
 
 ### Model resolution
 
-1. `cfg.planner_model` (explicit override, for benchmarking)
-2. `cfg.llm_chat_model`
+The planner runs on the chat tier (`resolve_model(cfg, Tier.CHAT)`).
 
 The planner must track the chat model. The plan is the scaffolding the
 chat model follows; a weaker planner on top of a stronger chat model
@@ -200,7 +199,6 @@ The engine consumes the plan in two phases.
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `planner_enabled` | `True` | Feature gate. |
-| `planner_model` | `""` | Explicit planner model override. |
 | `planner_timeout_sec` | `6.0` | Timeout for plan and step-resolver LLM calls. |
 
 ## Non-goals
