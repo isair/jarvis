@@ -234,13 +234,14 @@ def _resolve_evaluator_model(cfg) -> str:
     """Pick the LLM model for the evaluator pass.
 
     Resolution order: explicit ``evaluator_model`` → ``intent_judge_model`` →
-    ``ollama_chat_model``. The evaluator is a small classification job;
-    reusing the judge model keeps it on a small, already-warm model.
+    ``llm_chat_model`` (the resolved active chat model on both providers).
+    The evaluator is a small classification job; reusing the judge model
+    keeps it on a small, already-warm model.
     """
     for candidate in (
         getattr(cfg, "evaluator_model", ""),
         getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
+        getattr(cfg, "llm_chat_model", ""),
     ):
         if candidate:
             return candidate

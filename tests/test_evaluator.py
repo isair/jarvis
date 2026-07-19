@@ -98,6 +98,10 @@ class TestEvaluateTurn:
         c = _C()
         for k, v in overrides.items():
             setattr(c, k, v)
+        # Mirror config load: Settings always carries the resolved active
+        # chat model in llm_chat_model (= ollama_chat_model on Ollama).
+        if not hasattr(c, "llm_chat_model"):
+            c.llm_chat_model = c.ollama_chat_model
         return c
 
     def test_terminal_path(self):

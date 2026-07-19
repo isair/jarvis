@@ -782,14 +782,14 @@ def _resolve_loop_digest_model(cfg) -> str:
     """Pick the LLM model for the max-turn digest pass.
 
     Mirrors ``_resolve_evaluator_model``: explicit ``evaluator_model`` →
-    ``intent_judge_model`` → ``ollama_chat_model``. The digest is a
-    cheap classification-adjacent pass so reusing an already-warm small
-    model is preferred.
+    ``intent_judge_model`` → ``llm_chat_model`` (the resolved active chat
+    model on both providers). The digest is a cheap classification-adjacent
+    pass so reusing an already-warm small model is preferred.
     """
     for candidate in (
         getattr(cfg, "evaluator_model", ""),
         getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
+        getattr(cfg, "llm_chat_model", ""),
     ):
         if candidate:
             return candidate

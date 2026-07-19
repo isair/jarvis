@@ -27,7 +27,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/listening/intent_judge.py](src/jarvis/listening/intent_judge.py) — `IntentJudge.evaluate()`.
 - **Trigger**: on a speech segment *only if* there is an engagement signal (wake word detected, hot-window active, or TTS playing). Pure ambient speech skips it.
-- **Model / gating**: `cfg.intent_judge_model` (default `gemma4:e2b`, ~2B) via `get_llm_backend(cfg).chat(...)`. The backend re-raises `ConnectionError` so the judge can apply a 30s cooldown after the server actively refuses; falls back to text-based wake detection while the cooldown is active.
+- **Model / gating**: `cfg.intent_judge_model` via `get_llm_backend(cfg).chat(...)`. Provider-aware default at config load: `gemma4:e2b` (~2B) on the Ollama chat path; on an OpenAI-compatible chat provider an unset judge model resolves to the active `llm_chat_model` (the Ollama pull-name does not exist on the user's server). An explicit `intent_judge_model` in config.json wins on both paths. The backend re-raises `ConnectionError` so the judge can apply a 30s cooldown after the server actively refuses; falls back to text-based wake detection while the cooldown is active.
 - **Inputs**:
   - Rolling transcript buffer (last 120s, with timestamps)
   - Wake-word timestamp (if any), normalised aliases
@@ -252,7 +252,7 @@ user input
 3. Pre-warm the intent-judge model before TTS finishes.
 4. Cache tool-router (#7) output by query hash.
 5. Give each digest its own timeout budget rather than sharing `llm_digest_timeout_sec` (today a slow memory digest can starve the max-turn digest).
-6. Consider single-model deployments: router+planner prefer `intent_judge_model`; loading a second model hurts cold-start latency on small hardware.
+6. Consider single-model deployments: the router prefers `intent_judge_model` while the planner tracks `llm_chat_model`; loading a second model hurts cold-start latency on small hardware. (On an OpenAI-compatible chat provider an unset judge model already resolves to the chat model, so every auxiliary context rides the one served model.)
 7. Narrow `llm_thinking_enabled` to router/planner only, not every context.
 8. Reduce `intent_judge_timeout_sec` (15s) or race it against text-based wake detection to avoid blocking the audio loop.
 

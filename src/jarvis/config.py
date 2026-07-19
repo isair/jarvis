@@ -536,7 +536,7 @@ def get_default_config() -> Dict[str, Any]:
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
         "llm_thinking_enabled": False,  # Enable thinking/reasoning mode for chat (slower but may improve quality)
-        "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
+        "intent_judge_model": "gemma4:e2b",  # Ollama-path default; on an OpenAI-compatible chat provider an unset value resolves to llm_chat_model at load
         "intent_judge_timeout_sec": 15.0,  # Max time to wait for intent judge response
         "intent_judge_thinking_enabled": False,  # Enable thinking for intent judge (adds latency to wake detection)
 
@@ -759,8 +759,16 @@ def load_settings() -> Settings:
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
-    # Intent Judge - always used when available
-    intent_judge_model = str(merged.get("intent_judge_model", "gemma4:e2b"))
+    # Intent Judge - always used when available. The default judge model is an
+    # Ollama pull that only exists on the Ollama chat path. The judge rides the
+    # chat provider's backend, so on an OpenAI-compatible chat provider an
+    # unset judge model resolves to the active chat model — the one model the
+    # user's server is known to serve. An explicit value in the user's config
+    # always wins (power users may serve a dedicated small judge model).
+    if llm_provider == "openai_compatible" and not str(cfg_json.get("intent_judge_model", "") or "").strip():
+        intent_judge_model = llm_chat_model
+    else:
+        intent_judge_model = str(merged.get("intent_judge_model", "gemma4:e2b"))
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 10.0))
 
     # Transcript Buffer - ambient speech context for intent judge (separate from dialogue)
