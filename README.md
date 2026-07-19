@@ -195,9 +195,23 @@ Most users won't need to change anything. Open **⚙️ Settings** from the tray
 <details>
 <summary><strong>LLM Provider (Ollama or OpenAI-compatible)</strong></summary>
 
-By default Jarvis runs everything locally through [Ollama](https://ollama.com): no API keys, nothing leaves your machine. If you already run an OpenAI-compatible server (**LM Studio**, **oMLX**, **llama.cpp**'s `llama-server`, **vLLM**, **LocalAI**, …) you can point Jarvis at it instead. Your data still only travels to the servers you control.
+By default Jarvis runs everything locally through [Ollama](https://ollama.com): no API keys, nothing leaves your machine. If you already run an OpenAI-compatible server you can point Jarvis at it instead. Your data still only travels to the servers you control.
 
-Pick the provider in the Setup Wizard's first step, or under **⚙️ Settings → 🔌 LLM Provider**. No JSON editing required. For reference, the underlying keys are:
+Pick the provider in the Setup Wizard's first step, or under **⚙️ Settings → 🔌 LLM Provider**. No JSON editing required. On the OpenAI-compatible page the wizard does the legwork for you: it auto-detects running local servers, offers a one-click preset for your app, and when you press **Connect** it loads the server's model list and checks the chosen model for chat, tool calling, and embeddings, so you know it works before you finish setup.
+
+Tested local servers (all run on your own machine):
+
+| App | Default base URL | Notes |
+|-----|------------------|-------|
+| LM Studio | `http://localhost:1234/v1` | Chat, tool calling, and embeddings. |
+| Ollama (OpenAI API) | `http://localhost:11434/v1` | The native Ollama path is the default; the OpenAI shape works too. |
+| Jan | `http://localhost:1337/v1` | Chat and tool calling. |
+| llama.cpp (`llama-server`) | `http://localhost:8080/v1` | Tool calling depends on the model. |
+| LocalAI | `http://localhost:8080/v1` | Feature support depends on the backend model. |
+| vLLM | `http://localhost:8000/v1` | Tool calling depends on the model. |
+| oMLX (Apple Silicon) | varies | No embeddings endpoint, so memory uses keyword search unless you route embeddings to Ollama (below). |
+
+For reference, the underlying config keys are:
 
 ```json
 {
@@ -208,11 +222,11 @@ Pick the provider in the Setup Wizard's first step, or under **⚙️ Settings �
 }
 ```
 
-- `llm_base_url`: your server's OpenAI API base URL (LM Studio defaults to `http://localhost:1234/v1`).
+- `llm_base_url`: your server's OpenAI API base URL.
 - `llm_api_key`: only if your server requires one; leave empty otherwise.
 - `llm_chat_model`: whatever model name your server exposes.
 
-**Embeddings** (used for memory search) can run on a different backend. If your chat server has no embeddings endpoint, leave the embedding model empty to fall back to Ollama, or route embeddings explicitly:
+**Embeddings** (used for memory search) can run on a different backend. If your chat server has no embeddings endpoint, memory falls back to keyword search. To keep full semantic memory, route embeddings to Ollama (the wizard offers this automatically when it detects a server that cannot embed):
 
 ```json
 {
@@ -221,7 +235,7 @@ Pick the provider in the Setup Wizard's first step, or under **⚙️ Settings �
 }
 ```
 
-Leave `embedding_provider` empty to use the same provider as chat. When no embedding model is available, memory search degrades gracefully to keyword search.
+Leave `embedding_provider` empty to use the same provider as chat. With no working embeddings, memory search degrades gracefully to keyword search.
 
 </details>
 

@@ -108,6 +108,7 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 - `warm_up()` is a no-op (returns `True`): OpenAI-compatible servers keep models warm at server load time.
 - Authentication: `Authorization: Bearer <api_key>` header sent only when `api_key` is non-empty.
 - Error logs do not echo URLs or API keys: HTTP errors print only the status code, generic exceptions print only the class name, connection errors print a fixed string and re-raise so callers can apply their own back-off.
+- `check_capabilities(chat_model, embed_model=None, *, timeout_sec)` returns a `ServerCapabilities` dataclass (`reachable`, `chat`, `tools`, `embeddings`, `models`). It probes with real requests — `list_models`, a one-message chat, a trivial tool call, and an embedding — and never raises (every failure collapses to a `False` flag). `chat` is True for either a text reply or a tool-call-only reply. Used by the setup wizard and the desktop startup check to report honestly what a server+model can do before the user relies on it. The probe issues real inference, so it is recorded in `docs/llm_contexts.md`.
 
 ## Module-local LLM wrappers
 
