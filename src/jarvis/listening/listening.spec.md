@@ -68,11 +68,13 @@ All stream lifecycle calls (`InputStream`/`OutputStream` construction,
 TTS, and the thinking tune. PortAudio documents stream open/close as not
 thread safe; unserialised calls across threads abort the whole app on
 Windows (#462, #401, #422). The run loop uses `_serialised_stream` instead
-of the raw `with stream:` context manager. The Windows mic-permission
-check's timeout path deliberately abandons a blocked stream instead of
-aborting/closing it from another thread — the check thread may still be
-inside `start()`/`stop()` on it, and a cross-thread close is a native
-use-after-free.
+of the raw `with stream:` context manager. Two deliberate exceptions: the
+Windows mic-permission probe opens its stream *without* the lock (that open
+can hang indefinitely when Windows blocks mic access, and hanging while
+holding the process-wide lock would freeze every audio user), and its
+timeout path abandons a blocked stream instead of aborting/closing it from
+another thread — the check thread may still be inside `start()`/`stop()`
+on it, and a cross-thread close is a native use-after-free.
 
 ### 1. Transcript-First
 

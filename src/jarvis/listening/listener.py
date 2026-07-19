@@ -1645,21 +1645,36 @@ class VoiceListener(threading.Thread):
                 mic_error: list = [None]
 
                 def _mic_check():
+                    # Deliberately NOT under portaudio_lock: this probe's
+                    # open/start can hang indefinitely when Windows blocks
+                    # mic access at the system level (that is what the 5s
+                    # timeout below is for), and hanging while holding the
+                    # process-wide lock would freeze every other audio user
+                    # (listener, dictation, TTS). The probe runs once at
+                    # startup before the listener's main stream opens, so
+                    # the residual open/open race is minimal; the quick
+                    # stop/close after a successful start stays guarded.
+                    stream = None
                     try:
-                        with portaudio_lock:
-                            stream = sd.InputStream(
-                                samplerate=self._samplerate, channels=1,
-                                dtype="float32", blocksize=int(self._samplerate * 0.1),
-                            )
-                            mic_stream[0] = stream
-                            stream.start()
+                        stream = sd.InputStream(
+                            samplerate=self._samplerate, channels=1,
+                            dtype="float32", blocksize=int(self._samplerate * 0.1),
+                        )
+                        stream.start()
                         time.sleep(0.15)
                         with portaudio_lock:
                             stream.stop()
                             stream.close()
+                        stream = None
                         mic_ok.set()
                     except Exception as exc:
                         mic_error[0] = exc
+                        if stream is not None:
+                            try:
+                                with portaudio_lock:
+                                    stream.close()
+                            except Exception:
+                                pass
 
                 check_thread = threading.Thread(target=_mic_check, daemon=True)
                 check_thread.start()

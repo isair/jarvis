@@ -662,6 +662,11 @@ class DictationEngine:
         self._max_frames = MAX_RECORD_SECONDS * sample_rate
         self._lock = threading.Lock()
         self._started = False
+        # Monotonic recording-session token. Each press increments it; the
+        # _begin_recording worker only mutates engine state while its token
+        # is still current, so a stale worker from a superseded press can
+        # never clobber a newer session or leak a live stream.
+        self._session = 0
 
         # Double-tap detection for hands-free mode
         self._last_hotkey_release_time: float = 0.0
@@ -856,18 +861,41 @@ class DictationEngine:
             if self._recording:
                 return
             self._recording = True
+            self._session += 1
+            token = self._session
 
-        threading.Thread(target=self._begin_recording, daemon=True).start()
+        threading.Thread(
+            target=self._begin_recording, args=(token,), daemon=True
+        ).start()
 
-    def _begin_recording(self) -> None:
+    def _abandon_session(self, token: int) -> bool:
+        """Roll back a failed session if *token* is still current.
+
+        Returns True when this worker owned the active session (so the
+        caller should fire the end callback); False when a newer press has
+        superseded it and no state may be touched.
+        """
+        with self._lock:
+            if self._session != token or not self._recording:
+                return False
+            self._recording = False
+            return True
+
+    def _begin_recording(self, token: int) -> None:
         """Worker: open the audio stream and start capturing."""
         # Check Whisper readiness
         model = self._whisper_model_ref()
         backend = self._whisper_backend_ref()
         if model is None and backend != "mlx":
             debug_log("whisper model not loaded — dictation skipped", "dictation")
-            self._recording = False
+            self._abandon_session(token)
             return
+
+        # Bail early if the press was already released/superseded while the
+        # worker was starting up — avoids firing callbacks for a dead press.
+        with self._lock:
+            if self._session != token or not self._recording:
+                return
 
         debug_log("dictation recording started", "dictation")
         self._audio_frames = []
@@ -920,8 +948,7 @@ class DictationEngine:
                 debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
-            self._recording = False
-            if self._on_dictation_end:
+            if self._abandon_session(token) and self._on_dictation_end:
                 self._on_dictation_end()
             return
 
@@ -931,20 +958,20 @@ class DictationEngine:
         except Exception as exc:
             debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
             _close_stream(stream)
-            self._recording = False
-            if self._on_dictation_end:
+            if self._abandon_session(token) and self._on_dictation_end:
                 self._on_dictation_end()
             return
 
-        # The hotkey may have been released while the stream was opening
-        # (this now runs on a worker thread). If recording already stopped,
-        # tear the stream down instead of leaking a live capture.
+        # The hotkey may have been released (or pressed again, starting a
+        # newer session) while the stream was opening on this worker. Only
+        # the still-current session may store its stream; anything else is
+        # torn down instead of leaking a live microphone capture.
         with self._lock:
-            if self._recording:
+            if self._session == token and self._recording:
                 self._stream = stream
                 stream = None
         if stream is not None:
-            debug_log("dictation stopped before stream opened — closing", "dictation")
+            debug_log("dictation session superseded before stream opened — closing", "dictation")
             _close_stream(stream)
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
