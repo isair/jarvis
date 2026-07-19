@@ -34,6 +34,8 @@ def test_plan_injects_action_plan_block_into_system_message(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools, no direct-exec
+
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → native tools, no direct-exec
     mock_config.evaluator_enabled = False
 
     captured_system_messages: list[str] = []
@@ -92,6 +94,8 @@ def test_small_model_direct_execs_planned_tools_without_chat_llm(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
     mock_config.evaluator_enabled = False
 
     chat_call_count = [0]
@@ -175,6 +179,8 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"
+
+    mock_config.llm_chat_model = "gemma4:e2b"
     mock_config.evaluator_enabled = False
 
     captured_system_messages: list[str] = []
@@ -223,6 +229,8 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
 
     chat_call_count = [0]
 
@@ -289,6 +297,8 @@ def test_paraphrased_plan_falls_back_to_tool_router(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools
+
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → native tools
     mock_config.evaluator_enabled = False
 
     select_tools_called = [0]
@@ -342,6 +352,8 @@ def test_paraphrased_plan_skips_direct_exec_for_small_models(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → direct-exec path
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → direct-exec path
     mock_config.evaluator_enabled = False
 
     resolver_calls = [0]
@@ -396,6 +408,8 @@ def test_router_always_runs_and_plan_tools_are_unioned(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.evaluator_enabled = False
 
     router_calls = [0]
@@ -472,6 +486,8 @@ def test_direct_exec_fires_despite_prior_query_tool_carryover(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
 
     # Simulate a prior query that used a tool — this is what happens after the
     # "scientists similar to Einstein" query that ran webSearch successfully.

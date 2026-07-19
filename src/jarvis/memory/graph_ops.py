@@ -6,7 +6,9 @@ Keeps graph.py as a pure data store (SQLite only). This module handles:
 - Best-node traversal (greedy descent via recent → top → root entry points)
 - Auto-split when a node exceeds the token threshold
 
-All LLM calls use call_llm_direct from the local Ollama instance.
+All LLM calls go through the configured backend (factory dispatch on
+``cfg.llm_provider``); the local ``call_llm_direct`` wrapper is the
+single intercept point tests patch.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, NamedTuple, Optional
 
 from ..debug import debug_log
-from ..llm import call_llm_direct
+from ..llm import get_llm_backend
 from .graph import (
     BRANCH_DIRECTIVES,
     BRANCH_USER,
@@ -29,6 +31,19 @@ from .graph import (
     SPLIT_THRESHOLD,
     normalise_fact,
 )
+
+
+def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
+                    timeout_sec=10.0, thinking=False, num_ctx=4096,
+                    temperature=None):
+    """Local indirection: route graph-ops LLM calls through the backend
+    configured by ``cfg.llm_provider``. Tests patch this single symbol
+    to intercept every LLM round-trip in this module."""
+    return get_llm_backend(cfg).direct(
+        chat_model, system_prompt, user_content,
+        timeout_sec=timeout_sec, thinking=thinking,
+        num_ctx=num_ctx, temperature=temperature,
+    )
 
 
 # Mapping from the branch id the extractor emits to its human-readable
@@ -48,8 +63,8 @@ _LABEL_TO_BRANCH = {v: k for k, v in _BRANCH_LABELS.items()}
 
 def extract_graph_memories(
     summary: str,
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 30.0,
     thinking: bool = False,
     date_utc: Optional[str] = None,
@@ -177,7 +192,7 @@ def extract_graph_memories(
         f"summary:\n{date_prefix}{summary}"
     )
 
-    debug_log(f"graph memory extraction: sending {len(summary)} chars to {ollama_chat_model}", "memory")
+    debug_log(f"graph memory extraction: sending {len(summary)} chars to {chat_model}", "memory")
 
     # Knowledge extraction is a rule-following classification task —
     # determinism beats creativity here. Ollama's default ~0.8 makes
@@ -185,8 +200,8 @@ def extract_graph_memories(
     # sometimes drifting back into meta-narrative or stale-snapshot
     # extraction); temperature=0 lets the prompt do its job consistently.
     response = call_llm_direct(
-        base_url=ollama_base_url,
-        chat_model=ollama_chat_model,
+        cfg=cfg,
+        chat_model=chat_model,
         system_prompt=system_prompt,
         user_content=user_content,
         timeout_sec=timeout_sec,
@@ -247,8 +262,8 @@ def extract_graph_memories(
 def _llm_pick_best_child(
     fragment: str,
     children: list[MemoryNode],
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 15.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
@@ -279,9 +294,9 @@ def _llm_pick_best_child(
     # Picker is a one-digit classification — reuse the small picker_model
     # when the caller provides one (resolved from intent_judge_model → chat_model).
     # Falls back to the chat model when no small model is configured.
-    effective_model = picker_model or ollama_chat_model
+    effective_model = picker_model or chat_model
     response = call_llm_direct(
-        base_url=ollama_base_url,
+        cfg=cfg,
         chat_model=effective_model,
         system_prompt=system_prompt,
         user_content=user_content,
@@ -309,8 +324,8 @@ def _llm_pick_best_child(
 def find_best_node(
     store: GraphMemoryStore,
     fragment: str,
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 15.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
@@ -347,7 +362,7 @@ def find_best_node(
         if recent:
             debug_log(f"graph traversal: trying {len(recent)} recent nodes: {[n.name for n in recent]}", "memory")
             best = _llm_pick_best_child(
-                fragment, recent, ollama_base_url, ollama_chat_model,
+                fragment, recent, cfg, chat_model,
                 timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
             )
             if best is not None:
@@ -362,7 +377,7 @@ def find_best_node(
         if top:
             debug_log(f"graph traversal: trying {len(top)} top nodes: {[n.name for n in top]}", "memory")
             best = _llm_pick_best_child(
-                fragment, top, ollama_base_url, ollama_chat_model,
+                fragment, top, cfg, chat_model,
                 timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
             )
             if best is not None:
@@ -385,7 +400,7 @@ def find_best_node(
 
         debug_log(f"graph traversal: depth {depth}, choosing from {[c.name for c in children]}", "memory")
         best = _llm_pick_best_child(
-            fragment, children, ollama_base_url, ollama_chat_model,
+            fragment, children, cfg, chat_model,
             timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
         )
         if best is None:
@@ -539,8 +554,8 @@ def merge_node_data(
     store: GraphMemoryStore,
     node_id: str,
     new_facts: list[str],
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 20.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
@@ -610,9 +625,9 @@ def merge_node_data(
             f"consolidate / dedupe / prune only):\n{existing}"
         )
 
-    effective_model = picker_model or ollama_chat_model
+    effective_model = picker_model or chat_model
     response = call_llm_direct(
-        base_url=ollama_base_url,
+        cfg=cfg,
         chat_model=effective_model,
         system_prompt=_MERGE_SYSTEM_PROMPT,
         user_content=user_content,
@@ -687,8 +702,8 @@ def merge_node_data(
 def auto_split_node(
     store: GraphMemoryStore,
     node_id: str,
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 45.0,
     thinking: bool = False,
 ) -> bool:
@@ -739,8 +754,8 @@ def auto_split_node(
     )
 
     response = call_llm_direct(
-        base_url=ollama_base_url,
-        chat_model=ollama_chat_model,
+        cfg=cfg,
+        chat_model=chat_model,
         system_prompt=system_prompt,
         user_content=user_content,
         timeout_sec=timeout_sec,
@@ -816,8 +831,8 @@ class GraphUpdateResult(NamedTuple):
 def update_graph_from_dialogue(
     store: GraphMemoryStore,
     summary: str,
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 30.0,
     thinking: bool = False,
     date_utc: Optional[str] = None,
@@ -839,8 +854,8 @@ def update_graph_from_dialogue(
     # Step 1: Extract discrete branch-tagged facts from the summary
     facts = extract_graph_memories(
         summary=summary,
-        ollama_base_url=ollama_base_url,
-        ollama_chat_model=ollama_chat_model,
+        cfg=cfg,
+        chat_model=chat_model,
         timeout_sec=timeout_sec,
         thinking=thinking,
         date_utc=date_utc,
@@ -867,8 +882,8 @@ def update_graph_from_dialogue(
             node_id = find_best_node(
                 store=store,
                 fragment=fact,
-                ollama_base_url=ollama_base_url,
-                ollama_chat_model=ollama_chat_model,
+                cfg=cfg,
+                chat_model=chat_model,
                 timeout_sec=15.0,
                 thinking=thinking,
                 picker_model=picker_model,
@@ -948,8 +963,8 @@ def update_graph_from_dialogue(
                 store=store,
                 node_id=node_id,
                 new_facts=node_facts,
-                ollama_base_url=ollama_base_url,
-                ollama_chat_model=ollama_chat_model,
+                cfg=cfg,
+                chat_model=chat_model,
                 timeout_sec=20.0,
                 thinking=thinking,
                 picker_model=picker_model,
@@ -1005,8 +1020,8 @@ def update_graph_from_dialogue(
                 auto_split_node(
                     store=store,
                     node_id=node_id,
-                    ollama_base_url=ollama_base_url,
-                    ollama_chat_model=ollama_chat_model,
+                    cfg=cfg,
+                    chat_model=chat_model,
                     timeout_sec=45.0,
                     thinking=thinking,
                 )
@@ -1023,8 +1038,8 @@ def update_graph_from_dialogue(
 
 def consolidate_all_populated_nodes(
     store: GraphMemoryStore,
-    ollama_base_url: str,
-    ollama_chat_model: str,
+    cfg,
+    chat_model: str,
     timeout_sec: float = 20.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
@@ -1059,8 +1074,8 @@ def consolidate_all_populated_nodes(
                 store=store,
                 node_id=node.id,
                 new_facts=[],
-                ollama_base_url=ollama_base_url,
-                ollama_chat_model=ollama_chat_model,
+                cfg=cfg,
+                chat_model=chat_model,
                 timeout_sec=timeout_sec,
                 thinking=thinking,
                 picker_model=picker_model,

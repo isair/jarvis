@@ -46,6 +46,53 @@ class TestEntryPointImports:
         )
 
 
+class TestOllamaRuntimeFlags:
+    """The desktop startup must only launch/verify Ollama when a local
+    provider actually uses it. A pure OpenAI-compatible setup should skip
+    the Ollama server-start and model-verification entirely."""
+
+    def _flags(self, **provider):
+        from types import SimpleNamespace
+        from desktop_app.app import _ollama_runtime_flags
+        return _ollama_runtime_flags(SimpleNamespace(**provider))
+
+    def test_default_ollama_needs_everything(self):
+        needed, chat_on_ollama = self._flags(llm_provider="ollama", embedding_provider="")
+        assert needed is True
+        assert chat_on_ollama is True
+
+    def test_pure_openai_compatible_skips_ollama(self):
+        """Chat and embeddings both remote: no local server, no model checks."""
+        needed, chat_on_ollama = self._flags(
+            llm_provider="openai_compatible", embedding_provider="")
+        assert needed is False
+        assert chat_on_ollama is False
+
+    def test_openai_chat_with_ollama_embeddings_still_needs_server(self):
+        """Chat remote but embeddings on Ollama: the server must be up, but
+        the chat-model verification does not apply (the chat model isn't an
+        Ollama model)."""
+        needed, chat_on_ollama = self._flags(
+            llm_provider="openai_compatible", embedding_provider="ollama")
+        assert needed is True
+        assert chat_on_ollama is False
+
+    def test_ollama_chat_with_openai_embeddings_needs_server_and_chat_check(self):
+        needed, chat_on_ollama = self._flags(
+            llm_provider="ollama", embedding_provider="openai_compatible")
+        assert needed is True
+        assert chat_on_ollama is True
+
+    def test_missing_attrs_default_to_ollama(self):
+        """A cfg-like object without provider attrs defaults to the Ollama
+        path (fail-safe — never skip Ollama setup by accident)."""
+        from types import SimpleNamespace
+        from desktop_app.app import _ollama_runtime_flags
+        needed, chat_on_ollama = _ollama_runtime_flags(SimpleNamespace())
+        assert needed is True
+        assert chat_on_ollama is True
+
+
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 

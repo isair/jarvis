@@ -193,6 +193,39 @@ Most users won't need to change anything. Open **⚙️ Settings** from the tray
 </p>
 
 <details>
+<summary><strong>LLM Provider (Ollama or OpenAI-compatible)</strong></summary>
+
+By default Jarvis runs everything locally through [Ollama](https://ollama.com): no API keys, nothing leaves your machine. If you already run an OpenAI-compatible server (**LM Studio**, **oMLX**, **llama.cpp**'s `llama-server`, **vLLM**, **LocalAI**, …) you can point Jarvis at it instead. Your data still only travels to the servers you control.
+
+Pick the provider in the Setup Wizard's first step, or under **⚙️ Settings → 🔌 LLM Provider**. No JSON editing required. For reference, the underlying keys are:
+
+```json
+{
+  "llm_provider": "openai_compatible",
+  "llm_base_url": "http://localhost:1234/v1",
+  "llm_api_key": "",
+  "llm_chat_model": "your-served-model-name"
+}
+```
+
+- `llm_base_url`: your server's OpenAI API base URL (LM Studio defaults to `http://localhost:1234/v1`).
+- `llm_api_key`: only if your server requires one; leave empty otherwise.
+- `llm_chat_model`: whatever model name your server exposes.
+
+**Embeddings** (used for memory search) can run on a different backend. If your chat server has no embeddings endpoint, leave the embedding model empty to fall back to Ollama, or route embeddings explicitly:
+
+```json
+{
+  "embedding_provider": "ollama",
+  "embedding_model": "nomic-embed-text"
+}
+```
+
+Leave `embedding_provider` empty to use the same provider as chat. When no embedding model is available, memory search degrades gracefully to keyword search.
+
+</details>
+
+<details>
 <summary><strong>Speech Recognition (Whisper)</strong></summary>
 
 #### Language Modes

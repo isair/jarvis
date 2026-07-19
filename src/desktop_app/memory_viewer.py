@@ -530,8 +530,8 @@ def graph_import_diary() -> Response:
                     result = update_graph_from_dialogue(
                         store=store,
                         summary=summary_text,
-                        ollama_base_url=settings.ollama_base_url,
-                        ollama_chat_model=settings.ollama_chat_model,
+                        cfg=settings,
+                        chat_model=settings.llm_chat_model,
                         timeout_sec=settings.llm_chat_timeout_sec,
                         thinking=getattr(settings, 'llm_thinking_enabled', False),
                         date_utc=date_utc,
@@ -621,8 +621,8 @@ def graph_consolidate_all() -> Response:
             # nodes — buffering the full sweep would defeat NDJSON.
             for name, before, after in consolidate_all_populated_nodes(
                 store=store,
-                ollama_base_url=settings.ollama_base_url,
-                ollama_chat_model=settings.ollama_chat_model,
+                cfg=settings,
+                chat_model=settings.llm_chat_model,
                 timeout_sec=20.0,
                 thinking=getattr(settings, 'llm_thinking_enabled', False),
                 picker_model=picker_model,
@@ -708,12 +708,7 @@ def diary_scrub_deflections() -> Response:
             rows_seen = 0
             embeddings_refreshed = 0
 
-            for event in rewrite_all_diary_summaries(
-                db,
-                ollama_base_url=settings.ollama_base_url,
-                ollama_chat_model=settings.ollama_chat_model,
-                ollama_embed_model=settings.ollama_embed_model,
-            ):
+            for event in rewrite_all_diary_summaries(db, settings):
                 rows_seen += 1
                 if event.get("rewritten"):
                     rows_rewritten += 1
@@ -799,12 +794,7 @@ def diary_optimise_topics() -> Response:
             topics_merged = 0
             topics_expanded = 0
 
-            for event in optimise_diary_topics(
-                db,
-                ollama_base_url=settings.ollama_base_url,
-                ollama_chat_model=settings.ollama_chat_model,
-                ollama_embed_model=settings.ollama_embed_model,
-            ):
+            for event in optimise_diary_topics(db, settings):
                 rows_seen += 1
                 if event.get("topics_changed"):
                     rows_changed += 1

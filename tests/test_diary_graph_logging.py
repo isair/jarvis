@@ -43,12 +43,20 @@ class TestKnowledgeGraphConsoleLogging:
             "jarvis.memory.graph_ops.update_graph_from_dialogue",
             return_value=graph_result,
         ):
-            return update_diary_from_dialogue_memory(
-                db=db,
-                dialogue_memory=dialogue_memory,
+            from types import SimpleNamespace
+            cfg = SimpleNamespace(
+                llm_provider="ollama",
+                llm_base_url="http://localhost:11434",
+                llm_chat_model="test",
+                embedding_model="test",
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test",
                 ollama_embed_model="test",
+            )
+            return update_diary_from_dialogue_memory(
+                db=db,
+                dialogue_memory=dialogue_memory,
+                cfg=cfg,
                 force=True,
                 timeout_sec=5.0,
             )

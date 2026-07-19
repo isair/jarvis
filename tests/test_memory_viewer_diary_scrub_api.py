@@ -68,7 +68,7 @@ class TestDiaryScrubEndpoint:
         # known-bad sentences stripped out and everything else verbatim.
         # This keeps the endpoint test deterministic; the rewrite logic
         # itself is exercised in tests/test_diary_rewrite_sweep.py.
-        def fake_rewrite(base_url, model, system_prompt, user_prompt, **kwargs):
+        def fake_rewrite(cfg, system_prompt, user_prompt, **kwargs):
             # The user prompt is the diary text wrapped in untrusted-input
             # fence markers — strip them to recover the original.
             text = user_prompt
@@ -80,7 +80,7 @@ class TestDiaryScrubEndpoint:
             kept = [s for s in sentences if "the assistant" not in s.lower()]
             return ". ".join(kept) + ("." if kept else "")
 
-        monkeypatch.setattr(cmod, "call_llm_direct", fake_rewrite)
+        monkeypatch.setattr(cmod, "_direct_llm", fake_rewrite)
 
         memory_viewer.app.config["TESTING"] = True
         self.client = memory_viewer.app.test_client()

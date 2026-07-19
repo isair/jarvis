@@ -6,10 +6,11 @@ diverge, warmup loads the wrong model and the first real routing call eats a
 cold-start stall. The resolution order is enforced by a single helper
 (``resolve_tool_router_model``), which this test exercises directly.
 
-Order: `tool_router_model` → `intent_judge_model` → `ollama_chat_model` →
-empty string. The key property is that an explicit `tool_router_model` wins
-over everything, and that an empty `tool_router_model` falls through to the
-(small, fast, already-warm) judge model BEFORE the (large, slow) chat model.
+Order: ``tool_router_model`` → ``intent_judge_model`` → ``llm_chat_model``
+→ empty string. The key property is that an explicit ``tool_router_model``
+wins over everything, and that an empty ``tool_router_model`` falls through
+to the (small, fast, already-warm) judge model BEFORE the (large, slow)
+chat model.
 """
 
 import pytest
@@ -23,7 +24,7 @@ class _Cfg:
     def __init__(self, router="", judge="", chat=""):
         self.tool_router_model = router
         self.intent_judge_model = judge
-        self.ollama_chat_model = chat
+        self.llm_chat_model = chat
 
 
 class TestToolRouterModelResolution:
@@ -59,5 +60,5 @@ class TestToolRouterModelResolution:
         """When a cfg-like object is missing an attribute entirely (as can
         happen for partial mocks), the resolver must not raise."""
         class Partial:
-            ollama_chat_model = "only-chat"
+            llm_chat_model = "only-chat"
         assert resolve_tool_router_model(Partial()) == "only-chat"

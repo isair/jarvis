@@ -40,7 +40,23 @@ import re
 from typing import List, Optional, Sequence, Tuple
 
 from ..debug import debug_log
-from ..llm import call_llm_direct
+from ..llm import get_llm_backend
+
+
+def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
+                    timeout_sec=10.0, thinking=False, num_ctx=4096,
+                    temperature=None):
+    """Local indirection: route the planner's chat call through the
+    backend configured by ``cfg.llm_provider``.
+
+    Kept module-level so tests can patch this single symbol to intercept
+    every planner LLM call without reaching into the backend ABC.
+    """
+    return get_llm_backend(cfg).direct(
+        chat_model, system_prompt, user_content,
+        timeout_sec=timeout_sec, thinking=thinking,
+        num_ctx=num_ctx, temperature=temperature,
+    )
 
 
 # Hard cap on plan length. Small models happily emit 10+ step plans that
@@ -419,9 +435,8 @@ def plan_query(
     if not getattr(cfg, "planner_enabled", True):
         return []
 
-    base_url = getattr(cfg, "ollama_base_url", "") or ""
     model = resolve_planner_model(cfg)
-    if not base_url or not model:
+    if not model:
         return []
 
     effective_timeout = float(
@@ -435,7 +450,7 @@ def plan_query(
 
     try:
         raw = call_llm_direct(
-            base_url=base_url,
+            cfg=cfg,
             chat_model=model,
             system_prompt=system_prompt,
             user_content=user_content,
@@ -689,9 +704,8 @@ def resolve_next_tool_call(
         )
         return fast
 
-    base_url = getattr(cfg, "ollama_base_url", "") or ""
     model = resolve_planner_model(cfg)
-    if not base_url or not model:
+    if not model:
         return None
 
     effective_timeout = float(
@@ -710,7 +724,7 @@ def resolve_next_tool_call(
 
     try:
         raw = call_llm_direct(
-            base_url=base_url,
+            cfg=cfg,
             chat_model=model,
             system_prompt=_STEP_RESOLVER_SYSTEM,
             user_content=user_content,

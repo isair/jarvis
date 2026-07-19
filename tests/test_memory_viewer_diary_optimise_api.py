@@ -28,7 +28,7 @@ except ImportError:
 
 def _make_fake_optimise(events):
     """Return a callable that yields the given event dicts."""
-    def _fn(db, ollama_base_url, ollama_chat_model, ollama_embed_model=None, **kwargs):
+    def _fn(db, cfg, **kwargs):
         yield from events
     return _fn
 
@@ -70,6 +70,7 @@ class TestDiaryOptimiseTopicsEndpoint:
         cfg = MagicMock()
         cfg.ollama_base_url = "http://localhost:11434"
         cfg.ollama_chat_model = "test-model"
+        cfg.llm_chat_model = "test-model"
         cfg.ollama_embed_model = None
         cfg.sqlite_vss_path = None
 

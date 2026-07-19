@@ -1,7 +1,7 @@
 """Tests for tool selection strategies."""
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from jarvis.tools.selection import (
     select_tools,
@@ -11,6 +11,39 @@ from jarvis.tools.selection import (
     _ALWAYS_INCLUDED,
     _RELATIVE_THRESHOLD,
 )
+
+
+def _embedding_backend(text_to_vec=None, fail=False):
+    """Build a MagicMock embedding backend whose ``embed`` looks up text by
+    substring match against ``text_to_vec`` (a dict). Falls back to a zero
+    vector for unmatched text. ``fail=True`` makes embed always return None."""
+    backend = MagicMock()
+    if fail:
+        backend.embed.return_value = None
+        return backend
+
+    def _embed(text, model, timeout_sec=10.0):
+        if text_to_vec is None:
+            return [0.0] * 4
+        for key, vec in text_to_vec.items():
+            if key in text.lower():
+                return vec
+        return [0.0] * 4
+
+    backend.embed.side_effect = _embed
+    return backend
+
+
+def _llm_backend(direct_fn=None, return_value=None, raises=None):
+    """Build a MagicMock chat backend whose ``direct`` returns or raises."""
+    backend = MagicMock()
+    if raises is not None:
+        backend.direct.side_effect = raises
+    elif direct_fn is not None:
+        backend.direct.side_effect = direct_fn
+    else:
+        backend.direct.return_value = return_value
+    return backend
 
 
 # ---------------------------------------------------------------------------
@@ -191,20 +224,10 @@ class TestKeywordStrategy:
 
 class TestEmbeddingStrategy:
 
-    def _mock_embedding(self, text_to_vec):
-        """Return a mock get_embedding that maps text substrings to vectors."""
-        def mock_get_embedding(text, base_url, model, timeout_sec=10.0):
-            for key, vec in text_to_vec.items():
-                if key in text.lower():
-                    return vec
-            # Default: zero vector
-            return [0.0] * 4
-        return mock_get_embedding
-
     @pytest.mark.unit
     def test_selects_similar_tools(self):
         """Weather query should rank getWeather highest."""
-        mock_embed = self._mock_embedding({
+        backend = _embedding_backend({
             "weather": [1.0, 0.0, 0.0, 0.0],      # query + weather tool
             "search": [0.0, 1.0, 0.0, 0.0],
             "meal": [0.0, 0.0, 1.0, 0.0],
@@ -212,84 +235,79 @@ class TestEmbeddingStrategy:
             "file": [0.1, 0.1, 0.1, 0.1],
             "conversation": [0.1, 0.1, 0.1, 0.1],
         })
-        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
-            result = select_tools(
-                "what's the weather",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.EMBEDDING,
-                llm_base_url="http://localhost",
-                embed_model="nomic-embed-text",
-            )
+        result = select_tools(
+            "what's the weather",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
         assert "getWeather" in result
 
     @pytest.mark.unit
     def test_stop_always_included(self):
         """Stop tool must be present even if not semantically matched."""
-        mock_embed = self._mock_embedding({
-            "weather": [1.0, 0.0, 0.0, 0.0],
-        })
-        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
-            result = select_tools(
-                "what's the weather",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.EMBEDDING,
-                llm_base_url="http://localhost",
-                embed_model="nomic-embed-text",
-            )
+        backend = _embedding_backend({"weather": [1.0, 0.0, 0.0, 0.0]})
+        result = select_tools(
+            "what's the weather",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
         assert "stop" in result
 
     @pytest.mark.unit
     def test_failed_query_embedding_falls_back(self):
         """If query embedding fails, fall back to all tools."""
-        def mock_fail(text, base_url, model, timeout_sec=10.0):
-            return None
+        backend = _embedding_backend(fail=True)
+        result = select_tools(
+            "anything",
+            _builtin(), _mcp(),
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
+        assert len(result) == len(_builtin()) + len(_mcp())
 
-        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_fail):
-            result = select_tools(
-                "anything",
-                _builtin(), _mcp(),
-                strategy=ToolSelectionStrategy.EMBEDDING,
-                llm_base_url="http://localhost",
-                embed_model="nomic-embed-text",
-            )
+    @pytest.mark.unit
+    def test_no_embedding_backend_falls_back_to_all(self):
+        """When no embedding backend is supplied (e.g. unconfigured runtime),
+        the embedding strategy degrades to returning the full catalogue
+        rather than crashing."""
+        result = select_tools(
+            "anything",
+            _builtin(), _mcp(),
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embed_model="nomic-embed-text",
+        )
         assert len(result) == len(_builtin()) + len(_mcp())
 
     @pytest.mark.unit
     def test_returns_minimum_tools(self):
         """Should return at least _MIN_SELECTED tools even if similarity is low."""
-        # All tools get zero similarity (orthogonal to query)
         call_count = [0]
-        def mock_embed(text, base_url, model, timeout_sec=10.0):
+        def _embed(text, model, timeout_sec=10.0):
             call_count[0] += 1
             if call_count[0] == 1:  # query
                 return [1.0, 0.0, 0.0, 0.0]
-            return [0.0, 0.0, 0.0, 1.0]  # all tools orthogonal
+            return [0.0, 0.0, 0.0, 1.0]
+        backend = MagicMock()
+        backend.embed.side_effect = _embed
 
-        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
-            result = select_tools(
-                "something obscure",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.EMBEDDING,
-                llm_base_url="http://localhost",
-                embed_model="nomic-embed-text",
-            )
-        # Should still have at least _MIN_SELECTED + stop
+        result = select_tools(
+            "something obscure",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
         assert len(result) >= 3
 
     @pytest.mark.unit
     def test_relative_threshold_filters_low_similarity(self):
         """Relative threshold keeps only tools near the top score, not everything."""
         import math
-
-        # Simulate realistic scores with a clear top cluster and a weak tail.
-        # query = [1, 0, 0, 0]
-        # strong  → cos_sim ≈ 0.90   (getWeather)
-        # good    → cos_sim ≈ 0.88   (webSearch — within 85% of top)
-        # weak    → cos_sim ≈ 0.40   (everything else — well below cutoff)
-        #
-        # cutoff = 0.90 * 0.85 = 0.765
-        # strong (0.90) and good (0.88) pass; weak (0.40) do not.
-        # With _MIN_SELECTED=3, top-3 would apply if <3 passed, but 2 pass + stop = 3 total.
 
         strong = [0.9, 0.436, 0, 0]
         s_norm = math.sqrt(sum(x*x for x in strong))
@@ -313,21 +331,15 @@ class TestEmbeddingStrategy:
             "file": weak,                           # localFiles → low sim
         }
 
-        def mock_embed(text, base_url, model, timeout_sec=10.0):
-            text_lower = text.lower()
-            for key, vec in mock_map.items():
-                if key in text_lower:
-                    return vec
-            return [0.0] * 4
+        backend = _embedding_backend(mock_map)
 
-        with patch("jarvis.memory.embeddings.get_embedding", side_effect=mock_embed):
-            result = select_tools(
-                "what's the weather",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.EMBEDDING,
-                llm_base_url="http://localhost",
-                embed_model="nomic-embed-text",
-            )
+        result = select_tools(
+            "what's the weather",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
 
         # Strong and good matches must be included
         assert "getWeather" in result
@@ -352,34 +364,28 @@ class TestLLMStrategy:
 
     @pytest.mark.unit
     def test_parses_comma_separated_response(self):
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            return "webSearch, getWeather"
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "what's the weather",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+        backend = _llm_backend(return_value="webSearch, getWeather")
+        result = select_tools(
+            "what's the weather",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         assert "webSearch" in result
         assert "getWeather" in result
         assert "stop" in result
 
     @pytest.mark.unit
     def test_none_response_returns_only_mandatory(self):
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            return "none"
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "hello",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+        backend = _llm_backend(return_value="none")
+        result = select_tools(
+            "hello",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         assert result == ["stop"]
 
     @pytest.mark.unit
@@ -389,17 +395,14 @@ class TestLLMStrategy:
         small chat models (they choke on 41-tool prompts) and pins the
         conversation cache to "everything"; keyword narrowing preserves at
         least some routing on tool-name overlap with the query."""
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            raise TimeoutError("LLM timed out")
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "weather in London",
-                _builtin(), _mcp(),
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+        backend = _llm_backend(raises=TimeoutError("LLM timed out"))
+        result = select_tools(
+            "weather in London",
+            _builtin(), _mcp(),
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         # Keyword strategy on "weather" picks getWeather (its name + desc both
         # contain "weather"); irrelevant tools like fetchMeals must NOT appear.
         assert "getWeather" in result
@@ -410,17 +413,27 @@ class TestLLMStrategy:
     def test_empty_response_falls_back_to_keyword(self):
         """Empty router response is treated identically to a hard failure:
         fall back to keyword scoring rather than to the full catalogue."""
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            return ""
+        backend = _llm_backend(return_value="")
+        result = select_tools(
+            "weather report",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
+        assert "getWeather" in result
+        assert "fetchMeals" not in result
 
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "weather report",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+    @pytest.mark.unit
+    def test_no_llm_backend_falls_back_to_keyword(self):
+        """When no LLM backend is supplied (e.g. unconfigured runtime), the
+        LLM strategy degrades to keyword scoring rather than crashing."""
+        result = select_tools(
+            "weather in London",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_model="test",
+        )
         assert "getWeather" in result
         assert "fetchMeals" not in result
 
@@ -431,21 +444,18 @@ class TestLLMStrategy:
         Field trace: a small router occasionally produces text like "I think
         we should..." that the parser strips to nothing — pre-fix this fell
         open to all 41 tools; post-fix it narrows on query keywords."""
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            return "I think we should pick one"  # no known tool name
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "navigate to youtube.com",
-                _builtin(),
-                {"chrome-devtools__navigate_page": FakeToolSpec(
-                    "chrome-devtools__navigate_page",
-                    "Navigate the browser to a given URL.",
-                )},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+        backend = _llm_backend(return_value="I think we should pick one")
+        result = select_tools(
+            "navigate to youtube.com",
+            _builtin(),
+            {"chrome-devtools__navigate_page": FakeToolSpec(
+                "chrome-devtools__navigate_page",
+                "Navigate the browser to a given URL.",
+            )},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         # Keyword scoring matches "navigate" → chrome-devtools__navigate_page.
         assert "chrome-devtools__navigate_page" in result
         # The full catalogue must NOT be returned — that's the regression we're
@@ -454,17 +464,14 @@ class TestLLMStrategy:
 
     @pytest.mark.unit
     def test_ignores_hallucinated_tool_names(self):
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            return "webSearch, nonExistentTool, getWeather"
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "search and weather",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+        backend = _llm_backend(return_value="webSearch, nonExistentTool, getWeather")
+        result = select_tools(
+            "search and weather",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         assert "webSearch" in result
         assert "getWeather" in result
 
@@ -474,20 +481,14 @@ class TestLLMStrategy:
         The parser must strip that formatting before matching — a literal
         `webSearch` should resolve to the tool called webSearch, not be
         silently dropped as an unknown token."""
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            # A realistic worst case combining bullets, backticks, and a
-            # bracketed list tail — all of which have appeared from gemma-class
-            # routers in practice.
-            return "- `webSearch`, * `getWeather`, [logMeal]"
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "chatty router",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
+        backend = _llm_backend(return_value="- `webSearch`, * `getWeather`, [logMeal]")
+        result = select_tools(
+            "chatty router",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         assert "webSearch" in result
         assert "getWeather" in result
         assert "logMeal" in result
@@ -498,25 +499,21 @@ class TestLLMStrategy:
         compact selection — the hard cap guarantees downstream prompt size."""
         from jarvis.tools.selection import _LLM_MAX_SELECTED
 
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
-            return "webSearch, getWeather, logMeal, fetchMeals, screenshot, localFiles, homeassistant__turn_on"
-
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            result = select_tools(
-                "arbitrary query",
-                _builtin(), _mcp(),
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-            )
-        # Non-mandatory selections are capped; always-included tools are
-        # appended on top of that cap.
+        backend = _llm_backend(
+            return_value="webSearch, getWeather, logMeal, fetchMeals, screenshot, localFiles, homeassistant__turn_on"
+        )
+        result = select_tools(
+            "arbitrary query",
+            _builtin(), _mcp(),
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+        )
         non_mandatory = [t for t in result if t not in _ALWAYS_INCLUDED]
         assert len(non_mandatory) <= _LLM_MAX_SELECTED, (
             f"Expected at most {_LLM_MAX_SELECTED} non-mandatory tools, got "
             f"{len(non_mandatory)}: {non_mandatory}"
         )
-        # Ranking is preserved — first N from the router's list survive.
         assert non_mandatory[0] == "webSearch"
         assert "nonExistentTool" not in result
 
@@ -528,10 +525,12 @@ class TestLLMStrategy:
         of the prior turn rather than as standalone idle chatter."""
         captured = {}
 
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+        def _direct(model, sys, user, timeout_sec=8.0):
             captured["sys"] = sys
             captured["user"] = user
             return "getWeather"
+
+        backend = _llm_backend(direct_fn=_direct)
 
         hint = (
             "Current local time: Sunday, 2026-04-20 17:42 (Europe/London).\n\n"
@@ -539,22 +538,19 @@ class TestLLMStrategy:
             "- user: what's the weather like?\n"
             "- assistant: Sure — where should I check?"
         )
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            select_tools(
-                "I'm in London",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-                context_hint=hint,
-            )
+        select_tools(
+            "I'm in London",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+            context_hint=hint,
+        )
 
         assert "KNOWN FACTS" in captured["user"]
         assert "RECENT DIALOGUE" in captured["user"]
-        # Dialogue lines must actually reach the prompt under the dialogue label.
         dialogue_idx = captured["user"].index("RECENT DIALOGUE")
         assert "where should I check" in captured["user"][dialogue_idx:]
-        # System prompt must tell the router to treat follow-ups as continuations.
         assert "continuation" in captured["sys"].lower()
 
     @pytest.mark.unit
@@ -564,20 +560,21 @@ class TestLLMStrategy:
         through under the KNOWN FACTS label with no dialogue block."""
         captured = {}
 
-        def mock_llm(base_url, model, sys, user, timeout_sec=8.0):
+        def _direct(model, sys, user, timeout_sec=8.0):
             captured["user"] = user
             return "getWeather"
 
+        backend = _llm_backend(direct_fn=_direct)
+
         hint = "Current local time: Sunday, 2026-04-20 17:42 (Europe/London)."
-        with patch("jarvis.llm.call_llm_direct", side_effect=mock_llm):
-            select_tools(
-                "what's the weather?",
-                _builtin(), {},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_base_url="http://localhost",
-                llm_model="test",
-                context_hint=hint,
-            )
+        select_tools(
+            "what's the weather?",
+            _builtin(), {},
+            strategy=ToolSelectionStrategy.LLM,
+            llm_backend=backend,
+            llm_model="test",
+            context_hint=hint,
+        )
 
         assert "KNOWN FACTS" in captured["user"]
         assert "RECENT DIALOGUE" not in captured["user"]

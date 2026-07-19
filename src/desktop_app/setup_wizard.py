@@ -180,30 +180,41 @@ def check_ollama_server() -> Tuple[bool, Optional[str]]:
 
 
 def get_required_models() -> List[str]:
-    """Get list of required Ollama models from config.
+    """Get the Ollama models that must be present locally, given the active
+    providers.
 
-    Always includes:
-    - Chat model (user-selectable)
-    - Embedding model
-    - Intent judge model (gemma4 - required for voice intent classification)
+    Only models that actually run on Ollama are required:
+    - Chat model + intent-judge model — when the chat provider is Ollama
+      (both run through the chat backend). Skipped for an OpenAI-compatible
+      chat provider, where those are remote model names, not Ollama pulls.
+    - Embedding model — when the effective embedding provider is Ollama
+      (covers the advanced split where chat is remote but embeddings are
+      local). Skipped when embeddings are remote.
+
+    A pure OpenAI-compatible setup therefore requires nothing locally.
     """
     try:
         cfg = load_settings()
+        llm_provider = getattr(cfg, "llm_provider", "ollama") or "ollama"
+        embed_provider = getattr(cfg, "embedding_provider", "") or llm_provider
         models = []
 
-        # Chat model
-        if cfg.ollama_chat_model:
-            models.append(cfg.ollama_chat_model)
+        # Chat model runs on the chat provider's backend.
+        if llm_provider != "openai_compatible":
+            if cfg.ollama_chat_model:
+                models.append(cfg.ollama_chat_model)
 
-        # Embedding model
-        if cfg.ollama_embed_model:
-            models.append(cfg.ollama_embed_model)
+        # Embedding model runs on the embedding provider's backend.
+        if embed_provider != "openai_compatible":
+            if cfg.ollama_embed_model and cfg.ollama_embed_model not in models:
+                models.append(cfg.ollama_embed_model)
 
-        # Intent judge model - always required for voice intent classification
-        # This is separate from the chat model and cannot be changed by users
-        intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
-        if intent_judge_model and intent_judge_model not in models:
-            models.append(intent_judge_model)
+        # Intent judge is always needed for voice intent classification, but
+        # only as an Ollama pull when the chat provider is Ollama.
+        if llm_provider != "openai_compatible":
+            intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
+            if intent_judge_model and intent_judge_model not in models:
+                models.append(intent_judge_model)
 
         return models
     except Exception:
@@ -321,6 +332,16 @@ def should_show_setup_wizard() -> bool:
     Does NOT return True just because server isn't running,
     since the app can auto-start the server if CLI is installed.
     """
+    # An OpenAI-compatible user has opted out of the local Ollama stack,
+    # so the Ollama-centric prerequisites don't apply — never auto-show.
+    # (The wizard can still be opened manually from the tray to switch back.)
+    try:
+        cfg = load_settings()
+        if getattr(cfg, "llm_provider", "ollama") == "openai_compatible":
+            return False
+    except Exception:
+        pass
+
     status = check_ollama_status()
 
     # If CLI not installed, user needs to install Ollama
@@ -346,7 +367,8 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
-        QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox
+        QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox,
+        QRadioButton, QButtonGroup
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
@@ -473,6 +495,8 @@ class SetupWizard(QWizard):
 
         # Add pages and store their IDs
         self.welcome_page = WelcomePage(self)
+        self.provider_choice_page = ProviderChoicePage(self)
+        self.openai_compat_page = OpenAICompatiblePage(self)
         self.ollama_install_page = OllamaInstallPage(self)
         self.ollama_server_page = OllamaServerPage(self)
         self.models_page = ModelsPage(self)
@@ -484,6 +508,8 @@ class SetupWizard(QWizard):
         self.complete_page = CompletePage(self)
 
         self.welcome_page_id = self.addPage(self.welcome_page)
+        self.provider_choice_page_id = self.addPage(self.provider_choice_page)
+        self.openai_compat_page_id = self.addPage(self.openai_compat_page)
         self.ollama_install_page_id = self.addPage(self.ollama_install_page)
         self.ollama_server_page_id = self.addPage(self.ollama_server_page)
         self.models_page_id = self.addPage(self.models_page)
@@ -493,6 +519,12 @@ class SetupWizard(QWizard):
         self.search_providers_page_id = self.addPage(self.search_providers_page)
         self.location_page_id = self.addPage(self.location_page)
         self.complete_page_id = self.addPage(self.complete_page)
+
+        # The provider choice is the first step: Ollama is optional now, so
+        # the wizard must ask which runtime the user wants before running any
+        # Ollama-specific checks. The Welcome/status page and the Ollama
+        # install/server/models pages are only reached on the Ollama branch.
+        self.setStartId(self.provider_choice_page_id)
 
         # Custom button labels
         self.setButtonText(QWizard.WizardButton.NextButton, "Next →")
@@ -504,6 +536,17 @@ class SetupWizard(QWizard):
         self.ollama_status: Optional[OllamaStatus] = None
         self.mlx_whisper_status: Optional[MLXWhisperStatus] = None
         self._location_working: Optional[bool] = None
+
+    def ollama_entry_page_id(self) -> int:
+        """First Ollama-flow page to show, based on detection status:
+        install (CLI missing) → server (not running) → models. Shared by the
+        provider-choice page so the Ollama branch lands on the right step."""
+        status = self.ollama_status
+        if status is None or not status.is_cli_installed:
+            return self.ollama_install_page_id
+        if not status.is_server_running:
+            return self.ollama_server_page_id
+        return self.models_page_id
 
     def is_location_working(self) -> bool:
         """Check if location detection is working (cached)."""
@@ -782,21 +825,405 @@ class WelcomePage(QWizardPage):
         return True
 
     def nextId(self) -> int:
-        """Determine next page based on status."""
+        """The Welcome/status page is reached only on the Ollama branch (after
+        the provider choice), so it leads into the Ollama install/server/models
+        flow based on the detected status."""
         wizard = self.wizard()
-        if not isinstance(wizard, SetupWizard) or wizard.ollama_status is None:
-            return wizard.ollama_install_page_id
+        if not isinstance(wizard, SetupWizard):
+            return super().nextId()
+        return wizard.ollama_entry_page_id()
 
-        status = wizard.ollama_status
 
-        # Skip to appropriate page based on what's missing
-        if not status.is_cli_installed:
-            return wizard.ollama_install_page_id
-        elif not status.is_server_running:
-            return wizard.ollama_server_page_id
+class ProviderChoicePage(QWizardPage):
+    """Choose which local runtime serves the LLM: Ollama (the bundled
+    default) or an OpenAI-compatible server (LM Studio, oMLX, llama.cpp's
+    ``llama-server``, vLLM, LocalAI). The choice branches the rest of the
+    wizard — Ollama continues to the install/server/models flow, while
+    OpenAI-compatible jumps to a connection-config page and skips the
+    Ollama-specific pages entirely."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+        self._selected = "ollama"
+
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🔌 Choose Your LLM Provider")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Welcome to Jarvis. Choose how it runs its language model. Both "
+            "options keep everything on machines you control, never a "
+            "third-party cloud."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        # A QButtonGroup makes the radios mutually exclusive even though each
+        # lives in its own card (Qt's auto-exclusivity only applies to radios
+        # sharing a direct parent, which these do not).
+        self._button_group = QButtonGroup(self)
+
+        self._ollama_radio = QRadioButton("  🦙  Ollama (recommended)")
+        self._ollama_radio.setChecked(True)
+        self._button_group.addButton(self._ollama_radio)
+        ollama_card = self._provider_card(
+            self._ollama_radio,
+            "Runs open models locally on this machine. The wizard installs "
+            "Ollama and downloads the models for you. Best if you have no "
+            "model server already.",
+        )
+        layout.addWidget(ollama_card)
+
+        self._openai_radio = QRadioButton("  🔗  OpenAI-compatible server")
+        self._button_group.addButton(self._openai_radio)
+        openai_card = self._provider_card(
+            self._openai_radio,
+            "Point Jarvis at a server that speaks the OpenAI API. This is "
+            "usually another local app (LM Studio, oMLX, llama.cpp, vLLM, "
+            "LocalAI) running on your own machine or network. You provide its "
+            "URL and model name on the next step.",
+        )
+        layout.addWidget(openai_card)
+
+        self._ollama_radio.toggled.connect(self._on_toggle)
+        self._openai_radio.toggled.connect(self._on_toggle)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+        self._preselect_from_config()
+
+    def _provider_card(self, radio, desc_text):
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(6)
+        radio.setStyleSheet("font-size: 15px; font-weight: bold;")
+        card_layout.addWidget(radio)
+        desc = QLabel(desc_text)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+        card_layout.addWidget(desc)
+        return card
+
+    def _preselect_from_config(self):
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path()) or {}
+            provider = str(config.get("llm_provider", "ollama") or "ollama")
+        except Exception:
+            provider = "ollama"
+        if provider == "openai_compatible":
+            self._openai_radio.setChecked(True)
+            self._selected = "openai_compatible"
         else:
-            # Always show models page so users can change their model selection
-            return wizard.models_page_id
+            self._ollama_radio.setChecked(True)
+            self._selected = "ollama"
+
+    def _on_toggle(self):
+        self._selected = (
+            "openai_compatible" if self._openai_radio.isChecked() else "ollama"
+        )
+
+    def validatePage(self) -> bool:
+        """Persist the provider choice. Selecting Ollama clears any
+        OpenAI-compatible overrides so the Ollama settings become
+        authoritative again — no stale base URL / key / model is left
+        pointing at a former remote server."""
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            if self._selected == "openai_compatible":
+                config["llm_provider"] = "openai_compatible"
+            else:
+                # Ollama is the default; omit the key and drop the
+                # OpenAI-compatible connection overrides.
+                config.pop("llm_provider", None)
+                for stale in (
+                    "llm_base_url", "llm_api_key", "llm_chat_model",
+                    "embedding_provider", "embedding_base_url",
+                    "embedding_api_key", "embedding_model",
+                ):
+                    config.pop(stale, None)
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def isComplete(self) -> bool:
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if not isinstance(wizard, SetupWizard):
+            return super().nextId()
+        if self._selected == "openai_compatible":
+            return wizard.openai_compat_page_id
+        # Ollama branch: show the Welcome/status dashboard first (it populates
+        # the detected Ollama status), which then leads into install/server/
+        # models. Status is only surfaced once the user has chosen Ollama.
+        return wizard.welcome_page_id
+
+
+class _ModelFetchWorker(QThread):
+    """Fetches the model list from an OpenAI-compatible server off the UI
+    thread so the wizard never freezes while connecting."""
+
+    done = pyqtSignal(bool, list)  # (reached, model_ids)
+
+    def __init__(self, base_url: str, api_key: str):
+        super().__init__()
+        self._base_url = base_url
+        self._api_key = api_key
+
+    def run(self):
+        models = OpenAICompatiblePage._fetch_models(self._base_url, self._api_key)
+        self.done.emit(bool(models), models)
+
+
+class OpenAICompatiblePage(QWizardPage):
+    """Collect the OpenAI-compatible server's connection details. Shown only
+    on the OpenAI-compatible branch; it writes the ``llm_*`` /
+    ``embedding_model`` config keys and then skips straight to Whisper setup.
+
+    Guided rather than freeform: the user enters the base URL (and optional
+    key), clicks Connect, and the page fetches the server's actual model list
+    into editable dropdowns. Picking from the list stops users pasting a URL
+    or a wrong id as the model name (a common mistake), while the editable
+    combo still lets power users type a model the listing omits.
+    """
+
+    _DEFAULT_BASE_URL = "http://localhost:1234/v1"  # LM Studio default
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("")
+        self._fetch_worker = None
+
+        layout = QVBoxLayout()
+        layout.setSpacing(14)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("🔗 OpenAI-compatible Server")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Enter your server's address, then Connect to load its models. "
+            "The base URL and chat model are required; the API key and a "
+            "separate embedding model are optional."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        form_card = QFrame()
+        form_card.setObjectName("card")
+        form = QVBoxLayout(form_card)
+        form.setContentsMargins(16, 14, 16, 14)
+        form.setSpacing(10)
+
+        self._base_url_input = self._labelled_edit(
+            form, "Base URL",
+            "e.g. http://localhost:1234/v1 (LM Studio default)")
+        self._api_key_input = self._labelled_edit(
+            form, "API key (optional)", "leave empty if your server needs none",
+            password=True)
+
+        # Connect button + status: fetch the model list to populate the dropdowns.
+        self._connect_btn = QPushButton("🔌 Connect & load models")
+        self._connect_btn.setObjectName("secondary")
+        self._connect_btn.clicked.connect(self._on_connect)
+        form.addWidget(self._connect_btn)
+        self._connect_status = QLabel("")
+        self._connect_status.setWordWrap(True)
+        self._connect_status.setStyleSheet("font-size: 12px; color: #a1a1aa;")
+        form.addWidget(self._connect_status)
+
+        self._chat_model_combo = self._labelled_combo(
+            form, "Chat model", "pick after connecting, or type the model id")
+        self._embed_model_combo = self._labelled_combo(
+            form, "Embedding model (optional)",
+            "leave empty to skip embeddings (memory uses keyword search)")
+
+        layout.addWidget(form_card)
+
+        tip = QLabel(
+            "💡  Memory search uses embeddings. If your server has no "
+            "embeddings endpoint, leave the embedding model empty and Jarvis "
+            "falls back to keyword search."
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet(
+            "background: rgba(245, 158, 11, 0.10);"
+            "border: 1px solid rgba(245, 158, 11, 0.25);"
+            "border-radius: 8px; padding: 12px 16px; color: #fbbf24; font-size: 13px;"
+        )
+        layout.addWidget(tip)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+    def _labelled_edit(self, form, label_text, placeholder, password=False):
+        label = QLabel(label_text)
+        label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        form.addWidget(label)
+        field = QLineEdit()
+        field.setPlaceholderText(placeholder)
+        if password:
+            field.setEchoMode(QLineEdit.EchoMode.Password)
+        # Re-evaluate Next: the base URL is half of isComplete, so editing it
+        # must refresh the button (the chat-model combo does the same).
+        field.textChanged.connect(lambda *_: self.completeChanged.emit())
+        form.addWidget(field)
+        return field
+
+    def _labelled_combo(self, form, label_text, placeholder):
+        label = QLabel(label_text)
+        label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        form.addWidget(label)
+        combo = QComboBox()
+        combo.setEditable(True)  # power users can type a model the listing omits
+        combo.lineEdit().setPlaceholderText(placeholder)
+        combo.currentTextChanged.connect(lambda *_: self.completeChanged.emit())
+        form.addWidget(combo)
+        return combo
+
+    @staticmethod
+    def _fetch_models(base_url: str, api_key: str, timeout: float = 6.0) -> list:
+        """Return the model ids the server advertises at ``/v1/models``, or
+        an empty list if it is unreachable. Fail-soft: never raises, so the
+        user can still type a model id by hand."""
+        base_url = (base_url or "").strip()
+        if not base_url:
+            return []
+        try:
+            from jarvis.llm import OpenAICompatibleBackend
+            backend = OpenAICompatibleBackend(base_url, api_key=(api_key or "").strip() or None)
+            return list(backend.list_models(timeout_sec=timeout))
+        except Exception:
+            return []
+
+    def _on_connect(self):
+        base_url = (self._base_url_input.text() or "").strip()
+        if not base_url:
+            self._connect_status.setText("⚠️ Enter a base URL first.")
+            return
+        self._connect_btn.setEnabled(False)
+        self._connect_status.setText("⏳ Connecting…")
+        worker = _ModelFetchWorker(base_url, (self._api_key_input.text() or "").strip())
+        worker.done.connect(self._on_models_fetched)
+        self._fetch_worker = worker  # keep a reference so it isn't GC'd
+        worker.start()
+
+    def _on_models_fetched(self, reached: bool, models: list):
+        self._connect_btn.setEnabled(True)
+        self._populate_models(models)
+        if reached and models:
+            self._connect_status.setText(f"✅ Connected — {len(models)} model(s) found.")
+        else:
+            self._connect_status.setText(
+                "⚠️ Couldn't load models. Check the URL/key and that the server "
+                "is running, or type the model id manually below.")
+        self.completeChanged.emit()
+
+    def _populate_models(self, models: list):
+        """Fill the dropdowns with fetched model ids, preserving whatever the
+        user had typed/selected as the current value."""
+        for combo, include_blank in ((self._chat_model_combo, False),
+                                      (self._embed_model_combo, True)):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            if include_blank:
+                combo.addItem("")  # "(none)" — embeddings optional
+            for m in models:
+                combo.addItem(m)
+            combo.setCurrentText(current)
+            combo.blockSignals(False)
+
+    def initializePage(self):
+        """Pre-fill from any existing config so re-running the wizard keeps
+        the user's values. Defaults the base URL to the common LM Studio
+        address so a first-time user can just click Connect."""
+        try:
+            from jarvis.config import default_config_path, _load_json
+            config = _load_json(default_config_path()) or {}
+        except Exception:
+            config = {}
+        self._base_url_input.setText(
+            str(config.get("llm_base_url", "") or "") or self._DEFAULT_BASE_URL)
+        self._api_key_input.setText(str(config.get("llm_api_key", "") or ""))
+        self._chat_model_combo.setCurrentText(str(config.get("llm_chat_model", "") or ""))
+        self._embed_model_combo.setCurrentText(str(config.get("embedding_model", "") or ""))
+        self._connect_status.setText("")
+
+    @staticmethod
+    def _is_ready(base_url: str, chat_model: str) -> bool:
+        return bool((base_url or "").strip()) and bool((chat_model or "").strip())
+
+    def _read_inputs(self):
+        return (
+            (self._base_url_input.text() or "").strip(),
+            (self._api_key_input.text() or "").strip(),
+            (self._chat_model_combo.currentText() or "").strip(),
+            (self._embed_model_combo.currentText() or "").strip(),
+        )
+
+    def isComplete(self) -> bool:
+        base_url, _, chat_model, _ = self._read_inputs()
+        return self._is_ready(base_url, chat_model)
+
+    def validatePage(self) -> bool:
+        """Persist the connection details. Required fields are always
+        written; optional ones (API key, embedding model) are omitted when
+        empty to keep config.json minimal."""
+        base_url, api_key, chat_model, embed_model = self._read_inputs()
+        if not self._is_ready(base_url, chat_model):
+            return False
+        try:
+            from jarvis.config import default_config_path, _load_json, _save_json
+            config_path = default_config_path()
+            config = _load_json(config_path) or {}
+
+            config["llm_provider"] = "openai_compatible"
+            config["llm_base_url"] = base_url
+            config["llm_chat_model"] = chat_model
+            if api_key:
+                config["llm_api_key"] = api_key
+            else:
+                config.pop("llm_api_key", None)
+            if embed_model:
+                config["embedding_model"] = embed_model
+            else:
+                config.pop("embedding_model", None)
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_json(config_path, config)
+        except Exception:
+            pass
+        return True
+
+    def nextId(self) -> int:
+        wizard = self.wizard()
+        if isinstance(wizard, SetupWizard):
+            return wizard.mlx_whisper_page_id
+        return super().nextId()
 
 
 class OllamaInstallPage(QWizardPage):
@@ -1387,21 +1814,18 @@ class ModelsPage(QWizardPage):
     def _save_model_to_config(self):
         """Save the selected chat model to config file."""
         try:
+            from jarvis.config import _load_json, _save_json
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-
+            config = _load_json(config_path) or {}
             config["ollama_chat_model"] = self._selected_model
 
-            with config_path.open("w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-
-            return True
+            # _save_json restricts the file to 0o600 on POSIX. The config can
+            # hold llm_api_key (set via the OpenAI-compatible page), so every
+            # write must preserve those perms rather than recreate the file
+            # with the default umask.
+            return _save_json(config_path, config)
         except Exception:
             return False
 
@@ -2008,21 +2432,15 @@ class WhisperSetupPage(QWizardPage):
     def _save_whisper_model_to_config(self):
         """Save the selected whisper model to config file."""
         try:
+            from jarvis.config import _load_json, _save_json
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-
+            config = _load_json(config_path) or {}
             config["whisper_model"] = self._selected_whisper_model
 
-            with config_path.open("w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-
-            return True
+            # _save_json keeps the file at 0o600 (it can hold llm_api_key).
+            return _save_json(config_path, config)
         except Exception:
             return False
 
@@ -2453,21 +2871,16 @@ class LocationPage(QWizardPage):
             return
 
         try:
-            import json
+            from jarvis.config import _load_json, _save_json
 
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if config_path.exists():
-                with config_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-
+            config = _load_json(config_path) or {}
             config["location_ip_address"] = self._validated_ip
 
-            with config_path.open("w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
+            # _save_json keeps the file at 0o600 (it can hold llm_api_key).
+            _save_json(config_path, config)
 
             self.save_status_label.setText(f"✅ Saved to {config_path}")
             self.save_status_label.setStyleSheet("color: #4ade80;")

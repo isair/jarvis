@@ -2252,6 +2252,29 @@ class JarvisSystemTray:
         return self.app.exec()
 
 
+def _ollama_runtime_flags(cfg) -> tuple[bool, bool]:
+    """Decide how much of the Ollama startup flow applies given the active
+    providers.
+
+    Returns ``(ollama_needed, chat_on_ollama)``:
+    - ``ollama_needed`` — the local Ollama server must be up because chat
+      and/or embeddings run on it. False only for a pure OpenAI-compatible
+      setup (both chat and embeddings remote), where there is nothing local
+      to start or verify.
+    - ``chat_on_ollama`` — the chat model is an Ollama model, so the
+      chat-model verification / unsupported-model checks apply. False when
+      chat runs on an OpenAI-compatible server (its model name is not in the
+      Ollama catalogue and would be wrongly flagged as unsupported).
+    """
+    llm_provider = getattr(cfg, "llm_provider", "ollama") or "ollama"
+    embed_provider = getattr(cfg, "embedding_provider", "") or llm_provider
+    ollama_needed = not (
+        llm_provider == "openai_compatible" and embed_provider == "openai_compatible"
+    )
+    chat_on_ollama = llm_provider != "openai_compatible"
+    return ollama_needed, chat_on_ollama
+
+
 def main() -> int:
     """Main entry point for the desktop app."""
     # Fix Windows console encoding for Unicode/emoji characters
@@ -2439,192 +2462,229 @@ def main() -> int:
         else:
             print("✅ Ollama setup looks good", flush=True)
 
-        # Even if setup was completed before, verify Ollama server is actually running
-        # This handles the case where user reinstalls or Ollama service isn't auto-started
-        splash.set_status("Checking Ollama server...")
-        app.processEvents()
+        # Local-runtime readiness. A pure OpenAI-compatible setup needs no
+        # local Ollama server to start or models to pull, so skip the whole
+        # block. When chat runs on Ollama we verify the chat model; when only
+        # embeddings run on Ollama we just make sure the server is up.
+        try:
+            from jarvis.config import load_settings as _load_provider_settings
+            _ollama_needed, _chat_on_ollama = _ollama_runtime_flags(
+                _load_provider_settings()
+            )
+        except Exception:
+            _ollama_needed, _chat_on_ollama = True, True
 
-        # Run server check in background thread to keep splash animation alive
-        class ServerCheckWorker(QThread):
-            """Worker thread to check Ollama server status without blocking UI."""
-            finished = pyqtSignal(bool, object)  # Emits (is_running, version)
+        if not _ollama_needed:
+            print("🔌 OpenAI-compatible provider configured: skipping Ollama startup checks", flush=True)
 
-            def run(self):
-                try:
-                    running, ver = check_ollama_server()
-                    self.finished.emit(running, ver)
-                except Exception as e:
-                    print(f"  ❌ Server check failed: {e}", flush=True)
-                    self.finished.emit(False, None)
-
-        server_check_result = [None, None]  # [is_running, version]
-
-        def on_server_check_done(running: bool, ver):
-            server_check_result[0] = running
-            server_check_result[1] = ver
-
-        server_worker = ServerCheckWorker()
-        server_worker.finished.connect(on_server_check_done)
-        server_worker.start()
-
-        # Use QEventLoop to wait while keeping UI fully responsive
-        server_loop = QEventLoop()
-        server_worker.finished.connect(server_loop.quit)
-        server_loop.exec()
-
-        is_running, version = server_check_result
-
-        if not is_running:
-            print("⚠️ Ollama server not running, attempting to start...", flush=True)
-            splash.set_status("Starting Ollama server...")
+        if _ollama_needed:
+            # Even if setup was completed before, verify Ollama server is actually running
+            # This handles the case where user reinstalls or Ollama service isn't auto-started
+            splash.set_status("Checking Ollama server...")
             app.processEvents()
 
-            # Get ollama path
-            cli_installed, ollama_path = check_ollama_cli()
-            if not cli_installed:
-                ollama_path = "ollama"
-                print(f"  ⚠️ Ollama CLI not found in standard paths, trying '{ollama_path}' from PATH", flush=True)
-            else:
-                print(f"  📍 Found Ollama at: {ollama_path}", flush=True)
+            # Run server check in background thread to keep splash animation alive
+            class ServerCheckWorker(QThread):
+                """Worker thread to check Ollama server status without blocking UI."""
+                finished = pyqtSignal(bool, object)  # Emits (is_running, version)
 
-            # Try to start Ollama server
-            ollama_process = None
-            try:
-                if sys.platform == "darwin":
-                    # On macOS, try to open the Ollama app first
+                def run(self):
                     try:
-                        print("  🍎 Trying to open Ollama.app...", flush=True)
-                        ollama_process = subprocess.Popen(
-                            ["open", "-a", "Ollama"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
-                        )
+                        running, ver = check_ollama_server()
+                        self.finished.emit(running, ver)
                     except Exception as e:
-                        # Fall back to running serve command
-                        print(f"  ⚠️ Ollama.app not found ({e}), trying serve command...", flush=True)
+                        print(f"  ❌ Server check failed: {e}", flush=True)
+                        self.finished.emit(False, None)
+
+            server_check_result = [None, None]  # [is_running, version]
+
+            def on_server_check_done(running: bool, ver):
+                server_check_result[0] = running
+                server_check_result[1] = ver
+
+            server_worker = ServerCheckWorker()
+            server_worker.finished.connect(on_server_check_done)
+            server_worker.start()
+
+            # Use QEventLoop to wait while keeping UI fully responsive
+            server_loop = QEventLoop()
+            server_worker.finished.connect(server_loop.quit)
+            server_loop.exec()
+
+            is_running, version = server_check_result
+
+            if not is_running:
+                print("⚠️ Ollama server not running, attempting to start...", flush=True)
+                splash.set_status("Starting Ollama server...")
+                app.processEvents()
+
+                # Get ollama path
+                cli_installed, ollama_path = check_ollama_cli()
+                if not cli_installed:
+                    ollama_path = "ollama"
+                    print(f"  ⚠️ Ollama CLI not found in standard paths, trying '{ollama_path}' from PATH", flush=True)
+                else:
+                    print(f"  📍 Found Ollama at: {ollama_path}", flush=True)
+
+                # Try to start Ollama server
+                ollama_process = None
+                try:
+                    if sys.platform == "darwin":
+                        # On macOS, try to open the Ollama app first
+                        try:
+                            print("  🍎 Trying to open Ollama.app...", flush=True)
+                            ollama_process = subprocess.Popen(
+                                ["open", "-a", "Ollama"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                        except Exception as e:
+                            # Fall back to running serve command
+                            print(f"  ⚠️ Ollama.app not found ({e}), trying serve command...", flush=True)
+                            ollama_process = subprocess.Popen(
+                                [ollama_path, "serve"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                start_new_session=True
+                            )
+                    elif sys.platform == "win32":
+                        # On Windows, hide the console window
+                        print(f"  🪟 Starting Ollama server: {ollama_path} serve", flush=True)
+                        ollama_process = subprocess.Popen(
+                            [ollama_path, "serve"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                    else:
+                        # On Linux and other platforms
+                        print(f"  🐧 Starting Ollama server: {ollama_path} serve", flush=True)
                         ollama_process = subprocess.Popen(
                             [ollama_path, "serve"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             start_new_session=True
                         )
-                elif sys.platform == "win32":
-                    # On Windows, hide the console window
-                    print(f"  🪟 Starting Ollama server: {ollama_path} serve", flush=True)
-                    ollama_process = subprocess.Popen(
-                        [ollama_path, "serve"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                else:
-                    # On Linux and other platforms
-                    print(f"  🐧 Starting Ollama server: {ollama_path} serve", flush=True)
-                    ollama_process = subprocess.Popen(
-                        [ollama_path, "serve"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
 
-                # Verify the process started
-                if ollama_process and ollama_process.poll() is not None:
-                    print(f"  ❌ Ollama process exited immediately with code {ollama_process.returncode}", flush=True)
-                else:
-                    print(f"  ✅ Ollama process started (PID: {ollama_process.pid if ollama_process else 'unknown'})", flush=True)
+                    # Verify the process started
+                    if ollama_process and ollama_process.poll() is not None:
+                        print(f"  ❌ Ollama process exited immediately with code {ollama_process.returncode}", flush=True)
+                    else:
+                        print(f"  ✅ Ollama process started (PID: {ollama_process.pid if ollama_process else 'unknown'})", flush=True)
 
-                # Wait for Ollama to start (up to 15 seconds)
-                splash.set_status("Waiting for Ollama to start...")
-                app.processEvents()
-
-                import time
-                max_wait = 15
-                wait_interval = 0.5
-                waited = 0
-                while waited < max_wait:
-                    # Use shorter sleeps with more frequent UI updates for smooth animation
-                    for _ in range(5):  # 5 x 100ms = 500ms total
-                        time.sleep(0.1)
-                        app.processEvents()
-                    waited += wait_interval
-
-                    is_running, version = check_ollama_server()
-                    if is_running:
-                        print(f"✅ Ollama server started (version {version})", flush=True)
-                        break
-
-                    # Update splash with progress
-                    splash.set_status(f"Waiting for Ollama to start... ({int(waited)}s)")
+                    # Wait for Ollama to start (up to 15 seconds)
+                    splash.set_status("Waiting for Ollama to start...")
                     app.processEvents()
 
-                if not is_running:
-                    print("⚠️ Ollama server failed to start within timeout", flush=True)
-                    # Don't block startup - daemon will handle connection errors
-            except Exception as e:
-                print(f"⚠️ Failed to start Ollama: {e}", flush=True)
-                # Continue anyway - user may start Ollama manually
-        else:
-            print(f"✅ Ollama server is running (version {version})", flush=True)
+                    import time
+                    max_wait = 15
+                    wait_interval = 0.5
+                    waited = 0
+                    while waited < max_wait:
+                        # Use shorter sleeps with more frequent UI updates for smooth animation
+                        for _ in range(5):  # 5 x 100ms = 500ms total
+                            time.sleep(0.1)
+                            app.processEvents()
+                        waited += wait_interval
 
-        # Check for missing required models (important for users upgrading from older versions)
-        # This catches the case where server wasn't running at initial check but models are missing
-        splash.set_status("Verifying required models...")
-        app.processEvents()
+                        is_running, version = check_ollama_server()
+                        if is_running:
+                            print(f"✅ Ollama server started (version {version})", flush=True)
+                            break
 
-        required_models = get_required_models()
-        installed_models = check_installed_models(resolve_ollama_path())
+                        # Update splash with progress
+                        splash.set_status(f"Waiting for Ollama to start... ({int(waited)}s)")
+                        app.processEvents()
 
-        # Normalize model names for comparison (remove :latest suffix)
-        def normalize_model(name: str) -> str:
-            return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
+                    if not is_running:
+                        print("⚠️ Ollama server failed to start within timeout", flush=True)
+                        # Don't block startup - daemon will handle connection errors
+                except Exception as e:
+                    print(f"⚠️ Failed to start Ollama: {e}", flush=True)
+                    # Continue anyway - user may start Ollama manually
+            else:
+                print(f"✅ Ollama server is running (version {version})", flush=True)
 
-        installed_normalized = {normalize_model(m) for m in installed_models}
-        missing_models = [
-            m for m in required_models
-            if normalize_model(m) not in installed_normalized and m not in installed_models
-        ]
-
-        if missing_models:
-            splash.hide()
-            print(f"⚠️ Missing required models: {missing_models}", flush=True)
-            print("🔧 Opening setup wizard to install missing models...", flush=True)
-            wizard = SetupWizard()
-            wizard.show()
-            wizard.raise_()
-            wizard.activateWindow()
-            result = wizard.exec()
-
-            if result != wizard.DialogCode.Accepted:
-                print("Setup wizard cancelled - exiting", flush=True)
-                return 0
-
-            print("✅ Model installation complete", flush=True)
-            splash.show()
-            splash.set_status("Models installed!")
+        if _ollama_needed:
+            # Verify the required Ollama models are present. get_required_models()
+            # is provider-aware: it lists only models that actually run on Ollama
+            # (chat + judge when chat is local; the embed model when embeddings
+            # are local), so this covers the chat-on-Ollama path and the advanced
+            # "remote chat + local embeddings" split alike.
+            splash.set_status("Verifying required models...")
             app.processEvents()
-        else:
-            print("✅ All required models are installed", flush=True)
 
-        # Check if user is using an unsupported model
-        splash.set_status("Checking model compatibility...")
-        unsupported_model = check_model_support()
-        if unsupported_model:
-            splash.hide()
-            print(f"⚠️ Unsupported model detected: {unsupported_model}", flush=True)
-            if show_unsupported_model_dialog(unsupported_model):
-                # User wants to open setup wizard
-                print("🔧 Opening setup wizard to change model...", flush=True)
+            required_models = get_required_models()
+            installed_models = check_installed_models(resolve_ollama_path())
+
+            # Normalize model names for comparison (remove :latest suffix)
+            def normalize_model(name: str) -> str:
+                return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
+
+            installed_normalized = {normalize_model(m) for m in installed_models}
+            missing_models = [
+                m for m in required_models
+                if normalize_model(m) not in installed_normalized and m not in installed_models
+            ]
+
+            if missing_models and _chat_on_ollama:
+                # Chat runs on Ollama: the setup wizard lets the user pick and
+                # install the chat model along with the embed + judge models.
+                splash.hide()
+                print(f"⚠️ Missing required models: {missing_models}", flush=True)
+                print("🔧 Opening setup wizard to install missing models...", flush=True)
                 wizard = SetupWizard()
                 wizard.show()
                 wizard.raise_()
                 wizard.activateWindow()
                 result = wizard.exec()
+
                 if result != wizard.DialogCode.Accepted:
                     print("Setup wizard cancelled - exiting", flush=True)
                     return 0
-            splash.show()
-            splash.set_status("Model check complete!")
-            app.processEvents()
+
+                print("✅ Model installation complete", flush=True)
+                splash.show()
+                splash.set_status("Models installed!")
+                app.processEvents()
+            elif missing_models:
+                # Only embeddings run on Ollama (chat is remote), so the
+                # chat-model wizard does not apply. The embedding model is a
+                # fixed name; surface a clear, non-blocking instruction rather
+                # than silently degrading — memory search falls back to keyword
+                # matching until the model is pulled.
+                pull_cmd = "; ".join(f"ollama pull {m}" for m in missing_models)
+                print(
+                    f"⚠️ Ollama embedding model(s) not installed: {missing_models}. "
+                    f"Memory search will use keyword matching until you run: {pull_cmd}",
+                    flush=True,
+                )
+            else:
+                print("✅ All required models are installed", flush=True)
+
+        if _chat_on_ollama:
+            # Check if the user is on an unsupported chat model. Only meaningful
+            # on the Ollama path — an OpenAI-compatible model name is not in the
+            # Ollama catalogue and must not be flagged here.
+            splash.set_status("Checking model compatibility...")
+            unsupported_model = check_model_support()
+            if unsupported_model:
+                splash.hide()
+                print(f"⚠️ Unsupported model detected: {unsupported_model}", flush=True)
+                if show_unsupported_model_dialog(unsupported_model):
+                    # User wants to open setup wizard
+                    print("🔧 Opening setup wizard to change model...", flush=True)
+                    wizard = SetupWizard()
+                    wizard.show()
+                    wizard.raise_()
+                    wizard.activateWindow()
+                    result = wizard.exec()
+                    if result != wizard.DialogCode.Accepted:
+                        print("Setup wizard cancelled - exiting", flush=True)
+                        return 0
+                splash.show()
+                splash.set_status("Model check complete!")
+                app.processEvents()
 
         splash.set_status("Loading Jarvis...")
         print("Initializing JarvisSystemTray...", flush=True)
