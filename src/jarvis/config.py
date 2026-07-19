@@ -393,6 +393,21 @@ def _ensure_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _expand_path(value: Any) -> Optional[str]:
+    """Normalise a user-supplied path setting: tilde-expanded string or None.
+
+    User-authored config files and our docs use paths like
+    "~/.local/share/jarvis/jarvis.db"; without expansion, mkdir creates or
+    fails on a literal '~' directory and the daemon dies at boot (#467).
+    """
+    if value in (None, "", "null"):
+        return None
+    try:
+        return str(Path(str(value)).expanduser())
+    except Exception:
+        return str(value)
+
+
 def _ensure_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -641,8 +656,8 @@ def load_settings() -> Settings:
     voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
 
     # Normalize/convert fields
-    db_path = str(merged.get("db_path") or _default_db_path())
-    sqlite_vss_path = merged.get("sqlite_vss_path")
+    db_path = _expand_path(merged.get("db_path")) or _default_db_path()
+    sqlite_vss_path = _expand_path(merged.get("sqlite_vss_path"))
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
 
     ollama_base_url = str(merged.get("ollama_base_url"))
@@ -694,14 +709,12 @@ def load_settings() -> Settings:
     tts_chatterbox_device = str(merged.get("tts_chatterbox_device", "cuda")).lower()
     if tts_chatterbox_device not in ("cuda", "auto", "cpu"):
         tts_chatterbox_device = "cuda"  # Default to cuda if invalid value
-    tts_chatterbox_audio_prompt_val = merged.get("tts_chatterbox_audio_prompt")
-    tts_chatterbox_audio_prompt = None if tts_chatterbox_audio_prompt_val in (None, "", "null") else str(tts_chatterbox_audio_prompt_val)
+    tts_chatterbox_audio_prompt = _expand_path(merged.get("tts_chatterbox_audio_prompt"))
     tts_chatterbox_exaggeration = float(merged.get("tts_chatterbox_exaggeration", 0.5))
     tts_chatterbox_cfg_weight = float(merged.get("tts_chatterbox_cfg_weight", 0.5))
 
     # Piper TTS settings
-    tts_piper_model_path_val = merged.get("tts_piper_model_path")
-    tts_piper_model_path = None if tts_piper_model_path_val in (None, "", "null") else str(tts_piper_model_path_val)
+    tts_piper_model_path = _expand_path(merged.get("tts_piper_model_path"))
     tts_piper_speaker_val = merged.get("tts_piper_speaker")
     try:
         tts_piper_speaker = None if tts_piper_speaker_val in (None, "", "null") else int(tts_piper_speaker_val)
@@ -720,7 +733,9 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "medium"))
+    # whisper_model accepts a size name ("medium") or a local model
+    # directory; _expand_path is a no-op for plain names.
+    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
