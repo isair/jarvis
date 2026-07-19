@@ -396,7 +396,7 @@ def _ensure_list(value: Any) -> list[str]:
 def _expand_path(value: Any) -> Optional[str]:
     """Normalise a user-supplied path setting: tilde-expanded string or None.
 
-    Config files (including our own exported example config) use paths like
+    User-authored config files and our docs use paths like
     "~/.local/share/jarvis/jarvis.db"; without expansion, mkdir creates or
     fails on a literal '~' directory and the daemon dies at boot (#467).
     """
@@ -733,7 +733,9 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "medium"))
+    # whisper_model accepts a size name ("medium") or a local model
+    # directory; _expand_path is a no-op for plain names.
+    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"

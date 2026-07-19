@@ -50,6 +50,25 @@ def test_other_path_settings_are_expanded(tmp_path, monkeypatch):
     assert cfg.tts_chatterbox_audio_prompt == str(Path("~/prompts/me.wav").expanduser())
 
 
+def test_null_db_path_falls_back_to_default(tmp_path, monkeypatch):
+    """A 'null' db_path uses the default location instead of a literal path."""
+    _write_config(tmp_path, monkeypatch, {"db_path": "null"})
+
+    cfg = load_settings()
+
+    assert "null" not in cfg.db_path
+    assert cfg.db_path.endswith("jarvis.db")
+
+
+def test_tilde_whisper_model_path_is_expanded(tmp_path, monkeypatch):
+    """whisper_model accepts a local model directory; tilde must expand, names pass through."""
+    _write_config(tmp_path, monkeypatch, {"whisper_model": "~/models/faster-whisper-medium"})
+    assert load_settings().whisper_model == str(Path("~/models/faster-whisper-medium").expanduser())
+
+    _write_config(tmp_path, monkeypatch, {"whisper_model": "medium"})
+    assert load_settings().whisper_model == "medium"
+
+
 def test_absolute_and_unset_paths_are_untouched(tmp_path, monkeypatch):
     """Absolute paths pass through unchanged; unset optional paths stay None."""
     db = tmp_path / "jarvis.db"
