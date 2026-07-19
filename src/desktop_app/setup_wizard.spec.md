@@ -34,7 +34,7 @@ The **Provider Choice page is the wizard's first step** (`setStartId`): Ollama i
 | # | Page | Condition to show | Config written |
 |---|------|-------------------|----------------|
 | 1 | **Provider Choice** (start) | Always | `llm_provider` (Ollama clears the OpenAI-compatible overrides) |
-| 2 | **OpenAI-compatible** | Provider Choice = OpenAI-compatible | `llm_provider`, `llm_base_url`, `llm_chat_model`, `llm_api_key`?, `embedding_model`? |
+| 2 | **OpenAI-compatible** | Provider Choice = OpenAI-compatible | `llm_provider`, `llm_base_url`, `llm_chat_model`, `llm_api_key`?, `embedding_model`?, `embedding_provider` (set to `ollama` when the embeddings-fallback box is ticked, else cleared) |
 | 3 | **Welcome / Status** | Ollama path | — |
 | 4 | **Ollama Install** | Ollama path + CLI not found | — |
 | 5 | **Ollama Server** | Ollama path + server not running | — |
@@ -54,7 +54,14 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 **WelcomePage / Status** — Reached only on the Ollama branch. Status dashboard showing CLI, server, models, location, and MLX Whisper (Apple Silicon) readiness; a background `StatusCheckWorker` populates `wizard.ollama_status`. Leads into the first applicable Ollama page via `SetupWizard.ollama_entry_page_id()` (install if the CLI is missing, server if it is not running, else models).
 
-**OpenAICompatiblePage** — Shown only on the OpenAI-compatible path. Guided rather than freeform: the user enters the base URL (prefilled with the LM Studio default `http://localhost:1234/v1` on first run) and an optional API key, then clicks **🔌 Connect & load models**, which fetches the server's model list (`GET /v1/models` via `OpenAICompatibleBackend.list_models`, off the UI thread in `_ModelFetchWorker`) and populates the chat- and embedding-model **editable** dropdowns. Picking from the list prevents the common mistake of pasting a URL or wrong id as the model name; the editable combo still lets power users type a model the listing omits. The status line reports success (`✅ Connected — N models`) or a fail-soft hint to type the id manually. `isComplete` gates Next on base URL + chat model. On validate, writes `llm_provider="openai_compatible"`, `llm_base_url`, `llm_chat_model` (the combo's current text), and the optional `llm_api_key` / `embedding_model` only when non-empty. `nextId` skips the Ollama install/server/models pages and goes straight to Whisper setup.
+**OpenAICompatiblePage** — Shown only on the OpenAI-compatible path. Guided rather than freeform, designed so the common case is "Connect, then Next":
+
+- **App preset + auto-discovery.** An optional "Your app" picker prefills the base URL for a known server (LM Studio, Ollama, Jan, llama.cpp / LocalAI, vLLM). On open, when no custom URL is saved, `_DiscoveryWorker` probes those well-known **loopback** ports (`_discover_servers`, never the network) and announces what it finds, prefilling the first hit. With a saved URL, discovery is skipped and the saved value is kept.
+- **Connect.** **🔌 Connect & load models** fetches the model list (`GET /v1/models` via `OpenAICompatibleBackend.list_models`, off the UI thread in `_ModelFetchWorker`) and populates the chat- and embedding-model **editable** dropdowns. `_classify_models` routes `embed`-named ids to the embedding box and the rest to chat, and a sensible default is preselected (a typed/selected value is preserved). The editable combos still let power users type a model the listing omits.
+- **Capability probe.** Connect then runs `_CapabilityWorker` → `OpenAICompatibleBackend.check_capabilities`, which sends a tiny chat, a trivial tool call, and an embedding request against the chosen model. The status line reports an honest verdict (`✅ Chat   ✅ Tool calling   ⚠️ No embeddings …`) so a dud model or missing endpoint is caught during setup, not at runtime.
+- **Ollama-embeddings fallback.** When the probe shows the server can chat but not embed, a checkbox offers to route embeddings to Ollama (keeping full semantic memory). It is hidden otherwise.
+
+`isComplete` gates Next on base URL + chat model. On validate, writes `llm_provider="openai_compatible"`, `llm_base_url`, `llm_chat_model` (the combo's current text), and the optional `llm_api_key` / `embedding_model` only when non-empty. When the Ollama-embeddings checkbox is shown and ticked, writes `embedding_provider="ollama"` and drops `embedding_model` (Ollama's default applies); otherwise `embedding_provider` is cleared. `nextId` skips the Ollama install/server/models pages and goes straight to Whisper setup.
 
 **OllamaInstallPage** — Platform-specific download instructions. Opens official download page. Verify button re-checks `check_ollama_cli()`.
 

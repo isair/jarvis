@@ -23,6 +23,7 @@ which backend is active.
 """
 
 from __future__ import annotations
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 import json
@@ -30,6 +31,20 @@ import requests
 
 from ..debug import debug_log
 from .backend import LLMBackend, ToolsNotSupportedError
+
+
+@dataclass
+class ServerCapabilities:
+    """What an OpenAI-compatible server can actually do, probed with real
+    requests. ``reachable`` is False when the server did not respond at all
+    (wrong URL, server down); the per-feature flags are only meaningful when
+    ``reachable`` is True. ``models`` is the advertised model list."""
+
+    reachable: bool = False
+    chat: bool = False
+    tools: bool = False
+    embeddings: bool = False
+    models: List[str] = field(default_factory=list)
 
 
 def _normalise_response(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -153,7 +168,9 @@ class OpenAICompatibleBackend(LLMBackend):
             debug_log(f"OpenAICompatibleBackend.direct: timeout after {timeout_sec}s", "llm")
             return None
         except Exception as e:
-            debug_log(f"OpenAICompatibleBackend.direct: request failed — {e}", "llm")
+            # The exception string can embed the full URL (and any query-string
+            # credentials); log only the class so nothing sensitive leaks.
+            debug_log(f"OpenAICompatibleBackend.direct: request failed ({type(e).__name__})", "llm")
             return None
 
         return None
@@ -342,3 +359,65 @@ class OpenAICompatibleBackend(LLMBackend):
             return names
         except Exception:
             return []
+
+    def check_capabilities(
+        self,
+        chat_model: str,
+        embed_model: Optional[str] = None,
+        timeout_sec: float = 8.0,
+    ) -> ServerCapabilities:
+        """Probe what the server can actually do with real requests: list its
+        models, send a tiny chat completion, try a trivial tool call, and ask
+        for an embedding. Returns raw booleans (formatting is the caller's
+        job). Never raises — every failure mode collapses to a False flag so
+        the setup wizard and startup check can report honestly.
+
+        ``chat`` covers both a plain reply and a tool-call-only reply (an empty
+        ``content`` with ``tool_calls`` still proves the chat endpoint works)."""
+        caps = ServerCapabilities(models=self.list_models(timeout_sec=timeout_sec))
+        if caps.models:
+            caps.reachable = True
+
+        # Cap generation: we only need to know the endpoint answers, so a short
+        # reply keeps the probe fast on large models and avoids a long
+        # generation tripping the timeout and reporting a false "chat broken".
+        probe = [{"role": "user", "content": "ping"}]
+        probe_opts = {"max_tokens": 16}
+        try:
+            resp = self.chat(chat_model, probe, timeout_sec=timeout_sec, extra_options=probe_opts)
+            if isinstance(resp, dict):
+                caps.reachable = True
+                msg = resp.get("message")
+                msg = msg if isinstance(msg, dict) else {}
+                caps.chat = bool((msg.get("content") or "").strip()) or bool(msg.get("tool_calls"))
+        except requests.exceptions.ConnectionError:
+            # Server unreachable — nothing else can succeed either.
+            caps.reachable = False
+            return caps
+        except Exception:
+            pass
+
+        if caps.chat:
+            trivial_tool = [{
+                "type": "function",
+                "function": {
+                    "name": "ping",
+                    "description": "A no-op used to probe tool support.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }]
+            try:
+                tool_resp = self.chat(chat_model, probe, tools=trivial_tool,
+                                       timeout_sec=timeout_sec, extra_options=probe_opts)
+                caps.tools = isinstance(tool_resp, dict)
+            except ToolsNotSupportedError:
+                caps.tools = False
+            except Exception:
+                caps.tools = False
+
+        em = (embed_model or "").strip() or chat_model
+        if self.embed("ping", em, timeout_sec=timeout_sec):
+            caps.embeddings = True
+            caps.reachable = True
+
+        return caps

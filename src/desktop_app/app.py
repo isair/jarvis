@@ -2275,6 +2275,31 @@ def _ollama_runtime_flags(cfg) -> tuple[bool, bool]:
     return ollama_needed, chat_on_ollama
 
 
+def _check_openai_compat_reachable(cfg, timeout_sec: float = 4.0) -> bool:
+    """True when the configured OpenAI-compatible server answers its model
+    listing. Used at startup to warn the user early if their local server
+    isn't running, since (unlike Ollama) Jarvis cannot start it for them."""
+    try:
+        from jarvis.llm import get_llm_backend
+        return bool(get_llm_backend(cfg).list_models(timeout_sec=timeout_sec))
+    except Exception:
+        return False
+
+
+def _openai_compat_unreachable_message(cfg) -> str:
+    """Friendly heads-up shown when the OpenAI-compatible server isn't ready at
+    startup (unreachable, or reachable with no model loaded: the model listing
+    is empty in both cases). Names the address but never the API key."""
+    base = (getattr(cfg, "llm_base_url", "") or "").strip() or "your configured server"
+    return (
+        f"⚠️ Jarvis couldn't reach a ready LLM server at {base}.\n\n"
+        "Make sure your local server (for example LM Studio, Ollama, llama.cpp, "
+        "vLLM) is running with a model loaded, and Jarvis will connect "
+        "automatically.\n\n"
+        "You can change the server any time in Settings → LLM Provider."
+    )
+
+
 def main() -> int:
     """Main entry point for the desktop app."""
     # Fix Windows console encoding for Unicode/emoji characters
@@ -2470,14 +2495,39 @@ def main() -> int:
         # embeddings run on Ollama we just make sure the server is up.
         try:
             from jarvis.config import load_settings as _load_provider_settings
-            _ollama_needed, _chat_on_ollama = _ollama_runtime_flags(
-                _load_provider_settings()
-            )
+            _provider_cfg = _load_provider_settings()
+            _ollama_needed, _chat_on_ollama = _ollama_runtime_flags(_provider_cfg)
         except Exception:
+            _provider_cfg = None
             _ollama_needed, _chat_on_ollama = True, True
 
         if not _ollama_needed:
             print("🔌 OpenAI-compatible provider configured: skipping Ollama startup checks", flush=True)
+
+            # We can't start a third-party server the way we start Ollama, so
+            # check it is reachable and warn early if it isn't — otherwise the
+            # user only finds out when their first request silently fails.
+            splash.set_status("Checking your LLM server...")
+            app.processEvents()
+
+            class _LLMReachWorker(QThread):
+                finished = pyqtSignal(bool)
+
+                def run(self):
+                    self.finished.emit(_check_openai_compat_reachable(_provider_cfg))
+
+            _reach = [True]
+            _reach_worker = _LLMReachWorker()
+            _reach_worker.finished.connect(lambda ok: _reach.__setitem__(0, ok))
+            _reach_loop = QEventLoop()
+            _reach_worker.finished.connect(_reach_loop.quit)
+            _reach_worker.start()
+            _reach_loop.exec()
+
+            if not _reach[0]:
+                print("⚠️ LLM server not reachable at startup", flush=True)
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(None, "Jarvis", _openai_compat_unreachable_message(_provider_cfg))
 
         if _ollama_needed:
             # Even if setup was completed before, verify Ollama server is actually running

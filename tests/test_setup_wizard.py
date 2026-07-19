@@ -6,6 +6,7 @@ They treat the detection functions as black boxes, verifying inputs produce corr
 """
 
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pytest
 
@@ -616,6 +617,7 @@ class TestOpenAICompatiblePage:
         import tempfile, json
         from pathlib import Path
         page = OpenAICompatiblePage.__new__(OpenAICompatiblePage)
+        page._use_ollama_embed = SimpleNamespace(isVisible=lambda: False, isChecked=lambda: False)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"llm_provider": "openai_compatible"}, f)
@@ -641,6 +643,7 @@ class TestOpenAICompatiblePage:
         import tempfile, json
         from pathlib import Path
         page = OpenAICompatiblePage.__new__(OpenAICompatiblePage)
+        page._use_ollama_embed = SimpleNamespace(isVisible=lambda: False, isChecked=lambda: False)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("{}")
@@ -773,6 +776,145 @@ class TestOpenAICompatiblePage:
 
         assert fired, "editing the base URL should emit completeChanged"
         assert page.isComplete() is True
+
+    def test_classify_models_splits_embed_from_chat(self):
+        chat, embed = OpenAICompatiblePage._classify_models(
+            ["qwen2.5-7b-instruct", "nomic-embed-text", "text-embedding-3-small", "gemma-2b"])
+        assert chat == ["qwen2.5-7b-instruct", "gemma-2b"]
+        assert embed == ["nomic-embed-text", "text-embedding-3-small"]
+
+    def test_populate_models_applies_sensible_defaults(self, qapp):
+        """With nothing chosen yet, the first chat model and the first embed
+        model are preselected so the common case is just Connect then Next."""
+        page = OpenAICompatiblePage()
+        page._populate_models(["llama-3-8b", "nomic-embed-text", "phi-3"])
+        assert page._chat_model_combo.currentText() == "llama-3-8b"
+        assert page._embed_model_combo.currentText() == "nomic-embed-text"
+
+    def test_populate_models_preserves_user_choice_over_default(self, qapp):
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("my-model")
+        page._populate_models(["llama-3-8b", "phi-3"])
+        assert page._chat_model_combo.currentText() == "my-model"
+
+    def test_preset_prefills_base_url(self, qapp):
+        """Choosing an app preset fills in its default base URL."""
+        page = OpenAICompatiblePage()
+        # index 1 is the first known server (LM Studio)
+        label, url = OpenAICompatiblePage._KNOWN_SERVERS[0]
+        page._preset_combo.setCurrentIndex(1)
+        assert page._base_url_input.text() == url
+
+    def test_discover_servers_finds_running_server(self, stub_openai_server):
+        """Discovery returns reachable loopback servers and skips dead ports."""
+        base, _ = stub_openai_server
+        found = OpenAICompatiblePage._discover_servers(
+            [("Stub", base), ("Dead", "http://127.0.0.1:1/v1")], timeout=2)
+        assert found == [("Stub", base)]
+
+    def test_capability_summary_reports_each_feature(self):
+        ok = SimpleNamespace(reachable=True, chat=True, tools=True, embeddings=True)
+        summary = OpenAICompatiblePage._capability_summary(ok)
+        assert "✅ Chat" in summary and "✅ Tool calling" in summary and "✅ Embeddings" in summary
+
+        no_embed = SimpleNamespace(reachable=True, chat=True, tools=True, embeddings=False)
+        assert "No embeddings" in OpenAICompatiblePage._capability_summary(no_embed)
+
+        unreachable = SimpleNamespace(reachable=False, chat=False, tools=False, embeddings=False)
+        assert "Couldn't" in OpenAICompatiblePage._capability_summary(unreachable)
+
+    def test_on_capabilities_offers_ollama_embeddings_when_server_cannot_embed(self, qapp):
+        # isHidden() reflects the requested visibility flag without the page
+        # being shown on screen (isVisible() needs a shown ancestor).
+        page = OpenAICompatiblePage()
+        page._on_capabilities(
+            SimpleNamespace(reachable=True, chat=True, tools=True, embeddings=False))
+        assert page._use_ollama_embed.isHidden() is False
+
+    def test_on_capabilities_hides_offer_when_embeddings_work(self, qapp):
+        page = OpenAICompatiblePage()
+        page._use_ollama_embed.setVisible(True)
+        page._on_capabilities(
+            SimpleNamespace(reachable=True, chat=True, tools=True, embeddings=True))
+        assert page._use_ollama_embed.isHidden() is True
+
+    def test_validate_writes_ollama_embedding_split(self):
+        """When the user opts to embed via Ollama, the config routes embeddings
+        to Ollama and drops the remote embedding model."""
+        import tempfile, json
+        from pathlib import Path
+        page = OpenAICompatiblePage.__new__(OpenAICompatiblePage)
+        page._use_ollama_embed = SimpleNamespace(isVisible=lambda: True, isChecked=lambda: True)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            cfg_path = Path(f.name)
+        try:
+            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+                page._read_inputs = MagicMock(return_value=(
+                    "http://localhost:9876/v1", "", "qwen-27b", "some-embed",
+                ))
+                assert page.validatePage() is True
+            saved = json.loads(cfg_path.read_text())
+            assert saved["embedding_provider"] == "ollama"
+            assert "embedding_model" not in saved
+        finally:
+            cfg_path.unlink(missing_ok=True)
+
+    def test_connect_with_empty_base_url_warns_without_starting_worker(self, qapp):
+        page = OpenAICompatiblePage()
+        page._base_url_input.setText("")
+        page._on_connect()
+        assert "base URL" in page._connect_status.text()
+        assert page._fetch_worker is None
+
+    def test_populate_models_all_embeddings_does_not_default_chat_to_embed(self, qapp):
+        """A server that only lists embedding models must not auto-select an
+        embedding model as the chat model."""
+        page = OpenAICompatiblePage()
+        page._populate_models(["nomic-embed-text", "text-embedding-3-small"])
+        assert page._chat_model_combo.currentText() == ""
+
+    def test_initialize_page_starts_discovery_only_without_saved_url(self, qapp):
+        import tempfile, json
+        from pathlib import Path
+        page = OpenAICompatiblePage()
+
+        # Empty config (no saved URL) -> discovery runs.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            empty_cfg = Path(f.name)
+        # Saved custom URL -> discovery is skipped, saved value kept.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"llm_base_url": "http://saved:9/v1"}, f)
+            saved_cfg = Path(f.name)
+        try:
+            page._start_discovery = MagicMock()
+            with patch("jarvis.config.default_config_path", return_value=empty_cfg):
+                page.initializePage()
+            assert page._start_discovery.call_count == 1
+
+            page._start_discovery.reset_mock()
+            with patch("jarvis.config.default_config_path", return_value=saved_cfg):
+                page.initializePage()
+            assert page._start_discovery.call_count == 0
+            assert page._base_url_input.text() == "http://saved:9/v1"
+        finally:
+            empty_cfg.unlink(missing_ok=True)
+            saved_cfg.unlink(missing_ok=True)
+
+    def test_on_discovered_prefills_default_but_not_a_custom_url(self, qapp):
+        page = OpenAICompatiblePage()
+        # Still on the default URL -> discovery prefills the found server.
+        page._base_url_input.setText(OpenAICompatiblePage._DEFAULT_BASE_URL)
+        page._on_discovered([("Jan", "http://localhost:1337/v1")])
+        assert page._base_url_input.text() == "http://localhost:1337/v1"
+        assert "Found" in page._connect_status.text()
+
+        # User typed a custom URL -> discovery must not clobber it.
+        page._base_url_input.setText("http://mine:5/v1")
+        page._on_discovered([("Jan", "http://localhost:1337/v1")])
+        assert page._base_url_input.text() == "http://mine:5/v1"
 
 
 class TestOllamaStatusDataclass:

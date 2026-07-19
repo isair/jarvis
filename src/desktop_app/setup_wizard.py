@@ -1020,24 +1020,78 @@ class _ModelFetchWorker(_KeepAliveWorker):
         self.done.emit(bool(models), models)
 
 
+class _DiscoveryWorker(QThread):
+    """Probes well-known local ports for a running OpenAI-compatible server so
+    the wizard can offer a one-click pick instead of asking for a URL."""
+
+    done = pyqtSignal(list)  # list of (label, url)
+
+    def __init__(self, candidates: list):
+        super().__init__()
+        self._candidates = candidates
+
+    def run(self):
+        self.done.emit(OpenAICompatiblePage._discover_servers(self._candidates))
+
+
+class _CapabilityWorker(QThread):
+    """Probes what the chosen server+model can actually do (chat, tools,
+    embeddings) off the UI thread, so the wizard catches a dud model or a
+    missing embeddings endpoint before setup finishes rather than at runtime."""
+
+    done = pyqtSignal(object)  # ServerCapabilities
+
+    def __init__(self, base_url: str, api_key: str, chat_model: str, embed_model: str):
+        super().__init__()
+        self._base_url = base_url
+        self._api_key = api_key
+        self._chat_model = chat_model
+        self._embed_model = embed_model
+
+    def run(self):
+        try:
+            from jarvis.llm import OpenAICompatibleBackend, ServerCapabilities
+            backend = OpenAICompatibleBackend(self._base_url, api_key=self._api_key or None)
+            caps = backend.check_capabilities(self._chat_model, self._embed_model or None)
+        except Exception:
+            from jarvis.llm import ServerCapabilities
+            caps = ServerCapabilities()
+        self.done.emit(caps)
+
+
 class OpenAICompatiblePage(QWizardPage):
     """Collect the OpenAI-compatible server's connection details. Shown only
     on the OpenAI-compatible branch; it writes the ``llm_*`` /
     ``embedding_model`` config keys and then skips straight to Whisper setup.
 
-    Guided rather than freeform: the user enters the base URL (and optional
-    key), clicks Connect, and the page fetches the server's actual model list
-    into editable dropdowns. Picking from the list stops users pasting a URL
-    or a wrong id as the model name (a common mistake), while the editable
-    combo still lets power users type a model the listing omits.
+    Guided rather than freeform: the page auto-discovers running local
+    servers, offers a one-click app preset, and (after Connect) fetches the
+    server's actual model list into editable dropdowns with sensible defaults.
+    A single Connect then probes the chosen model so the user learns up front
+    whether chat, tool calling, and embeddings work, and is offered the
+    Ollama-embeddings fallback when the server can't embed. Power users can
+    still type any base URL or model id by hand.
     """
 
     _DEFAULT_BASE_URL = "http://localhost:1234/v1"  # LM Studio default
+
+    # Well-known local OpenAI-compatible servers, used both for the app preset
+    # picker and for auto-discovery. All loopback, so probing never leaves the
+    # machine.
+    _KNOWN_SERVERS = [
+        ("LM Studio", "http://localhost:1234/v1"),
+        ("Ollama (OpenAI API)", "http://localhost:11434/v1"),
+        ("Jan", "http://localhost:1337/v1"),
+        ("llama.cpp / LocalAI", "http://localhost:8080/v1"),
+        ("vLLM", "http://localhost:8000/v1"),
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
         self._fetch_worker = None
+        self._discovery_worker = None
+        self._cap_worker = None
 
         layout = QVBoxLayout()
         layout.setSpacing(14)
@@ -1048,9 +1102,9 @@ class OpenAICompatiblePage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Enter your server's address, then Connect to load its models. "
-            "The base URL and chat model are required; the API key and a "
-            "separate embedding model are optional."
+            "Point Jarvis at a local server (LM Studio, Ollama, Jan, llama.cpp, "
+            "vLLM, …). Pick your app or let Jarvis find it, then Connect to load "
+            "its models. Only the base URL and chat model are required."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -1064,6 +1118,19 @@ class OpenAICompatiblePage(QWizardPage):
         form.setContentsMargins(16, 14, 16, 14)
         form.setSpacing(10)
 
+        # App preset: prefills the base URL for a known server so the user
+        # never has to remember a port.
+        preset_label = QLabel("Your app")
+        preset_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        form.addWidget(preset_label)
+        self._preset_combo = QComboBox()
+        self._preset_combo.addItem("Select your app (optional)…")
+        for label, _url in self._KNOWN_SERVERS:
+            self._preset_combo.addItem(label)
+        self._preset_combo.addItem("Other / custom")
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        form.addWidget(self._preset_combo)
+
         self._base_url_input = self._labelled_edit(
             form, "Base URL",
             "e.g. http://localhost:1234/v1 (LM Studio default)")
@@ -1071,14 +1138,15 @@ class OpenAICompatiblePage(QWizardPage):
             form, "API key (optional)", "leave empty if your server needs none",
             password=True)
 
-        # Connect button + status: fetch the model list to populate the dropdowns.
+        # Connect button + status: fetch the model list, then probe the model.
         self._connect_btn = QPushButton("🔌 Connect & load models")
         self._connect_btn.setObjectName("secondary")
         self._connect_btn.clicked.connect(self._on_connect)
         form.addWidget(self._connect_btn)
         self._connect_status = QLabel("")
         self._connect_status.setWordWrap(True)
-        self._connect_status.setStyleSheet("font-size: 12px; color: #a1a1aa;")
+        self._connect_status.setStyleSheet(
+            f"font-size: 12px; color: {COLORS['text_secondary']};")
         form.addWidget(self._connect_status)
 
         self._chat_model_combo = self._labelled_combo(
@@ -1086,6 +1154,14 @@ class OpenAICompatiblePage(QWizardPage):
         self._embed_model_combo = self._labelled_combo(
             form, "Embedding model (optional)",
             "leave empty to skip embeddings (memory uses keyword search)")
+
+        # Shown only when the probe finds the server can't embed: a one-click
+        # way to keep full semantic memory by routing embeddings to Ollama.
+        self._use_ollama_embed = QCheckBox(
+            "Use Ollama for embeddings instead (keeps full semantic memory)")
+        self._use_ollama_embed.setVisible(False)
+        self._use_ollama_embed.toggled.connect(lambda *_: self.completeChanged.emit())
+        form.addWidget(self._use_ollama_embed)
 
         layout.addWidget(form_card)
 
@@ -1145,6 +1221,33 @@ class OpenAICompatiblePage(QWizardPage):
         except Exception:
             return []
 
+    @staticmethod
+    def _discover_servers(candidates: list, timeout: float = 1.5) -> list:
+        """Probe well-known local ports for a running OpenAI-compatible server.
+        Only loopback addresses are probed, so discovery never touches the
+        network. Returns the reachable ``(label, url)`` pairs."""
+        found = []
+        for label, url in candidates:
+            if OpenAICompatiblePage._fetch_models(url, "", timeout=timeout):
+                found.append((label, url))
+        return found
+
+    @staticmethod
+    def _classify_models(models: list) -> tuple:
+        """Split advertised ids into ``(chat, embed)`` by an id heuristic.
+        Model ids are vendor tokens rather than natural language, so matching
+        ``embed`` in the id stays language-agnostic."""
+        embed = [m for m in models if "embed" in m.lower()]
+        chat = [m for m in models if "embed" not in m.lower()]
+        return chat, embed
+
+    def _on_preset_changed(self, idx: int):
+        # idx 0 is the placeholder and the last item is "Other / custom"; the
+        # ones in between map to _KNOWN_SERVERS and prefill the base URL.
+        if 1 <= idx <= len(self._KNOWN_SERVERS):
+            _label, url = self._KNOWN_SERVERS[idx - 1]
+            self._base_url_input.setText(url)
+
     def _on_connect(self):
         base_url = (self._base_url_input.text() or "").strip()
         if not base_url:
@@ -1158,46 +1261,134 @@ class OpenAICompatiblePage(QWizardPage):
         worker.start()
 
     def _on_models_fetched(self, reached: bool, models: list):
-        self._connect_btn.setEnabled(True)
         self._populate_models(models)
-        if reached and models:
-            self._connect_status.setText(f"✅ Connected — {len(models)} model(s) found.")
-        else:
+        if not (reached and models):
+            self._connect_btn.setEnabled(True)
             self._connect_status.setText(
                 "⚠️ Couldn't load models. Check the URL/key and that the server "
                 "is running, or type the model id manually below.")
+            self.completeChanged.emit()
+            return
+        # Models loaded and a sensible chat default is selected — probe the
+        # model so the user learns up front what works.
+        chat = (self._chat_model_combo.currentText() or "").strip()
+        base = (self._base_url_input.text() or "").strip()
+        if base and chat:
+            self._connect_status.setText(
+                f"✅ Connected — {len(models)} model(s). Checking {chat}…")
+            self._start_capability_probe()
+        else:
+            self._connect_btn.setEnabled(True)
+            self._connect_status.setText(f"✅ Connected — {len(models)} model(s) found.")
         self.completeChanged.emit()
 
+    def _start_capability_probe(self):
+        base = (self._base_url_input.text() or "").strip()
+        chat = (self._chat_model_combo.currentText() or "").strip()
+        if not (base and chat):
+            self._connect_btn.setEnabled(True)
+            return
+        self._connect_btn.setEnabled(False)
+        worker = _CapabilityWorker(
+            base, (self._api_key_input.text() or "").strip(),
+            chat, (self._embed_model_combo.currentText() or "").strip())
+        worker.done.connect(self._on_capabilities)
+        self._cap_worker = worker  # keep a reference so it isn't GC'd
+        worker.start()
+
+    def _on_capabilities(self, caps):
+        self._connect_btn.setEnabled(True)
+        self._connect_status.setText(self._capability_summary(caps))
+        # Offer the Ollama-embeddings split only when the server clearly works
+        # for chat but cannot embed.
+        needs_split = bool(getattr(caps, "reachable", False)
+                           and getattr(caps, "chat", False)
+                           and not getattr(caps, "embeddings", False))
+        self._use_ollama_embed.setVisible(needs_split)
+        if not needs_split:
+            self._use_ollama_embed.setChecked(False)
+        self.completeChanged.emit()
+
+    @staticmethod
+    def _capability_summary(caps) -> str:
+        """Honest one-line verdict on what the chosen server+model can do."""
+        if not getattr(caps, "reachable", False):
+            return ("⚠️ Couldn't get a response with that model. Check the URL, "
+                    "key, and that the model id is loaded on the server.")
+        mark = lambda ok: "✅" if ok else "⚠️"
+        parts = [f"{mark(caps.chat)} Chat", f"{mark(caps.tools)} Tool calling"]
+        parts.append("✅ Embeddings" if caps.embeddings
+                     else "⚠️ No embeddings (memory uses keyword search)")
+        return "   ".join(parts)
+
     def _populate_models(self, models: list):
-        """Fill the dropdowns with fetched model ids, preserving whatever the
-        user had typed/selected as the current value."""
-        for combo, include_blank in ((self._chat_model_combo, False),
-                                      (self._embed_model_combo, True)):
-            current = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            if include_blank:
-                combo.addItem("")  # "(none)" — embeddings optional
-            for m in models:
-                combo.addItem(m)
-            combo.setCurrentText(current)
-            combo.blockSignals(False)
+        """Fill the dropdowns with fetched model ids. Embedding-named ids go to
+        the embedding box and the rest to chat; if the heuristic finds none of
+        a kind, both boxes get the full list. A value the user already
+        typed/selected is preserved, otherwise a sensible default is applied so
+        the common case is just Connect then Next."""
+        chat_models, embed_models = self._classify_models(models)
+        # The chat box lists chat models (or the full list if the heuristic
+        # found none), but only auto-selects a real chat model — never an
+        # embedding model, which would be a wrong default.
+        self._fill_combo(self._chat_model_combo, chat_models or models, blank=False,
+                         default=(chat_models[0] if chat_models else ""))
+        self._fill_combo(self._embed_model_combo, embed_models or models, blank=True,
+                         default=(embed_models[0] if embed_models else ""))
+
+    def _fill_combo(self, combo, items, *, blank: bool, default: str):
+        current = (combo.currentText() or "").strip()
+        combo.blockSignals(True)
+        combo.clear()
+        if blank:
+            combo.addItem("")  # "(none)" — embeddings optional
+        for it in items:
+            combo.addItem(it)
+        combo.setCurrentText(current or default)
+        combo.blockSignals(False)
 
     def initializePage(self):
-        """Pre-fill from any existing config so re-running the wizard keeps
-        the user's values. Defaults the base URL to the common LM Studio
-        address so a first-time user can just click Connect."""
+        """Pre-fill from any existing config so re-running the wizard keeps the
+        user's values. With no saved URL, default to the common LM Studio
+        address and kick off auto-discovery of running local servers."""
         try:
             from jarvis.config import default_config_path, _load_json
             config = _load_json(default_config_path()) or {}
         except Exception:
             config = {}
-        self._base_url_input.setText(
-            str(config.get("llm_base_url", "") or "") or self._DEFAULT_BASE_URL)
+        saved_url = str(config.get("llm_base_url", "") or "")
+        self._base_url_input.setText(saved_url or self._DEFAULT_BASE_URL)
         self._api_key_input.setText(str(config.get("llm_api_key", "") or ""))
         self._chat_model_combo.setCurrentText(str(config.get("llm_chat_model", "") or ""))
         self._embed_model_combo.setCurrentText(str(config.get("embedding_model", "") or ""))
+        self._use_ollama_embed.setVisible(False)
         self._connect_status.setText("")
+        # Only auto-discover when the user hasn't already saved a custom URL.
+        if not saved_url:
+            self._start_discovery()
+
+    def _start_discovery(self):
+        self._connect_status.setText("🔍 Looking for local servers…")
+        worker = _DiscoveryWorker(list(self._KNOWN_SERVERS))
+        worker.done.connect(self._on_discovered)
+        self._discovery_worker = worker  # keep a reference so it isn't GC'd
+        worker.start()
+
+    def _on_discovered(self, found: list):
+        if not found:
+            self._connect_status.setText("")  # nothing running; user enters details
+            return
+        label, url = found[0]
+        # Prefill the first hit unless the user already changed the default.
+        if (self._base_url_input.text() or "").strip() in ("", self._DEFAULT_BASE_URL):
+            self._base_url_input.setText(url)
+        if len(found) == 1:
+            self._connect_status.setText(
+                f"🔍 Found {label} at {url} — click Connect to load its models.")
+        else:
+            names = ", ".join(l for l, _ in found)
+            self._connect_status.setText(
+                f"🔍 Found {len(found)} servers ({names}). Pick one above, then Connect.")
 
     @staticmethod
     def _is_ready(base_url: str, chat_model: str) -> bool:
@@ -1234,10 +1425,20 @@ class OpenAICompatiblePage(QWizardPage):
                 config["llm_api_key"] = api_key
             else:
                 config.pop("llm_api_key", None)
-            if embed_model:
-                config["embedding_model"] = embed_model
-            else:
+
+            # Embeddings: when the server can't embed and the user opted for the
+            # Ollama fallback, route embeddings to Ollama and drop the remote
+            # embedding model (Ollama's default applies). Otherwise keep
+            # embeddings on this provider, writing the model only when set.
+            if self._use_ollama_embed.isVisible() and self._use_ollama_embed.isChecked():
+                config["embedding_provider"] = "ollama"
                 config.pop("embedding_model", None)
+            else:
+                config.pop("embedding_provider", None)
+                if embed_model:
+                    config["embedding_model"] = embed_model
+                else:
+                    config.pop("embedding_model", None)
 
             config_path.parent.mkdir(parents=True, exist_ok=True)
             _save_json(config_path, config)
