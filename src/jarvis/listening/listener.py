@@ -17,8 +17,11 @@ from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
 from rapidfuzz import fuzz
+from contextlib import contextmanager
+
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
+from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
@@ -337,6 +340,31 @@ def _clear_corrupted_whisper_cache(error_message: str) -> bool:
     except OSError as e:
         debug_log(f"failed to clear corrupted cache: {e}", "voice")
         return False
+
+
+
+@contextmanager
+def _serialised_stream(stream):
+    """Like ``with stream:`` but with lifecycle calls under portaudio_lock.
+
+    sounddevice's context manager calls start() on enter and stop()/close()
+    on exit; those are the thread-unsafe PortAudio lifecycle operations that
+    must be serialised process-wide (see jarvis.utils.audio_lock).
+    """
+    with portaudio_lock:
+        stream.start()
+    try:
+        yield stream
+    finally:
+        with portaudio_lock:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 class VoiceListener(threading.Thread):
@@ -1615,38 +1643,51 @@ class VoiceListener(threading.Thread):
                 print("  🔐 Checking microphone permission...", flush=True)
                 mic_ok = threading.Event()
                 mic_error: list = [None]
-                mic_stream: list = [None]
 
                 def _mic_check():
+                    # Deliberately NOT under portaudio_lock: this probe's
+                    # open/start can hang indefinitely when Windows blocks
+                    # mic access at the system level (that is what the 5s
+                    # timeout below is for), and hanging while holding the
+                    # process-wide lock would freeze every other audio user
+                    # (listener, dictation, TTS). The probe runs once at
+                    # startup before the listener's main stream opens, so
+                    # the residual open/open race is minimal; the quick
+                    # stop/close after a successful start stays guarded.
+                    stream = None
                     try:
                         stream = sd.InputStream(
                             samplerate=self._samplerate, channels=1,
                             dtype="float32", blocksize=int(self._samplerate * 0.1),
                         )
-                        mic_stream[0] = stream
                         stream.start()
                         time.sleep(0.15)
-                        stream.stop()
-                        stream.close()
-                        mic_stream[0] = None
+                        with portaudio_lock:
+                            stream.stop()
+                            stream.close()
+                        stream = None
                         mic_ok.set()
                     except Exception as exc:
                         mic_error[0] = exc
+                        if stream is not None:
+                            try:
+                                with portaudio_lock:
+                                    stream.close()
+                            except Exception:
+                                pass
 
                 check_thread = threading.Thread(target=_mic_check, daemon=True)
                 check_thread.start()
                 check_thread.join(timeout=5.0)
 
                 if check_thread.is_alive():
-                    # Clean up the stream if the thread is still blocked
+                    # Do NOT abort/close the stream from this thread: the
+                    # check thread may still be blocked inside start()/stop()
+                    # on it, and closing a stream under another thread's feet
+                    # is a native use-after-free that aborts the whole app on
+                    # Windows (#401). Abandon it — the daemon check thread
+                    # will finish the stop/close itself if it ever unblocks.
                     debug_log("microphone permission check timed out after 5s", "voice")
-                    stream_ref = mic_stream[0]
-                    if stream_ref is not None:
-                        try:
-                            stream_ref.abort()
-                            stream_ref.close()
-                        except Exception:
-                            pass
                     print("  ⚠️  Microphone permission check timed out", flush=True)
                     print("     This may indicate Windows is blocking microphone access.", flush=True)
                     print("     Continuing anyway — voice input may not work.", flush=True)
@@ -2043,14 +2084,15 @@ class VoiceListener(threading.Thread):
         self._stream_samplerate = self._samplerate
         open_error = None
         try:
-            stream = sd.InputStream(
-                samplerate=self._samplerate,
-                channels=1,
-                dtype="float32",
-                blocksize=self._frame_samples,
-                callback=self._on_audio,
-                **stream_kwargs,
-            )
+            with portaudio_lock:
+                stream = sd.InputStream(
+                    samplerate=self._samplerate,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=self._frame_samples,
+                    callback=self._on_audio,
+                    **stream_kwargs,
+                )
         except Exception as e:
             error_msg = str(e).lower()
             is_rate_error = "sample rate" in error_msg or "9987" in error_msg
@@ -2067,14 +2109,15 @@ class VoiceListener(threading.Thread):
                         native_frame_samples = max(1, int(native_rate * 30 / 1000))
                         print(f"  ⚠️  Device doesn't support {self._samplerate} Hz — using {native_rate} Hz with resampling", flush=True)
                         debug_log(f"retrying stream at native {native_rate} Hz", "voice")
-                        stream = sd.InputStream(
-                            samplerate=native_rate,
-                            channels=1,
-                            dtype="float32",
-                            blocksize=native_frame_samples,
-                            callback=self._on_audio,
-                            **stream_kwargs,
-                        )
+                        with portaudio_lock:
+                            stream = sd.InputStream(
+                                samplerate=native_rate,
+                                channels=1,
+                                dtype="float32",
+                                blocksize=native_frame_samples,
+                                callback=self._on_audio,
+                                **stream_kwargs,
+                            )
                     else:
                         open_error = e
                 except Exception:
@@ -2099,11 +2142,12 @@ class VoiceListener(threading.Thread):
             return
 
         # Main audio processing loop
-        with stream:
+        with _serialised_stream(stream):
             # Verify stream is actually recording (helps catch permission issues)
             if not stream.active:
                 try:
-                    stream.start()
+                    with portaudio_lock:
+                        stream.start()
                 except Exception as e:
                     error_msg = str(e).lower()
                     debug_log(f"failed to start audio stream: {e}", "voice")

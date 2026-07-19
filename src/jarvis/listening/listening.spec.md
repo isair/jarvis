@@ -60,6 +60,22 @@ This document outlines the voice listening architecture. The system uses a **tra
 
 ## Key Design Principles
 
+### 0. Serialised PortAudio Lifecycle
+
+All stream lifecycle calls (`InputStream`/`OutputStream` construction,
+`start`/`stop`/`close`/`abort`) run under the process-wide
+`jarvis.utils.audio_lock.portaudio_lock`, shared with the dictation engine,
+TTS, and the thinking tune. PortAudio documents stream open/close as not
+thread safe; unserialised calls across threads abort the whole app on
+Windows (#462, #401, #422). The run loop uses `_serialised_stream` instead
+of the raw `with stream:` context manager. Two deliberate exceptions: the
+Windows mic-permission probe opens its stream *without* the lock (that open
+can hang indefinitely when Windows blocks mic access, and hanging while
+holding the process-wide lock would freeze every audio user), and its
+timeout path abandons a blocked stream instead of aborting/closing it from
+another thread — the check thread may still be inside `start()`/`stop()`
+on it, and a cross-thread close is a native use-after-free.
+
 ### 1. Transcript-First
 
 Instead of extracting post-wake-word audio, we:

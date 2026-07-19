@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 
 from ..debug import debug_log
+from ..utils.audio_lock import portaudio_lock
 
 
 def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
@@ -232,24 +233,26 @@ class TunePlayer:
                     position[0] = remainder
 
             try:
-                stream = sd.OutputStream(
-                    samplerate=sample_rate,
-                    channels=1,
-                    dtype='int16',
-                    # Large block + high latency: fewer callbacks, fewer
-                    # GIL acquisitions, lighter touch on the rest of the
-                    # app. 8192 frames ≈ 186ms per wakeup vs 23ms before.
-                    blocksize=8192,
-                    latency='high',
-                    callback=callback,
-                )
+                with portaudio_lock:
+                    stream = sd.OutputStream(
+                        samplerate=sample_rate,
+                        channels=1,
+                        dtype='int16',
+                        # Large block + high latency: fewer callbacks, fewer
+                        # GIL acquisitions, lighter touch on the rest of the
+                        # app. 8192 frames ≈ 186ms per wakeup vs 23ms before.
+                        blocksize=8192,
+                        latency='high',
+                        callback=callback,
+                    )
             except Exception as exc:
                 debug_log(f"thinking tune: stream open failed: {exc!r}", category="tune")
                 self._play_fallback_tune()
                 return
 
             try:
-                stream.start()
+                with portaudio_lock:
+                    stream.start()
                 # Hand off to the OS audio thread. Wake when stop is
                 # requested — no polling loop, no per-iteration gap.
                 self._stop_event.wait()
@@ -257,7 +260,8 @@ class TunePlayer:
                 debug_log(f"thinking tune: stream playback failed: {exc!r}", category="tune")
             finally:
                 try:
-                    stream.close()
+                    with portaudio_lock:
+                        stream.close()
                 except Exception as exc:
                     debug_log(f"thinking tune: stream close failed: {exc!r}", category="tune")
         finally:
