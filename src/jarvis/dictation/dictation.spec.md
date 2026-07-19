@@ -74,6 +74,15 @@ After transcription, text passes through these stages in order:
 - **Pause flag** on the main listener to prevent dictation speech being
   interpreted as commands.
 
+### Optional Dependencies
+
+- `sounddevice`, `numpy`, and `pynput` are optional at import time: the
+  module must always import cleanly even when they are broken or missing
+  (e.g. `import sounddevice` raises **OSError**, not ImportError, when the
+  PortAudio shared library is absent; `pynput` can raise display errors on
+  headless Linux). Importers such as the setup wizard rely on this — a
+  missing audio backend must never crash the app.
+
 ### Audio Device Handling
 
 - The engine accepts an optional `voice_device` parameter, passed through from
