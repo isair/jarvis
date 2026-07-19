@@ -169,7 +169,7 @@ def resolve_planner_model(cfg) -> str:
     # llm_chat_model always carries the resolved active chat model — the
     # Ollama pick on the Ollama path, the served model on an OpenAI-compatible
     # provider — so tracking it keeps the planner valid on both.
-    return getattr(cfg, "llm_chat_model", "") or getattr(cfg, "ollama_chat_model", "") or ""
+    return getattr(cfg, "llm_chat_model", "") or ""
 
 
 _PROMPT_TEMPLATE = (

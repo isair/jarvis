@@ -242,7 +242,6 @@ def _resolve_evaluator_model(cfg) -> str:
         getattr(cfg, "evaluator_model", ""),
         getattr(cfg, "intent_judge_model", ""),
         getattr(cfg, "llm_chat_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
     ):
         if candidate:
             return candidate

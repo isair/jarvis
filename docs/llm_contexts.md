@@ -243,7 +243,7 @@ user input
 3. Pre-warm the intent-judge model before TTS finishes.
 4. Cache tool-router (#7) output by query hash.
 5. Give each digest its own timeout budget rather than sharing `llm_digest_timeout_sec` (today a slow memory digest can starve the max-turn digest).
-6. Consider single-model deployments: router+planner prefer `intent_judge_model`; loading a second model hurts cold-start latency on small hardware.
+6. Consider single-model deployments: the router prefers `intent_judge_model` while the planner tracks `llm_chat_model`; loading a second model hurts cold-start latency on small hardware. (On an OpenAI-compatible chat provider an unset judge model already resolves to the chat model, so every auxiliary context rides the one served model.)
 7. Narrow `llm_thinking_enabled` to router/planner only, not every context.
 8. Reduce `intent_judge_timeout_sec` (15s) or race it against text-based wake detection to avoid blocking the audio loop.
 

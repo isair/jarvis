@@ -95,6 +95,29 @@ class TestIntentJudgeModelResolution:
         settings = _load_settings_from(tmp_path, monkeypatch, {})
         assert settings.intent_judge_model == get_default_config()["intent_judge_model"]
 
+    def test_explicit_empty_judge_value_counts_as_unset(self, tmp_path, monkeypatch):
+        """An explicit empty string means "no judge model chosen", not "judge
+        model is the empty string" — it resolves like an absent key."""
+        settings = _load_settings_from(tmp_path, monkeypatch, {
+            "llm_provider": "openai_compatible",
+            "llm_base_url": "http://localhost:1234/v1",
+            "llm_chat_model": "qwen-27b",
+            "intent_judge_model": "",
+        })
+        assert settings.intent_judge_model == "qwen-27b"
+
+    def test_ollama_chat_with_openai_embeddings_keeps_small_judge(self, tmp_path, monkeypatch):
+        """The judge rides the CHAT provider; a remote embedding provider must
+        not flip the judge off its small Ollama default."""
+        from jarvis.config import get_default_config
+        settings = _load_settings_from(tmp_path, monkeypatch, {
+            "llm_provider": "ollama",
+            "embedding_provider": "openai_compatible",
+            "embedding_base_url": "http://localhost:1234/v1",
+            "embedding_model": "text-embedding-3-small",
+        })
+        assert settings.intent_judge_model == get_default_config()["intent_judge_model"]
+
 
 class TestAuxChainsEndAtResolvedChatModel:
     """The router/planner/digest/evaluator chains must terminate at
@@ -185,6 +208,19 @@ class TestPureOpenAIDispatchEndToEnd:
             assert stub.models_requested == ["qwen-27b"]
         finally:
             stub.stop()
+
+    def test_evaluator_and_digest_resolve_served_model_from_real_settings(self, tmp_path, monkeypatch):
+        """The evaluator and loop-digest chains, fed a real Settings from
+        load_settings (not a hand-built cfg), land on the served model."""
+        settings = _load_settings_from(tmp_path, monkeypatch, {
+            "llm_provider": "openai_compatible",
+            "llm_base_url": "http://localhost:1234/v1",
+            "llm_chat_model": "qwen-27b",
+        })
+        from jarvis.reply.evaluator import _resolve_evaluator_model
+        from jarvis.reply.enrichment import _resolve_loop_digest_model
+        assert _resolve_evaluator_model(settings) == "qwen-27b"
+        assert _resolve_loop_digest_model(settings) == "qwen-27b"
 
     def test_intent_judge_wiring_uses_served_model(self, tmp_path, monkeypatch):
         """The judge built from a pure OpenAI config must carry a model the

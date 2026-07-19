@@ -45,6 +45,9 @@ def _cfg(**overrides):
         "planner_timeout_sec": 6.0,
     }
     base.update(overrides)
+    # Mirror config load: Settings always carries the resolved active chat
+    # model in llm_chat_model (= ollama_chat_model on the Ollama path).
+    base.setdefault("llm_chat_model", base["ollama_chat_model"])
     return SimpleNamespace(**base)
 
 

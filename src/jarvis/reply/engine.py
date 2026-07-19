@@ -173,7 +173,7 @@ def resolve_tool_router_model(cfg) -> str:
     """Pick the LLM model for tool routing.
 
     Resolution order: explicit `tool_router_model` → `intent_judge_model` →
-    `ollama_chat_model`. Routing is a small classification job (the same
+    `llm_chat_model`. Routing is a small classification job (the same
     shape as intent judging), so reusing the judge model gives a small, fast
     default that is already warm on wake-word paths — the chat model is only
     a last resort because its weights are expensive to page in mid-reply.
