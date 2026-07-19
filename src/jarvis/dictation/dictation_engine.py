@@ -22,17 +22,23 @@ from ..debug import debug_log
 from .history import DictationHistory
 
 # Optional imports — graceful degradation when dependencies are missing.
+# sounddevice raises OSError (not ImportError) when the PortAudio shared
+# library itself is missing, so both must be treated as "no audio".
 try:
     import sounddevice as sd
     import numpy as np
-except ImportError:
+except (ImportError, OSError) as _audio_import_error:
     sd = None
     np = None
+    debug_log(f"audio backend unavailable, dictation disabled: {_audio_import_error!r}", "dictation")
 
+# pynput can fail with non-ImportError exceptions too (e.g. no X display
+# on headless Linux), and a broken hotkey backend must not crash the app.
 try:
     from pynput import keyboard as pynput_keyboard
-except ImportError:
+except Exception as _pynput_import_error:
     pynput_keyboard = None
+    debug_log(f"pynput unavailable, dictation hotkey disabled: {_pynput_import_error!r}", "dictation")
 
 
 # ---------------------------------------------------------------------------

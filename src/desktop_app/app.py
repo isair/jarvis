@@ -2430,7 +2430,6 @@ def main() -> int:
             print("  Setup wizard module loaded successfully", flush=True)
         except Exception as e:
             print(f"  ❌ Failed to load setup wizard: {e}", flush=True)
-            import traceback
             traceback.print_exc()
             raise
 
@@ -2439,16 +2438,18 @@ def main() -> int:
 
         class SetupCheckWorker(QThread):
             """Worker thread to check setup status without blocking UI."""
-            finished = pyqtSignal(bool)  # Emits True if setup wizard needed
+            # Named check_done so it does not shadow QThread's built-in
+            # finished signal (see _KeepAliveWorker in setup_wizard.py).
+            check_done = pyqtSignal(bool)  # Emits True if setup wizard needed
 
             def run(self):
                 try:
                     result = should_show_setup_wizard()
-                    self.finished.emit(result)
+                    self.check_done.emit(result)
                 except Exception as e:
                     print(f"  ❌ Setup check failed: {e}", flush=True)
                     # On error, show wizard to let user fix issues
-                    self.finished.emit(True)
+                    self.check_done.emit(True)
 
         setup_check_result = [None]  # Use list to allow modification in closure
 
@@ -2456,13 +2457,13 @@ def main() -> int:
             setup_check_result[0] = needs_wizard
 
         worker = SetupCheckWorker()
-        worker.finished.connect(on_setup_check_done)
+        worker.check_done.connect(on_setup_check_done)
         worker.start()
 
         # Use QEventLoop to wait while keeping UI fully responsive
         # This allows the splash animation to run smoothly
         loop = QEventLoop()
-        worker.finished.connect(loop.quit)
+        worker.check_done.connect(loop.quit)
         loop.exec()
 
         if setup_check_result[0]:
@@ -2537,15 +2538,17 @@ def main() -> int:
             # Run server check in background thread to keep splash animation alive
             class ServerCheckWorker(QThread):
                 """Worker thread to check Ollama server status without blocking UI."""
-                finished = pyqtSignal(bool, object)  # Emits (is_running, version)
+                # Named check_done so it does not shadow QThread's built-in
+                # finished signal (see _KeepAliveWorker in setup_wizard.py).
+                check_done = pyqtSignal(bool, object)  # Emits (is_running, version)
 
                 def run(self):
                     try:
                         running, ver = check_ollama_server()
-                        self.finished.emit(running, ver)
+                        self.check_done.emit(running, ver)
                     except Exception as e:
                         print(f"  ❌ Server check failed: {e}", flush=True)
-                        self.finished.emit(False, None)
+                        self.check_done.emit(False, None)
 
             server_check_result = [None, None]  # [is_running, version]
 
@@ -2554,12 +2557,12 @@ def main() -> int:
                 server_check_result[1] = ver
 
             server_worker = ServerCheckWorker()
-            server_worker.finished.connect(on_server_check_done)
+            server_worker.check_done.connect(on_server_check_done)
             server_worker.start()
 
             # Use QEventLoop to wait while keeping UI fully responsive
             server_loop = QEventLoop()
-            server_worker.finished.connect(server_loop.quit)
+            server_worker.check_done.connect(server_loop.quit)
             server_loop.exec()
 
             is_running, version = server_check_result
