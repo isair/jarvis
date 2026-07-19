@@ -88,8 +88,18 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 ## Threading
 
-- `StatusCheckWorker(QThread)` — runs `check_ollama_status()` off the UI thread, emits result via signal.
-- `CommandWorker(QThread)` — runs shell commands (e.g. `ollama pull`), emits stdout line-by-line and completion status.
+- All wizard worker threads inherit `_KeepAliveWorker(QThread)`, which keeps
+  each started worker referenced in a class-level registry until its OS
+  thread has fully finished (released via the built-in `finished` signal).
+  Pages rebind their worker attribute inside completion slots (install
+  chains, refresh/test buttons); without the registry, dropping the last
+  reference to a winding-down thread destroys a running QThread and Qt
+  aborts the whole app. Because of this, worker subclasses must never
+  shadow the built-in `finished` signal — custom completion signals use
+  other names (`completed`, `status_ready`, `done`).
+- `StatusCheckWorker` — runs `check_ollama_status()` off the UI thread, emits result via `status_ready`.
+- `CommandWorker` — runs shell commands (e.g. `ollama pull`), emits stdout line-by-line via `output` and completion status via `completed`.
+- `_ModelFetchWorker` — fetches the OpenAI-compatible model list off the UI thread, emits via `done`.
 
 ## Settings NOT Configured by Wizard
 
