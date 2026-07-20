@@ -1,13 +1,11 @@
 """
-Regression tests: ``_save_json`` must never leave ``config.json`` truncated
-or partially written if the process dies mid-save.
+Regression tests for ``_save_json``'s atomic-write guarantee.
 
-The config file can hold ``llm_api_key`` and every other user setting, so a
-crash between opening the file for writing and finishing the write used to
-leave the user with a corrupted or empty config. ``_save_json`` now writes
-to a temp file in the same directory and ``os.replace()``s it over the
-target, so the target either has the old contents or the new contents,
-never a partial write.
+The config file can hold ``llm_api_key`` and every other user setting, so
+``_save_json`` must never leave it truncated or partially written if the
+process dies mid-save. It writes to a temp file in the same directory and
+``os.replace()``s it over the target, so the target always ends up holding
+either the old contents or the new contents, never a partial write.
 """
 
 import json
@@ -93,3 +91,15 @@ def test_save_json_sets_permissions_to_0600_on_posix(tmp_path):
     _save_json(cfg_path, {"llm_api_key": "secret"})
 
     assert (cfg_path.stat().st_mode & 0o777) == 0o600
+
+
+def test_save_json_creates_missing_parent_directory(tmp_path):
+    """A brand-new install has no config directory yet; the first save must create it."""
+    cfg_path = tmp_path / "newuser" / ".config" / "jarvis" / "config.json"
+
+    ok = _save_json(cfg_path, {"llm_api_key": "first-save"})
+
+    assert ok is True
+    assert json.loads(cfg_path.read_text()) == {"llm_api_key": "first-save"}
+    leftover = [p for p in cfg_path.parent.iterdir() if p != cfg_path]
+    assert leftover == []
