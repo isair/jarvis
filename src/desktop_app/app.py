@@ -2652,7 +2652,20 @@ def main() -> int:
 
                     if not is_running:
                         print("⚠️ Ollama server failed to start within timeout", flush=True)
-                        # Don't block startup - daemon will handle connection errors
+                        # Show the setup wizard so the user can diagnose connectivity
+                        splash.hide()
+                        app.processEvents()
+                        wizard = SetupWizard()
+                        wizard.show()
+                        wizard.raise_()
+                        wizard.activateWindow()
+                        result = wizard.exec()
+                        if result != wizard.DialogCode.Accepted:
+                            print("Setup wizard cancelled - exiting", flush=True)
+                            return 0
+                        splash.show()
+                        splash.set_status("Ollama configured!")
+                        app.processEvents()
                 except Exception as e:
                     print(f"⚠️ Failed to start Ollama: {e}", flush=True)
                     # Continue anyway - user may start Ollama manually

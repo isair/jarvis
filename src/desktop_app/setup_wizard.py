@@ -322,7 +322,7 @@ def check_ollama_status() -> OllamaStatus:
     return status
 
 
-def should_show_setup_wizard() -> bool:
+def should_show_setup_wizard(force_server_check: bool = False) -> bool:
     """
     Check if the setup wizard should be shown.
 
@@ -332,6 +332,8 @@ def should_show_setup_wizard() -> bool:
 
     Does NOT return True just because server isn't running,
     since the app can auto-start the server if CLI is installed.
+    Pass ``force_server_check=True`` after auto-start has already been
+    attempted and failed to re-evaluate the unreachable-server case.
     """
     # An OpenAI-compatible user has opted out of the local Ollama stack,
     # so the Ollama-centric prerequisites don't apply — never auto-show.
@@ -351,6 +353,11 @@ def should_show_setup_wizard() -> bool:
 
     # If server is running and models are missing, user needs to download them
     if status.is_server_running and len(status.missing_models) > 0:
+        return True
+
+    # If auto-start already failed and server is still unreachable,
+    # the user needs to intervene to diagnose the problem.
+    if force_server_check and not status.is_server_running:
         return True
 
     # If CLI is installed but server not running, we can start it ourselves

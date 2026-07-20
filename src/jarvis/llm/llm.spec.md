@@ -107,7 +107,7 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 - Streaming: JSON-lines (`{...}\n`).
 - Tool calls: native `tools` parameter (Ollama 0.4+); arguments returned as a Python dict.
 - `extra_options` keys map onto the wire shape: `keep_alive` / `format` / `think` go to the payload root; everything else (incl. `temperature`, `num_ctx`, `num_predict`) folds into the nested `options` object. Callers can also pass an explicit `options` sub-dict for explicit nesting.
-- `warm_up(model)` issues `POST /api/generate` with an empty prompt and `keep_alive: "30m"`; the model stays resident for 30 minutes after each call.
+- `warm_up(model)` first verifies the endpoint is actually an Ollama server via `GET /api/version`, then issues `POST /api/generate` with an empty prompt and `keep_alive: "30m"`; the model stays resident for 30 minutes after each call.
 
 ### OpenAI-compatible (`OpenAICompatibleBackend`)
 

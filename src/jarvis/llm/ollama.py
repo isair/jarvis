@@ -319,6 +319,18 @@ class OllamaBackend(LLMBackend):
         if not self._base_url or not model:
             return False
         try:
+            # Verify the server is actually Ollama before warming up —
+            # a non-Ollama HTTP server on the same port could return 200
+            # to the generate POST and produce a false positive.
+            version_resp = requests.get(
+                f"{self._base_url}/api/version", timeout=timeout_sec
+            )
+            if version_resp.status_code != 200:
+                return False
+            version_data = version_resp.json()
+            if not isinstance(version_data, dict) or "version" not in version_data:
+                return False
+
             resp = requests.post(
                 f"{self._base_url}/api/generate",
                 json={
