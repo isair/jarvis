@@ -35,11 +35,8 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
     if cfg is None:
         return None
 
-    model = (
-        getattr(cfg, "tool_router_model", "")
-        or getattr(cfg, "intent_judge_model", "")
-        or getattr(cfg, "llm_chat_model", "")
-    )
+    from ...llm import resolve_model, Tier
+    model = resolve_model(cfg, Tier.FAST)
     if not model:
         return None
 

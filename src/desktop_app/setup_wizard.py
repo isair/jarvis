@@ -209,12 +209,13 @@ def get_required_models() -> List[str]:
             if cfg.ollama_embed_model and cfg.ollama_embed_model not in models:
                 models.append(cfg.ollama_embed_model)
 
-        # Intent judge is always needed for voice intent classification, but
-        # only as an Ollama pull when the chat provider is Ollama.
+        # The fast model powers voice intent classification and the other
+        # real-time passes, but is only an Ollama pull when the chat
+        # provider is Ollama (config load resolves it per provider).
         if llm_provider != "openai_compatible":
-            intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
-            if intent_judge_model and intent_judge_model not in models:
-                models.append(intent_judge_model)
+            fast_model = getattr(cfg, "fast_model", "gemma4:e2b")
+            if fast_model and fast_model not in models:
+                models.append(fast_model)
 
         return models
     except Exception:
@@ -1877,9 +1878,9 @@ class ModelsPage(QWizardPage):
             self._model_buttons[model_id] = btn
             selection_layout.addWidget(btn)
 
-        # VRAM note — explains that VRAM values include the always-loaded intent judge
+        # VRAM note — explains that VRAM values include the always-loaded fast model
         ram_note = QLabel(
-            "ℹ️ VRAM values include the intent judge model (gemma4:e2b) "
+            "ℹ️ VRAM values include the fast model (gemma4:e2b) "
             "which is always loaded for voice intent classification."
         )
         ram_note.setWordWrap(True)
@@ -1973,11 +1974,11 @@ class ModelsPage(QWizardPage):
 
         # Get config values
         embed_model = "nomic-embed-text"
-        intent_judge_model = "gemma4:e2b"
+        fast_model = "gemma4:e2b"
         try:
             cfg = load_settings()
             embed_model = cfg.ollama_embed_model
-            intent_judge_model = getattr(cfg, "intent_judge_model", "gemma4:e2b")
+            fast_model = getattr(cfg, "fast_model", "gemma4:e2b")
         except Exception:
             pass
 
@@ -1986,11 +1987,12 @@ class ModelsPage(QWizardPage):
         if isinstance(wizard, SetupWizard) and wizard.ollama_status:
             installed = wizard.ollama_status.installed_models
 
-        # Required models: selected chat model + embed model + intent judge model
-        # Intent judge (gemma4) is always required for voice intent classification
+        # Required models: selected chat model + embed model + fast model
+        # (the fast model powers voice intent classification and the other
+        # real-time passes, so it is always required)
         required = [self._selected_model, embed_model]
-        if intent_judge_model and intent_judge_model not in required:
-            required.append(intent_judge_model)
+        if fast_model and fast_model not in required:
+            required.append(fast_model)
 
         # Check which are missing
         def normalize_model(name: str) -> str:

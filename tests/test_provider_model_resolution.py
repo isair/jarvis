@@ -70,105 +70,60 @@ def _load_settings_from(tmp_path, monkeypatch, cfg: dict):
     return load_settings()
 
 
-class TestIntentJudgeModelResolution:
-    """The judge model must exist on the chat provider's server."""
+class TestLegacyJudgeKeyResolution:
+    """Configs written before the two-tier system carried the judge model in
+    ``intent_judge_model``; loading one must land that choice on the fast
+    tier so the judge keeps running on the model the user picked."""
 
-    def test_openai_chat_provider_defaults_judge_to_chat_model(self, tmp_path, monkeypatch):
-        settings = _load_settings_from(tmp_path, monkeypatch, {
-            "llm_provider": "openai_compatible",
-            "llm_base_url": "http://localhost:1234/v1",
-            "llm_chat_model": "qwen-27b",
-        })
-        assert settings.intent_judge_model == "qwen-27b"
-
-    def test_openai_chat_provider_keeps_explicit_judge_override(self, tmp_path, monkeypatch):
+    def test_legacy_judge_key_becomes_fast_model(self, tmp_path, monkeypatch):
         settings = _load_settings_from(tmp_path, monkeypatch, {
             "llm_provider": "openai_compatible",
             "llm_base_url": "http://localhost:1234/v1",
             "llm_chat_model": "qwen-27b",
             "intent_judge_model": "my-small-judge",
         })
-        assert settings.intent_judge_model == "my-small-judge"
+        assert settings.fast_model == "my-small-judge"
 
-    def test_ollama_path_keeps_the_small_judge_default(self, tmp_path, monkeypatch):
-        from jarvis.config import get_default_config
-        settings = _load_settings_from(tmp_path, monkeypatch, {})
-        assert settings.intent_judge_model == get_default_config()["intent_judge_model"]
-
-    def test_explicit_empty_judge_value_counts_as_unset(self, tmp_path, monkeypatch):
-        """An explicit empty string means "no judge model chosen", not "judge
-        model is the empty string" — it resolves like an absent key."""
+    def test_openai_chat_provider_defaults_fast_to_chat_model(self, tmp_path, monkeypatch):
         settings = _load_settings_from(tmp_path, monkeypatch, {
             "llm_provider": "openai_compatible",
             "llm_base_url": "http://localhost:1234/v1",
             "llm_chat_model": "qwen-27b",
-            "intent_judge_model": "",
         })
-        assert settings.intent_judge_model == "qwen-27b"
-
-    def test_ollama_chat_with_openai_embeddings_keeps_small_judge(self, tmp_path, monkeypatch):
-        """The judge rides the CHAT provider; a remote embedding provider must
-        not flip the judge off its small Ollama default."""
-        from jarvis.config import get_default_config
-        settings = _load_settings_from(tmp_path, monkeypatch, {
-            "llm_provider": "ollama",
-            "embedding_provider": "openai_compatible",
-            "embedding_base_url": "http://localhost:1234/v1",
-            "embedding_model": "text-embedding-3-small",
-        })
-        assert settings.intent_judge_model == get_default_config()["intent_judge_model"]
+        assert settings.fast_model == "qwen-27b"
 
 
-class TestAuxChainsEndAtResolvedChatModel:
-    """The router/planner/digest/evaluator chains must terminate at
-    ``llm_chat_model`` (always the resolved active chat model on both
-    providers), never at the Ollama-only field."""
+class TestTiersResolveToServedModel:
+    """On a pure OpenAI-compatible setup both tiers must resolve to a model
+    the user's server actually serves — never an Ollama pull-name."""
 
     def _pure_openai_cfg(self):
-        # Shaped like a pure OpenAI-compatible Settings: aux overrides unset,
-        # judge already resolved to the chat model by config load.
+        # Shaped like a pure OpenAI-compatible Settings after config load:
+        # both tier fields resolved to the served model.
         return SimpleNamespace(
             llm_provider="openai_compatible",
             llm_chat_model="qwen-27b",
-            ollama_chat_model="gemma4:e2b",
-            intent_judge_model="qwen-27b",
-            tool_router_model="",
-            evaluator_model="",
-            planner_model="",
+            fast_model="qwen-27b",
         )
 
-    def test_tool_router_resolves_to_served_model(self):
-        from jarvis.reply.engine import resolve_tool_router_model
-        assert resolve_tool_router_model(self._pure_openai_cfg()) == "qwen-27b"
+    def test_fast_tier_resolves_to_served_model(self):
+        from jarvis.llm import resolve_model, Tier
+        assert resolve_model(self._pure_openai_cfg(), Tier.FAST) == "qwen-27b"
 
-    def test_planner_resolves_to_served_model(self):
-        from jarvis.reply.planner import resolve_planner_model
-        assert resolve_planner_model(self._pure_openai_cfg()) == "qwen-27b"
-
-    def test_loop_digest_resolves_to_served_model(self):
-        from jarvis.reply.enrichment import _resolve_loop_digest_model
-        assert _resolve_loop_digest_model(self._pure_openai_cfg()) == "qwen-27b"
-
-    def test_evaluator_resolves_to_served_model(self):
-        from jarvis.reply.evaluator import _resolve_evaluator_model
-        assert _resolve_evaluator_model(self._pure_openai_cfg()) == "qwen-27b"
+    def test_chat_tier_resolves_to_served_model(self):
+        from jarvis.llm import resolve_model, Tier
+        assert resolve_model(self._pure_openai_cfg(), Tier.CHAT) == "qwen-27b"
 
     def test_ollama_path_unchanged(self):
-        """On the Ollama path llm_chat_model IS the resolved Ollama model, so
-        the chains behave exactly as they always have."""
-        from jarvis.reply.engine import resolve_tool_router_model
-        from jarvis.reply.planner import resolve_planner_model
+        """On the Ollama path the tiers carry the resolved Ollama models."""
+        from jarvis.llm import resolve_model, Tier
         cfg = SimpleNamespace(
             llm_provider="ollama",
-            llm_chat_model="gemma4:e2b",   # config load: = ollama_chat_model
-            ollama_chat_model="gemma4:e2b",
-            intent_judge_model="gemma4:e2b",
-            tool_router_model="",
-            evaluator_model="",
-            planner_model="",
+            llm_chat_model="gpt-oss:20b",  # config load: = ollama_chat_model
+            fast_model="gemma4:e2b",
         )
-        assert resolve_tool_router_model(cfg) == "gemma4:e2b"
-        assert resolve_planner_model(cfg) == "gemma4:e2b"
+        assert resolve_model(cfg, Tier.FAST) == "gemma4:e2b"
+        assert resolve_model(cfg, Tier.CHAT) == "gpt-oss:20b"
 
 
 class TestPureOpenAIDispatchEndToEnd:
@@ -209,18 +164,17 @@ class TestPureOpenAIDispatchEndToEnd:
         finally:
             stub.stop()
 
-    def test_evaluator_and_digest_resolve_served_model_from_real_settings(self, tmp_path, monkeypatch):
-        """The evaluator and loop-digest chains, fed a real Settings from
-        load_settings (not a hand-built cfg), land on the served model."""
+    def test_both_tiers_resolve_served_model_from_real_settings(self, tmp_path, monkeypatch):
+        """Both tiers, fed a real Settings from load_settings (not a
+        hand-built cfg), land on the served model."""
         settings = _load_settings_from(tmp_path, monkeypatch, {
             "llm_provider": "openai_compatible",
             "llm_base_url": "http://localhost:1234/v1",
             "llm_chat_model": "qwen-27b",
         })
-        from jarvis.reply.evaluator import _resolve_evaluator_model
-        from jarvis.reply.enrichment import _resolve_loop_digest_model
-        assert _resolve_evaluator_model(settings) == "qwen-27b"
-        assert _resolve_loop_digest_model(settings) == "qwen-27b"
+        from jarvis.llm import resolve_model, Tier
+        assert resolve_model(settings, Tier.FAST) == "qwen-27b"
+        assert resolve_model(settings, Tier.CHAT) == "qwen-27b"
 
     def test_intent_judge_wiring_uses_served_model(self, tmp_path, monkeypatch):
         """The judge built from a pure OpenAI config must carry a model the

@@ -26,7 +26,6 @@ from jarvis.reply.planner import (
     plan_requires_memory,
     progress_nudge,
     resolve_next_tool_call,
-    resolve_planner_model,
     strip_memory_directives,
     plan_has_unresolved_tool_steps,
     tool_names_in_plan,
@@ -38,9 +37,7 @@ def _cfg(**overrides):
     base = {
         "ollama_base_url": "http://localhost:11434",
         "ollama_chat_model": "gemma4:e2b",
-        "planner_model": "",
-        "tool_router_model": "",
-        "intent_judge_model": "",
+        "fast_model": "",
         "planner_enabled": True,
         "planner_timeout_sec": 6.0,
     }
@@ -96,28 +93,31 @@ class TestIsTrivialPlan:
         assert _is_trivial_plan(["a", "b", "c"]) is False
 
 
-class TestResolvePlannerModel:
-    def test_prefers_explicit_planner_model(self):
-        cfg = _cfg(planner_model="gemma-plan", ollama_chat_model="chat")
-        assert resolve_planner_model(cfg) == "gemma-plan"
+class TestPlannerModelTier:
+    """Planning runs on the CHAT tier: the plan is scaffolding the chat model
+    follows, so the two must be matched — never the fast model."""
 
-    def test_tracks_chat_model_by_default(self):
+    def test_tracks_chat_model(self):
+        from jarvis.llm import resolve_model, Tier
         cfg = _cfg(ollama_chat_model="gemma4:e2b")
-        assert resolve_planner_model(cfg) == "gemma4:e2b"
+        assert resolve_model(cfg, Tier.CHAT) == "gemma4:e2b"
 
-    def test_ignores_tool_router_model(self):
-        # Planner must track the chat model — not the router. Upgrading
+    def test_ignores_fast_model(self):
+        # Planner must track the chat model — not the fast tier. Upgrading
         # the chat model through setup must upgrade the planner too.
-        cfg = _cfg(tool_router_model="router-x", ollama_chat_model="chat-y")
-        assert resolve_planner_model(cfg) == "chat-y"
+        from jarvis.llm import resolve_model, Tier
+        cfg = _cfg(fast_model="router-x", ollama_chat_model="chat-y")
+        assert resolve_model(cfg, Tier.CHAT) == "chat-y"
 
     def test_upgrading_chat_model_upgrades_planner(self):
+        from jarvis.llm import resolve_model, Tier
         cfg = _cfg(ollama_chat_model="gpt-oss:20b")
-        assert resolve_planner_model(cfg) == "gpt-oss:20b"
+        assert resolve_model(cfg, Tier.CHAT) == "gpt-oss:20b"
 
     def test_returns_empty_when_no_candidates(self):
+        from jarvis.llm import resolve_model, Tier
         cfg = _cfg(ollama_chat_model="")
-        assert resolve_planner_model(cfg) == ""
+        assert resolve_model(cfg, Tier.CHAT) == ""
 
 
 class TestPlanQuery:

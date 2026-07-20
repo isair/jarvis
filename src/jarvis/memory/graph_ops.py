@@ -292,7 +292,7 @@ def _llm_pick_best_child(
     )
 
     # Picker is a one-digit classification — reuse the small picker_model
-    # when the caller provides one (resolved from intent_judge_model → chat_model).
+    # when the caller provides one (the fast tier: resolve_model(cfg, Tier.FAST)).
     # Falls back to the chat model when no small model is configured.
     effective_model = picker_model or chat_model
     response = call_llm_direct(

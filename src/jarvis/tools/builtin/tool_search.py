@@ -13,18 +13,7 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..selection import select_tools, ToolSelectionStrategy
 from ...debug import debug_log
-from ...llm import get_embedding_backend, get_llm_backend
-
-
-def _resolve_router_model(cfg) -> str:
-    for candidate in (
-        getattr(cfg, "tool_router_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "llm_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
+from ...llm import get_embedding_backend, get_llm_backend, resolve_model, Tier
 
 
 class ToolSearchTool(Tool):
@@ -97,7 +86,7 @@ class ToolSearchTool(Tool):
                 mcp_tools=mcp_tools,
                 strategy=strategy,
                 llm_backend=get_llm_backend(cfg),
-                llm_model=_resolve_router_model(cfg),
+                llm_model=resolve_model(cfg, Tier.FAST),
                 llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
                 embedding_backend=get_embedding_backend(cfg),
                 embed_model=cfg.embedding_model,

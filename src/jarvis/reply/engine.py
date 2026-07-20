@@ -16,6 +16,8 @@ from ..llm import (
     extract_text_from_response,
     get_embedding_backend,
     get_llm_backend,
+    resolve_model,
+    Tier,
     ToolsNotSupportedError,
 )
 
@@ -167,29 +169,6 @@ def _format_tool_schema_hint(
             f"{key}: {type_hint}{marker}" if type_hint else f"{key}{marker}"
         )
     return f"{tool_name}(" + ", ".join(parts) + ")"
-
-
-def resolve_tool_router_model(cfg) -> str:
-    """Pick the LLM model for tool routing.
-
-    Resolution order: explicit `tool_router_model` → `intent_judge_model` →
-    `llm_chat_model`. Routing is a small classification job (the same
-    shape as intent judging), so reusing the judge model gives a small, fast
-    default that is already warm on wake-word paths — the chat model is only
-    a last resort because its weights are expensive to page in mid-reply.
-
-    Extracted as a helper so the resolution order can be unit-tested and so
-    the listener's warmup path (listener.py) stays in sync with the reply
-    engine's selection path without the call sites drifting.
-    """
-    for candidate in (
-        getattr(cfg, "tool_router_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "llm_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
 
 
 def _text_tool_call_guidance(allowed_names: list[str]) -> str:
@@ -941,7 +920,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             mcp_tools=mcp_tools,
             strategy=strategy,
             llm_backend=get_llm_backend(cfg),
-            llm_model=resolve_tool_router_model(cfg),
+            llm_model=resolve_model(cfg, Tier.FAST),
             llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
             embedding_backend=get_embedding_backend(cfg),
             embed_model=cfg.embedding_model,
@@ -1172,7 +1151,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log("memory extractor served from hot-window cache", "memory")
             else:
                 search_params = extract_search_params_for_memory(
-                    _extractor_query, cfg, resolve_tool_router_model(cfg),
+                    _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
                     context_hint=context_hint,

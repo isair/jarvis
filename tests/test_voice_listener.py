@@ -1519,7 +1519,7 @@ def _make_listener_for_warmup(
                 mock_cfg.llm_chat_model = chat_model
                 mock_cfg.ollama_base_url = base_url
                 mock_cfg.llm_tools_timeout_sec = 8.0
-                mock_cfg.intent_judge_model = judge_model or ""
+                mock_cfg.fast_model = judge_model or ""
                 mock_cfg.intent_judge_timeout_sec = 10.0
                 mock_cfg.intent_judge_thinking_enabled = False
                 mock_cfg.wake_word = "jarvis"
@@ -1643,7 +1643,7 @@ class TestWhisperWarmup:
                             mock_cfg.ollama_chat_model = ""
                             mock_cfg.llm_chat_model = ""
                             mock_cfg.ollama_base_url = ""
-                            mock_cfg.intent_judge_model = ""
+                            mock_cfg.fast_model = ""
                             listener = VoiceListener(
                                 MagicMock(), mock_cfg, MagicMock(), MagicMock()
                             )

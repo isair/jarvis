@@ -81,7 +81,7 @@ def _create_listener(**kwargs):
     mock_cfg.tts_rate = 200
     mock_cfg.transcript_buffer_duration_sec = 120.0
     # Real intent judge config
-    mock_cfg.intent_judge_model = "gemma4:e2b"
+    mock_cfg.fast_model = "gemma4:e2b"
     mock_cfg.ollama_base_url = "http://127.0.0.1:11434"
     mock_cfg.intent_judge_timeout_sec = 10.0
     mock_db = MagicMock()

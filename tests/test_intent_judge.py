@@ -492,7 +492,7 @@ class TestCreateIntentJudge:
         """Creates judge from config with defaults."""
         mock_cfg = MagicMock()
         mock_cfg.intent_judge_enabled = True
-        mock_cfg.intent_judge_model = "gemma4:e2b"
+        mock_cfg.fast_model = "gemma4:e2b"
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.intent_judge_timeout_sec = 3.0
         mock_cfg.wake_word = "jarvis"
@@ -506,7 +506,7 @@ class TestCreateIntentJudge:
     def test_always_returns_judge_when_requests_available(self):
         """Always returns judge when requests library is available (per spec)."""
         mock_cfg = MagicMock()
-        mock_cfg.intent_judge_model = "gemma4:e2b"
+        mock_cfg.fast_model = "gemma4:e2b"
         mock_cfg.ollama_base_url = "http://localhost:11434"
         mock_cfg.intent_judge_timeout_sec = 3.0
         mock_cfg.wake_word = "jarvis"

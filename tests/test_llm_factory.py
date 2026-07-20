@@ -283,7 +283,7 @@ class TestConfigMigration:
         assert settings.ollama_base_url == "http://1.2.3.4:11434"
         # Migration is persisted to disk.
         on_disk = json.loads(cfg_path.read_text())
-        assert on_disk["_config_version"] == 2
+        assert on_disk["_config_version"] == 3
         assert on_disk["llm_provider"] == "ollama"
         assert on_disk["llm_base_url"] == "http://1.2.3.4:11434"
 
@@ -335,5 +335,5 @@ class TestConfigMigration:
         assert settings.llm_base_url == settings.ollama_base_url
         # Migration runs without touching keys that have no source.
         on_disk = json.loads(cfg_path.read_text())
-        assert on_disk["_config_version"] == 2
+        assert on_disk["_config_version"] == 3
         assert on_disk["llm_provider"] == "ollama"

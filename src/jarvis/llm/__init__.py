@@ -32,15 +32,18 @@ from .backend import LLMBackend, ToolsNotSupportedError
 from .ollama import OllamaBackend, extract_text_from_response
 from .openai_compatible import OpenAICompatibleBackend, ServerCapabilities
 from .factory import get_embedding_backend, get_llm_backend
+from .tiers import Tier, resolve_model
 
 __all__ = [
     "LLMBackend",
     "OllamaBackend",
     "OpenAICompatibleBackend",
     "ServerCapabilities",
+    "Tier",
     "ToolsNotSupportedError",
     "get_llm_backend",
     "get_embedding_backend",
+    "resolve_model",
     "extract_text_from_response",
     "call_llm_direct",
     "call_llm_streaming",

@@ -241,7 +241,7 @@ class TestConfigNewOptions:
 
         defaults = get_default_config()
 
-        assert "intent_judge_model" in defaults
+        assert "fast_model" in defaults
         assert isinstance(defaults["intent_judge_timeout_sec"], (int, float))
         assert defaults["intent_judge_timeout_sec"] > 0
 
@@ -261,8 +261,8 @@ class TestConfigNewOptions:
 
             settings = load_settings()
 
-            # Intent judge options
-            assert hasattr(settings, "intent_judge_model")
+            # Fast tier + intent judge options
+            assert hasattr(settings, "fast_model")
             assert hasattr(settings, "intent_judge_timeout_sec")
 
             # Transcript buffer options

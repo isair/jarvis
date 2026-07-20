@@ -64,11 +64,9 @@ Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests.
 
 ### Model resolution
 
-`_resolve_evaluator_model(cfg)` picks the first non-empty candidate:
-
-1. `cfg.evaluator_model` (explicit override)
-2. `cfg.intent_judge_model` (small, already warm from wake-word path)
-3. `cfg.llm_chat_model` (last resort)
+The evaluator is a small classification job: it runs on the fast tier
+(`resolve_model(cfg, Tier.FAST)`), the small, already-warm model shared by
+the intent judge and the tool router.
 
 ### Gating
 

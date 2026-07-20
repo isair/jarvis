@@ -144,7 +144,7 @@ class TestGetRequiredModels:
         mock_settings = MagicMock()
         mock_settings.ollama_chat_model = "llama2:7b"
         mock_settings.ollama_embed_model = "nomic-embed-text"
-        mock_settings.intent_judge_model = "gemma4:e2b"
+        mock_settings.fast_model = "gemma4:e2b"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
@@ -152,21 +152,34 @@ class TestGetRequiredModels:
             assert "llama2:7b" in models
             assert "nomic-embed-text" in models
 
-    def test_includes_intent_judge_model_when_different_from_chat(self):
-        """Includes intent judge model when it differs from chat model."""
+    def test_includes_fast_model_when_different_from_chat(self):
+        """Includes the fast model when it differs from the chat model."""
         mock_settings = MagicMock()
-        mock_settings.ollama_chat_model = "gpt-oss:20b"  # Different from intent judge
+        mock_settings.ollama_chat_model = "gpt-oss:20b"  # Different from fast model
         mock_settings.ollama_embed_model = "nomic-embed-text"
-        mock_settings.intent_judge_model = "gemma4:e2b"
+        mock_settings.fast_model = "gemma4:e2b"
 
         with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
             models = get_required_models()
 
-            # Should have 3 models: chat, embed, and intent judge
+            # Should have 3 models: chat, embed, and the fast model
             assert len(models) == 3
             assert "gpt-oss:20b" in models
             assert "nomic-embed-text" in models
-            assert "gemma4:e2b" in models  # Intent judge model is always required
+            assert "gemma4:e2b" in models  # the fast model is always required
+
+    def test_fast_model_equal_to_chat_is_not_duplicated(self):
+        """When the fast model is the chat model, the pull list stays at two
+        entries — no duplicate download of the same model."""
+        mock_settings = MagicMock()
+        mock_settings.ollama_chat_model = "gemma4:e2b"
+        mock_settings.ollama_embed_model = "nomic-embed-text"
+        mock_settings.fast_model = "gemma4:e2b"
+
+        with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
+            models = get_required_models()
+            assert len(models) == 2
+            assert models.count("gemma4:e2b") == 1
 
     def test_returns_defaults_on_config_error(self):
         """Returns default models if config can't be loaded."""
@@ -184,7 +197,7 @@ class TestGetRequiredModels:
             embedding_provider="",
             ollama_chat_model="gemma4:e2b",
             ollama_embed_model="nomic-embed-text",
-            intent_judge_model="gemma4:e2b",
+            fast_model="gemma4:e2b",
         )
         base.update(over)
         return SimpleNamespace(**base)

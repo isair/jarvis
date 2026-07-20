@@ -495,7 +495,7 @@ def graph_import_diary() -> Response:
     from jarvis.config import load_settings
     from jarvis.memory.db import Database
     from jarvis.memory.graph_ops import update_graph_from_dialogue
-    from jarvis.reply.engine import resolve_tool_router_model
+    from jarvis.llm import resolve_model, Tier
 
     def generate():
         try:
@@ -505,7 +505,7 @@ def graph_import_diary() -> Response:
             # Run the best-child picker on the small router-chain model so
             # historical import doesn't page in the big chat model for every
             # placement decision.
-            picker_model = resolve_tool_router_model(settings)
+            picker_model = resolve_model(settings, Tier.FAST)
 
             summaries = db.get_all_conversation_summaries()
             total = len(summaries)
@@ -593,12 +593,12 @@ def graph_consolidate_all() -> Response:
         consolidate_all_populated_nodes,
         is_populated_node,
     )
-    from jarvis.reply.engine import resolve_tool_router_model
+    from jarvis.llm import resolve_model, Tier
 
     def generate():
         try:
             settings = load_settings()
-            picker_model = resolve_tool_router_model(settings)
+            picker_model = resolve_model(settings, Tier.FAST)
             store = get_graph_store()
 
             # Count populated nodes upfront so the UI can render a
