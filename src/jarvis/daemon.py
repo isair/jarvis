@@ -23,9 +23,11 @@ if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         import io
         # Only wrap if stdout has a proper binary buffer (not a custom writer)
         if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace',
+                                          line_buffering=True)
         if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace',
+                                          line_buffering=True)
     except Exception:
         pass
 
@@ -530,6 +532,12 @@ def main() -> None:
                 ollama_base_url=getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"),
                 ollama_model=cfg.ollama_chat_model,
                 thinking=getattr(cfg, "dictation_thinking_enabled", False),
+                # Share the listener's forced decode language so dictation and
+                # conversation transcribe under identical assumptions. The
+                # Whisper model itself is still the listener's — only a
+                # reference is passed above, never a second load.
+                language=getattr(cfg, "whisper_language", None),
+                initial_prompt=getattr(cfg, "whisper_initial_prompt", None),
             )
             dictation.start()
             _global_dictation_engine = dictation

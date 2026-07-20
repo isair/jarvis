@@ -1,5 +1,5 @@
 """
-Jarvis Setup Wizard
+Cora Setup Wizard
 
 A setup wizard that checks for Ollama installation, running server, and required models.
 Guides users through the setup process with automated actions where possible.
@@ -464,7 +464,7 @@ class SetupWizard(QWizard):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🚀 Jarvis Setup Wizard")
+        self.setWindowTitle("🚀 Cora Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.setMinimumSize(700, 875)
 
@@ -497,7 +497,7 @@ class SetupWizard(QWizard):
         # Custom button labels
         self.setButtonText(QWizard.WizardButton.NextButton, "Next →")
         self.setButtonText(QWizard.WizardButton.BackButton, "← Back")
-        self.setButtonText(QWizard.WizardButton.FinishButton, "🎉 Start Jarvis")
+        self.setButtonText(QWizard.WizardButton.FinishButton, "🎉 Start Cora")
         self.setButtonText(QWizard.WizardButton.CancelButton, "Exit")
 
         # Store status for sharing between pages
@@ -525,7 +525,7 @@ class SetupWizard(QWizard):
         return self._location_working
 
     def _apply_theme(self):
-        """Apply the shared Jarvis theme with SVG indicator icons."""
+        """Apply the shared Cora theme with SVG indicator icons."""
         icons = _ensure_icons()
         icon_css = _ICON_STYLESHEET_TEMPLATE.format(**icons)
         self.setStyleSheet(JARVIS_THEME_STYLESHEET + icon_css + """
@@ -587,7 +587,7 @@ class WelcomePage(QWizardPage):
         # Header
         header_layout = QVBoxLayout()
 
-        title = QLabel("🤖 Welcome to Jarvis")
+        title = QLabel("🤖 Welcome to Cora")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(title)
@@ -815,7 +815,7 @@ class OllamaInstallPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("Ollama is required to run local AI models for Jarvis.")
+        subtitle = QLabel("Ollama is required to run local AI models for Cora.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -958,7 +958,7 @@ class OllamaServerPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("The Ollama server needs to be running for Jarvis to use AI models.")
+        subtitle = QLabel("The Ollama server needs to be running for Cora to use AI models.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -1040,7 +1040,7 @@ class OllamaServerPage(QWizardPage):
                 ollama_path = wizard.ollama_status.cli_path
 
             # Note: We intentionally detach the Ollama server process so it keeps
-            # running after Jarvis exits. Ollama is a system service that should
+            # running after Cora exits. Ollama is a system service that should
             # persist. The serve command is idempotent - it won't spawn duplicates.
             if sys.platform == "darwin":
                 # On macOS, try to open the Ollama app first
@@ -1167,7 +1167,7 @@ class ModelsPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("Jarvis needs specific AI models to work. Choose your model and install.")
+        subtitle = QLabel("Cora needs specific AI models to work. Choose your model and install.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -1510,7 +1510,7 @@ class ModelsPage(QWizardPage):
     def _skip_models(self):
         """Skip model installation."""
         self._is_complete = True
-        self.status_label.setText("⚠️ Skipped model installation. Jarvis may not work correctly without all models.")
+        self.status_label.setText("⚠️ Skipped model installation. Cora may not work correctly without all models.")
         self.status_label.setStyleSheet("color: #fbbf24;")
         self.completeChanged.emit()
 
@@ -2225,7 +2225,7 @@ class LocationPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("Location helps Jarvis provide weather, local services, and time-aware responses.")
+        subtitle = QLabel("Location helps Cora provide weather, local services, and time-aware responses.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -2691,7 +2691,7 @@ class MCPPage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "MCP (Model Context Protocol) servers give Jarvis extra abilities. "
+            "MCP (Model Context Protocol) servers give Cora extra abilities. "
             "Select any you'd like to enable — you can always change these later in Settings."
         )
         subtitle.setObjectName("subtitle")
@@ -2704,7 +2704,7 @@ class MCPPage(QWizardPage):
         self._node_warning = QLabel(
             "⚠️  <b>Node.js not found.</b> The MCP servers below require Node.js to run. "
             "<a href='https://nodejs.org/' style='color: #f59e0b;'>Download Node.js</a> "
-            "and restart Jarvis, or skip this page for now."
+            "and restart Cora, or skip this page for now."
         )
         self._node_warning.setOpenExternalLinks(True)
         self._node_warning.setWordWrap(True)
@@ -2837,7 +2837,7 @@ class SearchProvidersPage(QWizardPage):
     Ordering mirrors the runtime fallback chain: DDG → Brave → Wikipedia →
     honest "blocked" envelope. The page is always shown (even when nothing
     needs configuring) because the explainer itself is the point — users
-    should understand what Jarvis will and won't reach over the network
+    should understand what Cora will and won't reach over the network
     before they start using it.
     """
 
@@ -2854,7 +2854,7 @@ class SearchProvidersPage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Jarvis uses DuckDuckGo for web search. When DuckDuckGo blocks a "
+            "Cora uses DuckDuckGo for web search. When DuckDuckGo blocks a "
             "request or has nothing useful, these optional fallbacks keep "
             "answers flowing — all off by default except Wikipedia."
         )
@@ -2922,7 +2922,7 @@ class SearchProvidersPage(QWizardPage):
         layout.addWidget(wiki_card)
 
         tip = QLabel(
-            "💡  When every provider fails, Jarvis tells you the search was "
+            "💡  When every provider fails, Cora tells you the search was "
             "blocked rather than making something up."
         )
         tip.setWordWrap(True)
@@ -3022,7 +3022,7 @@ class CompletePage(QWizardPage):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        subtitle = QLabel("Jarvis is ready to use. Click 'Start Jarvis' to launch the voice assistant.")
+        subtitle = QLabel("Cora is ready to use. Click 'Start Cora' to launch the voice assistant.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3043,9 +3043,9 @@ class CompletePage(QWizardPage):
         card_layout.addSpacing(8)
 
         tips = QLabel(
-            "• Say your wake word (e.g. 'Jarvis') anywhere in your sentence to activate the assistant\n"
-            "• After Jarvis replies, speak your follow-up — no need to repeat the wake word\n"
-            "• Jarvis will appear in your system tray (menu bar on macOS)\n"
+            "• Say your wake word (e.g. 'Cora') anywhere in your sentence to activate the assistant\n"
+            "• After Cora replies, speak your follow-up — no need to repeat the wake word\n"
+            "• Cora will appear in your system tray (menu bar on macOS)\n"
             "• Right-click the tray icon to access settings and controls\n"
             "• View logs by clicking '📝 View Logs' in the tray menu"
         )
@@ -3054,7 +3054,7 @@ class CompletePage(QWizardPage):
         card_layout.addWidget(tips)
 
         # Memory viewer tip with special styling
-        brain_tip = QLabel("🧠  Peek inside Jarvis's brain — open the Memory Viewer to see what he remembers")
+        brain_tip = QLabel("🧠  Peek inside Cora's brain — open the Memory Viewer to see what he remembers")
         brain_tip.setWordWrap(True)
         brain_tip.setStyleSheet("""
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,

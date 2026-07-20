@@ -1,7 +1,7 @@
 """
-🧠 Jarvis Memory Viewer
+🧠 Cora Memory Viewer
 
-A beautiful web interface for exploring Jarvis's conversation memories.
+A beautiful web interface for exploring Cora's conversation memories.
 Run directly: python -m desktop_app.memory_viewer
 """
 
@@ -857,7 +857,7 @@ def index() -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🧠 Jarvis Memory</title>
+    <title>🧠 Cora Memory</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -2051,7 +2051,7 @@ def index() -> str:
         <div class="header-content">
             <div class="logo">
                 <span class="logo-icon">🧠</span>
-                <h1>Jarvis Memory</h1>
+                <h1>Cora Memory</h1>
             </div>
 
             <div class="search-container">
@@ -3810,7 +3810,7 @@ def main() -> None:
             pass
 
     print("\n" + "=" * 60)
-    print("🧠 Jarvis Memory Viewer")
+    print("🧠 Cora Memory Viewer")
     print("=" * 60)
     print(f"\n  📂 Database: {_get_db_path()}")
     print(f"  🌐 URL: http://localhost:{port}")

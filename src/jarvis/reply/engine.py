@@ -168,6 +168,39 @@ def resolve_tool_router_model(cfg) -> str:
     return ""
 
 
+# Language directives keyed by ISO-639-1 code. Each one replaces the default
+# "always answer in English" instruction when `response_language` is set.
+# Written in the target language: instructing a model in the language you want
+# back is markedly more reliable than describing it in English.
+_RESPONSE_LANGUAGE_DIRECTIVES: dict[str, str] = {
+    "ro": (
+        "Răspunde întotdeauna în română naturală și corectă, cu diacritice. "
+        "Păstrează numele proprii, comenzile, căile, URL-urile și fragmentele de "
+        "cod în forma lor originală. Formulează răspunsuri scurte și potrivite "
+        "pentru redare vocală."
+    ),
+}
+
+
+def _response_language_directive(code: str) -> str:
+    """Return the system-prompt directive pinning replies to *code*.
+
+    Falls back to a generic English-worded instruction for languages that have
+    no hand-written directive, so setting an arbitrary ISO-639-1 code still
+    changes behaviour instead of silently doing nothing.
+    """
+    key = (code or "").strip().lower()
+    directive = _RESPONSE_LANGUAGE_DIRECTIVES.get(key)
+    if directive:
+        return directive
+    return (
+        f"Always respond in the language with ISO-639-1 code '{key}', "
+        "regardless of the language the user speaks in. Keep proper nouns, "
+        "commands, file paths, URLs and code snippets in their original form. "
+        "Keep replies short and suitable for being read aloud."
+    )
+
+
 def _text_tool_call_guidance(allowed_names: list[str]) -> str:
     """Build the text-based tool-call guidance block for gemma-class models.
 
@@ -794,6 +827,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     Returns:
         Generated reply text or None
     """
+    # Step 0: facts the process already holds — date, clock, arithmetic.
+    # Answered here rather than by the model: a 2B model handed an English
+    # context line and asked to reply in Romanian was observed inventing both
+    # the weekday and the word "vigileoptitudine". No web, no memory, no LLM.
+    if bool(getattr(cfg, "local_answers_enabled", True)):
+        try:
+            from .local_answers import try_local_answer
+
+            local = try_local_answer(text)
+        except Exception as e:  # never let this shadow the real pipeline
+            debug_log(f"local answer check failed: {e}", "planning")
+            local = None
+        if local:
+            debug_log(f"local deterministic answer (no LLM): {local!r}", "planning")
+            print(f"  ⚡ Răspuns local (fără LLM): {local}", flush=True)
+            return local
+
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
@@ -1415,7 +1465,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     action_plan = strip_memory_directives(action_plan)
 
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
-    _persona_prompt = build_system_prompt(_assistant_name)
+    _persona_prompt = build_system_prompt(
+        _assistant_name,
+        style=getattr(cfg, "assistant_style", "butler"),
+    )
 
     def _build_initial_system_message() -> str:
         guidance = [_persona_prompt.strip()]
@@ -1426,8 +1479,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Both current TTS engines (Piper, Chatterbox) only support English.
         # Responding in another language would produce garbled audio.
         # Remove this constraint when a multilingual TTS engine is added.
+        # `response_language` overrides the default English-only rule. It applies
+        # regardless of TTS engine: the user asked for a language, not for a
+        # speech-synthesis workaround. With it unset, upstream behaviour is kept
+        # exactly — English is pinned only when a TTS engine will speak the reply.
         tts_engine = getattr(cfg, 'tts_engine', 'piper')
-        if tts_engine in ('piper', 'chatterbox'):
+        response_language = getattr(cfg, 'response_language', None)
+        if response_language:
+            guidance.append(_response_language_directive(response_language))
+        elif tts_engine in ('piper', 'chatterbox'):
             guidance.append(
                 "Always respond in English regardless of the language the user speaks in."
             )
@@ -2405,7 +2465,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Print error message
         try:
-            print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
+            print(f"\n⚠️ {_assistant_name}\n  {_indent_text(reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"error reply formatting failed: {e}", "planning")
 
@@ -2427,12 +2487,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:
-        # Print reply with appropriate header
+        # Print reply with appropriate header (wake_word → display name)
         try:
             if not getattr(cfg, "voice_debug", False):
-                print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)
+                print(f"\n🤖 {_assistant_name}\n  {_indent_text(safe_reply)}\n", flush=True)
             else:
-                print(f"\n[jarvis]\n  {_indent_text(safe_reply)}\n", flush=True)
+                print(f"\n[{_assistant_name.lower()}]\n  {_indent_text(safe_reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"reply formatting failed: {e}", "planning")
 

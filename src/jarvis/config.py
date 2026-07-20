@@ -32,6 +32,16 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "size": "~12GB",
         "vram": "24GB+",
     },
+    "qwen3.5:9b": {
+        "name": "Qwen 3.5 9B",
+        "description": (
+            "Strong multilingual reasoning and native tool calling; 9.7B params, "
+            "Q4_K_M. Disable thinking for voice — with thinking on, time-to-first-"
+            "token measured ~27s versus ~0.3s with it off. ~6.6GB download"
+        ),
+        "size": "~6.6GB",
+        "vram": "12GB+",
+    },
 }
 
 # The default chat model (first in the supported list)
@@ -137,6 +147,49 @@ class Settings:
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
     whisper_min_word_length: int
+
+    # Language
+    # ISO-639-1 codes. None preserves upstream behaviour: Whisper auto-detects
+    # per utterance, and the reply engine keeps its English-only instruction.
+    whisper_language: str | None  # forces Whisper's decode language
+    response_language: str | None  # forces the language the assistant replies in
+
+    # Optional context string handed to Whisper as `initial_prompt`. It biases
+    # the decoder towards the vocabulary and orthography it contains — it does
+    # NOT substitute words after the fact. Keep it short and generic: a long or
+    # over-specific prompt makes Whisper hallucinate its own contents into
+    # silence. None disables it (upstream behaviour).
+    whisper_initial_prompt: str | None
+
+    # Barge-in / stop phrases.
+    # These live in get_default_config() but were never surfaced on Settings, so
+    # listener.py's `getattr(cfg, "stop_commands", [...])` always fell through to
+    # its hard-coded English default and any configured value was ignored.
+    stop_commands: list[str]
+    stop_command_fuzzy_ratio: float
+
+    # Single-flight capture gate.
+    # Silence held after TTS playback ends before the microphone is live again,
+    # and the minimum voiced duration WebRTC VAD must find in a captured
+    # utterance before it is sent to Whisper. min_voiced_ms <= 0 disables the
+    # VAD gate (energy gate still applies).
+    post_tts_cooldown_sec: float
+    min_voiced_ms: float
+
+    # Answer date, clock and arithmetic locally, before the planner and
+    # the LLM. False restores upstream behaviour (everything goes to the model).
+    local_answers_enabled: bool
+
+    # Assistant persona variant: "butler" (upstream British-butler persona) or
+    # "professional". Anything unrecognised falls back to "butler".
+    assistant_style: str
+
+    # Thinking/reasoning mode. Same missing-from-Settings problem as
+    # stop_commands: the engine reads these via getattr with a False default, so
+    # a configured `true` was silently ignored. Surfaced here so the config key
+    # actually controls behaviour.
+    llm_thinking_enabled: bool
+    intent_judge_thinking_enabled: bool
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
@@ -434,6 +487,18 @@ def get_default_config() -> Dict[str, Any]:
         # Whisper Speech Recognition
         "whisper_model": "medium",
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
+        # ISO-639-1 language codes; null keeps upstream behaviour
+        # (Whisper auto-detects, assistant replies in English).
+        "whisper_language": None,
+        "response_language": None,
+        # Whisper decoding context; null = upstream behaviour (no bias).
+        "whisper_initial_prompt": None,
+        # Persona variant: "butler" (upstream) or "professional".
+        "assistant_style": "butler",
+        "local_answers_enabled": True,
+        # Single-flight capture gate.
+        "post_tts_cooldown_sec": 0.5,
+        "min_voiced_ms": 250,
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
         "whisper_vad": True,
@@ -640,6 +705,56 @@ def load_settings() -> Settings:
         whisper_device = "auto"
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
     whisper_vad = bool(merged.get("whisper_vad", True))
+
+    def _normalise_language(value: Any) -> str | None:
+        """Normalise an ISO-639-1 language code.
+
+        Accepts "ro", "RO", "ro-RO", "ro_RO" and returns "ro". Empty strings,
+        None, and the sentinels "auto"/"none" all mean "leave it to upstream
+        behaviour" and normalise to None.
+        """
+        if value is None:
+            return None
+        code = str(value).strip().lower()
+        if not code or code in ("auto", "none", "null"):
+            return None
+        # Keep only the primary subtag: "ro-ro" / "ro_ro" -> "ro".
+        code = code.replace("_", "-").split("-", 1)[0]
+        return code or None
+
+    whisper_language = _normalise_language(merged.get("whisper_language"))
+    response_language = _normalise_language(merged.get("response_language"))
+
+    # Whisper's initial_prompt. Capped because a long prompt measurably raises
+    # the chance Whisper emits the prompt's own words over silence.
+    WHISPER_PROMPT_MAX_CHARS = 300
+    _raw_prompt = merged.get("whisper_initial_prompt")
+    whisper_initial_prompt: str | None = None
+    if _raw_prompt is not None:
+        _p = str(_raw_prompt).strip()
+        if _p:
+            if len(_p) > WHISPER_PROMPT_MAX_CHARS:
+                _p = _p[:WHISPER_PROMPT_MAX_CHARS].rstrip()
+            whisper_initial_prompt = _p
+
+    stop_commands = [
+        c.strip().lower()
+        for c in _ensure_list(merged.get("stop_commands"))
+        if str(c).strip()
+    ] or list(defaults["stop_commands"])
+    stop_command_fuzzy_ratio = float(merged.get("stop_command_fuzzy_ratio", 0.8))
+
+    post_tts_cooldown_sec = max(0.0, float(merged.get("post_tts_cooldown_sec", 0.5)))
+    min_voiced_ms = max(0.0, float(merged.get("min_voiced_ms", 250)))
+
+    local_answers_enabled = bool(merged.get("local_answers_enabled", True))
+
+    assistant_style = str(merged.get("assistant_style", "butler")).strip().lower()
+    if assistant_style not in ("butler", "professional"):
+        assistant_style = "butler"
+
+    llm_thinking_enabled = bool(merged.get("llm_thinking_enabled", False))
+    intent_judge_thinking_enabled = bool(merged.get("intent_judge_thinking_enabled", False))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
     vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
@@ -803,6 +918,27 @@ def load_settings() -> Settings:
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
+
+        # Language
+        whisper_language=whisper_language,
+        response_language=response_language,
+        whisper_initial_prompt=whisper_initial_prompt,
+
+        # Stop phrases
+        stop_commands=stop_commands,
+        stop_command_fuzzy_ratio=stop_command_fuzzy_ratio,
+
+        # Capture gate
+        post_tts_cooldown_sec=post_tts_cooldown_sec,
+        min_voiced_ms=min_voiced_ms,
+
+        # Deterministic local answers
+        local_answers_enabled=local_answers_enabled,
+
+        # Persona + thinking
+        assistant_style=assistant_style,
+        llm_thinking_enabled=llm_thinking_enabled,
+        intent_judge_thinking_enabled=intent_judge_thinking_enabled,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,

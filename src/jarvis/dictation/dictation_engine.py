@@ -628,6 +628,8 @@ class DictationEngine:
         ollama_base_url: str = "http://127.0.0.1:11434",
         ollama_model: str = "gemma4:e2b",
         thinking: bool = False,
+        language: Optional[str] = None,
+        initial_prompt: Optional[str] = None,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
         self._whisper_backend_ref = whisper_backend_ref
@@ -646,6 +648,11 @@ class DictationEngine:
         self._ollama_base_url = ollama_base_url
         self._ollama_model = ollama_model
         self._thinking = thinking
+        # ISO-639-1 code forced on the Whisper decode. None keeps upstream
+        # per-utterance auto-detection.
+        self._language = language
+        # Optional decoding-context string for Whisper. None = upstream.
+        self._initial_prompt = initial_prompt
 
         # Parse hotkey
         self._modifiers, self._trigger = parse_hotkey(hotkey)
@@ -1094,7 +1101,16 @@ class DictationEngine:
             return ""
         try:
             import mlx_whisper
-            result = mlx_whisper.transcribe(audio, path_or_hf_repo=repo, language=None)
+            prompt_kw = {"initial_prompt": self._initial_prompt} if self._initial_prompt else {}
+            try:
+                result = mlx_whisper.transcribe(audio, path_or_hf_repo=repo,
+                                                language=self._language, **prompt_kw)
+            except TypeError as exc:
+                if prompt_kw:
+                    debug_log(f"MLX rejected initial_prompt ({exc}); retrying without it "
+                              "(language kept)", "dictation")
+                result = mlx_whisper.transcribe(audio, path_or_hf_repo=repo,
+                                                language=self._language)
             text = result.get("text", "").strip() if isinstance(result, dict) else ""
             return text
         except Exception as exc:
@@ -1103,10 +1119,16 @@ class DictationEngine:
 
     def _transcribe_faster_whisper(self, model, audio) -> str:
         try:
+            prompt_kw = {"initial_prompt": self._initial_prompt} if self._initial_prompt else {}
             try:
-                segments, _info = model.transcribe(audio, language=None, vad_filter=False)
-            except TypeError:
-                segments, _info = model.transcribe(audio, language=None)
+                segments, _info = model.transcribe(audio, language=self._language,
+                                                   vad_filter=False, **prompt_kw)
+            except TypeError as exc:
+                # Drop only the optional extras; language must survive the retry.
+                if prompt_kw:
+                    debug_log(f"faster-whisper rejected initial_prompt ({exc}); retrying "
+                              "without it (language kept)", "dictation")
+                segments, _info = model.transcribe(audio, language=self._language)
             return " ".join(seg.text for seg in segments).strip()
         except Exception as exc:
             debug_log(f"faster-whisper transcription error: {exc}", "dictation")

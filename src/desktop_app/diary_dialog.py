@@ -52,7 +52,7 @@ class DiaryUpdateDialog(QDialog):
             Qt.WindowType.WindowTitleHint
         )
 
-        # Apply the shared Jarvis theme
+        # Apply the shared Cora theme
         self.setStyleSheet(JARVIS_THEME_STYLESHEET)
 
         layout = QVBoxLayout(self)
@@ -100,7 +100,7 @@ class DiaryUpdateDialog(QDialog):
         layout.addWidget(self.diary_text, stretch=1)
 
         # Hint at bottom
-        hint = QLabel("Please wait while Jarvis saves your conversations...")
+        hint = QLabel("Please wait while Cora saves your conversations...")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setObjectName("subtitle")
         layout.addWidget(hint)

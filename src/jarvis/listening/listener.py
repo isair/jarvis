@@ -78,6 +78,14 @@ def _is_apple_silicon() -> bool:
     return sys.platform == "darwin" and platform.machine() == "arm64"
 
 
+# Single-flight states for the capture gate. Plain strings rather than an Enum
+# so debug logs and tests read naturally and no import is needed to compare.
+FLIGHT_LISTENING = "LISTENING"
+FLIGHT_PROCESSING = "PROCESSING"
+FLIGHT_SPEAKING = "SPEAKING"
+FLIGHT_COOLDOWN = "COOLDOWN"
+
+
 def _get_mic_permission_hint() -> str:
     """Return platform-appropriate microphone permission guidance."""
     if sys.platform == 'win32':
@@ -383,6 +391,24 @@ class VoiceListener(threading.Thread):
         # Audio callback monitoring (for debugging)
         self._callback_count = 0
         self._last_callback_log_time = 0
+
+        # --- single-flight gate -------------------------------------------
+        # LISTENING -> PROCESSING -> SPEAKING -> COOLDOWN -> LISTENING.
+        # Audio is accepted ONLY in LISTENING. Upstream this was gated solely on
+        # _should_stop/_dictation_active, so the microphone kept filling the
+        # queue while Piper was speaking: the assistant heard its own voice and
+        # room noise, producing extra "Heard" lines and overlapping replies.
+        self._flight_lock = threading.Lock()
+        self._flight_state = FLIGHT_LISTENING
+        self._utterance_seq = 0
+        self._active_utterance_id: Optional[str] = None
+        self._cooldown_timer: Optional[threading.Timer] = None
+        # Silence gap after playback ends before the mic is live again.
+        self._post_tts_cooldown_sec = float(
+            getattr(self.cfg, "post_tts_cooldown_sec", 0.5)
+        )
+        # Guards against a second TTS playback for the same reply.
+        self._spoken_utterance_ids: set = set()
 
         # Voice activity detection
         self.is_speech_active = False
@@ -1166,7 +1192,10 @@ class VoiceListener(threading.Thread):
         Args:
             query: Complete user query to process
         """
-        debug_log(f"dispatching query: '{query}'", "voice")
+        # Claim the single flight slot before any work starts: from here until
+        # the post-playback cooldown expires, no new audio is accepted.
+        utterance_id = self._begin_utterance()
+        debug_log(f"[utt {utterance_id}] dispatching query: '{query}'", "voice")
 
         # Clear audio buffers to prevent stale audio from next query
         self._clear_audio_buffers()
@@ -1196,7 +1225,9 @@ class VoiceListener(threading.Thread):
             self._stop_thinking_tune()
             # Provide user feedback via TTS
             if self.tts and self.tts.enabled:
+                self._set_flight_state(FLIGHT_SPEAKING)
                 self.tts.speak("Sorry, I encountered an error processing your request.")
+            self._enter_cooldown()
             return
 
         # Handle TTS with proper callbacks
@@ -1204,10 +1235,27 @@ class VoiceListener(threading.Thread):
             # Stop thinking tune when TTS starts
             self._stop_thinking_tune()
 
+            # Exactly one playback per reply. A duplicate speak() for the same
+            # utterance is the "two voices" symptom, so refuse it loudly rather
+            # than letting it overlap.
+            if utterance_id in self._spoken_utterance_ids:
+                debug_log(f"[utt {utterance_id}] REFUSED duplicate TTS playback", "voice")
+                print(f"  ⚠️  Duplicate TTS suppressed for {utterance_id}", flush=True)
+                self._enter_cooldown()
+                return
+            self._spoken_utterance_ids.add(utterance_id)
+            if len(self._spoken_utterance_ids) > 64:
+                self._spoken_utterance_ids = set(list(self._spoken_utterance_ids)[-32:])
+
+            self._set_flight_state(FLIGHT_SPEAKING)
+
             # TTS completion callback for hot window
             def _on_tts_complete():
                 import time as _time
-                debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
+                debug_log(f"[utt {utterance_id}] TTS complete at {_time.time():.3f}", "voice")
+                # Playback really finished — now hold the mic shut for the
+                # cooldown, then flush and resume listening.
+                self._enter_cooldown()
                 self.activate_hot_window()
 
             # Duration callback to update echo detector with exact timing (Piper only)
@@ -1220,12 +1268,116 @@ class VoiceListener(threading.Thread):
             self.track_tts_start(reply)
             debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
 
-            self.tts.speak(reply, completion_callback=_on_tts_complete,
-                          duration_callback=_on_duration_known)
+            debug_log(f"[utt {utterance_id}] TTS playback started (1 of 1)", "voice")
+            self._arm_speaking_watchdog(utterance_id)
+            try:
+                self.tts.speak(reply, completion_callback=_on_tts_complete,
+                               duration_callback=_on_duration_known)
+            except Exception as e:
+                debug_log(f"[utt {utterance_id}] TTS speak failed: {e}", "voice")
+                self._enter_cooldown()
         else:
             debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response
             self._stop_thinking_tune()
+            # Nothing will be spoken, so no completion callback will fire —
+            # release the flight slot here or the mic would stay shut forever.
+            self._enter_cooldown()
+
+    # ------------------------------------------------------------------
+    # Single-flight capture gate
+    # ------------------------------------------------------------------
+
+    def _set_flight_state(self, state: str) -> None:
+        """Move the capture gate to *state*, logging real transitions only."""
+        with self._flight_lock:
+            previous = self._flight_state
+            self._flight_state = state
+        if previous != state:
+            debug_log(
+                f"[utt {self._active_utterance_id or '-'}] flight: {previous} -> {state}",
+                "voice",
+            )
+
+    def get_flight_state(self) -> str:
+        with self._flight_lock:
+            return self._flight_state
+
+    def _accepting_audio(self) -> bool:
+        """True only in LISTENING. Everything else drops incoming audio."""
+        with self._flight_lock:
+            return self._flight_state == FLIGHT_LISTENING
+
+    def _begin_utterance(self) -> str:
+        """Claim the single flight slot. Returns the new utterance id."""
+        with self._flight_lock:
+            self._utterance_seq += 1
+            self._active_utterance_id = f"u{self._utterance_seq:04d}"
+            self._flight_state = FLIGHT_PROCESSING
+        debug_log(f"[utt {self._active_utterance_id}] flight: -> PROCESSING", "voice")
+        return self._active_utterance_id
+
+    def _arm_speaking_watchdog(self, utterance_id: str, max_sec: float = 120.0) -> None:
+        """Force-release the flight slot if playback never reports completion.
+
+        A stuck SPEAKING state means a permanently deaf assistant — strictly
+        worse than the duplicate-audio bug this gate exists to fix. The
+        watchdog guarantees the microphone always comes back.
+        """
+        def _force_release():
+            if self.get_flight_state() == FLIGHT_SPEAKING and \
+                    self._active_utterance_id == utterance_id:
+                debug_log(
+                    f"[utt {utterance_id}] WATCHDOG: still SPEAKING after "
+                    f"{max_sec:.0f}s — forcing cooldown", "voice",
+                )
+                print("  ⚠️  TTS completion never fired — releasing microphone", flush=True)
+                self._enter_cooldown()
+
+        timer = threading.Timer(max_sec, _force_release)
+        timer.daemon = True
+        timer.start()
+
+    def _cancel_cooldown_timer(self) -> None:
+        timer, self._cooldown_timer = self._cooldown_timer, None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _enter_cooldown(self) -> None:
+        """Hold the mic shut for the cooldown, flush, then listen again.
+
+        Flushing happens at the END of the cooldown: anything captured while the
+        timer runs is the tail of our own playback or its echo, and must not
+        become the next utterance.
+        """
+        self._cancel_cooldown_timer()
+        self._set_flight_state(FLIGHT_COOLDOWN)
+        utt = self._active_utterance_id
+
+        def _resume():
+            try:
+                self._clear_audio_buffers()
+                try:
+                    while True:
+                        self._audio_q.get_nowait()
+                except queue.Empty:
+                    pass
+                except Exception:
+                    pass
+            finally:
+                with self._flight_lock:
+                    self._active_utterance_id = None
+                    self._flight_state = FLIGHT_LISTENING
+                debug_log(f"[utt {utt}] flight: COOLDOWN -> LISTENING (buffers flushed)",
+                          "voice")
+
+        timer = threading.Timer(self._post_tts_cooldown_sec, _resume)
+        timer.daemon = True
+        self._cooldown_timer = timer
+        timer.start()
 
     def _calculate_audio_energy(self, frames: list) -> float:
         """Calculate RMS energy from audio frames."""
@@ -1423,6 +1575,11 @@ class VoiceListener(threading.Thread):
         """Audio callback from sounddevice."""
         try:
             if self._should_stop or self._dictation_active:
+                return
+            # Single-flight: outside LISTENING the microphone is shut. Dropping
+            # here (rather than filtering later) is what stops the assistant
+            # transcribing its own playback and the room noise around it.
+            if not self._accepting_audio():
                 return
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
@@ -2268,6 +2425,117 @@ class VoiceListener(threading.Thread):
                             except Exception:
                                 break
 
+    def _log_utterance_summary(self, audio, verdict: str, reason: str) -> None:
+        """One diagnostic line per captured utterance, JARVIS_VOICE_DEBUG only.
+
+        Deliberately per-utterance, never per-frame: a per-frame log would emit
+        50 lines/second and perturb the very timing it is meant to measure.
+        Reads only values already computed by the pipeline — it cannot change a
+        threshold, a verdict, or the audio itself. No samples are written.
+        """
+        # Skip the percentile maths entirely when debug is off. debug_log()
+        # gates output on its own, but the computation would still run.
+        try:
+            from ..debug import _is_debug_enabled as _dbg
+            if not _dbg():
+                return
+        except Exception:
+            if not getattr(self.cfg, "voice_debug", False):
+                return
+        try:
+            frame = max(1, int(self._samplerate * 0.02))
+            n = audio.size // frame
+            if n:
+                trimmed = audio[: n * frame].reshape(n, frame)
+                rms = np.sqrt(np.mean(np.square(trimmed), axis=1))
+                srt = np.sort(rms)
+                p50 = float(srt[len(srt) // 2])
+                p95 = float(srt[min(len(srt) - 1, int(len(srt) * 0.95))])
+                mx = float(srt[-1])
+            else:
+                p50 = p95 = mx = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+
+            thr = float(getattr(self.cfg, "voice_min_energy", 0.0))
+            debug_log(
+                "UTT_SUMMARY "
+                f"id={self._active_utterance_id or '-'} "
+                f"fsm={self.get_flight_state()} "
+                f"dur={audio.size / max(self._samplerate, 1):.2f}s "
+                f"rms_p50={p50:.6f} rms_p95={p95:.6f} rms_max={mx:.6f} "
+                f"energy_thr={thr:.6f} energy_gate={'PASS' if mx >= thr else 'BELOW'} "
+                f"voiced_ms={getattr(self, '_last_voiced_ms', -1):.0f} "
+                f"min_voiced_ms={float(getattr(self.cfg, 'min_voiced_ms', 0)):.0f} "
+                f"verdict={verdict} reason={reason}",
+                "voice",
+            )
+        except Exception:
+            # Instrumentation must never affect the pipeline.
+            pass
+
+    def _has_real_speech(self, frames: list) -> bool:
+        """Independent voiced-speech check on the captured utterance.
+
+        Deliberately does NOT use Whisper's own signals. `no_speech_prob` is
+        computed by the same decoder that produces the text, and a configured
+        `whisper_initial_prompt` was measured to collapse it from 0.85 to 0.06
+        on pure silence — so it cannot be trusted as the guard against
+        transcribing noise. WebRTC VAD is a separate model on the raw PCM.
+
+        Returns True when VAD is unavailable, so this can only ever reject
+        audio, never gate the pipeline off when the check itself is missing.
+        """
+        # Fail open unless the threshold is a genuine number. A Mock or missing
+        # config means "not configured", and an unconfigured gate must never be
+        # the thing that silences the assistant.
+        try:
+            min_voiced_ms = float(getattr(self.cfg, "min_voiced_ms", 250))
+        except (TypeError, ValueError):
+            return True
+        if min_voiced_ms <= 0 or webrtcvad is None or np is None or not frames:
+            return True
+
+        try:
+            audio = np.concatenate(frames).flatten()
+        except Exception:
+            return True
+
+        rate = int(getattr(self, "_stream_samplerate", self._samplerate) or 16000)
+        # WebRTC VAD accepts only these rates and 10/20/30 ms frames.
+        if rate not in (8000, 16000, 32000, 48000):
+            audio = _resample(audio, rate, 16000)
+            rate = 16000
+
+        frame_len = int(rate * 0.02)  # 20 ms
+        if frame_len <= 0 or audio.size < frame_len:
+            return True
+
+        try:
+            vad = webrtcvad.Vad(int(getattr(self.cfg, "vad_aggressiveness", 2)))
+        except Exception:
+            return True
+
+        voiced_ms = 0.0
+        for off in range(0, audio.size - frame_len + 1, frame_len):
+            chunk = audio[off:off + frame_len]
+            pcm = np.clip(chunk * 32768.0, -32768, 32767).astype(np.int16).tobytes()
+            try:
+                if vad.is_speech(pcm, rate):
+                    voiced_ms += 20.0
+            except Exception:
+                return True  # VAD unusable for this shape — do not block
+
+        # Diagnostics only — read by _log_utterance_summary, never by the
+        # decision below.
+        self._last_voiced_ms = voiced_ms
+
+        if voiced_ms < min_voiced_ms:
+            debug_log(
+                f"utterance rejected: only {voiced_ms:.0f}ms voiced "
+                f"(< {min_voiced_ms:.0f}ms) — treating as noise", "voice",
+            )
+            return False
+        return True
+
     def _finalize_utterance(self) -> None:
         """Process completed utterance through speech recognition."""
         if np is None or not self._utterance_frames:
@@ -2313,25 +2581,60 @@ class VoiceListener(threading.Thread):
         min_duration = getattr(self.cfg, "whisper_min_audio_duration", 0.3)
         if audio_duration < min_duration:
             debug_log(f"audio too short ({audio_duration:.2f}s < {min_duration}s), ignoring", "voice")
+            self._log_utterance_summary(audio, "REJECTED", "too_short")
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
+
+        # Second, independent gate: energy alone let room noise through and
+        # Whisper then confidently transcribed boilerplate over it. VAD decides
+        # on the raw PCM, unaffected by anything Whisper is configured with.
+        self._last_voiced_ms = -1.0
+        if not self._has_real_speech([audio]):
+            self._log_utterance_summary(audio, "REJECTED", "vad_no_speech")
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return
+
+        self._log_utterance_summary(audio, "ACCEPTED", "to_whisper")
 
         # Speech recognition with appropriate backend
         try:
             if self._whisper_backend == "mlx":
-                # MLX Whisper transcription
+                # MLX Whisper transcription. See the faster-whisper branch below
+                # for why a configured language beats auto-detection.
+                forced_language = getattr(self.cfg, "whisper_language", None)
+                initial_prompt = getattr(self.cfg, "whisper_initial_prompt", None)
+                _prompt_kw = {"initial_prompt": initial_prompt} if initial_prompt else {}
                 with self.transcribe_lock:
-                    result = mlx_whisper.transcribe(
-                        audio,
-                        path_or_hf_repo=self._mlx_model_repo,
-                        language=None,
-                    )
+                    try:
+                        result = mlx_whisper.transcribe(
+                            audio,
+                            path_or_hf_repo=self._mlx_model_repo,
+                            language=forced_language,
+                            **_prompt_kw,
+                        )
+                    except TypeError as e:
+                        if _prompt_kw:
+                            debug_log(
+                                f"MLX Whisper rejected a keyword ({e}); retrying without "
+                                "initial_prompt (language kept)", "voice",
+                            )
+                            print("  ⚠️  MLX Whisper does not support initial_prompt "
+                                  "— transcribing without it", flush=True)
+                        result = mlx_whisper.transcribe(
+                            audio,
+                            path_or_hf_repo=self._mlx_model_repo,
+                            language=forced_language,
+                        )
 
                 # Capture Whisper's auto-detected language (ISO-639-1) so
                 # downstream tools can pick locale-appropriate resources.
-                detected = result.get("language")
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
+                # A forced language is authoritative over what the result reports.
+                if forced_language:
+                    self._last_detected_language = forced_language
+                else:
+                    detected = result.get("language")
+                    if isinstance(detected, str) and detected:
+                        self._last_detected_language = detected
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
                 min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
@@ -2373,22 +2676,48 @@ class VoiceListener(threading.Thread):
                 # faster-whisper transcription
                 # CPU mode: skip timestamps and disable context carry-over for speed
                 cpu_mode = self._whisper_device == "cpu"
+                # None keeps Whisper's per-utterance auto-detection (upstream
+                # behaviour). A configured code pins the decode language, which
+                # is markedly more accurate on short utterances where
+                # auto-detection routinely guesses a neighbouring language.
+                forced_language = getattr(self.cfg, "whisper_language", None)
+                initial_prompt = getattr(self.cfg, "whisper_initial_prompt", None)
+                # Only pass initial_prompt when configured, so an unset value
+                # leaves the call byte-identical to upstream.
+                _prompt_kw = {"initial_prompt": initial_prompt} if initial_prompt else {}
                 with self.transcribe_lock:
                     try:
                         segments, _info = self.model.transcribe(
-                            audio, language=None, vad_filter=False,
+                            audio, language=forced_language, vad_filter=False,
                             condition_on_previous_text=not cpu_mode,
                             without_timestamps=cpu_mode,
+                            **_prompt_kw,
                         )
-                    except TypeError:
-                        segments, _info = self.model.transcribe(audio, language=None)
+                    except TypeError as e:
+                        # An older faster-whisper may not accept one of the
+                        # keyword arguments. Drop only the optional extras and
+                        # retry — language must survive, or Romanian decoding
+                        # silently reverts to auto-detection.
+                        if _prompt_kw:
+                            debug_log(
+                                f"faster-whisper rejected a keyword ({e}); retrying "
+                                "without initial_prompt (language kept)", "voice",
+                            )
+                            print("  ⚠️  Whisper backend does not support initial_prompt "
+                                  "— transcribing without it", flush=True)
+                        segments, _info = self.model.transcribe(audio, language=forced_language)
                     segments_list = list(segments)
                 # Capture the detected language (faster-whisper exposes it
                 # on the info object). Guard against older API variants
-                # where the attribute may be absent.
-                detected = getattr(_info, "language", None)
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
+                # where the attribute may be absent. When the language was
+                # forced, that is authoritative — don't let a stale or absent
+                # info attribute override it.
+                if forced_language:
+                    self._last_detected_language = forced_language
+                else:
+                    detected = getattr(_info, "language", None)
+                    if isinstance(detected, str) and detected:
+                        self._last_detected_language = detected
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:

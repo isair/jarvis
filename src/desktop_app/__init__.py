@@ -1,7 +1,7 @@
 """
-Jarvis Desktop App - System Tray Application
+Cora Desktop App - System Tray Application
 
-A cross-platform system tray app for controlling the Jarvis voice assistant.
+A cross-platform system tray app for controlling the Cora voice assistant.
 Supports Windows, Ubuntu (Linux), and macOS.
 """
 

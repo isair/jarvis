@@ -32,6 +32,6 @@ def debug_log(message: str, category: str = "debug") -> None:
     if not _is_debug_enabled():
         return
     try:
-        print(f"[{category:^10}] {message}", file=sys.stderr)
+        print(f"[{category:^10}] {message}", file=sys.stderr, flush=True)
     except Exception:
         pass

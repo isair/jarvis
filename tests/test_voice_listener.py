@@ -673,6 +673,11 @@ class TestCpuOptimisations:
                     mock_cfg.voice_debug = False
                     mock_cfg.whisper_min_confidence = 0.3
                     mock_cfg.whisper_min_audio_duration = 0.15
+                    # These tests assert the CPU/GPU decode kwargs, feeding pure
+                    # silence as a stand-in utterance. Disable the VAD noise gate
+                    # (added for single-flight capture) so silence still reaches
+                    # transcribe here — same intent as vad_enabled = False above.
+                    mock_cfg.min_voiced_ms = 0
 
                     listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                     listener.model = mock_whisper_model

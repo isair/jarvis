@@ -5,7 +5,7 @@ Shared between the setup wizard (quick picks) and settings window (full manageme
 Each entry contains the config needed to add the server to config.json.
 
 Selection criteria:
-- Must NOT duplicate Jarvis built-in tools (web search, page fetch, file ops,
+- Must NOT duplicate Cora built-in tools (web search, page fetch, file ops,
   memory/recall, weather, screenshot/OCR, meals).
 - Wizard-featured entries must be zero-config (no API keys).
 - All entries must be from the official @modelcontextprotocol org or widely trusted.
@@ -70,7 +70,7 @@ CATALOGUE: List[MCPEntry] = [
         name="youtube-transcript",
         display_name="📺 YouTube Transcripts",
         description="Extract and summarise transcripts from any YouTube video — "
-                    "just paste a link and ask Jarvis about the content",
+                    "just paste a link and ask Cora about the content",
         command="npx",
         args=["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
         wizard_featured=True,

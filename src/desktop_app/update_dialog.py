@@ -516,7 +516,7 @@ class UpdateProgressDialog(QDialog):
         self._connect_signals()
 
     def _setup_ui(self):
-        self.setWindowTitle("Updating Jarvis")
+        self.setWindowTitle("Updating Cora")
         self.setMinimumSize(450, 220)
         self.setWindowFlags(
             Qt.WindowType.Dialog

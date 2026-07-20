@@ -144,7 +144,7 @@ def _quote_arg(arg: str) -> str:
 def run_action(action: CudaRecoveryAction) -> bool:
     """Launch the recovery script with UAC elevation.
 
-    `install_cuda.ps1` writes into `Program Files\\Jarvis\\cuda`, which a
+    `install_cuda.ps1` writes into `Program Files\\Cora\\cuda`, which a
     standard user account cannot write to. ShellExecuteW with the `runas`
     verb triggers the UAC prompt; without it the script silently fails
     its first file write and the user is no better off than before.

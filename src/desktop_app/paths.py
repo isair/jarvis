@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 def get_log_dir() -> Path:
-    """Return the platform-appropriate directory for Jarvis logs.
+    """Return the platform-appropriate directory for Cora logs.
 
     Falls back to a temp directory if the preferred location cannot be
     created (e.g. read-only home, permission denied) so callers never have

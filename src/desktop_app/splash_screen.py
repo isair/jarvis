@@ -1,5 +1,5 @@
 """
-🚀 Jarvis Splash Screen
+🚀 Cora Splash Screen
 
 A stylish startup splash screen with animated loading indicator
 that shows progress during application initialization.

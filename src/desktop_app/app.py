@@ -1,13 +1,14 @@
 """
-Jarvis Desktop App - System Tray Application
+Cora Desktop App - System Tray Application
 
-A cross-platform system tray app for controlling the Jarvis voice assistant.
+A cross-platform system tray app for controlling the Cora voice assistant.
 Supports Windows, Ubuntu (Linux), and macOS.
 """
 
 from __future__ import annotations
 import sys
 import os
+import re
 import time
 
 # Fix OpenBLAS threading crash in bundled apps
@@ -223,7 +224,7 @@ def setup_crash_logging():
             import faulthandler
             faulthandler.enable(file=log_handle)
 
-            print(f"=== Jarvis Desktop App Crash Log ===", flush=True)
+            print(f"=== Cora Desktop App Crash Log ===", flush=True)
             print(f"Timestamp: {__import__('datetime').datetime.now()}", flush=True)
             print(f"Platform: {sys.platform}", flush=True)
             print(f"Python: {sys.version}", flush=True)
@@ -328,7 +329,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
             def __init__(self, crash_info: str):
                 super().__init__()
                 self.crash_info = crash_info
-                self.setWindowTitle("🐛 Jarvis Crash Report")
+                self.setWindowTitle("🐛 Cora Crash Report")
                 self.setMinimumSize(600, 450)
                 self.setStyleSheet(JARVIS_THEME_STYLESHEET)
                 self._setup_ui()
@@ -338,7 +339,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
                 layout.setSpacing(16)
 
                 # Header
-                header = QLabel("😵 Jarvis crashed in the previous session")
+                header = QLabel("😵 Cora crashed in the previous session")
                 header.setStyleSheet("font-size: 18px; font-weight: bold; color: #f87171;")
                 layout.addWidget(header)
 
@@ -532,7 +533,7 @@ def show_unsupported_model_dialog(model_name: str) -> bool:
                 # Description
                 supported_list = ", ".join(sorted(SUPPORTED_CHAT_MODELS))
                 desc = QLabel(
-                    f"You're using <b>{self.model}</b> which hasn't been tested with Jarvis.\n\n"
+                    f"You're using <b>{self.model}</b> which hasn't been tested with Cora.\n\n"
                     f"Officially supported models: <b>{supported_list}</b>\n\n"
                     "Other models may work but could have issues with tool calling, "
                     "response formatting, or performance."
@@ -599,9 +600,9 @@ def show_unsupported_model_dialog(model_name: str) -> bool:
 def get_lock_file_path() -> Path:
     """Get the path to the single-instance lock file."""
     if sys.platform == "darwin":
-        lock_dir = Path.home() / "Library" / "Application Support" / "Jarvis"
+        lock_dir = Path.home() / "Library" / "Application Support" / "Cora"
     elif sys.platform == "win32":
-        lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
+        lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Cora"
     else:
         lock_dir = Path.home() / ".jarvis"
 
@@ -610,7 +611,7 @@ def get_lock_file_path() -> Path:
 
 
 def get_existing_instance_pid() -> Optional[int]:
-    """Read the PID of the existing Jarvis instance from the lock file."""
+    """Read the PID of the existing Cora instance from the lock file."""
     lock_file = get_lock_file_path()
     try:
         if lock_file.exists():
@@ -624,19 +625,19 @@ def get_existing_instance_pid() -> Optional[int]:
 
 def kill_existing_instance(pid: int) -> bool:
     """
-    Terminate an existing Jarvis instance by PID.
+    Terminate an existing Cora instance by PID.
 
     Returns True if the process was terminated, False otherwise.
     """
     try:
         process = psutil.Process(pid)
-        # Verify it's actually a Jarvis process (safety check)
+        # Verify it's actually a Cora process (safety check)
         proc_name = process.name().lower()
         if "jarvis" not in proc_name and "python" not in proc_name:
-            debug_log(f"PID {pid} doesn't look like Jarvis (name: {proc_name}), not killing", "desktop")
+            debug_log(f"PID {pid} doesn't look like Cora (name: {proc_name}), not killing", "desktop")
             return False
 
-        debug_log(f"Terminating existing Jarvis instance (PID {pid})", "desktop")
+        debug_log(f"Terminating existing Cora instance (PID {pid})", "desktop")
         process.terminate()
 
         # Wait up to 5 seconds for graceful shutdown
@@ -667,8 +668,8 @@ def show_instance_conflict_dialog() -> bool:
     from PyQt6.QtGui import QIcon
 
     msg = QMessageBox()
-    msg.setWindowTitle("Jarvis Already Running")
-    msg.setText("Another instance of Jarvis is already running.")
+    msg.setWindowTitle("Cora Already Running")
+    msg.setText("Another instance of Cora is already running.")
     msg.setInformativeText("Would you like to close the existing instance and start a new one?")
     msg.setIcon(QMessageBox.Icon.Question)
 
@@ -760,11 +761,11 @@ class LogSignals(QObject):
 
 
 class LogViewerWindow(QMainWindow):
-    """Window for viewing Jarvis logs in real-time."""
+    """Window for viewing Cora logs in real-time."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("📝 Jarvis Logs")
+        self.setWindowTitle("📝 Cora Logs")
         self.setGeometry(100, 100, 900, 650)
 
         # Apply theme
@@ -789,7 +790,7 @@ class LogViewerWindow(QMainWindow):
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(4)
 
-        title = QLabel("📝 Jarvis Logs")
+        title = QLabel("📝 Cora Logs")
         title.setObjectName("title")
         title.setStyleSheet("font-size: 20px; font-weight: 600; color: #fbbf24;")
         title_layout.addWidget(title)
@@ -852,7 +853,7 @@ class LogViewerWindow(QMainWindow):
         layout.addWidget(self.log_display)
 
         # Initial message
-        self.append_log("🚀 Jarvis Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
+        self.append_log("🚀 Cora Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
 
     def append_log(self, text: str) -> None:
         """Append text to the log display."""
@@ -926,13 +927,13 @@ class LogViewerWindow(QMainWindow):
 
 
 class MemoryViewerWindow(QMainWindow):
-    """Window for viewing Jarvis memory using embedded web view."""
+    """Window for viewing Cora memory using embedded web view."""
 
     MEMORY_VIEWER_PORT = 5050
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🧠 Jarvis Memory")
+        self.setWindowTitle("🧠 Cora Memory")
         self.setGeometry(150, 150, 1200, 900)
 
         # Apply theme
@@ -1241,7 +1242,7 @@ class MemoryViewerWindow(QMainWindow):
 
 
 class JarvisSystemTray:
-    """System tray application for Jarvis voice assistant."""
+    """System tray application for Cora voice assistant."""
 
     def __init__(self):
         # Use existing QApplication if available, otherwise create one
@@ -1256,7 +1257,7 @@ class JarvisSystemTray:
         self.is_listening = False
         self.is_bundled = getattr(sys, 'frozen', False)
 
-        # Kill any orphaned Jarvis processes from previous sessions
+        # Kill any orphaned Cora processes from previous sessions
         self.cleanup_orphaned_processes()
 
         # Create log viewer window (hidden by default)
@@ -1305,14 +1306,14 @@ class JarvisSystemTray:
         debug_log("desktop app initialized", "desktop")
 
     def cleanup_orphaned_processes(self) -> None:
-        """Kill any orphaned Jarvis daemon processes from previous sessions."""
+        """Kill any orphaned Cora daemon processes from previous sessions."""
         try:
             current_pid = os.getpid()
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
                     cmdline = proc.info.get('cmdline', [])
                     if cmdline and 'jarvis.main' in ' '.join(cmdline):
-                        # This is a Jarvis daemon process
+                        # This is a Cora daemon process
                         if proc.pid != current_pid:
                             debug_log(f"killing orphaned jarvis process: {proc.pid}", "desktop")
                             proc.terminate()
@@ -1460,7 +1461,7 @@ class JarvisSystemTray:
             "Reinstall GPU libraries",
             (
                 "This will download cuBLAS and cuDNN (~1.1 GB) and install them "
-                "into the Jarvis program folder. You'll see a UAC prompt. "
+                "into the Cora program folder. You'll see a UAC prompt. "
                 "Continue?"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1486,7 +1487,7 @@ class JarvisSystemTray:
             "Reinstall GPU libraries",
             (
                 "The CUDA installer is running. Once it finishes, restart "
-                f"Jarvis to use GPU acceleration. See {action_spec.target_dir / 'install.log'} "
+                f"Cora to use GPU acceleration. See {action_spec.target_dir / 'install.log'} "
                 "for details."
             ),
         )
@@ -1532,7 +1533,7 @@ class JarvisSystemTray:
         if result == QDialog.DialogCode.Accepted and self.is_listening:
             reply = QMessageBox.question(
                 None, "🔄 Restart?",
-                "Settings saved. Restart Jarvis now to apply changes?",
+                "Settings saved. Restart Cora now to apply changes?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
@@ -1746,14 +1747,14 @@ class JarvisSystemTray:
         self.tray_icon.setIcon(icon)
 
     def toggle_listening(self) -> None:
-        """Toggle the Jarvis daemon on/off."""
+        """Toggle the Cora daemon on/off."""
         if self.is_listening:
             self.stop_daemon()
         else:
             self.start_daemon()
 
     def start_daemon(self) -> None:
-        """Start the Jarvis daemon."""
+        """Start the Cora daemon."""
         try:
             if self.is_bundled:
                 # When bundled, run daemon in a QThread since Qt components may be used
@@ -1802,7 +1803,7 @@ class JarvisSystemTray:
                             try:
                                 # Import and run the daemon
                                 from jarvis.daemon import main as daemon_main
-                                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
+                                self.log_signals.new_log.emit("🚀 Cora daemon started\n")
                                 self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
 
                                 # Run daemon - this should run the main loop
@@ -1880,7 +1881,7 @@ class JarvisSystemTray:
                 )
                 log_thread.start()
                 self.log_reader_threads.append(log_thread)
-                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
+                self.log_signals.new_log.emit("🚀 Cora daemon started\n")
 
             self.is_listening = True
             self.toggle_action.setText("⏸️ Stop Listening")
@@ -1893,7 +1894,7 @@ class JarvisSystemTray:
             self.log_viewer.activateWindow()
 
             self.tray_icon.showMessage(
-                "Jarvis Started",
+                "Cora Started",
                 "Voice assistant is now listening",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
@@ -1909,7 +1910,7 @@ class JarvisSystemTray:
             debug_log(f"failed to start daemon: {e}", "desktop")
             self.log_signals.new_log.emit(f"❌ Failed to start: {str(e)}\n{traceback.format_exc()}\n")
             self.tray_icon.showMessage(
-                "Error Starting Jarvis",
+                "Error Starting Cora",
                 f"Failed to start: {str(e)}",
                 QSystemTrayIcon.MessageIcon.Critical,
                 3000
@@ -1930,10 +1931,57 @@ class JarvisSystemTray:
             except Exception:
                 pass
 
+    # Diagnostic tee: cap and rotation so an unattended session cannot fill the disk.
+    _CALIB_LOG_NAME = "_calib-daemon.log"
+    # Loopback and private ranges are kept — they are diagnostic signal, not PII.
+    _IPV4_RE = re.compile(
+        r"\b(?!127\.0\.0\.1\b)(?!0\.0\.0\.0\b)"
+        r"(?!10\.)(?!192\.168\.)(?!172\.(?:1[6-9]|2\d|3[01])\.)"
+        r"(?:\d{1,3}\.){3}\d{1,3}\b"
+    )
+    _CALIB_LOG_MAX_BYTES = 20 * 1024 * 1024
+
+    def _open_calib_tee(self):
+        """Open the diagnostic tee file, or return None when not requested.
+
+        The daemon writes to a pipe owned by this process (consumed above for
+        the Log Viewer), so nothing outside can capture it. This mirrors each
+        line to disk without touching Popen or the pipe itself.
+        """
+        if os.environ.get("JARVIS_VOICE_DEBUG") != "1":
+            return None
+        try:
+            path = Path(__file__).resolve().parents[2] / self._CALIB_LOG_NAME
+            # Rotate rather than truncate, so a previous run stays inspectable.
+            if path.exists() and path.stat().st_size > self._CALIB_LOG_MAX_BYTES:
+                backup = path.with_suffix(path.suffix + ".1")
+                try:
+                    if backup.exists():
+                        backup.unlink()
+                    path.rename(backup)
+                except Exception:
+                    pass
+            # buffering=1 -> line buffered, so the file is tailable live.
+            handle = open(path, "a", encoding="utf-8", buffering=1, errors="replace")
+            handle.write(f"\n--- daemon log capture started (pid {os.getpid()}) ---\n")
+            handle.flush()
+            debug_log(f"diagnostic tee active: {path}", "desktop")
+            return handle
+        except Exception as e:
+            debug_log(f"diagnostic tee unavailable: {e}", "desktop")
+            return None
+
     def _read_daemon_logs(self) -> None:
         """Read logs from daemon subprocess in a background thread."""
         if not self.daemon_process or not self.daemon_process.stdout:
             return
+
+        tee = self._open_calib_tee()
+        bytes_written = 0
+        try:
+            from jarvis.utils.redact import redact as _redact
+        except Exception:
+            _redact = None
 
         try:
             while True:
@@ -1945,13 +1993,37 @@ class JarvisSystemTray:
                 # Debug: log IPC events specifically
                 if "__DIARY__:" in line:
                     debug_log(f"log reader: IPC event read: {line[:80]}...", "desktop")
+                # Log Viewer always receives the line unchanged and first, so
+                # the tee can never delay or alter what the UI shows.
                 self.log_signals.new_log.emit(line)
+                if tee is not None and bytes_written < self._CALIB_LOG_MAX_BYTES:
+                    try:
+                        # Redact before it reaches disk: tokens and keys via the
+                        # shared rules, then IPs — which redact() does not cover
+                        # and which leaked the machine's public address into a
+                        # log that gets shared.
+                        safe = _redact(line) if _redact else line
+                        safe = self._IPV4_RE.sub("[REDACTED_IP]", safe)
+                        tee.write(safe if safe.endswith("\n") else safe + "\n")
+                        tee.flush()
+                        bytes_written += len(safe)
+                    except Exception:
+                        # A failing tee must never break log reading.
+                        tee = None
         except Exception as e:
             debug_log(f"log reader error: {e}", "desktop")
             self.log_signals.new_log.emit(f"⚠️ Log reader error: {e}\n")
+        finally:
+            if tee is not None:
+                try:
+                    tee.write("--- daemon log capture ended ---\n")
+                    tee.flush()
+                    tee.close()
+                except Exception:
+                    pass
 
     def stop_daemon(self, show_diary_dialog: bool = True) -> None:
-        """Stop the Jarvis daemon.
+        """Stop the Cora daemon.
 
         Args:
             show_diary_dialog: If True (and bundled), shows a dialog with live diary update progress.
@@ -1967,7 +2039,7 @@ class JarvisSystemTray:
             if self.is_bundled and self.daemon_thread:
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
-                self.log_signals.new_log.emit("⏸️ Stopping Jarvis daemon...\n")
+                self.log_signals.new_log.emit("⏸️ Stopping Cora daemon...\n")
 
                 # Show diary update dialog for bundled app
                 if show_diary_dialog:
@@ -2180,13 +2252,13 @@ class JarvisSystemTray:
             self.update_icon()
 
             self.tray_icon.showMessage(
-                "Jarvis Stopped",
+                "Cora Stopped",
                 "Voice assistant is no longer listening",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
             )
 
-            self.log_signals.new_log.emit("⏸️ Jarvis daemon stopped\n")
+            self.log_signals.new_log.emit("⏸️ Cora daemon stopped\n")
             debug_log("daemon stopped from desktop app", "desktop")
 
         except Exception as e:
@@ -2205,7 +2277,7 @@ class JarvisSystemTray:
                 # Thread has terminated
                 self._on_daemon_finished()
                 self.tray_icon.showMessage(
-                    "Jarvis Stopped",
+                    "Cora Stopped",
                     "Voice assistant process ended unexpectedly",
                     QSystemTrayIcon.MessageIcon.Warning,
                     3000
@@ -2224,7 +2296,7 @@ class JarvisSystemTray:
                     self.update_icon()
 
                     self.tray_icon.showMessage(
-                        "Jarvis Stopped",
+                        "Cora Stopped",
                         "Voice assistant process ended unexpectedly",
                         QSystemTrayIcon.MessageIcon.Warning,
                         3000
@@ -2275,7 +2347,7 @@ def main() -> int:
     # Single-instance check
     # This prevents multiple tray icons and log windows from spawning
     if not acquire_single_instance_lock():
-        print("⚠️ Another instance of Jarvis Desktop is already running.", flush=True)
+        print("⚠️ Another instance of Cora Desktop is already running.", flush=True)
 
         # Create a minimal QApplication for the dialog
         from PyQt6.QtWidgets import QApplication
@@ -2324,7 +2396,7 @@ def main() -> int:
     # Register clean exit handler
     atexit.register(mark_session_clean_exit)
 
-    print("Starting Jarvis Desktop App...", flush=True)
+    print("Starting Cora Desktop App...", flush=True)
     print(f"Python executable: {sys.executable}", flush=True)
     print(f"Working directory: {os.getcwd()}", flush=True)
     print(f"__file__: {__file__}", flush=True)
@@ -2627,14 +2699,14 @@ def main() -> int:
             splash.set_status("Model check complete!")
             app.processEvents()
 
-        splash.set_status("Loading Jarvis...")
+        splash.set_status("Loading Cora...")
         print("Initializing JarvisSystemTray...", flush=True)
         tray_instance = JarvisSystemTray()
         print("JarvisSystemTray initialized successfully", flush=True)
 
         # Always auto-start listening (logs will be shown via start_daemon)
         splash.set_status("Starting voice assistant...")
-        print("🚀 Auto-starting Jarvis listener...", flush=True)
+        print("🚀 Auto-starting Cora listener...", flush=True)
         tray_instance.start_daemon()
 
         # Close splash screen
@@ -2644,7 +2716,7 @@ def main() -> int:
             # Show notification with log file location
             from PyQt6.QtWidgets import QSystemTrayIcon
             tray_instance.tray_icon.showMessage(
-                "Jarvis Started",
+                "Cora Started",
                 f"Crash logs available at:\n{crash_log_file}",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000
@@ -2665,8 +2737,8 @@ def main() -> int:
 
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Icon.Critical)
-            msg.setWindowTitle("Jarvis Desktop App Error")
-            msg.setText("Failed to start Jarvis Desktop App")
+            msg.setWindowTitle("Cora Desktop App Error")
+            msg.setText("Failed to start Cora Desktop App")
             msg.setDetailedText(str(e) + "\n\n" + traceback.format_exc())
             if crash_log_file:
                 msg.setInformativeText(f"Check log file at:\n{crash_log_file}")
