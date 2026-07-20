@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests  # noqa: F401  — re-exported for test patching, see module docstring
 
 from .backend import LLMBackend, ToolsNotSupportedError
-from .ollama import OllamaBackend, extract_text_from_response
+from .ollama import OllamaBackend, check_version, extract_text_from_response
 from .openai_compatible import OpenAICompatibleBackend, ServerCapabilities
 from .factory import get_embedding_backend, get_llm_backend
 from .tiers import Tier, resolve_model
@@ -41,6 +41,7 @@ __all__ = [
     "ServerCapabilities",
     "Tier",
     "ToolsNotSupportedError",
+    "check_version",
     "get_llm_backend",
     "get_embedding_backend",
     "resolve_model",

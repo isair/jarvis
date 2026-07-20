@@ -167,16 +167,8 @@ def check_ollama_server() -> Tuple[bool, Optional[str]]:
     except Exception:
         base_url = "http://127.0.0.1:11434"
 
-    try:
-        response = requests.get(f"{base_url}/api/version", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            version = data.get("version", "unknown")
-            return True, version
-    except Exception:
-        pass
-
-    return False, None
+    from jarvis.llm.ollama import check_version
+    return check_version(base_url, timeout=5.0)
 
 
 def get_required_models() -> List[str]:

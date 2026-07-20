@@ -23,6 +23,25 @@ from ..debug import debug_log
 from .backend import LLMBackend, ToolsNotSupportedError
 
 
+def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None]:
+    """Probe ``GET /api/version`` and return ``(True, version_str)`` if the
+    endpoint responds as an Ollama server, or ``(False, None)`` on failure or
+    non-Ollama response."""
+    try:
+        resp = requests.get(f"{base_url}/api/version", timeout=timeout)
+        if resp.status_code != 200:
+            return False, None
+        data = resp.json()
+        if not isinstance(data, dict):
+            return False, None
+        version = data.get("version")
+        if not isinstance(version, str) or not version:
+            return False, None
+        return True, version
+    except Exception:
+        return False, None
+
+
 def extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
     """Extract text from an LLM chat response across known shapes.
 
@@ -322,13 +341,8 @@ class OllamaBackend(LLMBackend):
             # Verify the server is actually Ollama before warming up —
             # a non-Ollama HTTP server on the same port could return 200
             # to the generate POST and produce a false positive.
-            version_resp = requests.get(
-                f"{self._base_url}/api/version", timeout=timeout_sec
-            )
-            if version_resp.status_code != 200:
-                return False
-            version_data = version_resp.json()
-            if not isinstance(version_data, dict) or "version" not in version_data:
+            ok, _ = check_version(self._base_url, timeout=min(timeout_sec, 5.0))
+            if not ok:
                 return False
 
             resp = requests.post(
