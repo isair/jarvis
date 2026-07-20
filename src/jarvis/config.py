@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -292,6 +293,10 @@ def _load_json(path: Path) -> Dict[str, Any]:
 def _save_json(path: Path, data: Dict[str, Any]) -> bool:
     """Save config data to JSON file. Returns True on success.
 
+    Writes to a temp file in the same directory and ``os.replace()``s it
+    over the target, so a crash mid-write leaves the existing config
+    untouched instead of truncated.
+
     Restricts the saved file to ``0o600`` on POSIX so credentials in
     config (``llm_api_key``, ``embedding_api_key``, ``brave_search_api_key``)
     are not readable by other users on multi-user systems. ``chmod`` is a
@@ -300,12 +305,24 @@ def _save_json(path: Path, data: Dict[str, Any]) -> bool:
     """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        tmp_path = Path(tmp_name)
         try:
-            path.chmod(0o600)
-        except OSError:
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            try:
+                tmp_path.chmod(0o600)
+            except OSError:
+                pass
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise
         return True
     except Exception:
         return False
