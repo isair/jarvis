@@ -176,9 +176,9 @@ class Settings:
     echo_energy_threshold: float
     echo_tolerance: float
 
-    # Fast tier — the small, warm, low-latency model behind every real-time
-    # classification pass: voice intent judging, tool routing, memory
-    # enrichment extraction, graph placement, digests, plan-step resolution.
+    # Fast tier — the small, warm, low-latency model behind the real-time
+    # classification passes (the Model tiers table in llm.spec.md is the
+    # authoritative context list).
     # Always resolved at config load: an explicit user value wins; unset
     # resolves to the small Ollama default on the Ollama chat path and to
     # the active chat model on an OpenAI-compatible provider. Read via
@@ -769,9 +769,9 @@ def load_settings() -> Settings:
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
-    # Fast tier — the small, warm model behind every real-time classification
-    # pass (voice intent, tool routing, enrichment extraction, graph
-    # placement, digests, plan-step resolution). An explicit value wins; the
+    # Fast tier — the small, warm model behind the real-time classification
+    # passes (see the Model tiers table in llm.spec.md for the context
+    # list). An explicit value wins; the
     # automatic default is the small Ollama pull on the Ollama chat path and
     # the active chat model on an OpenAI-compatible provider, where that
     # pull-name does not exist and the chat model is the one name the user's

@@ -3,8 +3,8 @@
 Jarvis needs exactly two inference tiers plus embeddings:
 
 - **FAST** — small, warm, low-latency model for real-time classification
-  work: voice intent judging, tool routing, memory-enrichment extraction,
-  graph placement, plan-step resolution, digests. Tiny strict-JSON outputs.
+  work with tiny strict-JSON outputs (the Model tiers table in llm.spec.md
+  is the authoritative context list).
 - **CHAT** — the capable model that writes replies, plans, summarises and
   extracts knowledge.
 
@@ -137,6 +137,20 @@ class TestV3Migration:
         on_disk = json.loads(cfg_path.read_text())
         assert on_disk["fast_model"] == "already-chosen"
         assert "intent_judge_model" not in on_disk
+
+    def test_v1_config_with_explicit_judge_composes_to_fast_model(self, tmp_path, monkeypatch):
+        """An old install (pre-v2 config) with a chosen judge model, upgraded
+        across both migrations in one load, keeps its model on the fast tier."""
+        settings, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
+            "ollama_chat_model": "gpt-oss:20b",
+            "intent_judge_model": "my-judge",
+        }, version=1)
+        assert settings.fast_model == "my-judge"
+        on_disk = json.loads(cfg_path.read_text())
+        assert on_disk["fast_model"] == "my-judge"
+        assert on_disk["_config_version"] >= 3
+        # The v2 promotion still happened alongside.
+        assert on_disk["llm_chat_model"] == "gpt-oss:20b"
 
     def test_default_ollama_judge_value_does_not_promote(self, tmp_path, monkeypatch):
         """A v2 config carrying the old *default* judge value (written by an

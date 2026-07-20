@@ -1878,9 +1878,9 @@ class ModelsPage(QWizardPage):
             self._model_buttons[model_id] = btn
             selection_layout.addWidget(btn)
 
-        # VRAM note — explains that VRAM values include the always-loaded intent judge
+        # VRAM note — explains that VRAM values include the always-loaded fast model
         ram_note = QLabel(
-            "ℹ️ VRAM values include the intent judge model (gemma4:e2b) "
+            "ℹ️ VRAM values include the fast model (gemma4:e2b) "
             "which is always loaded for voice intent classification."
         )
         ram_note.setWordWrap(True)

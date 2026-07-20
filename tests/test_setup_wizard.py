@@ -168,6 +168,19 @@ class TestGetRequiredModels:
             assert "nomic-embed-text" in models
             assert "gemma4:e2b" in models  # the fast model is always required
 
+    def test_fast_model_equal_to_chat_is_not_duplicated(self):
+        """When the fast model is the chat model, the pull list stays at two
+        entries — no duplicate download of the same model."""
+        mock_settings = MagicMock()
+        mock_settings.ollama_chat_model = "gemma4:e2b"
+        mock_settings.ollama_embed_model = "nomic-embed-text"
+        mock_settings.fast_model = "gemma4:e2b"
+
+        with patch("desktop_app.setup_wizard.load_settings", return_value=mock_settings):
+            models = get_required_models()
+            assert len(models) == 2
+            assert models.count("gemma4:e2b") == 1
+
     def test_returns_defaults_on_config_error(self):
         """Returns default models if config can't be loaded."""
         with patch("desktop_app.setup_wizard.load_settings", side_effect=Exception("Config error")):

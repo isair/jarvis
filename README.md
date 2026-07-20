@@ -225,6 +225,7 @@ For reference, the underlying config keys are:
 - `llm_base_url`: your server's OpenAI API base URL.
 - `llm_api_key`: only if your server requires one; leave empty otherwise.
 - `llm_chat_model`: whatever model name your server exposes.
+- `fast_model` (optional): the small, quick model used for real-time work (voice intent, tool routing, quick classifications). Leave empty for automatic: `gemma4:e2b` on Ollama, your chat model on an OpenAI-compatible server. Set it to pin a dedicated small model.
 
 **Embeddings** (used for memory search) can run on a different backend. If your chat server has no embeddings endpoint, memory falls back to keyword search. To keep full semantic memory, route embeddings to Ollama (the wizard offers this automatically when it detects a server that cannot embed):
 

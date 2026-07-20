@@ -3,12 +3,15 @@
 Jarvis runs every LLM context on one of two models:
 
 - ``Tier.FAST`` — the small, warm, low-latency model behind real-time
-  classification passes: voice intent judging, tool routing, memory
-  enrichment extraction, graph placement, digests, plan-step resolution.
-  These contexts take a few thousand tokens in and emit tiny strict-JSON
-  answers, so latency dominates and a ~2B model is ideal.
+  classification passes. These contexts take a few thousand tokens in and
+  emit tiny strict-JSON answers, so latency dominates and a ~2B model is
+  ideal.
 - ``Tier.CHAT`` — the capable model that writes replies, plans,
   summarises, and extracts knowledge. Long-form output; quality dominates.
+
+The Model tiers table in ``llm.spec.md`` is the authoritative list of
+which context runs on which tier; docstrings elsewhere point here rather
+than re-enumerating it.
 
 Both fields are fully resolved at config load (``fast_model`` /
 ``llm_chat_model`` always hold a provider-valid model name), so resolution

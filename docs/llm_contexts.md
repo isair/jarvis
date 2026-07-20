@@ -143,7 +143,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `merge_node_data()` (system prompt at `_MERGE_SYSTEM_PROMPT`).
 - **Trigger**: **once per (node, flush)** during `update_graph_from_dialogue`. The orchestrator first applies the exact-match dedupe fast-path, then groups the remaining facts by their resolved `node_id` so a 5-fact flush hitting the User node fires one rewrite, not five. Cold-start writes (empty target node) skip straight to plain append. Also invoked with `new_facts=[]` by the `consolidate_all_populated_nodes` maintenance op (powering the memory viewer's 🧹 button) to re-apply current rules to historical data.
-- **Model**: same `picker_model` chain as #11 (small router model when configured, falls back to `cfg.llm_chat_model`). Factory-dispatched. Temperature 0 — the task is rule-following classification.
+- **Model**: same `picker_model` as #11 (the fast tier when the caller resolves it, falling back to `cfg.llm_chat_model`). Factory-dispatched. Temperature 0 — the task is rule-following classification.
 - **Inputs**: existing node `data` + the batch of new facts (zero or more) routed to that node in this flush.
 - **System prompt**: defines an ordered rule set — contradiction/reversal drops the old version, near-duplicate phrasings collapse to one, repeated daily activities consolidate into patterns, independent attributes coexist (visible contradictions are NOT silently dropped), common-knowledge facts are pruned. Demands a bare `{"facts": [...]}` JSON object. Parser tries direct `json.loads` first, then a scoped regex (no greedy `\{.*\}`) before giving up.
 - **Output**: `MergeResult(success: bool, incorporated_indices: list[int])`. The revised fact list is written back as the node's full `data`; `incorporated_indices` tells the orchestrator which inputs survived as new lines (under NFKC + casefold matching) so consolidated-out facts aren't reported as "newly stored". Subsumes per-flush supersession, near-duplicate dedupe, and ongoing consolidation in a single call. Because the latest prompt rewrites the whole node, updated conventions propagate to old data without a separate migration step.
@@ -191,7 +191,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 |---|---------|-----------|-----------|------------|
 | 1 | Main chat loop | 1-8 | No | LARGE |
 | 2 | Intent judge | 1 (voice only) | fallback available | SMALL |
-| 3 | Memory enrichment extract | 0-1 | gated by planner | SMALL (via router chain) |
+| 3 | Memory enrichment extract | 0-1 | gated by planner | SMALL (FAST tier) |
 | 4 | Memory digest | 0-N | auto by size | SMALL (uses chat model) |
 | 5 | Tool-result digest | 0-N | auto by size | SMALL (uses chat model) |
 | 6 | Max-turn digest | 0-1 | No | SMALL |
@@ -199,10 +199,10 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 8 | Tool searcher | 0-3 | model-initiated | SMALL (reuses #7) |
 | 9 | Summariser | ~1/session | No (background) | LARGE |
 | 10 | Graph extraction | ~1/session | No (background) | LARGE |
-| 11 | Graph best-child | 0-N | No (background) | SMALL (via router chain) |
-| 11b | Graph node merge | 0-N (per node, batched) | No (background) | SMALL (via router chain) |
+| 11 | Graph best-child | 0-N | No (background) | SMALL (FAST tier) |
+| 11b | Graph node merge | 0-N (per node, batched) | No (background) | SMALL (FAST tier) |
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
-| 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
+| 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | tracks chat model (CHAT tier; runs only when that model is SMALL) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
 
 ## Size-aware auto switches
