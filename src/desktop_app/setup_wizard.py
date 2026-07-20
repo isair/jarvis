@@ -167,7 +167,7 @@ def check_ollama_server() -> Tuple[bool, Optional[str]]:
     except Exception:
         base_url = "http://127.0.0.1:11434"
 
-    from jarvis.llm.ollama import check_version
+    from jarvis.llm import check_version
     return check_version(base_url, timeout=5.0)
 
 
@@ -321,6 +321,7 @@ def should_show_setup_wizard(force_server_check: bool = False) -> bool:
     Returns True only if user intervention is needed:
     - CLI not installed (user must install Ollama)
     - Models missing (user must download models)
+    - Server unreachable after auto-start already failed (force_server_check)
 
     Does NOT return True just because server isn't running,
     since the app can auto-start the server if CLI is installed.

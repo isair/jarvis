@@ -2301,19 +2301,17 @@ def _openai_compat_unreachable_message(cfg) -> str:
 
 
 def _run_setup_wizard() -> bool:
-    """Create and show the SetupWizard modally. Returns True if accepted.
-    Wraps construction in try/except so a missing PyQt6 dependency or corrupt
-    state shows a targeted message instead of propagating to the outer fatal-
-    error handler."""
+    """Create and show the SetupWizard modally. Returns True if accepted."""
     try:
+        from desktop_app.setup_wizard import SetupWizard
         wizard = SetupWizard()
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
+        return wizard.exec() == wizard.DialogCode.Accepted
     except Exception as e:
         print(f"  ❌ Failed to create setup wizard: {e}", flush=True)
         return False
-    wizard.show()
-    wizard.raise_()
-    wizard.activateWindow()
-    return wizard.exec() == wizard.DialogCode.Accepted
 
 
 def main() -> int:
@@ -2438,7 +2436,7 @@ def main() -> int:
         print("  Loading setup wizard module...", flush=True)
         try:
             from desktop_app.setup_wizard import (
-                should_show_setup_wizard, SetupWizard,
+                should_show_setup_wizard,
                 check_ollama_server, check_ollama_cli,
                 get_required_models, check_installed_models,
                 resolve_ollama_path,
@@ -2615,7 +2613,7 @@ def main() -> int:
                             [ollama_path, "serve"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            creationflags=subprocess.CREATE_NO_WINDOW | 0x00000008,
+                            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
                         )
                     else:
                         # On Linux and other platforms

@@ -18,6 +18,7 @@ from jarvis.llm import (
     ToolsNotSupportedError,
     get_llm_backend,             # factory: settings → chat backend
     get_embedding_backend,       # factory: settings → embedding backend
+    check_version,               # verify a URL points to a live Ollama server
     call_llm_direct,             # base-URL helper (see below)
     call_llm_streaming,
     chat_with_messages,

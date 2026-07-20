@@ -332,19 +332,22 @@ class OllamaBackend(LLMBackend):
             return []
 
     def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
-        """Issue a minimal ``/api/generate`` request so Ollama loads ``model``
-        into resident memory with a 30-minute ``keep_alive``. Best-effort:
-        errors are swallowed so callers never crash on warmup failure."""
+        """Probe ``/api/version`` to verify the server is Ollama, then issue a
+        minimal ``/api/generate`` request so it loads ``model`` into resident
+        memory with a 30-minute ``keep_alive``.  Best-effort: errors are
+        swallowed so callers never crash on warmup failure."""
         if not self._base_url or not model:
             return False
         try:
             # Verify the server is actually Ollama before warming up —
             # a non-Ollama HTTP server on the same port could return 200
             # to the generate POST and produce a false positive.
-            ok, _ = check_version(self._base_url, timeout=min(timeout_sec, 5.0))
+            version_to = min(timeout_sec, 5.0)
+            ok, _ = check_version(self._base_url, timeout=version_to)
             if not ok:
                 return False
 
+            remaining = max(1.0, timeout_sec - version_to)
             resp = requests.post(
                 f"{self._base_url}/api/generate",
                 json={
@@ -354,7 +357,7 @@ class OllamaBackend(LLMBackend):
                     "keep_alive": "30m",
                     "options": {"num_predict": 1},
                 },
-                timeout=timeout_sec,
+                timeout=remaining,
             )
             return resp.status_code == 200
         except Exception:
