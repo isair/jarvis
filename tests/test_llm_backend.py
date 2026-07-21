@@ -502,7 +502,7 @@ class TestCheckVersion:
 
 
 # ---------------------------------------------------------------------------
-# OllamaBackend — warm_up (version check + generate ping)
+# OllamaBackend — warm_up (version check + chat ping)
 # ---------------------------------------------------------------------------
 
 
@@ -520,7 +520,7 @@ class TestOllamaBackendWarmUp:
         get_url = mock_get.call_args[0][0]
         assert "api/version" in get_url
         post_url = mock_post.call_args[0][0]
-        assert "api/generate" in post_url
+        assert "api/chat" in post_url
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
@@ -567,7 +567,7 @@ class TestOllamaBackendWarmUp:
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_fails_when_generate_fails_after_version_check(self, mock_get, mock_post):
+    def test_warmup_fails_when_chat_fails_after_version_check(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
         mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
@@ -578,7 +578,7 @@ class TestOllamaBackendWarmUp:
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_models_on_subsequent_api_call(self, mock_get, mock_post):
+    def test_warmup_sends_chat_request_with_correct_payload(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
         mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
@@ -590,6 +590,12 @@ class TestOllamaBackendWarmUp:
         assert post_body["model"] == "gemma4:e2b"
         assert post_body["keep_alive"] == "30m"
         assert post_body["stream"] is False
+        # Must use chat endpoint with messages to exercise full inference pipeline
+        assert "messages" in post_body
+        assert len(post_body["messages"]) == 2
+        assert post_body["messages"][0]["role"] == "system"
+        assert post_body["messages"][1]["role"] == "user"
+        assert post_body["options"]["num_predict"] == 1
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
