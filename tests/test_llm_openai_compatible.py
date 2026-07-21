@@ -564,42 +564,84 @@ class TestOpenAICompatibleListModels:
 
 
 # ---------------------------------------------------------------------------
-# warm_up() — reachability probe via list_models
+# warm_up() — two-phase probe: reachability + inference
 # ---------------------------------------------------------------------------
 
 
 class TestOpenAICompatibleWarmUp:
-    """``warm_up`` is a reachability probe for OpenAI-compatible servers: the
-    server keeps models resident at load time, so there is no per-call
-    unloading to counter. A failed probe (server down, wrong URL, no model
-    loaded) surfaces ``False`` so the listener can warn the user early
-    instead of waiting for the first real request to fail."""
+    """``warm_up`` is a two-phase probe for OpenAI-compatible servers: it
+    first checks reachability via ``GET /models``, then sends a minimal
+    chat completion (``max_tokens=1``) to force the runtime to load the
+    model into memory. A failure in either phase surfaces ``False`` so
+    the listener can warn the user early instead of the first real
+    request paying cold-start latency."""
 
+    # ── success paths ─────────────────────────────────────────────────
+
+    @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_succeeds_when_server_lists_models(self, mock_get):
+    def test_warmup_succeeds_when_both_phases_pass(self, mock_get, mock_post):
+        """GET /models succeeds and POST /chat/completions returns 200."""
         from jarvis.llm import OpenAICompatibleBackend
 
-        resp = MagicMock()
-        resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
-        resp.raise_for_status = MagicMock()
-        mock_get.return_value = resp
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.status_code = 200
+        mock_post.return_value = post_resp
+
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
-
         assert backend.warm_up("gpt-4o-mini") is True
+        mock_post.assert_called_once()
 
+    @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_fails_when_server_unreachable(self, mock_get):
+    def test_warmup_inference_payload_is_minimal(self, mock_get, mock_post):
+        """The inference request uses max_tokens=1 and a short message."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.status_code = 200
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        backend.warm_up("gpt-4o-mini")
+
+        _, kwargs = mock_post.call_args
+        payload = kwargs["json"]
+        assert payload["model"] == "gpt-4o-mini"
+        assert payload["messages"] == [{"role": "user", "content": "ping"}]
+        assert payload["max_tokens"] == 1
+        assert payload["stream"] is False
+
+    # ── failure in phase 1 (reachability) ─────────────────────────────
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_server_unreachable(self, mock_get, mock_post):
+        """GET fails — phase 2 (POST) should never be attempted."""
         from jarvis.llm import OpenAICompatibleBackend
 
         mock_get.side_effect = RuntimeError("connection refused")
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
 
         assert backend.warm_up("gpt-4o-mini") is False
+        mock_post.assert_not_called()
 
+    @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_fails_when_model_list_empty(self, mock_get):
+    def test_warmup_fails_when_model_list_empty(self, mock_get, mock_post):
         """An empty list means the server is up but no model is loaded —
-        the first chat call would fail, so warmup must report ``False``."""
+        the first chat call would fail, so warmup must report ``False``
+        without attempting inference."""
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
@@ -609,9 +651,12 @@ class TestOpenAICompatibleWarmUp:
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
 
         assert backend.warm_up("gpt-4o-mini") is False
+        mock_post.assert_not_called()
 
+    @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_fails_on_http_error(self, mock_get):
+    def test_warmup_fails_on_get_http_error(self, mock_get, mock_post):
+        """GET /models raises — phase 2 not attempted."""
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
@@ -620,6 +665,44 @@ class TestOpenAICompatibleWarmUp:
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
 
         assert backend.warm_up("gpt-4o-mini") is False
+        mock_post.assert_not_called()
+
+    # ── failure in phase 2 (inference) ────────────────────────────────
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_inference_returns_non_200(self, mock_get, mock_post):
+        """GET succeeds but POST returns a non-200 status."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.status_code = 500
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        assert backend.warm_up("gpt-4o-mini") is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_inference_raises(self, mock_get, mock_post):
+        """GET succeeds but POST raises an exception."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        mock_post.side_effect = RuntimeError("model load failed")
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        assert backend.warm_up("gpt-4o-mini") is False
+
+    # ── guard cases ───────────────────────────────────────────────────
 
     @patch("jarvis.llm.requests.get")
     def test_warmup_fails_for_empty_base_url(self, mock_get):

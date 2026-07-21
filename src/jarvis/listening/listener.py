@@ -1517,8 +1517,8 @@ class VoiceListener(threading.Thread):
 
         Warmup goes through ``warm_up_chat_model`` → ``LLMBackend.warm_up``,
         so it pages models into Ollama's resident memory on the Ollama path
-        and is a no-op for an OpenAI-compatible server (which keeps models
-        warm at load time). Starts up to two daemon threads concurrently so
+        and sends a minimal inference to load the model on an OpenAI-
+        compatible server. Starts up to two daemon threads concurrently so
         warmup overlaps with Whisper initialisation. When both models point
         at the same model, a single warmup covers both.
 

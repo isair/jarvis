@@ -362,15 +362,48 @@ class OpenAICompatibleBackend(LLMBackend):
             return []
 
     def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
-        """Reachability probe: list the server's models. OpenAI-compatible
-        servers keep models resident at load time, so (unlike Ollama) there
-        is no per-call unloading to counter. The probe surfaces ``False``
-        when the server is down, the URL is wrong, or no model is loaded,
-        so the listener can warn the user early instead of waiting for the
-        first real request to fail. Best-effort: errors are swallowed."""
+        """Warm up the model by sending a minimal inference request.
+
+        Phase 1 — reachability check: calls ``GET /models`` to confirm
+        the server is up and has models loaded. Fast (capped at 25 % of
+        the budget, max 5 s).
+
+        Phase 2 — model loading: sends a single-token chat completion
+        (``max_tokens=1``) so the runtime actually loads the model into
+        memory. Without this, an OpenAI-compatible server may leave the
+        model cold until the first real request, incurring latency on the
+        user's first query. This mirrors what ``OllamaBackend.warm_up()``
+        does with ``POST /api/generate``.
+
+        Best-effort: errors are swallowed; ``False`` is returned when the
+        server is unreachable, the model name is missing, or the inference
+        request fails, so the listener can warn the user early."""
         if not self._base_url or not model:
             return False
-        return bool(self.list_models(timeout_sec=min(timeout_sec, 5.0)))
+
+        # Phase 1: reachability probe (fast).
+        list_to = min(max(timeout_sec * 0.25, 1.0), 5.0)
+        if not self.list_models(timeout_sec=list_to):
+            return False
+
+        # Phase 2: minimal inference to force model loading.
+        remaining = max(1.0, timeout_sec - list_to)
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "stream": False,
+        }
+        try:
+            resp = requests.post(
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=self._headers(),
+                timeout=remaining,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     def check_capabilities(
         self,
