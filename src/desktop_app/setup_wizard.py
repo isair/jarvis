@@ -1085,6 +1085,7 @@ class OpenAICompatiblePage(QWizardPage):
         ("Jan", "http://localhost:1337/v1"),
         ("llama.cpp / LocalAI", "http://localhost:8080/v1"),
         ("vLLM", "http://localhost:8000/v1"),
+        ("oMLX (ol.mlx)", "http://localhost:9876/v1"),
     ]
 
     def __init__(self, parent=None):
