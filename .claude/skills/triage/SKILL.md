@@ -168,6 +168,13 @@ loaded, Whisper is installed. If a `📝 Heard:` line exists, the system heard
 speech — do not ask "did it hear you?". Read the log, identify the branch, and
 diagnose.
 
+**If you realise you were wrong, edit — do not stack.** A single clean comment
+with the correct diagnosis is always better than the original plus two
+follow-ups saying "actually..." and "scratch that...". If you're not confident
+in the diagnosis, re-read the log before posting rather than guessing and
+correcting later. The thread is public and every "sorry, let me correct myself"
+undermines trust in the triage.
+
 ### Other recurring user-environment answers
 
 - **Windows "Error 4551: Application Control policy has blocked this file"**: WDAC / AppLocker / corporate MDM, not Jarvis. Point at IT allow-listing, `secpol.msc`, or install-from-source.
@@ -233,8 +240,11 @@ If a `body` you want to post starts with `@`, use `-f body="..."`, not `-F body=
 ## Step 6. Clean up your own past comments
 
 If a previous owner comment was premature, wrong, or asked an
-obviously-answered question, **edit it in place**. A clean thread beats a trail
-of self-corrections.
+obviously-answered question, **edit it in place** and **delete any follow-up
+correction comments** you left. A clean thread beats a trail of
+self-corrections. If you stacked "actually..." or "scratch that..." comments
+after the original, delete them once the first comment is accurate — the thread
+should read as if you got it right the first time.
 
 Issue comment edit:
 
