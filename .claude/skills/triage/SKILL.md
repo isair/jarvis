@@ -67,25 +67,98 @@ you?" when a `Heard:` line proves it did.
 
 ## Step 3. Diagnose from the log
 
-Common Jarvis patterns and what they mean:
+Read every line of the log. Do not skip what looks like normal startup — the
+answer is almost always there. Follow this diagnosis flow:
 
-| Symptom in log | Likely cause | Ask for |
-|----------------|--------------|---------|
-| `📝 Heard: "...George..."` or `"...Georg..."` | Whisper heard speech but transcribed the wake word "Jarvis" as "George" (a very common phonetic confusion). The wake word itself matched nothing. | Ask what wake word they're saying and confirm it matches the configured wake word in Settings. Point out that "George" is a known Whisper mishearing of "Jarvis". |
-| Repeated `📝 Heard: "Thank you."`, `"you..."`, `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Ask them to check the input level bar (Windows Sound settings, or macOS System Settings → Sound → Input) actually moves when they speak, and confirm which mic they intend to use. |
-| `🧠 Intent judge: unavailable (timeout or error)` | Known; improved in v1.25.1 (bump this version as newer fixes ship). | Version they're on, and retry on latest. |
-| `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Download-time crash, platform-specific. Not the same as 429 throttling. | Keep open as its own bug. Workaround: manual `ollama pull ...` and relaunch. |
-| `LLM connection error: ... RemoteDisconnected` | Ollama dropped. Upstream, not Jarvis. | `ollama run <model>` health check; Ollama version. |
-| `setup_wizard.py ... _install_next_model` fatal | Real bug on our side. | Which model had just finished, which was about to start; `ollama list` after crash; `~/Library/Logs/DiagnosticReports/Jarvis-*.ips` on macOS. |
-| `Low confidence` lines only, no `Heard:` ever | Mic is captured but utterances are under the confidence floor. Usually mic placement or wrong device. | Same as first row. |
-| `📍 Location features are not available` | Not an error. Location is optional and only affects weather / local-time context. | Reassure, don't diagnose. Point at the MaxMind GeoLite2 signup if they actually want it. |
+### Quick-reference symptom table
+
+| Symptom in log | Likely cause | Action |
+|----------------|--------------|--------|
+| `📝 Heard: "...George..."` or `"...Georg..."` | Wake word "Jarvis" misheard as "George" by Whisper (very common phonetic confusion). | Tell them to use the correct wake word. |
+| `📝 Heard: "Jarvis, ..."` then `🧠 Intent judge: unavailable (timeout)` | Intent judge model too slow for hardware. Usually CPU-only or large model mismatch. | Advise running setup wizard lowest option. |
+| `📝 Heard: "Jarvis, ..."` then `⏱️ LLM request timed out` | Chat model too slow for hardware. Same root cause as above. | Advise running setup wizard lowest option. |
+| Repeated `📝 Heard: "Thank you."` / `"you..."` / `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Check input level in OS sound settings; confirm intended mic. |
+| `Low confidence` lines only, no `Heard:` ever | Mic captures audio but utterances are under the confidence floor. Wrong device or mic placement. | Same as above. |
+| `⚠️  Chat model '...' warmup failed` + `⚠️  Intent judge '...' warmup failed` + CPU mode | Two different model variants (e.g. gemma4:e4b for chat, gemma4:e2b for intent) competing on CPU. | Run setup wizard lowest option to use one model for everything. |
+| Normal startup log, zero interaction lines (`📝 Heard:`, `🧠 Intent judge:`, `💬 Generating`) | User never spoke after launch, or didn't use the wake word. This is by far the most common. | Ask what they said and whether they said "Jarvis" first. |
+| `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Platform-specific download crash. | Manual `ollama pull ...` workaround. |
+| `LLM connection error: ... RemoteDisconnected` | Ollama process crashed or unreachable. | `ollama run <model>` health check; Ollama version. |
+| Piper voice download stuck (percentage stops advancing) | First-run ~60 MB TTS voice download with slow/unstable connection. | Wait or relaunch; check internet. |
+| `❌ Failed to load Whisper model: ConnectTimeout` | HF blocked by firewall (common in China). | `HF_ENDPOINT=https://hf-mirror.com` env var or VPN. |
+| `❌ Microphone permission check failed: Error querying device -1` | No microphone detected on Windows. | Check Windows Sound Settings for input devices. |
+| `🔊 Downloading Piper voice` line at startup, nothing after | First launch — Piper voice is still downloading. Normal, just slow. | Reassure, ask them to wait or relaunch. |
+| `🗑️ Logs Cleared` or empty bug template | User cleared logs before filing, or the template was submitted unfilled. No data to diagnose. | Label `bug,question`, ask for description and fresh logs. |
+| `📍 Location features are not available` | Not an error. Location is optional. | Reassure, point at MaxMind GeoLite2 signup if they want it. |
+| `Fatal Python error: Aborted` during setup wizard launch | macOS app bundle crash during first-run wizard. | Ask for macOS version, system crash reports, Ollama status. |
+| `Fatal Python error: Illegal instruction` in pynput | macOS dictation keyboard listener incompatibility. | Suggest disabling dictation in settings. |
+| `mkl_malloc: failed to allocate memory` when loading Whisper | Intel MKL memory allocation failure. | Try CPU-only mode or run setup wizard again. |
+
+### Diagnosis flow (read in this order)
+
+**1. Check for `📝 Heard:` lines.** These are the most actionable signal.
+
+- **No `📝 Heard:` line at all** — the user never spoke to Jarvis, or their
+  mic isn't capturing speech. Either:
+  - They don't know to use the wake word (common — log shows healthy startup,
+    no interaction)
+  - Mic is wrong/broken (check for "Error querying device" or "Low confidence")
+  - Mic permissions denied
+  → Ask what they said, whether they said "Jarvis" first, and for fresh logs.
+
+- **`📝 Heard:` line exists** — the system detected speech. Check *what* it heard:
+  - **"George" / "Georg"** — the wake word "Jarvis" was misheard by Whisper.
+    Point it out directly.
+  - **Wake word present** (e.g. "Jarvis, open Chrome") — good. Move to step 2.
+  - **Random words, no wake word** — user didn't use the wake word. Explain it.
+  - **"Thank you" / "you..." / "Thanks for watching"** — Whisper hallucinating
+    on silent audio. Wrong mic device. Troubleshoot mic.
+
+**2. Check what happened after the `Heard:` line.**
+
+- **`🧠 Intent judge: unavailable (timeout after 15.0s)`** — the intent judge
+  model is too slow for the hardware. Usually CPU-only or large model mismatch.
+  → Advise setup wizard lowest option.
+
+- **`⏱️ LLM request timed out`** — the chat model is too slow. Same cause.
+  → Same advice: setup wizard lowest option.
+
+- **`✨ Working on it:` followed by a response** — everything worked. The issue
+  may be intermittent. Ask for the exact scenario that failed.
+
+- **Nothing after `Heard:`** — log truncated or cleared. Ask for fresh logs.
+
+**3. Check startup for model loading issues.**
+
+- `⚠️ ... warmup failed` with **CPU mode** and **two different models** loaded
+  (e.g. `gemma4:e4b` for chat, `gemma4:e2b` for intent): two variants competing
+  on CPU overwhelms most machines.
+  → Advise setup wizard lowest option to unify on `gemma4:2b`.
+
+- `⚠️ ... warmup failed` but everything else healthy and no interaction lines:
+  warmup failures are non-fatal (models load on first use). The real issue is
+  likely step 1 (no wake word). Focus on that, not the warnings.
+
+**4. Check for download failures (common on first run).**
+
+- Piper voice stuck: first-run ~60 MB download, slow connection.
+- Whisper model download timeout: HF blocked (China) or slow network.
+- HuggingFace hub errors.
+
+**5. Startup looks perfectly normal, no errors, no interaction lines.**
+
+This is the most common pattern. Everything loaded and is listening, but zero
+`📝 Heard:` or `🧠 Intent judge:` lines. The user almost certainly never tried
+speaking, or didn't use the wake word.
+  → Do not ask about warmup warnings or model config. Ask what they said and
+    whether they said "Jarvis" first.
 
 **Do not ask obviously-answered questions.** If the log shows the wizard was
-pulling models, Ollama is by definition installed and running. If the log shows
-Whisper loaded, Whisper is installed. If the log shows a `📝 Heard:` line, the
-system heard speech — do not ask "did it hear you?". Read before asking.
+pulling models, Ollama is by definition installed and running. If Whisper
+loaded, Whisper is installed. If a `📝 Heard:` line exists, the system heard
+speech — do not ask "did it hear you?". Read the log, identify the branch, and
+diagnose.
 
-Other recurring user-environment answers:
+### Other recurring user-environment answers
 
 - **Windows "Error 4551: Application Control policy has blocked this file"**: WDAC / AppLocker / corporate MDM, not Jarvis. Point at IT allow-listing, `secpol.msc`, or install-from-source.
 - **"missing AI models"**: `ollama pull gemma4:e2b` + `ollama pull nomic-embed-text`, or tray → 🔧 Setup Wizard.
