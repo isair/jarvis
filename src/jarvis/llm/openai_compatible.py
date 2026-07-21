@@ -30,7 +30,7 @@ import json
 import requests
 
 from ..debug import debug_log
-from .backend import LLMBackend, ToolsNotSupportedError
+from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
 @dataclass
@@ -247,9 +247,10 @@ class OpenAICompatibleBackend(LLMBackend):
         tools: Optional[List[Dict[str, Any]]] = None,
         thinking: bool = False,
     ) -> Optional[Dict[str, Any]]:
+        sanitised = strip_nonstandard_message_fields(messages)
         payload: Dict[str, Any] = {
             "model": chat_model,
-            "messages": messages,
+            "messages": sanitised,
             "stream": False,
         }
         if extra_options and isinstance(extra_options, dict):

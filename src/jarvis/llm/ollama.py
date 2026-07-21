@@ -20,7 +20,7 @@ import json
 import requests
 
 from ..debug import debug_log
-from .backend import LLMBackend, ToolsNotSupportedError
+from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
 def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None]:
@@ -236,9 +236,10 @@ class OllamaBackend(LLMBackend):
         models like ``gemma4:e2b`` then fall back to pre-trained
         ``tool_code`` scaffolding instead of producing valid tool calls.
         """
+        sanitised = strip_nonstandard_message_fields(messages)
         payload: Dict[str, Any] = {
             "model": chat_model,
-            "messages": messages,
+            "messages": sanitised,
             "stream": False,
             "options": {"num_ctx": 8192},
             "think": thinking,

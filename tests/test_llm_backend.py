@@ -670,3 +670,195 @@ class TestFunctionStyleEntryPoints:
         from jarvis.llm import extract_text_from_response
 
         assert extract_text_from_response({"message": {"content": "hi"}}) == "hi"
+
+
+class TestStripNonstandardMessageFields:
+    """``strip_nonstandard_message_fields`` strips engine-internal annotation
+    fields from each message, keeping only the subset allowed by the OpenAI
+    Chat Completions schema for that role."""
+
+    def test_removes_tool_failed_from_tool_message(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "sunny, 22°C",
+                "tool_name": "getWeather",
+                "tool_failed": False,
+            }
+        ]
+        result = strip_nonstandard_message_fields(messages)
+
+        assert result[0] == {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "sunny, 22°C",
+        }
+
+    def test_removes_tool_name_and_is_context_injected_from_system(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+                "_is_context_injected": True,
+            }
+        ]
+        result = strip_nonstandard_message_fields(messages)
+
+        assert result[0] == {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        }
+
+    def test_preserves_allowed_assistant_fields(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"type": "function", "function": {"name": "getWeather"}}],
+                "unknown_field": "should_be_removed",
+            }
+        ]
+        result = strip_nonstandard_message_fields(messages)
+
+        assert "unknown_field" not in result[0]
+        assert result[0]["role"] == "assistant"
+        assert result[0]["content"] == ""
+        assert len(result[0]["tool_calls"]) == 1
+
+    def test_preserves_user_content(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        messages = [{"role": "user", "content": "How's the weather?", "tool_name": "getWeather"}]
+        result = strip_nonstandard_message_fields(messages)
+
+        assert result[0] == {"role": "user", "content": "How's the weather?"}
+
+    def test_preserves_unknown_role_unchanged(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        messages = [{"role": "developer", "content": "some instruction", "custom": True}]
+        result = strip_nonstandard_message_fields(messages)
+
+        assert result[0] == messages[0]
+
+    def test_original_messages_not_mutated(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        original = [
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": "data",
+                "tool_name": "getWeather",
+                "tool_failed": False,
+            }
+        ]
+        original_copy = [dict(m) for m in original]
+
+        strip_nonstandard_message_fields(original)
+
+        assert original == original_copy
+
+    def test_multiple_messages_in_sequence(self):
+        from jarvis.llm.backend import strip_nonstandard_message_fields
+
+        messages = [
+            {"role": "system", "content": "Be helpful.", "_is_context_injected": True},
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"type": "function", "function": {"name": "x"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": "result",
+                "tool_name": "x",
+                "tool_failed": False,
+            },
+        ]
+        result = strip_nonstandard_message_fields(messages)
+
+        assert len(result) == 4
+        assert "_is_context_injected" not in result[0]
+        assert "tool_name" not in result[3]
+        assert "tool_failed" not in result[3]
+        assert result[3]["role"] == "tool"
+        assert result[3]["tool_call_id"] == "c1"
+        assert result[3]["content"] == "result"
+
+
+class TestOllamaBackendSanitizesMessages:
+    """OllamaBackend.chat() strips non-standard fields from messages before
+    sending them to the wire."""
+
+    @patch("jarvis.llm.ollama.requests.post")
+    def test_tool_name_not_in_wire_payload(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(
+            json_data={"message": {"content": "done", "tool_calls": []}}
+        )
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat(
+            "gemma4:e2b",
+            [
+                {"role": "user", "content": "How's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "1", "type": "function", "function": {"name": "getWeather"}}],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "1",
+                    "content": "Error: no location",
+                    "tool_name": "getWeather",
+                    "tool_failed": True,
+                },
+            ],
+        )
+
+        sent = mock_post.call_args.kwargs["json"]
+        tool_msg = sent["messages"][2]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["tool_call_id"] == "1"
+        assert tool_msg["content"] == "Error: no location"
+        assert "tool_name" not in tool_msg, "tool_name field must be stripped"
+        assert "tool_failed" not in tool_msg, "tool_failed field must be stripped"
+
+    @patch("jarvis.llm.ollama.requests.post")
+    def test_system_is_context_injected_stripped(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(
+            json_data={"message": {"content": "hello", "tool_calls": []}}
+        )
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat(
+            "gemma4:e2b",
+            [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant.",
+                    "_is_context_injected": True,
+                },
+                {"role": "user", "content": "Hi"},
+            ],
+        )
+
+        sent = mock_post.call_args.kwargs["json"]
+        sys_msg = sent["messages"][0]
+        assert sys_msg["role"] == "system"
+        assert sys_msg["content"] == "You are a helpful assistant."
+        assert "_is_context_injected" not in sys_msg
