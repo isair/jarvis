@@ -180,6 +180,26 @@ class Settings:
     # the LLM. False restores upstream behaviour (everything goes to the model).
     local_answers_enabled: bool
 
+    # Cora Learning Loop v1 — structured lessons after conversation end.
+    # Default false until live validation. Never auto-edits code/config/models.
+    conversation_learning_enabled: bool
+    conversation_learning_mode: str  # "safe_auto"
+    conversation_learning_max_items: int
+    conversation_learning_timeout_sec: float
+    conversation_learning_min_recurrences: int
+
+    # OpenAI Realtime premium voice backend (default off). API key is read
+    # only from Windows Credential Manager target ``Cora.OpenAI`` — never from
+    # config.json / .env / DB.
+    openai_realtime_enabled: bool
+    openai_realtime_model: str
+    openai_realtime_transcription_model: str
+    openai_realtime_voice: str
+    openai_realtime_language: str
+    openai_realtime_idle_timeout_sec: float
+    openai_realtime_fallback_local: bool
+    openai_realtime_require_wake_each_turn: bool
+
     # Assistant persona variant: "butler" (upstream British-butler persona) or
     # "professional". Anything unrecognised falls back to "butler".
     assistant_style: str
@@ -496,6 +516,23 @@ def get_default_config() -> Dict[str, Any]:
         # Persona variant: "butler" (upstream) or "professional".
         "assistant_style": "butler",
         "local_answers_enabled": True,
+        # Cora Learning Loop v1 — default off until live validation
+        "conversation_learning_enabled": False,
+        "conversation_learning_mode": "safe_auto",
+        "conversation_learning_max_items": 4,
+        "conversation_learning_timeout_sec": 12.0,
+        "conversation_learning_min_recurrences": 3,
+
+        # OpenAI Realtime premium (off until paid live test)
+        "openai_realtime_enabled": False,
+        "openai_realtime_model": "gpt-realtime-2.1",
+        "openai_realtime_transcription_model": "gpt-4o-transcribe",
+        "openai_realtime_voice": "marin",
+        "openai_realtime_language": "ro",
+        "openai_realtime_idle_timeout_sec": 60.0,
+        "openai_realtime_fallback_local": True,
+        "openai_realtime_require_wake_each_turn": True,
+
         # Single-flight capture gate.
         "post_tts_cooldown_sec": 0.5,
         "min_voiced_ms": 250,
@@ -748,6 +785,36 @@ def load_settings() -> Settings:
     min_voiced_ms = max(0.0, float(merged.get("min_voiced_ms", 250)))
 
     local_answers_enabled = bool(merged.get("local_answers_enabled", True))
+    conversation_learning_enabled = bool(merged.get("conversation_learning_enabled", False))
+    conversation_learning_mode = str(merged.get("conversation_learning_mode", "safe_auto") or "safe_auto").strip().lower()
+    if conversation_learning_mode not in ("safe_auto",):
+        conversation_learning_mode = "safe_auto"
+    conversation_learning_max_items = max(1, int(merged.get("conversation_learning_max_items", 4)))
+    conversation_learning_timeout_sec = float(merged.get("conversation_learning_timeout_sec", 12.0))
+    conversation_learning_min_recurrences = max(2, int(merged.get("conversation_learning_min_recurrences", 3)))
+    openai_realtime_enabled = bool(merged.get("openai_realtime_enabled", False))
+    openai_realtime_model = str(
+        merged.get("openai_realtime_model", "gpt-realtime-2.1") or "gpt-realtime-2.1"
+    ).strip()
+    openai_realtime_transcription_model = str(
+        merged.get("openai_realtime_transcription_model", "gpt-4o-transcribe")
+        or "gpt-4o-transcribe"
+    ).strip()
+    openai_realtime_voice = str(
+        merged.get("openai_realtime_voice", "marin") or "marin"
+    ).strip()
+    openai_realtime_language = str(
+        merged.get("openai_realtime_language", "ro") or "ro"
+    ).strip().lower()
+    openai_realtime_idle_timeout_sec = float(
+        merged.get("openai_realtime_idle_timeout_sec", 60.0)
+    )
+    openai_realtime_fallback_local = bool(
+        merged.get("openai_realtime_fallback_local", True)
+    )
+    openai_realtime_require_wake_each_turn = bool(
+        merged.get("openai_realtime_require_wake_each_turn", True)
+    )
 
     assistant_style = str(merged.get("assistant_style", "butler")).strip().lower()
     if assistant_style not in ("butler", "professional"):
@@ -934,6 +1001,19 @@ def load_settings() -> Settings:
 
         # Deterministic local answers
         local_answers_enabled=local_answers_enabled,
+        conversation_learning_enabled=conversation_learning_enabled,
+        conversation_learning_mode=conversation_learning_mode,
+        conversation_learning_max_items=conversation_learning_max_items,
+        conversation_learning_timeout_sec=conversation_learning_timeout_sec,
+        conversation_learning_min_recurrences=conversation_learning_min_recurrences,
+        openai_realtime_enabled=openai_realtime_enabled,
+        openai_realtime_model=openai_realtime_model,
+        openai_realtime_transcription_model=openai_realtime_transcription_model,
+        openai_realtime_voice=openai_realtime_voice,
+        openai_realtime_language=openai_realtime_language,
+        openai_realtime_idle_timeout_sec=openai_realtime_idle_timeout_sec,
+        openai_realtime_fallback_local=openai_realtime_fallback_local,
+        openai_realtime_require_wake_each_turn=openai_realtime_require_wake_each_turn,
 
         # Persona + thinking
         assistant_style=assistant_style,

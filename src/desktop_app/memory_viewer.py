@@ -244,6 +244,28 @@ def get_stats() -> Response:
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/lessons")
+def get_lessons() -> Response:
+    """List learning lessons (safe projection — no secrets/sensitive quotes)."""
+    try:
+        from jarvis.memory.db import Database
+        from jarvis.memory.learning import LearningStore
+
+        db_path = _get_db_path()
+        db = Database(db_path, sqlite_vss_path=None)
+        try:
+            store = LearningStore(db)
+            lessons = store.list_for_viewer(limit=200)
+            return jsonify({"lessons": lessons, "count": len(lessons)})
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+    except Exception as e:
+        return jsonify({"error": type(e).__name__, "lessons": [], "count": 0}), 500
+
+
 @app.route("/api/memory/<int:memory_id>")
 def get_memory(memory_id: int) -> Response:
     """Get a single memory by ID."""
@@ -2092,6 +2114,9 @@ def index() -> str:
             <button class="tab" data-tab="meals">
                 <span>🍽️</span> Meals
             </button>
+            <button class="tab" data-tab="lessons">
+                <span>📌</span> Lessons
+            </button>
         </div>
 
         <div class="tab-content">
@@ -2187,6 +2212,12 @@ def index() -> str:
                     <div class="loading"><div class="spinner"></div></div>
                 </div>
             </div>
+
+            <div id="lessons-content" class="tab-pane" style="display: none;">
+                <div class="memory-list" id="lessons-list">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -2215,9 +2246,11 @@ def index() -> str:
         const topicsCloud = document.getElementById('topics-cloud');
         const memoriesPane = document.getElementById('memories-content');
         const mealsPane = document.getElementById('meals-content');
+        const lessonsPane = document.getElementById('lessons-content');
         const graphContent = document.getElementById('graph-content');
         const memoriesContent = memoriesPane.querySelector('.memory-list');
         const mealsContent = mealsPane.querySelector('.memory-list');
+        const lessonsContent = document.getElementById('lessons-list');
         const tabs = document.querySelectorAll('.tab');
 
         // Shared utilities
@@ -2546,6 +2579,7 @@ def index() -> str:
             memoriesPane.style.display = 'none';
             graphContent.style.display = 'none';
             mealsPane.style.display = 'none';
+            lessonsPane.style.display = 'none';
 
             if (currentTab === 'memories') {
                 memoriesPane.style.display = '';
@@ -2553,9 +2587,37 @@ def index() -> str:
             } else if (currentTab === 'graph') {
                 graphContent.style.display = '';
                 initGraph();
+            } else if (currentTab === 'lessons') {
+                lessonsPane.style.display = '';
+                loadLessons();
             } else {
                 mealsPane.style.display = '';
                 loadMeals();
+            }
+        }
+
+        async function loadLessons() {
+            try {
+                const res = await fetch('/api/lessons');
+                const data = await res.json();
+                const lessons = data.lessons || [];
+                if (!lessons.length) {
+                    lessonsContent.innerHTML = '<div class="empty">No lessons yet</div>';
+                    return;
+                }
+                lessonsContent.innerHTML = lessons.map(l => `
+                    <div class="memory-card">
+                        <div class="memory-meta">
+                            <span class="badge">${l.lesson_type || ''}</span>
+                            <span class="badge">${l.status || ''}</span>
+                            <span class="muted">${l.updated_at || ''}</span>
+                        </div>
+                        <div class="memory-title">${l.subject_key || ''}</div>
+                        <div class="memory-body">confidence ${(Number(l.confidence||0)*100).toFixed(0)}% · ${l.value_preview || ''}</div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                lessonsContent.innerHTML = '<div class="empty">Failed to load lessons</div>';
             }
         }
 

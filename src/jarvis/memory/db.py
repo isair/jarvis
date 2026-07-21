@@ -60,6 +60,35 @@ CREATE TRIGGER IF NOT EXISTS summaries_au AFTER UPDATE ON conversation_summaries
   INSERT INTO summaries_fts(summaries_fts, rowid, summary, topics) VALUES('delete', old.id, old.summary, old.topics);
   INSERT INTO summaries_fts(rowid, summary, topics) VALUES (new.id, new.summary, new.topics);
 END;
+
+-- Cora Learning Loop v1: structured lessons (same profile DB; not a second store).
+-- Additive CREATE IF NOT EXISTS — compatible with existing diary/graph rows.
+CREATE TABLE IF NOT EXISTS learning_lessons (
+  id                TEXT PRIMARY KEY,
+  lesson_type       TEXT NOT NULL,
+  subject_key       TEXT NOT NULL,
+  value             TEXT NOT NULL,
+  source_quote      TEXT NOT NULL,
+  conversation_id   TEXT NOT NULL,
+  turn_id           TEXT NOT NULL,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  confidence        REAL NOT NULL,
+  sensitivity       TEXT NOT NULL DEFAULT 'normal',
+  status            TEXT NOT NULL DEFAULT 'active',
+  expires_at        TEXT,
+  namespace         TEXT NOT NULL,
+  occurrence_count  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_lessons_active
+  ON learning_lessons(status, namespace, lesson_type, subject_key);
+
+CREATE TABLE IF NOT EXISTS learning_processed_conversations (
+  conversation_id TEXT PRIMARY KEY,
+  processed_at    TEXT NOT NULL,
+  lesson_count    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 _VSS_SCHEMA_SQL = """

@@ -844,6 +844,31 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             print(f"  ⚡ Răspuns local (fără LLM): {local}", flush=True)
             return local
 
+    # Step 0b: Learning Loop voice commands (memorize / forget / what learned).
+    # Gated by conversation_learning_enabled (default false).
+    if bool(getattr(cfg, "conversation_learning_enabled", False)) and dialogue_memory is not None:
+        try:
+            from ..memory.learning import LearningStore, try_learning_command
+
+            _cid = getattr(dialogue_memory, "conversation_id", None) or "interactive"
+            cmd = try_learning_command(
+                text,
+                store=LearningStore(db),
+                dialogue_memory=dialogue_memory,
+                conversation_id=str(_cid),
+            )
+            if cmd.handled and cmd.reply:
+                debug_log("learning command handled locally", "learning")
+                print(f"  🧠 Learning command: handled", flush=True)
+                if tts is not None and getattr(tts, "enabled", False):
+                    try:
+                        tts.speak(cmd.reply)
+                    except Exception:
+                        pass
+                return cmd.reply
+        except Exception as e:
+            debug_log(f"learning command failed (ignored): {type(e).__name__}", "learning")
+
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
@@ -1501,6 +1526,31 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # below) because it must be present on every turn, not
             # gated by the planner's searchMemory decision.
             guidance.append("\n" + warm_profile_block)
+
+        # Learning Loop lessons — untrusted, relevance-gated, budgeted.
+        if bool(getattr(cfg, "conversation_learning_enabled", False)):
+            try:
+                from ..memory.learning import (
+                    LearningStore,
+                    format_lessons_for_prompt,
+                    retrieve_relevant_lessons,
+                )
+                _store = LearningStore(db)
+                _all = _store.list_active(limit=80)
+                _picked = retrieve_relevant_lessons(
+                    _all,
+                    text,
+                    max_items=int(getattr(cfg, "conversation_learning_max_items", 4)),
+                )
+                _block = format_lessons_for_prompt(_picked)
+                if _block:
+                    guidance.append("\n" + _block)
+                    print(
+                        f"  🧠 Learning context: {len(_picked)} lesson(s)",
+                        flush=True,
+                    )
+            except Exception as e:
+                debug_log(f"learning retrieval skipped: {type(e).__name__}", "learning")
 
         if conversation_context:
             # Two safety framings, both needed:

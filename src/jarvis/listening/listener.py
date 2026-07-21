@@ -13,6 +13,7 @@ import queue
 import sys
 import platform
 from collections import deque
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
@@ -410,6 +411,30 @@ class VoiceListener(threading.Thread):
         # Guards against a second TTS playback for the same reply.
         self._spoken_utterance_ids: set = set()
 
+        # OpenAI Realtime premium PCM assembly (float32 @ sample_rate).
+        # Segments accumulate in order for one logical utterance; cleared on
+        # success / fallback / timeout / exception. Whisper text is wake/hot
+        # gating only when openai_realtime_enabled.
+        self._premium_pcm_segments: list = []
+        self._premium_pcm_candidate: Optional[object] = None
+        self._premium_collecting: bool = False
+        self._realtime_session = None
+        self._skip_premium_once: bool = False
+
+        # JARVIS_AUDIO_DIAG=1 — one-shot PCM capture (no OpenAI, no reply).
+        self._audio_diag_enabled = False
+        self._audio_diag_done = False
+        self._audio_diag_raw_frames: list = []
+        self._audio_diag_kept_frames = 0
+        self._audio_diag_dropped_mid_frames = 0
+        self._audio_diag_callback_frames = 0
+        self._audio_diag_status_overflow = 0
+        try:
+            from .audio_diag import audio_diag_enabled
+            self._audio_diag_enabled = audio_diag_enabled()
+        except Exception:
+            self._audio_diag_enabled = False
+
         # Voice activity detection
         self.is_speech_active = False
         self._silence_frames = 0
@@ -437,6 +462,29 @@ class VoiceListener(threading.Thread):
             voice_collect_seconds=float(getattr(self.cfg, "voice_collect_seconds", 2.0)),
             max_collect_seconds=float(getattr(self.cfg, "voice_max_collect_seconds", 60.0))
         )
+
+        # Learning Loop v1: learn after hot-window → wake-word; defer on new speech.
+        # Fail-open — never disturb the audio path.
+        def _schedule_learning():
+            try:
+                from ..memory.learning import get_learning_worker
+                get_learning_worker().schedule(
+                    db=self.db,
+                    cfg=self.cfg,
+                    dialogue_memory=self.dialogue_memory,
+                )
+            except Exception as e:
+                debug_log(f"learning schedule failed (ignored): {type(e).__name__}", "learning")
+
+        def _defer_learning():
+            try:
+                from ..memory.learning import get_learning_worker
+                get_learning_worker().defer_for_new_command()
+            except Exception as e:
+                debug_log(f"learning defer failed (ignored): {type(e).__name__}", "learning")
+
+        self.state_manager.set_on_return_to_wake(_schedule_learning)
+        self.state_manager.set_on_new_command(_defer_learning)
 
         # Energy tracking for echo detection
         self._recent_audio_energy: deque = deque(maxlen=50)
@@ -527,6 +575,379 @@ class VoiceListener(threading.Thread):
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
+    def _premium_realtime_enabled(self) -> bool:
+        # Must be exactly True — MagicMock configs must not enable premium.
+        return getattr(self.cfg, "openai_realtime_enabled", False) is True
+
+    def _premium_ensure_session(self):
+        """Lazy OpenAI Realtime session for V4 streaming (no network in tests unless injected)."""
+        from ..voice.openai_realtime import get_realtime_session, premium_enabled
+        if not premium_enabled(self.cfg):
+            return None
+        if self._realtime_session is None:
+            self._realtime_session = get_realtime_session(self.cfg, allow_network=True)
+        else:
+            self._realtime_session.cfg = self.cfg
+        return self._realtime_session
+
+    def _premium_stream_mic_frame(self, frame) -> None:
+        """V4: while LISTENING, forward every mic frame (incl. silence) to OpenAI."""
+        if not self._accepting_audio():
+            return
+        session = self._premium_ensure_session()
+        if session is None:
+            return
+        rate = int(getattr(self, "_stream_samplerate", self._samplerate) or self._samplerate)
+        if not session.ensure_streaming(rate):
+            return
+        session.stream_append_float32(frame, rate)
+
+    def _premium_poll_and_handle_turn(self) -> None:
+        """V4: on transcription.completed → OpenAI wake gate → optional response.create."""
+        session = getattr(self, "_realtime_session", None)
+        if session is None:
+            return
+        try:
+            pending = session.poll_pending_transcript(timeout=0.0)
+        except Exception as e:
+            debug_log(f"premium poll failed: {type(e).__name__}", "openai")
+            return
+        if pending is None:
+            return
+
+        # Claim flight before long response — stops mic (SPEAKING/COOLDOWN path).
+        utt_id = self._begin_utterance()
+        self._clear_audio_buffers()
+        self._start_thinking_tune()
+        try:
+            print("  🎙️ OpenAI Realtime…", flush=True)
+            result = session.finish_premium_turn(pending)
+        except Exception as e:
+            debug_log(f"premium finish failed: {type(e).__name__}", "openai")
+            self._stop_thinking_tune()
+            self._enter_cooldown()
+            return
+
+        # Reuse the same result handling as batch path.
+        try:
+            if getattr(result, "ignored_no_wake", False):
+                self._stop_thinking_tune()
+                self._enter_cooldown()
+                debug_log(
+                    f"[utt {utt_id}] premium ignored — no OpenAI wake word",
+                    "openai",
+                )
+                return
+            if result.ok and result.used_premium:
+                user_tr = (result.user_transcript or "").strip()
+                asst_tr = (result.assistant_transcript or "").strip()
+                if user_tr:
+                    print(f"\n📝 Heard (OpenAI): \"{user_tr}\"", flush=True)
+                if asst_tr:
+                    print(f"\n🤖 Cora\n  {asst_tr}\n", flush=True)
+                if self.dialogue_memory is not None and user_tr:
+                    try:
+                        self.dialogue_memory.add_message("user", user_tr)
+                        if asst_tr:
+                            self.dialogue_memory.add_message("assistant", asst_tr)
+                    except Exception:
+                        pass
+                self._spoken_utterance_ids.add(utt_id)
+                self._stop_thinking_tune()
+                self.track_tts_start(asst_tr or user_tr or "openai")
+                self._enter_cooldown()
+                self.activate_hot_window()
+                debug_log(f"[utt {utt_id}] realtime V4 success — skipped Gemma/Piper", "openai")
+                return
+            self._stop_thinking_tune()
+            self._enter_cooldown()
+        finally:
+            self._premium_pcm_clear()
+
+    def _premium_pcm_clear(self) -> None:
+        """Drop assembled premium PCM (success / fallback / timeout / exception)."""
+        self._premium_pcm_segments = []
+        self._premium_pcm_candidate = None
+        self._premium_collecting = False
+
+    def _premium_pcm_stash_candidate(self, audio) -> None:
+        if audio is None:
+            self._premium_pcm_candidate = None
+            return
+        try:
+            self._premium_pcm_candidate = audio.copy()
+        except Exception:
+            self._premium_pcm_candidate = audio
+
+    def _premium_pcm_append_candidate(self) -> None:
+        cand = self._premium_pcm_candidate
+        self._premium_pcm_candidate = None
+        if cand is None:
+            return
+        try:
+            seg = cand.copy() if hasattr(cand, "copy") else cand
+        except Exception:
+            seg = cand
+        self._premium_pcm_segments.append(seg)
+
+    def _premium_pcm_concat(self):
+        """Ordered segments with minimal silence between; never drop the first (wake) segment."""
+        segs = self._premium_pcm_segments
+        if not segs:
+            return None
+        if len(segs) == 1:
+            return segs[0]
+        if np is None:
+            return segs[0]
+        sr = int(getattr(self.cfg, "sample_rate", 16000))
+        # ~40 ms gap — enough to avoid splice clicks, does not rewrite speech.
+        gap = max(1, int(0.04 * sr))
+        silence = np.zeros(gap, dtype=np.float32)
+        parts = []
+        for i, s in enumerate(segs):
+            if i:
+                parts.append(silence)
+            parts.append(np.asarray(s, dtype=np.float32).reshape(-1))
+        return np.concatenate(parts)
+
+    def _flush_collection_if_ready(self) -> None:
+        """Dispatch on collection timeout; premium may dispatch on PCM alone."""
+        if not self.state_manager.check_collection_timeout():
+            return
+        query = self.state_manager.clear_collection()
+        if self._premium_pcm_segments:
+            self._premium_collecting = False
+            self._dispatch_query(query or "")
+        elif (query or "").strip():
+            self._dispatch_query(query)
+
+    def _process_transcript_premium(
+        self,
+        text: str,
+        utterance_energy: float = 0.0,
+        utterance_start_time: float = 0.0,
+        utterance_end_time: float = 0.0,
+    ) -> None:
+        """Premium path: Whisper text is wake/hot-window gate only; PCM goes to OpenAI.
+
+        Bypasses intent judge, extract_query_after_wake, LLM-rewritten query, and
+        Whisper semantic confidence gating (confidence already skipped at finalize).
+        """
+        self._flush_collection_if_ready()
+        self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+
+        text_lower = (text or "").strip().lower()
+        self._wake_timestamp = None
+
+        in_hot_window = self.state_manager.was_speech_during_hot_window(
+            utterance_start_time, utterance_end_time
+        ) or self.state_manager.is_hot_window_active()
+
+        # Empty Whisper: still accept in hot window / active premium collection.
+        if not text_lower:
+            if self._premium_collecting or self.state_manager.is_collecting():
+                if self._premium_pcm_candidate is not None:
+                    self._premium_accept_for_openai(
+                        carrier="\u2060", wake=False, hot=False
+                    )
+                return
+            if in_hot_window and (
+                self._premium_pcm_candidate is not None or self._premium_pcm_segments
+            ):
+                self._premium_accept_for_openai(
+                    carrier="\u2060", wake=False, hot=True
+                )
+            else:
+                self._premium_pcm_candidate = None
+            return
+
+        start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-3] if utterance_start_time > 0 else "N/A"
+        end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
+        debug_log(f"heard (premium gate): '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
+
+        received_during_tts = self.tts and self.tts.is_speaking()
+
+        # Early echo rejection (feedback loop) — not an intent/semantic gate.
+        if not received_during_tts and not self._is_thinking_tune_active():
+            if in_hot_window:
+                last_tts_text = self.echo_detector._last_tts_text or ""
+                if last_tts_text:
+                    echo_score = fuzz.partial_ratio(text_lower, last_tts_text.lower())
+                    tts_words = len(last_tts_text.split())
+                    text_words = len(text_lower.split())
+                    is_pure_echo = (
+                        echo_score >= 70
+                        and text_words <= max(tts_words * 1.3, tts_words + 3)
+                    )
+                    if is_pure_echo:
+                        salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
+                        if salvaged == text_lower:
+                            salvaged_alt = self.echo_detector.salvage_after_echo_tail(text_lower)
+                            if salvaged_alt:
+                                salvaged = salvaged_alt
+                        min_words = self.echo_detector.min_salvage_words
+                        if (salvaged != text_lower
+                                and len(salvaged.split()) >= min_words):
+                            text_lower = salvaged
+                        else:
+                            debug_log(f"🔇 Premium early echo rejection (score={echo_score})", "voice")
+                            self._premium_pcm_candidate = None
+                            return
+                self._start_thinking_tune()
+                self._set_face_state_listening()
+            else:
+                wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+                fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
+                if is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+                    self._wake_timestamp = utterance_start_time
+                    self._start_thinking_tune()
+                    self._set_face_state_listening()
+
+        # Stop commands while TTS plays — keep local interrupt behavior.
+        if self.tts and self.tts.enabled and self.tts.is_speaking():
+            stop_commands = getattr(
+                self.cfg, "stop_commands",
+                ["stop", "quiet", "shush", "silence", "enough", "shut up"],
+            )
+            if is_stop_command(text_lower, stop_commands):
+                debug_log(f"stop command during TTS (premium): {text_lower}", "voice")
+                if hasattr(self.tts, "interrupt"):
+                    self.tts.interrupt()
+                else:
+                    self.tts.stop()
+                self._premium_pcm_candidate = None
+                return
+            debug_log(f"premium ignore during TTS (not stop): {text_lower}", "voice")
+            self._premium_pcm_candidate = None
+            return
+
+        wake_word = getattr(self.cfg, "wake_word", "jarvis")
+        aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
+        fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
+        wake_detected = (
+            self._wake_timestamp is not None
+            or is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio)
+        )
+
+        # Mid-collection segments (multi-part utterance) — keep PCM order, no new wake.
+        if self._premium_collecting or self.state_manager.is_collecting():
+            self._premium_accept_for_openai(
+                carrier=text_lower or "\u2060", wake=False, hot=False
+            )
+            return
+
+        if wake_detected:
+            self._wake_timestamp = self._wake_timestamp or utterance_start_time
+            # Carrier only — never used as authoritative query / memory on premium success.
+            self._premium_accept_for_openai(
+                carrier=text_lower or "\u2060", wake=True, hot=False
+            )
+            return
+
+        if in_hot_window:
+            self._premium_accept_for_openai(
+                carrier=text_lower or "\u2060", wake=False, hot=True
+            )
+            return
+
+        # Outside hot window, no wake → local ignore, zero OpenAI traffic.
+        debug_log(
+            f"premium ignore (no wake, no hot window): "
+            f"\"{text_lower[:40]}{'...' if len(text_lower) > 40 else ''}\"",
+            "voice",
+        )
+        self._premium_pcm_candidate = None
+        self._stop_thinking_tune()
+
+    def _premium_accept_for_openai(
+        self, *, carrier: str, wake: bool, hot: bool
+    ) -> None:
+        """Append candidate PCM and arm collection timeout → OpenAI dispatch."""
+        self._premium_pcm_append_candidate()
+        if not self._premium_pcm_segments:
+            debug_log("premium accept skipped: no PCM segments", "openai")
+            return
+
+        self._premium_collecting = True
+        # Non-empty carrier so collection timeout still fires; not semantic.
+        marker = (carrier or "").strip() or "\u2060"
+
+        if wake:
+            self.state_manager.cancel_hot_window_activation()
+            self._transcript_buffer.mark_segment_processed(marker)
+
+        if self.state_manager.is_collecting():
+            self.state_manager.add_to_collection(marker)
+        else:
+            self.state_manager.start_collection(marker)
+            self._start_thinking_tune()
+            try:
+                mode = "hot window" if hot and not wake else "wake"
+                print(f"\n✨ OpenAI Realtime ({mode})…", flush=True)
+            except Exception:
+                pass
+
+    def _premium_dispatch_pcm_direct(self, audio) -> None:
+        """Send one acoustically-gated PCM utterance to OpenAI (no local Whisper)."""
+        self._premium_pcm_clear()
+        try:
+            self._premium_pcm_segments = [audio.copy()]
+        except Exception:
+            self._premium_pcm_segments = [audio]
+
+        self._start_thinking_tune()
+        try:
+            self._set_face_state_listening()
+        except Exception:
+            pass
+
+        utterance_id = self._begin_utterance()
+        debug_log(f"[utt {utterance_id}] premium acoustic → OpenAI PCM", "openai")
+        self._clear_audio_buffers()
+
+        premium_pcm = self._premium_pcm_concat()
+        if self._try_openai_realtime(utterance_id, "", premium_pcm):
+            return
+
+        # Optional local fallback after OpenAI transport error (not for no-wake / empty).
+        # Whisper may run exactly once here for the local reply engine only.
+        self._premium_pcm_clear()
+        text = ""
+        try:
+            text = self._whisper_transcribe_once_for_fallback(audio)
+        except Exception as e:
+            debug_log(f"fallback whisper failed: {type(e).__name__}", "voice")
+        if not (text or "").strip():
+            self._stop_thinking_tune()
+            self._enter_cooldown()
+            return
+        self._skip_premium_once = True
+        try:
+            self._dispatch_query(text.strip())
+        finally:
+            self._skip_premium_once = False
+
+    def _whisper_transcribe_once_for_fallback(self, audio) -> str:
+        """One Whisper pass only when OpenAI failed and local fallback is allowed."""
+        if self._whisper_backend == "mlx" and mlx_whisper is not None:
+            forced_language = getattr(self.cfg, "whisper_language", None)
+            with self.transcribe_lock:
+                result = mlx_whisper.transcribe(
+                    audio,
+                    path_or_hf_repo=self._mlx_model_repo,
+                    language=forced_language,
+                )
+            return (result.get("text") or "").strip()
+        if getattr(self, "model", None) is not None:
+            forced_language = getattr(self.cfg, "whisper_language", None)
+            with self.transcribe_lock:
+                segments, _info = self.model.transcribe(
+                    audio, language=forced_language, vad_filter=False,
+                )
+                return " ".join(seg.text for seg in segments).strip()
+        return ""
+
     def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0) -> None:
         """
         Process a transcript from speech recognition.
@@ -535,6 +956,11 @@ class VoiceListener(threading.Thread):
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
         """
+        if self._premium_realtime_enabled():
+            # V3: OpenAI is the only ASR/wake authority — ignore Whisper transcript path.
+            debug_log("premium: ignoring local Whisper transcript path", "openai")
+            return
+
         if not text or not text.strip():
             # Check for timeouts
             if self.state_manager.check_collection_timeout():
@@ -1197,6 +1623,11 @@ class VoiceListener(threading.Thread):
         utterance_id = self._begin_utterance()
         debug_log(f"[utt {utterance_id}] dispatching query: '{query}'", "voice")
 
+        # Snapshot assembled premium PCM (all segments). Cleared in realtime finally.
+        premium_pcm = None
+        if self._premium_realtime_enabled() and self._premium_pcm_segments:
+            premium_pcm = self._premium_pcm_concat()
+
         # Clear audio buffers to prevent stale audio from next query
         self._clear_audio_buffers()
 
@@ -1208,6 +1639,10 @@ class VoiceListener(threading.Thread):
             debug_log("face state set to THINKING (dispatch_query)", "voice")
         except Exception as e:
             debug_log(f"failed to set face state to THINKING: {e}", "voice")
+
+        # --- OpenAI Realtime premium path (optional) ---
+        if self._try_openai_realtime(utterance_id, query, premium_pcm):
+            return
 
         # Import reply engine
         from ..reply.engine import run_reply_engine
@@ -1283,6 +1718,125 @@ class VoiceListener(threading.Thread):
             # Nothing will be spoken, so no completion callback will fire —
             # release the flight slot here or the mic would stay shut forever.
             self._enter_cooldown()
+
+    def _try_openai_realtime(self, utterance_id: str, wake_query: str, pcm) -> bool:
+        """Attempt premium Realtime turn. Returns True if the turn is fully handled
+        (success, ignore-no-wake, or fail-closed). Returns False only for local fallback.
+
+        On success: plays OpenAI audio once, skips Gemma + Piper.
+        Authoritative user text is gpt-4o-transcribe only (never Whisper).
+        On no-wake / empty transcript: handled locally as ignore (no Piper).
+        """
+        if getattr(self, "_skip_premium_once", False):
+            return False
+        if getattr(self.cfg, "openai_realtime_enabled", False) is not True:
+            return False
+
+        # No PCM → cannot do audio-to-audio; fall through to local if allowed.
+        if pcm is None:
+            debug_log("realtime skipped: no PCM available", "openai")
+            self._premium_pcm_clear()
+            return False
+
+        result = None
+        try:
+            from ..voice.openai_realtime import (
+                get_realtime_session,
+                premium_enabled,
+            )
+            if not premium_enabled(self.cfg):
+                self._premium_pcm_clear()
+                return False
+
+            if self._realtime_session is None:
+                self._realtime_session = get_realtime_session(
+                    self.cfg, allow_network=True
+                )
+            else:
+                self._realtime_session.cfg = self.cfg
+
+            print("  🎙️ OpenAI Realtime…", flush=True)
+            result = self._realtime_session.handle_utterance(
+                pcm, int(getattr(self.cfg, "sample_rate", 16000))
+            )
+        except Exception as e:
+            debug_log(f"realtime path crashed: {type(e).__name__}", "openai")
+            self._premium_pcm_clear()
+            if bool(getattr(self.cfg, "openai_realtime_fallback_local", True)):
+                print("  ↪️ Realtime failed — local fallback (1×)", flush=True)
+                return False
+            self._stop_thinking_tune()
+            self._enter_cooldown()
+            return True
+
+        try:
+            if getattr(result, "ignored_no_wake", False):
+                # Fail closed: no response, no memory, no hot window, no tools.
+                self._stop_thinking_tune()
+                self._enter_cooldown()
+                debug_log(
+                    f"[utt {utterance_id}] premium ignored — no OpenAI wake word",
+                    "openai",
+                )
+                return True
+
+            if result.ok and result.used_premium:
+                user_tr = (result.user_transcript or "").strip()
+                asst_tr = (result.assistant_transcript or "").strip()
+                if user_tr:
+                    print(f"\n📝 Heard (OpenAI): \"{user_tr}\"", flush=True)
+                else:
+                    debug_log("OpenAI transcript unavailable", "openai")
+                    print("  ⚠️ OpenAI transcript unavailable", flush=True)
+                if asst_tr:
+                    print(f"\n🤖 Cora\n  {asst_tr}\n", flush=True)
+
+                if self.dialogue_memory is not None and user_tr:
+                    try:
+                        self.dialogue_memory.add_message("user", user_tr)
+                        if asst_tr:
+                            self.dialogue_memory.add_message("assistant", asst_tr)
+                    except Exception:
+                        pass
+                elif self.dialogue_memory is not None and asst_tr:
+                    try:
+                        self.dialogue_memory.add_message("assistant", asst_tr)
+                    except Exception:
+                        pass
+
+                if utterance_id in self._spoken_utterance_ids:
+                    debug_log(f"[utt {utterance_id}] realtime audio already counted", "voice")
+                self._spoken_utterance_ids.add(utterance_id)
+
+                self._stop_thinking_tune()
+                self.track_tts_start(asst_tr or user_tr or "openai")
+                self._enter_cooldown()
+                # Hot window may still run for local mode compatibility, but premium
+                # require_wake_each_turn ignores non-Cora follow-ups via OpenAI gate.
+                self.activate_hot_window()
+                debug_log(f"[utt {utterance_id}] realtime success — skipped Gemma/Piper", "openai")
+                return True
+
+            err = result.error or "unknown"
+            if err == "MISSING_OPENAI_CREDENTIAL":
+                if bool(getattr(self.cfg, "openai_realtime_fallback_local", True)):
+                    print("  ↪️ Local fallback (1×)", flush=True)
+                    return False
+                self._stop_thinking_tune()
+                self._enter_cooldown()
+                return True
+
+            # Fail closed for empty transcript / timeout / response errors unless fallback allowed.
+            debug_log(f"realtime turn failed: {err}", "openai")
+            if bool(getattr(self.cfg, "openai_realtime_fallback_local", True)) and result.fallback_needed:
+                print(f"  ↪️ Realtime error ({err}) — local fallback (1×)", flush=True)
+                return False
+
+            self._stop_thinking_tune()
+            self._enter_cooldown()
+            return True
+        finally:
+            self._premium_pcm_clear()
 
     # ------------------------------------------------------------------
     # Single-flight capture gate
@@ -1562,10 +2116,7 @@ class VoiceListener(threading.Thread):
 
     def _check_query_timeout(self) -> None:
         """Check if there's a pending query that has timed out, and check hot window expiry."""
-        if self.state_manager.check_collection_timeout():
-            query = self.state_manager.clear_collection()
-            if query.strip():
-                self._dispatch_query(query)
+        self._flush_collection_if_ready()
 
         # Also check hot window expiry - this ensures the timeout is enforced
         # even when there's no audio being processed
@@ -1582,6 +2133,18 @@ class VoiceListener(threading.Thread):
             if not self._accepting_audio():
                 return
             self._callback_count += 1
+            if getattr(self, "_audio_diag_enabled", False) and not getattr(self, "_audio_diag_done", False):
+                try:
+                    self._audio_diag_callback_frames += int(frames or 0)
+                    # sounddevice CallbackFlags: count input overflow/drop conditions.
+                    if status:
+                        overflow = bool(getattr(status, "input_overflow", False)) or bool(
+                            getattr(status, "input_underflow", False)
+                        )
+                        if overflow or (not hasattr(status, "input_overflow") and bool(status)):
+                            self._audio_diag_status_overflow += 1
+                except Exception:
+                    pass
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
                 self._audio_q.put_nowait(chunk)
@@ -2341,6 +2904,8 @@ class VoiceListener(threading.Thread):
                 except queue.Empty:
                     # Critical: Check timeouts even when no audio is being received
                     # This ensures hot window expiry fires reliably
+                    if self._premium_realtime_enabled():
+                        self._premium_poll_and_handle_turn()
                     self._check_query_timeout()
                     continue
 
@@ -2371,7 +2936,15 @@ class VoiceListener(threading.Thread):
                     frame = mono[offset: offset + self._frame_samples]
                     offset += self._frame_samples
 
-                    # VAD decision
+                    # Premium Audio V4: bypass local energy/VAD/endpoint/_utterance_frames.
+                    # Stream every LISTENING frame to OpenAI; server semantic_vad owns turns.
+                    if self._premium_realtime_enabled():
+                        self._premium_stream_mic_frame(frame)
+                        self._premium_poll_and_handle_turn()
+                        self._check_query_timeout()
+                        continue
+
+                    # VAD decision (local path only — flag=false)
                     is_voice = self._is_speech_frame(frame)
 
                     if not self.is_speech_active:
@@ -2391,6 +2964,16 @@ class VoiceListener(threading.Thread):
                                 self._utterance_frames.extend(list(self._pre_roll))
                             self._utterance_frames.append(frame.copy())
                             self._silence_frames = 0
+                            if getattr(self, "_audio_diag_enabled", False) and not getattr(self, "_audio_diag_done", False):
+                                self._audio_diag_raw_frames = []
+                                self._audio_diag_kept_frames = 0
+                                self._audio_diag_dropped_mid_frames = 0
+                                if self._pre_roll:
+                                    for pr in self._pre_roll:
+                                        self._audio_diag_raw_frames.append(pr.copy() if hasattr(pr, "copy") else pr)
+                                        self._audio_diag_kept_frames += 1
+                                self._audio_diag_raw_frames.append(frame.copy())
+                                self._audio_diag_kept_frames += 1
                         else:
                             # Maintain pre-roll buffer
                             self._pre_roll.append(frame.copy())
@@ -2403,8 +2986,16 @@ class VoiceListener(threading.Thread):
                         if is_voice:
                             self._utterance_frames.append(frame.copy())
                             self._silence_frames = 0
+                            if getattr(self, "_audio_diag_enabled", False) and not getattr(self, "_audio_diag_done", False):
+                                self._audio_diag_raw_frames.append(frame.copy())
+                                self._audio_diag_kept_frames += 1
                         else:
                             self._silence_frames += 1
+                            # Mid-utterance non-voice frames are NOT kept in
+                            # _utterance_frames — this is the wall-clock vs PCM gap.
+                            if getattr(self, "_audio_diag_enabled", False) and not getattr(self, "_audio_diag_done", False):
+                                self._audio_diag_raw_frames.append(frame.copy())
+                                self._audio_diag_dropped_mid_frames += 1
                             # Use shorter timeout during TTS for quick stop command detection
                             current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
                             if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
@@ -2536,6 +3127,58 @@ class VoiceListener(threading.Thread):
             return False
         return True
 
+    def _audio_diag_write_capture(
+        self,
+        *,
+        diag_raw,
+        raw_rate: int,
+        pre_openai,
+        pre_rate: int,
+        dropped_frames: int,
+        samples_before: int,
+        samples_after: int,
+    ) -> None:
+        """Persist one-shot WAVs under worktree `_audio_diag/` (flag-gated)."""
+        from .audio_diag import save_one_shot_capture
+        from ..voice.openai_realtime import float32_mono_to_pcm16_24k
+
+        # Worktree root: .../src/jarvis/listening/listener.py → parents[3]
+        root = Path(__file__).resolve().parents[3]
+        out_dir = root / "_audio_diag"
+
+        raw = diag_raw if diag_raw is not None and getattr(diag_raw, "size", 0) else pre_openai
+        raw_r = int(raw_rate if diag_raw is not None and getattr(diag_raw, "size", 0) else pre_rate)
+        pcm24 = float32_mono_to_pcm16_24k(
+            np.asarray(pre_openai, dtype=np.float32), int(pre_rate)
+        )
+        man = save_one_shot_capture(
+            out_dir=out_dir,
+            raw_audio=np.asarray(raw, dtype=np.float32),
+            raw_rate=raw_r,
+            pre_openai_audio=np.asarray(pre_openai, dtype=np.float32),
+            pre_openai_rate=int(pre_rate),
+            openai_pcm16_24k=pcm24,
+            dropped_frames=int(dropped_frames),
+        )
+        debug_log(
+            f"audio diag saved: {man} "
+            f"raw_rate={raw_r} pre_rate={pre_rate} "
+            f"samples_before={samples_before} samples_after={samples_after} "
+            f"dropped_mid_frames={dropped_frames} "
+            f"callback_frames={getattr(self, '_audio_diag_callback_frames', 0)} "
+            f"status_overflow={getattr(self, '_audio_diag_status_overflow', 0)} "
+            f"stream_rate={getattr(self, '_stream_samplerate', None)} "
+            f"cfg_rate={self._samplerate}",
+            "voice",
+        )
+        print(
+            f"  🧪 AUDIO_DIAG saved → {out_dir} "
+            f"(dropped_mid_frames={dropped_frames}, "
+            f"raw_dur={(getattr(raw, 'size', 0) / max(raw_r, 1)):.2f}s, "
+            f"pre_openai_dur={(getattr(pre_openai, 'size', 0) / max(int(pre_rate), 1)):.2f}s)",
+            flush=True,
+        )
+
     def _finalize_utterance(self) -> None:
         """Process completed utterance through speech recognition."""
         if np is None or not self._utterance_frames:
@@ -2563,18 +3206,54 @@ class VoiceListener(threading.Thread):
         # Calculate energy before clearing frames for transcript processing
         utterance_energy = self._calculate_audio_energy(self._utterance_frames[-10:] if self._utterance_frames else [])
 
+        # Snapshot diag raw (includes mid-utterance non-voice) before clearing.
+        diag_raw = None
+        diag_dropped = int(getattr(self, "_audio_diag_dropped_mid_frames", 0) or 0)
+        if getattr(self, "_audio_diag_enabled", False) and not getattr(self, "_audio_diag_done", False):
+            try:
+                if self._audio_diag_raw_frames:
+                    diag_raw = np.concatenate(self._audio_diag_raw_frames, axis=0).flatten()
+            except Exception:
+                diag_raw = None
+
         # Reset state before processing
         self.is_speech_active = False
         self._silence_frames = 0
         self._utterance_frames = []
+        if getattr(self, "_audio_diag_enabled", False):
+            self._audio_diag_raw_frames = []
 
         if audio is None or audio.size == 0:
             return
 
         # Resample to Whisper's expected rate if the stream ran at a different rate
         stream_rate = getattr(self, "_stream_samplerate", self._samplerate)
+        samples_before = int(audio.size)
+        rate_before = int(stream_rate)
         if stream_rate != self._samplerate:
             audio = _resample(audio, stream_rate, self._samplerate)
+        samples_after = int(audio.size)
+        rate_after = int(self._samplerate)
+
+        # One-shot local WAV capture (JARVIS_AUDIO_DIAG=1 only; no OpenAI / no reply).
+        if getattr(self, "_audio_diag_enabled", False) and not getattr(self, "_audio_diag_done", False):
+            try:
+                self._audio_diag_write_capture(
+                    diag_raw=diag_raw,
+                    raw_rate=rate_before,
+                    pre_openai=audio,
+                    pre_rate=rate_after,
+                    dropped_frames=diag_dropped,
+                    samples_before=samples_before,
+                    samples_after=samples_after,
+                )
+            except Exception as e:
+                debug_log(f"audio diag write failed: {type(e).__name__}", "voice")
+            finally:
+                self._audio_diag_done = True
+            # Capture only — do not call OpenAI, Whisper, or speak a reply.
+            self._log_utterance_summary(audio, "ACCEPTED", "audio_diag_oneshot")
+            return
 
         # Filter short audio
         audio_duration = len(audio) / self._samplerate
@@ -2592,6 +3271,15 @@ class VoiceListener(threading.Thread):
         if not self._has_real_speech([audio]):
             self._log_utterance_summary(audio, "REJECTED", "vad_no_speech")
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return
+
+        # Premium V3: acoustic gates only → PCM to OpenAI. No local Whisper / wake / hot.
+        if self._premium_realtime_enabled():
+            self._log_utterance_summary(audio, "ACCEPTED", "to_openai_pcm")
+            if self.tts and self.tts.enabled and self.tts.is_speaking():
+                debug_log("premium ignore during TTS (acoustic path)", "voice")
+                return
+            self._premium_dispatch_pcm_direct(audio)
             return
 
         self._log_utterance_summary(audio, "ACCEPTED", "to_whisper")
@@ -2670,8 +3358,7 @@ class VoiceListener(threading.Thread):
 
                     text = " ".join(filtered_texts).strip()
                 else:
-                    # Fallback to full text if no segments
-                    text = result.get("text", "").strip()
+                    text = (result.get("text") or "").strip()
             else:
                 # faster-whisper transcription
                 # CPU mode: skip timestamps and disable context carry-over for speed

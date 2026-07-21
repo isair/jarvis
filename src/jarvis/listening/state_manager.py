@@ -2,7 +2,7 @@
 
 import time
 import threading
-from typing import Optional
+from typing import Optional, Callable
 from enum import Enum
 from datetime import datetime
 
@@ -58,6 +58,36 @@ class StateManager:
         # Stop flag for background threads
         self._should_stop = False
 
+        # Optional callback when hot window ends and we return to wake-word mode.
+        # Used by Learning Loop v1 — must never raise into the audio path.
+        self._on_return_to_wake: Optional[Callable[[], None]] = None
+        # Fired when a new utterance collection starts — defers in-flight learning.
+        self._on_new_command: Optional[Callable[[], None]] = None
+
+    def set_on_return_to_wake(self, callback: Optional[Callable[[], None]]) -> None:
+        self._on_return_to_wake = callback
+
+    def set_on_new_command(self, callback: Optional[Callable[[], None]]) -> None:
+        self._on_new_command = callback
+
+    def _fire_return_to_wake(self) -> None:
+        cb = self._on_return_to_wake
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as e:
+            debug_log(f"on_return_to_wake failed (ignored): {type(e).__name__}", "learning")
+
+    def _fire_new_command(self) -> None:
+        cb = self._on_new_command
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as e:
+            debug_log(f"on_new_command failed (ignored): {type(e).__name__}", "learning")
+
     def get_state(self) -> ListeningState:
         """Get current listening state."""
         with self._state_lock:
@@ -86,6 +116,7 @@ class StateManager:
 
         start_time_str = datetime.fromtimestamp(self._collect_start_time).strftime('%H:%M:%S.%f')[:-3]
         debug_log(f"collection started at {start_time_str}: '{initial_text}'", "state")
+        self._fire_new_command()
 
         # Set face state to LISTENING
         try:
@@ -323,6 +354,8 @@ class StateManager:
             except Exception:
                 pass
 
+            self._fire_return_to_wake()
+
         with self._timer_lock:
             self._hot_window_expiry_timer = threading.Timer(self.hot_window_seconds, _expire)
             self._hot_window_expiry_timer.daemon = True
@@ -454,6 +487,7 @@ class StateManager:
             except Exception:
                 pass
 
+            self._fire_return_to_wake()
             return True
         return False
 
@@ -490,6 +524,8 @@ class StateManager:
                 print("💤 Returning to wake word mode", flush=True)
             except Exception:
                 pass
+
+            self._fire_return_to_wake()
 
     def stop(self) -> None:
         """Stop the state manager and cancel all timers."""

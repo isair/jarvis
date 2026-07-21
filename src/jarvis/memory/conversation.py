@@ -736,6 +736,26 @@ class DialogueMemory:
         self._lock = threading.RLock()  # Reentrant lock for thread safety
         # Track the last profile used for follow-up detection
         self._last_profile: Optional[str] = None
+        # Learning Loop v1 — conversation identity + user controls
+        self.conversation_id: Optional[str] = None
+        self._learning_opt_out: bool = False
+        self._pending_forget_subject: Optional[str] = None
+
+    def _ensure_conversation_id(self) -> str:
+        """Stable id for the active dialogue window (learning dedupe)."""
+        import uuid
+        with self._lock:
+            if not self.conversation_id:
+                self.conversation_id = str(uuid.uuid4())
+            return self.conversation_id
+
+    def reset_learning_session(self) -> None:
+        """Start a fresh learning conversation id (after process / opt-out)."""
+        import uuid
+        with self._lock:
+            self.conversation_id = str(uuid.uuid4())
+            self._learning_opt_out = False
+            self._pending_forget_subject = None
 
     def _next_ts(self) -> float:
         """Return a strictly-monotonic timestamp.
@@ -758,9 +778,16 @@ class DialogueMemory:
     def add_message(self, role: str, content: str) -> None:
         """Add a message to recent memory. Thread-safe."""
         with self._lock:
+            # New dialogue window → new learning conversation id
+            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            if not any(ts >= cutoff for ts, _, _ in self._messages):
+                self.conversation_id = None
+                self._learning_opt_out = False
             timestamp = self._next_ts()
             self._messages.append((timestamp, role.strip(), content.strip()))
             self._last_activity_time = timestamp
+            if role.strip() == "user":
+                self._ensure_conversation_id()
 
     def get_recent_context(self) -> List[str]:
         """Get recent messages formatted as context strings."""

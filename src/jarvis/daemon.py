@@ -638,6 +638,21 @@ def main() -> None:
         print("✅ Diary update complete", flush=True)
         debug_log("diary update complete", "jarvis")
 
+        # Learning Loop v1: consolidate any unprocessed conversation (fail-open).
+        try:
+            if bool(getattr(cfg, "conversation_learning_enabled", False)) and _global_dialogue_memory is not None:
+                from .memory.learning import get_learning_worker
+                print("🧠 Consolidating learned lessons...", flush=True)
+                get_learning_worker().flush_sync(
+                    db=db,
+                    cfg=cfg,
+                    dialogue_memory=_global_dialogue_memory,
+                    timeout_sec=min(15.0, float(getattr(cfg, "conversation_learning_timeout_sec", 12.0)) + 3.0),
+                )
+                print("✅ Learning consolidate complete", flush=True)
+        except Exception as e:
+            debug_log(f"learning shutdown flush failed (ignored): {type(e).__name__}", "learning")
+
         if tts is not None:
             tts.stop()
 

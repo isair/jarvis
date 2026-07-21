@@ -264,6 +264,21 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("memory_enrichment_source", "Enrichment Source",
       "Which memory system enriches replies: all (diary + graph), diary only, or graph only",
       "memory", "choice", choices=[("diary", "Diary only"), ("graph", "Graph only"), ("all", "All (diary + graph)")])
+    f("conversation_learning_enabled", "Conversation Learning",
+      "After a conversation ends, extract verified user lessons (default off until live test)",
+      "memory", "bool")
+    f("conversation_learning_mode", "Learning Mode",
+      "safe_auto: deterministic extract + validated model proposals (never auto-executes)",
+      "memory", "choice", choices=[("safe_auto", "Safe auto")])
+    f("conversation_learning_max_items", "Learning Max Items",
+      "Max lessons injected into a reply prompt",
+      "memory", "int", min_val=1, max_val=8)
+    f("conversation_learning_timeout_sec", "Learning Timeout",
+      "Max seconds for background learning job",
+      "memory", "float", min_val=3.0, max_val=60.0, step=1.0, suffix="s")
+    f("conversation_learning_min_recurrences", "Improvement Threshold",
+      "Similar failures required before an improvement_candidate is proposed",
+      "memory", "int", min_val=2, max_val=10)
     f("tool_carryover_max_turns", "Tool Carryover Turns",
       "How many prior replies' tool results to keep visible for follow-up questions",
       "memory", "int", min_val=0, max_val=10)
@@ -294,6 +309,30 @@ def _build_field_metadata() -> List[FieldMeta]:
     # --- Features ---
     f("web_search_enabled", "Web Search",
       "Enable web search tool",
+      "features", "bool")
+    f("openai_realtime_enabled", "OpenAI Realtime (Premium)",
+      "Use OpenAI Realtime audio-to-audio after wake word (API key from Windows Credential Manager: Cora.OpenAI). Default off.",
+      "features", "bool")
+    f("openai_realtime_model", "Realtime Model",
+      "OpenAI Realtime conversational model",
+      "features", "str")
+    f("openai_realtime_transcription_model", "Realtime Transcription Model",
+      "Model used for displayed / memory transcripts",
+      "features", "str")
+    f("openai_realtime_voice", "Realtime Voice",
+      "OpenAI output voice (e.g. marin)",
+      "features", "str")
+    f("openai_realtime_language", "Realtime Language",
+      "ISO-639-1 language forced for Realtime (ro)",
+      "features", "str")
+    f("openai_realtime_idle_timeout_sec", "Realtime Idle Timeout",
+      "Close the Realtime session after this many seconds without follow-ups",
+      "features", "float", min_val=10.0, max_val=600.0, step=5.0, suffix="s")
+    f("openai_realtime_fallback_local", "Realtime Local Fallback",
+      "On Realtime errors, fall back once to the local Gemma + Piper pipeline",
+      "features", "bool")
+    f("openai_realtime_require_wake_each_turn", "Realtime Require Wake Each Turn",
+      "When premium is on, every OpenAI turn must start with Cora/aliases (no hot-window free follow-ups)",
       "features", "bool")
     f("brave_search_api_key", "Brave Search API Key",
       "Optional. When set, Brave is used as the primary fallback if DuckDuckGo "
