@@ -1529,7 +1529,13 @@ class VoiceListener(threading.Thread):
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
 
         chat_model = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
-        chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)
+        # Cap warmup at 60s total: the join budget is hardcoded at 60s (see
+        # warmup-join logic below), so a longer per-thread timeout would
+        # leave daemon threads running after the deadline.
+        chat_timeout = min(
+            max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0),
+            60.0,
+        )
         judge = self._intent_judge
         judge_model = judge.config.model if judge is not None else ""
         shared_judge = bool(chat_model) and judge_model == chat_model
@@ -1547,6 +1553,9 @@ class VoiceListener(threading.Thread):
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
         embed_model = str(getattr(self.cfg, "embedding_model", "") or "").strip()
+        shared_embed = bool(embed_model) and embed_model in {
+            m for m in (chat_model, judge_model, router_model) if m
+        }
 
         threads: list[threading.Thread] = []
 
@@ -1560,6 +1569,10 @@ class VoiceListener(threading.Thread):
                 # Router reusing chat_model is already covered.
                 if router_model and router_model == chat_model:
                     self._llm_warmup_results["router"] = (chat_model, ok)
+                # When the embed model matches chat, the chat warmup already
+                # loaded the model into memory; no separate embed thread runs.
+                if shared_embed and embed_model == chat_model:
+                    self._llm_warmup_results["embed"] = (chat_model, ok)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
@@ -1569,6 +1582,8 @@ class VoiceListener(threading.Thread):
                 self._llm_warmup_results["judge"] = (judge_model, ok)
                 if router_model and router_model == judge_model:
                     self._llm_warmup_results["router"] = (judge_model, ok)
+                if shared_embed and embed_model == judge_model:
+                    self._llm_warmup_results["embed"] = (judge_model, ok)
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
 
@@ -1576,10 +1591,12 @@ class VoiceListener(threading.Thread):
             def _warm_router() -> None:
                 ok = warm_up_chat_model(self.cfg, router_model, timeout=chat_timeout)
                 self._llm_warmup_results["router"] = (router_model, ok)
+                if shared_embed and embed_model == router_model:
+                    self._llm_warmup_results["embed"] = (router_model, ok)
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
-        if embed_model:
+        if embed_model and not shared_embed:
             def _warm_embed() -> None:
                 try:
                     backend = get_embedding_backend(self.cfg)
@@ -1588,7 +1605,10 @@ class VoiceListener(threading.Thread):
                     # on the chat endpoint — warm_up() sends a chat completion
                     # which would fail for those models. A single-token embedding
                     # request forces the runtime to load the model the same way.
-                    result = backend.embed("ping", embed_model, timeout_sec=chat_timeout)
+                    # Use the embed method's own default timeout (15s) rather than
+                    # the full chat_timeout (60s) since this probe is sub-second.
+                    embed_timeout = min(chat_timeout, 15.0)
+                    result = backend.embed("ping", embed_model, timeout_sec=embed_timeout)
                     ok = result is not None
                 except Exception as exc:
                     debug_log(f"embed warmup failed: {exc}", "voice")

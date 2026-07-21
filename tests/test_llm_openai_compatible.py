@@ -748,7 +748,7 @@ class TestOpenAICompatibleWarmUp:
         get_kwargs = mock_get.call_args[1]
         post_kwargs = mock_post.call_args[1]
         assert get_kwargs["timeout"] == 1.0
-        assert post_kwargs["timeout"] == 1.0
+        assert post_kwargs["timeout"] == 0.1
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
@@ -793,8 +793,11 @@ class TestOpenAICompatibleWarmUp:
         backend = OpenAICompatibleBackend("http://localhost:1234/v1", api_key="sk-test")
         backend.warm_up("gpt-4o-mini")
 
-        headers = mock_post.call_args[1]["headers"]
-        assert headers["Authorization"] == "Bearer sk-test"
+        get_headers = mock_get.call_args[1]["headers"]
+        assert get_headers["Authorization"] == "Bearer sk-test"
+
+        post_headers = mock_post.call_args[1]["headers"]
+        assert post_headers["Authorization"] == "Bearer sk-test"
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
@@ -814,8 +817,11 @@ class TestOpenAICompatibleWarmUp:
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
         backend.warm_up("gpt-4o-mini")
 
-        headers = mock_post.call_args[1]["headers"]
-        assert "Authorization" not in headers
+        get_headers = mock_get.call_args[1]["headers"]
+        assert "Authorization" not in get_headers
+
+        post_headers = mock_post.call_args[1]["headers"]
+        assert "Authorization" not in post_headers
 
     # ── guard cases ───────────────────────────────────────────────────
 

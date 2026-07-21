@@ -23,7 +23,7 @@ def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
     Thin wrapper over :meth:`LLMBackend.warm_up` so callers don't need to
     construct a backend just to ask for a warmup. Returns whatever the
     backend's warmup result is — on an Ollama backend this sends a real
-    inference with ``keep_alive``; on an OpenAI-compatible backend it now
+    inference with ``keep_alive``; on an OpenAI-compatible backend it
     also sends a minimal inference to force model loading (no longer a
     no-op). A failed warmup is informational and never blocks operation.
     """

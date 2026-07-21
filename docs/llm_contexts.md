@@ -259,14 +259,16 @@ user input
 ## 21. Model warm-up probe (OpenAI-compatible path)
 
 - **Source**: `src/jarvis/llm/openai_compatible.py` — `warm_up()` (Phase 2)
-- **Trigger**: once per model (chat, judge, router, embed) at listener startup, run in parallel daemon threads
-- **Model / gating**: the model being warmed, via direct `requests.post` (not via `chat()` — no response parsing)
+- **Trigger**: once per model (chat, judge, router) at listener startup, run in parallel daemon threads; the embed model takes a separate path via `backend.embed()` (see Notes)
+- **Model / gating**: the model being warmed, via direct `requests.post` (not via `chat()`, no response parsing). The two-phase probe (GET /models + POST /chat/completions) is specific to the `openai_compatible` provider; on the Ollama path the warmup uses `POST /api/generate` instead.
 - **What is sent**: a fixed `{"role": "user", "content": "ping"}` message, `max_tokens=1`, `stream=False`
-- **Gating**: only fires when `llm_provider` (or `embedding_provider`) is `"openai_compatible"`
+- **Gating**: the warmup always fires when a model is configured (regardless of provider). What differs between providers is the *probe behaviour*: the two-phase chat-completion probe described here is specific to `openai_compatible`; the Ollama warmup sends `POST /api/generate` with `keep_alive`.
 - **Output**: `True`/`False` — consumed by the listener startup dashboard (shown as `⚠️ warmup failed — will load on first use`)
-- **Limits**: preceded by `GET /models` (Phase 1, capped at 25 % of budget, max 5 s); Phase 2 timeout is `max(1.0, timeout_sec - list_to)` with caller default 60 s
+- **Limits**: preceded by `GET /models` (Phase 1, capped at 25 % of budget, max 5 s); Phase 2 timeout is `max(0.1, timeout_sec - list_to)` with caller default 60 s. The embed warmup path does not use this two-phase split — it passes the full timeout directly to `backend.embed()`.
 - **Data flow**: `warm_up()` → raw `requests.post` → `resp.ok` (any 2xx) → `bool` returned to `_start_llm_warmup()` → listener startup print
 - **Notes**: Best-effort and non-blocking. A failed warmup never prevents the listener from starting. Mirrors the Ollama warmup path (`POST /api/generate` in `src/jarvis/llm/ollama.py:335`), which is not tracked as a separate context since it sends no real inference (empty prompt, `num_predict=0`).
+
+    The **embed warmup** is a separate path: `listener.py:_start_llm_warmup` calls `backend.embed("ping", embed_model)` instead of `backend.warm_up()`. This is because embedding-only models (e.g. nomic-embed-text, modernbert) are not served on the `/chat/completions` endpoint. The embed probe uses the `/embeddings` endpoint with a single-token input and has no Phase 1 reachability check.
 
 ---
 

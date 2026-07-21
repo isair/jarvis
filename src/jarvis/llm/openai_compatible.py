@@ -364,11 +364,11 @@ class OpenAICompatibleBackend(LLMBackend):
     def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
         """Warm up the model by sending a minimal inference request.
 
-        Phase 1 — reachability check: calls ``GET /models`` to confirm
+        Phase 1 (reachability check): calls ``GET /models`` to confirm
         the server is up and has models loaded. Fast (capped at 25 % of
         the budget, max 5 s).
 
-        Phase 2 — model loading: sends a single-token chat completion
+        Phase 2 (model loading): sends a single-token chat completion
         (``max_tokens=1``) so the runtime actually loads the model into
         memory. Without this, an OpenAI-compatible server may leave the
         model cold until the first real request, incurring latency on the
@@ -387,7 +387,7 @@ class OpenAICompatibleBackend(LLMBackend):
             return False
 
         # Phase 2: minimal inference to force model loading.
-        remaining = max(1.0, timeout_sec - list_to)
+        remaining = max(0.1, timeout_sec - list_to)
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": "ping"}],
