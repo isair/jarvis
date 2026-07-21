@@ -132,7 +132,7 @@ I have opened YouTube for you.
 
 | Platform | Requirement |
 |----------|-------------|
-| **All** | [Ollama](https://ollama.com/download) |
+| **All** | [Ollama](https://ollama.com/download) (default), or any OpenAI-compatible server you already run (LM Studio, Jan, llama.cpp, vLLM, oMLX, LocalAI, …) — see [Configuration → LLM Provider](#configuration) |
 
 ### 2. Download Jarvis
 
@@ -179,7 +179,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 | Better quality | 16GB+ | `gemma4:e4b` |
 | High-end | 24GB+ | `gpt-oss:20b` |
 
-> **Note:** VRAM requirements include the intent judge model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification. The default model shares this, so no extra VRAM is needed.
+> **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
 
 The setup wizard will guide you through model selection and installation on first launch.
 
