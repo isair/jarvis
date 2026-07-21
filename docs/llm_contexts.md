@@ -35,7 +35,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine.
-- **Limits**: `intent_judge_timeout_sec` (15s). `num_ctx: 8192` (explicit — the system prompt is ~2k tokens and the rolling transcript buffer at default `transcript_buffer_duration_sec=120` can reach ~1.5k tokens in chatty multi-speaker scenes; the larger window gives the few-shot examples and TRANSCRIPT NOISE block at the tail of the prompt enough headroom on Ollama). Ollama-only knobs (`keep_alive: "30m"`, `num_ctx`, `num_predict`) flow via `extra_options`; OpenAI-compatible backends silently drop them.
+- **Limits**: `intent_judge_timeout_sec` (6s). `num_ctx: 8192` (explicit — the system prompt is ~2k tokens and the rolling transcript buffer at default `transcript_buffer_duration_sec=120` can reach ~1.5k tokens in chatty multi-speaker scenes; the larger window gives the few-shot examples and TRANSCRIPT NOISE block at the tail of the prompt enough headroom on Ollama). Ollama-only knobs (`keep_alive: "30m"`, `num_ctx`, `num_predict`) flow via `extra_options`; OpenAI-compatible backends silently drop them.
 
 ## 3. Memory Enrichment Extractor
 
@@ -152,12 +152,12 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 12. Task-list Planner (pre-flight decomposition, gates the whole turn)
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
-- **Trigger**: once per reply, **after the tool router and before memory search**. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), or when no model / base URL is available.
+- **Trigger**: once per reply, **after the tool router and before memory search**. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), when no model / base URL is available, or when the **engine-level fast-path skip** fires (the tool router returned no real tools AND the query is ≤ 8 words — the engine injects `["Reply to the user."]` as the plan without calling the LLM).
 - **Model / gating**: CHAT tier — `resolve_model(cfg, Tier.CHAT)`. Factory-dispatched. The planner tracks the active chat model so upgrading it (via setup wizard, config, or provider switch) automatically upgrades plan quality.
 - **Inputs**: user query, dialogue context, **router-narrowed** tool catalogue (names + one-line descriptions) — not the full 30+ list. When the carry-over guard from #7 fires, the previous turn's failed tool name is unioned into this catalogue before the planner sees it, so the planner can plan a re-call without `toolSearchTool` round-tripping. **No** memory context — the planner decides *whether* memory is needed.
 - **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups, short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
 - **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
-- **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`.
+- **Limits**: `planner_timeout_sec` (3s). Fail-open → `[]`.
 
 ## 13. Plan Step Resolver (per direct-exec turn, small models)
 
@@ -167,7 +167,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: next planned step text, prior tool calls (name + args + result excerpt), per-turn tool schema.
 - **System prompt**: `_STEP_RESOLVER_SYSTEM` at [planner.py:300](src/jarvis/reply/planner.py:300). Teaches one-JSON-object output, placeholder substitution from prior results, `null` for synthesis steps.
 - **Output**: `(tool_name, arguments)` tuple or `None`. Unknown tool names are rejected via the allow-list guard.
-- **Limits**: `planner_timeout_sec`. Fail-open → `None` (engine falls back to the chat-model turn).
+- **Limits**: `planner_timeout_sec` (3s). Fail-open → `None` (engine falls back to the chat-model turn).
 
 ## 14. Tool-specific LLM calls
 
@@ -220,7 +220,7 @@ Driven by `detect_model_size(model_name) → SMALL (≤7B) | LARGE (8B+)`:
 
 - Models: `llm_chat_model` (CHAT tier), `fast_model` (FAST tier). Every context resolves via `resolve_model(cfg, tier)`. Legacy on-disk keys (`ollama_chat_model` as a v1 → v2 alias; `intent_judge_model` / `tool_router_model` / `evaluator_model` / `planner_model` folded into `fast_model` by the v2 → v3 migration) are readable but no longer part of `Settings`.
 - Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`
-- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (15s)
+- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
 - Caps: `agentic_max_turns` (8), `tool_search_max_calls` (3), `_LLM_MAX_SELECTED` (5), `_DIGEST_MAX_CHARS` (400), `_TOOL_DIGEST_MAX_CHARS` (600)
 
 ## Flow

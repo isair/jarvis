@@ -479,7 +479,7 @@ def create_intent_judge(cfg) -> IntentJudge:
         aliases=list(getattr(cfg, "wake_aliases", [])),
         model=resolve_model(cfg, Tier.FAST),
         cfg=cfg,
-        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
+        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 6.0)),
         thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
     return IntentJudge(config)

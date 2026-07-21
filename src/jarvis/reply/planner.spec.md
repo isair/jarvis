@@ -50,6 +50,16 @@ integration in `src/jarvis/reply/engine.py`.
 - Only when `cfg.planner_enabled` is True (default).
 - Only when an `ollama_base_url` and a resolvable model are available.
 
+### Fast-path skip (engine-level)
+
+The engine skips the planner entirely when **all** of these hold:
+
+- The tool router returned no real tools (only system tools like `stop` — the router's positive "none" decision, not its fall-open-to-all-tools path).
+- The query is short (≤ 8 words, split on whitespace — language-agnostic).
+- `planner_enabled` is True (the skip is an optimisation, not a feature-gate bypass).
+
+When skipped the engine injects `["Reply to the user."]` as the plan — a positive signal that no tools and no memory enrichment are needed. The warm-profile block is still injected, so the chat model sees user identity and preferences. Longer tool-free queries ("what do you know about my dietary preferences") still reach the planner so it can emit a `searchMemory` directive when the warm profile alone is insufficient.
+
 ### Model resolution
 
 The planner runs on the chat tier (`resolve_model(cfg, Tier.CHAT)`).
@@ -199,7 +209,7 @@ The engine consumes the plan in two phases.
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `planner_enabled` | `True` | Feature gate. |
-| `planner_timeout_sec` | `6.0` | Timeout for plan and step-resolver LLM calls. |
+| `planner_timeout_sec` | `3.0` | Timeout for plan and step-resolver LLM calls. Planner fails open on timeout — an empty list is returned and the engine behaves as if the planner never ran. |
 
 ## Non-goals
 

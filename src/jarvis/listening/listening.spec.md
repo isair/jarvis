@@ -307,7 +307,7 @@ If the intent judge later rejects the query (and no hot window override applies)
   "transcript_buffer_duration_sec": 120,
 
   "fast_model": "gemma4:e2b",
-  "intent_judge_timeout_sec": 15.0,
+  "intent_judge_timeout_sec": 6.0,
 
   "hot_window_seconds": 3.0,
   "echo_tolerance": 0.3

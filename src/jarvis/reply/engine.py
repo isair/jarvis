@@ -991,16 +991,54 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
-    try:
-        action_plan = plan_query(
-            cfg=cfg,
-            query=redacted,
-            dialogue_context=_dialogue_ctx,
-            tools=_planner_tool_catalog,
+
+    # Fast-path: skip the planner when the tool router found no real tools
+    # AND the query is short. The planner's main job is decomposing multi-step
+    # tool queries and gating memory enrichment; for short, tool-free queries
+    # like "hello" / "how are you" / "tell me a joke", it adds a CHAT-tier
+    # LLM round-trip whose only output is "Reply to the user." — pure overhead.
+    #
+    # Gate: the router returned only system tools (just "stop"), meaning it
+    # positively decided no tools are needed. The router's "fall open to all
+    # tools" path (timeout / empty / no-match) is NOT treated as tool-free
+    # because it carries no signal — the router gave up rather than ruling
+    # tools out. We also require the query to be short (< 8 words) so
+    # longer tool-free queries that might need memory still reach the
+    # planner for a `searchMemory` directive. Language-agnostic: word count
+    # splits on whitespace, which works for every script-separated language.
+    _router_said_no_tools = (
+        routed_tools is not None
+        and len(routed_tools) <= 1
+        and ("stop" in routed_tools or not routed_tools)
+    )
+    _query_word_count = len(redacted.split()) if redacted else 0
+    _skip_planner = (
+        _router_said_no_tools
+        and _query_word_count <= 8
+        and getattr(cfg, "planner_enabled", True)
+    )
+    if _skip_planner:
+        # Positive signal: no tools, no memory needed. The warm profile
+        # (injected unconditionally below) provides user-context for the
+        # chat model; memory enrichment is skipped as if the planner had
+        # emitted a single "Reply to the user." step.
+        action_plan = ["Reply to the user."]
+        debug_log(
+            f"planner skipped: router returned no tools, query is "
+            f"{_query_word_count} words — using reply-only plan",
+            "planning",
         )
-    except Exception as _plan_exc:  # pragma: no cover — defensive
-        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
-        action_plan = []
+    else:
+        try:
+            action_plan = plan_query(
+                cfg=cfg,
+                query=redacted,
+                dialogue_context=_dialogue_ctx,
+                tools=_planner_tool_catalog,
+            )
+        except Exception as _plan_exc:  # pragma: no cover — defensive
+            debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
+            action_plan = []
     if action_plan:
         _plan_preview = " | ".join(s[:50] for s in action_plan)
         print(
