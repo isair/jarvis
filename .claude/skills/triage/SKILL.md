@@ -56,12 +56,22 @@ Read the **logs** and traceback carefully before replying. The vast majority of
 reports contain the answer in the log; the reporter just didn't know what to
 look for.
 
+**Always fetch the full issue body.** Do not truncate with `body[:N]` — the
+interaction lines (`📝 Heard:`) often appear near the bottom, past a 2000-char
+cutoff. Use the unbounded jq selector (`.body`) and read every line.
+
+**Scan for `📝 Heard:` lines first.** They are the most actionable signal in any
+log. If a `Heard:` line exists, the system detected speech — the question is
+what it heard and whether it matches the wake word. Do not ask "did it hear
+you?" when a `Heard:` line proves it did.
+
 ## Step 3. Diagnose from the log
 
 Common Jarvis patterns and what they mean:
 
 | Symptom in log | Likely cause | Ask for |
 |----------------|--------------|---------|
+| `📝 Heard: "...George..."` or `"...Georg..."` | Whisper heard speech but transcribed the wake word "Jarvis" as "George" (a very common phonetic confusion). The wake word itself matched nothing. | Ask what wake word they're saying and confirm it matches the configured wake word in Settings. Point out that "George" is a known Whisper mishearing of "Jarvis". |
 | Repeated `📝 Heard: "Thank you."`, `"you..."`, `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Ask them to check the input level bar (Windows Sound settings, or macOS System Settings → Sound → Input) actually moves when they speak, and confirm which mic they intend to use. |
 | `🧠 Intent judge: unavailable (timeout or error)` | Known; improved in v1.25.1 (bump this version as newer fixes ship). | Version they're on, and retry on latest. |
 | `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Download-time crash, platform-specific. Not the same as 429 throttling. | Keep open as its own bug. Workaround: manual `ollama pull ...` and relaunch. |
@@ -72,7 +82,8 @@ Common Jarvis patterns and what they mean:
 
 **Do not ask obviously-answered questions.** If the log shows the wizard was
 pulling models, Ollama is by definition installed and running. If the log shows
-Whisper loaded, Whisper is installed. Read before asking.
+Whisper loaded, Whisper is installed. If the log shows a `📝 Heard:` line, the
+system heard speech — do not ask "did it hear you?". Read before asking.
 
 Other recurring user-environment answers:
 
