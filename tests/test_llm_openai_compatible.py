@@ -590,7 +590,7 @@ class TestOpenAICompatibleWarmUp:
         mock_get.return_value = get_resp
 
         post_resp = MagicMock()
-        post_resp.status_code = 200
+        post_resp.__enter__.return_value.ok = True
         mock_post.return_value = post_resp
 
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
@@ -609,7 +609,7 @@ class TestOpenAICompatibleWarmUp:
         mock_get.return_value = get_resp
 
         post_resp = MagicMock()
-        post_resp.status_code = 200
+        post_resp.__enter__.return_value.ok = True
         mock_post.return_value = post_resp
 
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
@@ -681,7 +681,7 @@ class TestOpenAICompatibleWarmUp:
         mock_get.return_value = get_resp
 
         post_resp = MagicMock()
-        post_resp.status_code = 500
+        post_resp.__enter__.return_value.ok = False
         mock_post.return_value = post_resp
 
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
@@ -701,6 +701,121 @@ class TestOpenAICompatibleWarmUp:
         mock_post.side_effect = RuntimeError("model load failed")
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
         assert backend.warm_up("gpt-4o-mini") is False
+
+    # ── timeout budget calculation ─────────────────────────────────────
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_timeout_split_at_60s_default(self, mock_get, mock_post):
+        """At default 60s, GET gets 5s (capped) and POST gets 55s."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.__enter__.return_value.ok = True
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        backend.warm_up("gpt-4o-mini", timeout_sec=60.0)
+
+        get_kwargs = mock_get.call_args[1]
+        post_kwargs = mock_post.call_args[1]
+        assert get_kwargs["timeout"] == 5.0
+        assert post_kwargs["timeout"] == 55.0
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_timeout_split_when_very_small(self, mock_get, mock_post):
+        """Below 2s, both phases floor to 1s each."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.__enter__.return_value.ok = True
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        backend.warm_up("gpt-4o-mini", timeout_sec=1.0)
+
+        get_kwargs = mock_get.call_args[1]
+        post_kwargs = mock_post.call_args[1]
+        assert get_kwargs["timeout"] == 1.0
+        assert post_kwargs["timeout"] == 1.0
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_timeout_split_at_intermediate(self, mock_get, mock_post):
+        """At 20s, GET has 5s (25%→5 capped) and POST has 15s."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.__enter__.return_value.ok = True
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        backend.warm_up("gpt-4o-mini", timeout_sec=20.0)
+
+        get_kwargs = mock_get.call_args[1]
+        post_kwargs = mock_post.call_args[1]
+        assert get_kwargs["timeout"] == 5.0
+        assert post_kwargs["timeout"] == 15.0
+
+    # ── warmup POST header behaviour ──────────────────────────────────
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_sends_auth_header_when_api_key_set(self, mock_get, mock_post):
+        """When an API key is configured, the inference POST carries it."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.__enter__.return_value.ok = True
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1", api_key="sk-test")
+        backend.warm_up("gpt-4o-mini")
+
+        headers = mock_post.call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer sk-test"
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_omits_auth_header_when_no_key(self, mock_get, mock_post):
+        """When no API key is set, the inference POST has no Auth header."""
+        from jarvis.llm import OpenAICompatibleBackend
+
+        get_resp = MagicMock()
+        get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.__enter__.return_value.ok = True
+        mock_post.return_value = post_resp
+
+        backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+        backend.warm_up("gpt-4o-mini")
+
+        headers = mock_post.call_args[1]["headers"]
+        assert "Authorization" not in headers
 
     # ── guard cases ───────────────────────────────────────────────────
 

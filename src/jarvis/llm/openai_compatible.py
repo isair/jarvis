@@ -395,13 +395,13 @@ class OpenAICompatibleBackend(LLMBackend):
             "stream": False,
         }
         try:
-            resp = requests.post(
+            with requests.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
                 timeout=remaining,
-            )
-            return resp.status_code == 200
+            ) as resp:
+                return resp.ok
         except Exception:
             return False
 

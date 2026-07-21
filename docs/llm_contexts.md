@@ -256,6 +256,18 @@ user input
 7. Narrow `llm_thinking_enabled` to router/planner only, not every context.
 8. Reduce `intent_judge_timeout_sec` (15s) or race it against text-based wake detection to avoid blocking the audio loop.
 
+## 21. Model warm-up probe (OpenAI-compatible path)
+
+- **Source**: `src/jarvis/llm/openai_compatible.py` — `warm_up()` (Phase 2)
+- **Trigger**: once per model (chat, judge, router, embed) at listener startup, run in parallel daemon threads
+- **Model / gating**: the model being warmed, via direct `requests.post` (not via `chat()` — no response parsing)
+- **What is sent**: a fixed `{"role": "user", "content": "ping"}` message, `max_tokens=1`, `stream=False`
+- **Gating**: only fires when `llm_provider` (or `embedding_provider`) is `"openai_compatible"`
+- **Output**: `True`/`False` — consumed by the listener startup dashboard (shown as `⚠️ warmup failed — will load on first use`)
+- **Limits**: preceded by `GET /models` (Phase 1, capped at 25 % of budget, max 5 s); Phase 2 timeout is `max(1.0, timeout_sec - list_to)` with caller default 60 s
+- **Data flow**: `warm_up()` → raw `requests.post` → `resp.ok` (any 2xx) → `bool` returned to `_start_llm_warmup()` → listener startup print
+- **Notes**: Best-effort and non-blocking. A failed warmup never prevents the listener from starting. Mirrors the Ollama warmup path (`POST /api/generate` in `src/jarvis/llm/ollama.py:335`), which is not tracked as a separate context since it sends no real inference (empty prompt, `num_predict=0`).
+
 ---
 
 ## Measuring
