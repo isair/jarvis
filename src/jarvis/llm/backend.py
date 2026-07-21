@@ -17,6 +17,51 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional
 
 
+# Fields allowed per message ``role`` in the OpenAI Chat Completions schema.
+# Any field outside this set (e.g. engine-internal annotations like
+# ``tool_name``, ``tool_failed``, ``_is_context_injected``) MUST be
+# stripped before the message reaches the wire, because strict servers
+# (llama.cpp, vLLM, etc.) reject unknown fields with 400.
+_ALLOWED_FIELDS_BY_ROLE: Dict[str, set[str]] = {
+    "system": {"role", "content", "name"},
+    "user": {"role", "content", "name"},
+    "assistant": {"role", "content", "tool_calls", "name", "reasoning_content"},
+    "tool": {"role", "tool_call_id", "content"},
+}
+
+
+def strip_nonstandard_message_fields(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return a new list of messages with fields not in the OpenAI Chat
+    Completions schema removed.
+
+    The reply engine annotates some messages with internal fields it
+    uses for duplicate detection and carry-over logic (``tool_name``,
+    ``tool_failed`` on tool messages, ``_is_context_injected`` on
+    system messages).  These must be stripped before the payload is
+    serialised because strict servers (e.g. llama.cpp serving Gemma-4)
+    reject unknown fields with a 400 ``Invalid 'messages'`` error.
+
+    Each message retains only the fields allowed for its ``role``;
+    messages whose role is not in the known set are returned as-is
+    (empty dict fallback) so future roles (``developer``, ``function``)
+    are not silently dropped.
+    """
+    allowed = _ALLOWED_FIELDS_BY_ROLE.get
+    cleaned: List[Dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role", "")
+        fields = allowed(role)
+        if fields is not None:
+            cleaned.append({k: v for k, v in msg.items() if k in fields})
+        else:
+            # Unknown role — keep all fields rather than risk dropping
+            # functionality the caller depends on.
+            cleaned.append(dict(msg))
+    return cleaned
+
+
 class ToolsNotSupportedError(Exception):
     """Raised when a backend rejects the ``tools`` parameter.
 
