@@ -4,10 +4,11 @@ First-run wizard that ensures Ollama, required models, and Whisper are ready bef
 
 ## Overview
 
-The setup wizard is shown only when **user action is required** — it is not shown merely because the Ollama server isn't running (Jarvis can auto-start it). The triggers are:
+The setup wizard is shown only when **user action is required** — it is not shown merely because the Ollama server isn't running (Jarvis can auto-start it), unless auto-start has already been attempted and failed. The triggers are:
 
 1. Ollama CLI is not installed.
 2. Ollama server is running but required models are missing.
+3. Ollama auto-start timed out (server still unreachable).
 
 An OpenAI-compatible user has opted out of the local Ollama stack, so `should_show_setup_wizard()` returns `False` for them regardless of Ollama state. They can still open the wizard manually from the tray to switch providers.
 
@@ -85,7 +86,7 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 | Function | Returns | Purpose |
 |----------|---------|---------|
-| `should_show_setup_wizard()` | `bool` | Gate: only `True` when user action needed |
+| `should_show_setup_wizard(force_server_check=False)` | `bool` | Gate: only `True` when user action needed; pass `force_server_check=True` after auto-start fails to also flag unreachable server |
 | `check_ollama_cli()` | `(bool, path)` | CLI installed + path |
 | `check_ollama_server()` | `(bool, version)` | Server reachable + version |
 | `get_required_models()` | `list[str]` | Models needed per config |

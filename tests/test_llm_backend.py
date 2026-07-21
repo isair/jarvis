@@ -420,6 +420,197 @@ class TestOllamaBackendListModels:
 
 
 # ---------------------------------------------------------------------------
+# check_version — standalone Ollama identity probe
+# ---------------------------------------------------------------------------
+
+
+class TestCheckVersion:
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_true_and_version_on_success(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is True
+        assert ver == "0.5.1"
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_false_on_connection_error(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.side_effect = RuntimeError("connection refused")
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_false_on_non_200_status(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.return_value = _make_response(status_code=404)
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_false_when_json_missing_version_key(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.return_value = _make_response(json_data={"not_version": "garbage"})
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_false_when_response_not_json(self, mock_get):
+        from jarvis.llm import check_version
+
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = ValueError("not json")
+        mock_get.return_value = resp
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_false_when_version_is_empty_string(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.return_value = _make_response(json_data={"version": ""})
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_returns_false_when_version_is_not_a_string(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.return_value = _make_response(json_data={"version": 42})
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+    @patch("jarvis.llm.ollama.requests.get")
+    def test_response_is_not_a_dict(self, mock_get):
+        from jarvis.llm import check_version
+
+        mock_get.return_value = _make_response(json_data=[1, 2, 3])
+        ok, ver = check_version("http://localhost:11434")
+        assert ok is False
+        assert ver is None
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — warm_up (version check + generate ping)
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendWarmUp:
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_succeeds_when_server_is_ollama(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
+        mock_post.return_value = _make_response(status_code=200)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is True
+        get_url = mock_get.call_args[0][0]
+        assert "api/version" in get_url
+        post_url = mock_post.call_args[0][0]
+        assert "api/generate" in post_url
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_version_endpoint_unreachable(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.side_effect = RuntimeError("connection refused")
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_version_response_not_200(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.return_value = _make_response(status_code=404)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_version_json_missing_version_key(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.return_value = _make_response(json_data={"not_version": "garbage"})
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_version_response_not_json(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = ValueError("not json")
+        mock_get.return_value = resp
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_fails_when_generate_fails_after_version_check(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
+        mock_post.return_value = _make_response(status_code=500)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_models_on_subsequent_api_call(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
+        mock_post.return_value = _make_response(status_code=200)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is True
+        post_body = mock_post.call_args[1]["json"]
+        assert post_body["model"] == "gemma4:e2b"
+        assert post_body["keep_alive"] == "30m"
+        assert post_body["stream"] is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_returns_false_for_empty_model(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        backend = OllamaBackend("http://localhost:11434")
+        assert backend.warm_up("") is False
+        assert backend.warm_up(None) is False
+
+    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.requests.get")
+    def test_warmup_returns_false_for_empty_base_url(self, mock_get, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        backend = OllamaBackend("")
+        assert backend.warm_up("gemma4:e2b") is False
+        assert backend.warm_up("gemma4:e2b") is False
+
+
+# ---------------------------------------------------------------------------
 # Factory dispatch
 # ---------------------------------------------------------------------------
 

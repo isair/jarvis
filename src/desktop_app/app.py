@@ -2300,6 +2300,20 @@ def _openai_compat_unreachable_message(cfg) -> str:
     )
 
 
+def _run_setup_wizard() -> bool:
+    """Create and show the SetupWizard modally. Returns True if accepted."""
+    try:
+        from desktop_app.setup_wizard import SetupWizard
+        wizard = SetupWizard()
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
+        return wizard.exec() == wizard.DialogCode.Accepted
+    except Exception as e:
+        print(f"  ❌ Failed to create setup wizard: {e}", flush=True)
+        return False
+
+
 def main() -> int:
     """Main entry point for the desktop app."""
     # Fix Windows console encoding for Unicode/emoji characters
@@ -2422,7 +2436,7 @@ def main() -> int:
         print("  Loading setup wizard module...", flush=True)
         try:
             from desktop_app.setup_wizard import (
-                should_show_setup_wizard, SetupWizard,
+                should_show_setup_wizard,
                 check_ollama_server, check_ollama_cli,
                 get_required_models, check_installed_models,
                 resolve_ollama_path,
@@ -2467,22 +2481,13 @@ def main() -> int:
         loop.exec()
 
         if setup_check_result[0]:
-            # Hide splash while wizard is shown
             splash.hide()
+            app.processEvents()
             print("🔧 Setup required - launching setup wizard...", flush=True)
-            wizard = SetupWizard()
-            # Ensure wizard is visible and has focus (prevents window manager issues)
-            wizard.show()
-            wizard.raise_()
-            wizard.activateWindow()
-            result = wizard.exec()
-
-            if result != wizard.DialogCode.Accepted:
+            if not _run_setup_wizard():
                 print("Setup wizard cancelled - exiting", flush=True)
                 return 0
-
             print("✅ Setup wizard completed successfully", flush=True)
-            # Show splash again after wizard
             splash.show()
             splash.set_status("Setup complete!")
             app.processEvents()
@@ -2608,7 +2613,7 @@ def main() -> int:
                             [ollama_path, "serve"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            creationflags=subprocess.CREATE_NO_WINDOW,
+                            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
                         )
                     else:
                         # On Linux and other platforms
@@ -2651,8 +2656,26 @@ def main() -> int:
                         app.processEvents()
 
                     if not is_running:
-                        print("⚠️ Ollama server failed to start within timeout", flush=True)
-                        # Don't block startup - daemon will handle connection errors
+                        # One final check — the server may have started between
+                        # the last poll and the timeout decision.
+                        is_running, version = check_ollama_server()
+                        if not is_running:
+                            print("⚠️ Ollama server failed to start within timeout", flush=True)
+                            splash.hide()
+                            app.processEvents()
+                            if not _run_setup_wizard():
+                                print("Setup wizard cancelled - exiting", flush=True)
+                                return 0
+                            # Re-check after the wizard in case the user fixed
+                            # the issue (e.g. started Ollama manually).
+                            is_running, version = check_ollama_server()
+                            if not is_running:
+                                print("⚠️ Server still unreachable after setup wizard", flush=True)
+                                return 0
+                            print(f"✅ Ollama server is running (version {version})", flush=True)
+                            splash.show()
+                            splash.set_status("Ollama configured!")
+                            app.processEvents()
                 except Exception as e:
                     print(f"⚠️ Failed to start Ollama: {e}", flush=True)
                     # Continue anyway - user may start Ollama manually
@@ -2682,21 +2705,13 @@ def main() -> int:
             ]
 
             if missing_models and _chat_on_ollama:
-                # Chat runs on Ollama: the setup wizard lets the user pick and
-                # install the chat model along with the embed + judge models.
                 splash.hide()
+                app.processEvents()
                 print(f"⚠️ Missing required models: {missing_models}", flush=True)
                 print("🔧 Opening setup wizard to install missing models...", flush=True)
-                wizard = SetupWizard()
-                wizard.show()
-                wizard.raise_()
-                wizard.activateWindow()
-                result = wizard.exec()
-
-                if result != wizard.DialogCode.Accepted:
+                if not _run_setup_wizard():
                     print("Setup wizard cancelled - exiting", flush=True)
                     return 0
-
                 print("✅ Model installation complete", flush=True)
                 splash.show()
                 splash.set_status("Models installed!")
@@ -2726,14 +2741,8 @@ def main() -> int:
                 splash.hide()
                 print(f"⚠️ Unsupported model detected: {unsupported_model}", flush=True)
                 if show_unsupported_model_dialog(unsupported_model):
-                    # User wants to open setup wizard
                     print("🔧 Opening setup wizard to change model...", flush=True)
-                    wizard = SetupWizard()
-                    wizard.show()
-                    wizard.raise_()
-                    wizard.activateWindow()
-                    result = wizard.exec()
-                    if result != wizard.DialogCode.Accepted:
+                    if not _run_setup_wizard():
                         print("Setup wizard cancelled - exiting", flush=True)
                         return 0
                 splash.show()

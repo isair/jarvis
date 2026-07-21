@@ -360,6 +360,17 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return []
 
+    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+        """Reachability probe: list the server's models. OpenAI-compatible
+        servers keep models resident at load time, so (unlike Ollama) there
+        is no per-call unloading to counter. The probe surfaces ``False``
+        when the server is down, the URL is wrong, or no model is loaded,
+        so the listener can warn the user early instead of waiting for the
+        first real request to fail. Best-effort: errors are swallowed."""
+        if not self._base_url or not model:
+            return False
+        return bool(self.list_models(timeout_sec=min(timeout_sec, 5.0)))
+
     def check_capabilities(
         self,
         chat_model: str,

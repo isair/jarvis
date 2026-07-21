@@ -18,6 +18,7 @@ from jarvis.llm import (
     ToolsNotSupportedError,
     get_llm_backend,             # factory: settings → chat backend
     get_embedding_backend,       # factory: settings → embedding backend
+    check_version,               # verify a URL points to a live Ollama server
     call_llm_direct,             # base-URL helper (see below)
     call_llm_streaming,
     chat_with_messages,
@@ -39,7 +40,7 @@ Two interchangeable styles dispatch to the same backend:
 | `chat(model, messages, *, timeout_sec, extra_options, tools, thinking)` | `Optional[Dict]` | Arbitrary messages array. Returns the raw response dict so callers (today: the reply engine) can inspect `content` and `tool_calls`. Raises `ToolsNotSupportedError` when the model rejects native tools. Re-raises `requests.ConnectionError` so callers can distinguish "server unreachable" from a transient HTTP failure. |
 | `embed(text, model, *, timeout_sec)` | `Optional[List[float]]` | Vector embedding. Returns `None` on error or when the runtime does not expose embeddings. |
 | `list_models(*, timeout_sec)` | `List[str]` | Names of models the runtime has available. Returns `[]` on error. |
-| `warm_up(model, *, timeout_sec)` | `bool` | Page `model` into resident memory ahead of the first real request. Default impl returns `True` (no-op for runtimes without per-call unloading). Ollama overrides this to issue a minimal `/api/generate` ping with `keep_alive: "30m"`. |
+| `warm_up(model, *, timeout_sec)` | `bool` | Reachability probe before the first real request. The `LLMBackend` default returns `True` (no-op for runtimes without a useful probe). `OllamaBackend` verifies the server is Ollama via `GET /api/version`, then issues a minimal `/api/generate` ping with `keep_alive: "30m"` to page the model into resident memory. `OpenAICompatibleBackend` probes `GET /models` and reports `False` when the server is unreachable or has no models loaded. |
 
 `direct()` and `streaming()` are convenience methods over `chat()`: they construct the `[system, user]` messages array internally so callers running classification-shaped passes (planner, intent judge, evaluator, enrichment extractor) do not have to. `chat()` is the low-level primitive for arbitrary message arrays — multi-turn dialogue, native tool calls, and anything that needs custom roles.
 
@@ -107,7 +108,7 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 - Streaming: JSON-lines (`{...}\n`).
 - Tool calls: native `tools` parameter (Ollama 0.4+); arguments returned as a Python dict.
 - `extra_options` keys map onto the wire shape: `keep_alive` / `format` / `think` go to the payload root; everything else (incl. `temperature`, `num_ctx`, `num_predict`) folds into the nested `options` object. Callers can also pass an explicit `options` sub-dict for explicit nesting.
-- `warm_up(model)` issues `POST /api/generate` with an empty prompt and `keep_alive: "30m"`; the model stays resident for 30 minutes after each call.
+- `warm_up(model)` first verifies the endpoint is actually an Ollama server via `GET /api/version`, then issues `POST /api/generate` with an empty prompt and `keep_alive: "30m"`; the model stays resident for 30 minutes after each call.
 
 ### OpenAI-compatible (`OpenAICompatibleBackend`)
 
@@ -116,7 +117,7 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 - Tool calls: native `tools` parameter; OpenAI returns `tool_calls[*].function.arguments` as a JSON-encoded string. The backend decodes them to a dict so the reply engine sees a single shape.
 - Response normalisation: `_normalise_response` lifts `choices[0].message` to top-level `message` so callers do not branch on provider. Servers that already return Ollama-shaped responses pass through unchanged.
 - `extra_options` lifts sampling fields (`temperature`, `max_tokens`, `top_p`, `stop`, …) to the payload root and silently drops Ollama-only knobs (`keep_alive`, `num_ctx`, `num_predict`, `think`) that have no equivalent in the OpenAI shape.
-- `warm_up()` is a no-op (returns `True`): OpenAI-compatible servers keep models warm at server load time.
+- `warm_up(model)` is a reachability probe: it issues `GET /models` and returns `False` when the server is unreachable or has no models loaded. OpenAI-compatible servers keep models resident at load time, so there is no per-call unloading to counter; the probe exists so the listener can warn the user early instead of waiting for the first real request to fail.
 - Authentication: `Authorization: Bearer <api_key>` header sent only when `api_key` is non-empty.
 - Error logs do not echo URLs or API keys: HTTP errors print only the status code, generic exceptions print only the class name, connection errors print a fixed string and re-raise so callers can apply their own back-off.
 - `check_capabilities(chat_model, embed_model=None, *, timeout_sec)` returns a `ServerCapabilities` dataclass (`reachable`, `chat`, `tools`, `embeddings`, `models`). It probes with real requests — `list_models`, a one-message chat, a trivial tool call, and an embedding — and never raises (every failure collapses to a `False` flag). `chat` is True for either a text reply or a tool-call-only reply. Used by the setup wizard and the desktop startup check to report honestly what a server+model can do before the user relies on it. The probe issues real inference, so it is recorded in `docs/llm_contexts.md`.

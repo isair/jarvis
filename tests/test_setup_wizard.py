@@ -436,6 +436,55 @@ class TestShouldShowSetupWizard:
              patch("desktop_app.setup_wizard.check_ollama_status", return_value=missing_cli):
             assert should_show_setup_wizard() is False
 
+    def test_returns_true_when_force_server_check_and_server_down(self):
+        """Returns True for force_server_check when CLI is installed but
+        server is not running (auto-start already failed)."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=False,
+            missing_models=[],
+        )
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard(force_server_check=True) is True
+
+    def test_force_server_check_still_returns_true_when_cli_missing(self):
+        """force_server_check does not suppress other triggers (CLI missing)."""
+        mock_status = OllamaStatus(
+            is_cli_installed=False,
+            is_server_running=False,
+            missing_models=[],
+        )
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard(force_server_check=True) is True
+
+    def test_force_server_check_ignored_for_openai_compatible(self):
+        """force_server_check is dead code when llm_provider is
+        openai_compatible — the early return prevents it from firing."""
+        from types import SimpleNamespace
+        cfg = SimpleNamespace(llm_provider="openai_compatible")
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            is_server_running=False,
+            missing_models=[],
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=cfg), \
+             patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard(force_server_check=True) is False
+
+    def test_force_server_check_still_returns_false_when_everything_ok(self):
+        """force_server_check still returns False when everything is fine."""
+        mock_status = OllamaStatus(
+            is_cli_installed=True,
+            cli_path="/usr/bin/ollama",
+            is_server_running=True,
+            server_version="0.1.23",
+            installed_models=["llama2:7b"],
+            missing_models=[],
+        )
+        with patch("desktop_app.setup_wizard.check_ollama_status", return_value=mock_status):
+            assert should_show_setup_wizard(force_server_check=True) is False
+
 
 class TestProviderChoicePage:
     """The first real wizard decision: which runtime serves the LLM."""

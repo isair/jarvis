@@ -26,6 +26,7 @@ from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
 from ..debug import debug_log
+from ..llm import get_embedding_backend
 from ..utils.location import is_location_available
 
 if TYPE_CHECKING:
@@ -1545,6 +1546,8 @@ class VoiceListener(threading.Thread):
         router_model = router_model_effective if strategy == "llm" else ""
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
+        embed_model = str(getattr(self.cfg, "embedding_model", "") or "").strip()
+
         threads: list[threading.Thread] = []
 
         if chat_model:
@@ -1576,12 +1579,26 @@ class VoiceListener(threading.Thread):
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
+        if embed_model:
+            def _warm_embed() -> None:
+                try:
+                    ok = get_embedding_backend(self.cfg).warm_up(
+                        embed_model, timeout_sec=chat_timeout
+                    )
+                except Exception as exc:
+                    debug_log(f"embed warmup failed: {exc}", "voice")
+                    ok = False
+                self._llm_warmup_results["embed"] = (embed_model, ok)
+
+            threads.append(threading.Thread(target=_warm_embed, daemon=True, name="warmup-embed"))
+
         for t in threads:
             t.start()
 
         debug_log(
             f"LLM warmup started (chat={chat_model or 'n/a'}, "
             f"judge={judge_model or 'n/a'}, router={router_model or 'n/a'}, "
+            f"embed={embed_model or 'n/a'}, "
             f"shared_judge={shared_judge}, shared_router={shared_router})",
             "voice",
         )
@@ -2001,6 +2018,7 @@ class VoiceListener(threading.Thread):
             _print_status("chat", "Chat model", "💬")
             _print_status("judge", "Intent judge", "🧠")
             _print_status("router", "Tool router", "🔧")
+            _print_status("embed", "Embed model", "📐")
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")

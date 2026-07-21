@@ -23,6 +23,25 @@ from ..debug import debug_log
 from .backend import LLMBackend, ToolsNotSupportedError
 
 
+def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None]:
+    """Probe ``GET /api/version`` and return ``(True, version_str)`` if the
+    endpoint responds as an Ollama server, or ``(False, None)`` on failure or
+    non-Ollama response."""
+    try:
+        resp = requests.get(f"{base_url}/api/version", timeout=timeout)
+        if resp.status_code != 200:
+            return False, None
+        data = resp.json()
+        if not isinstance(data, dict):
+            return False, None
+        version = data.get("version")
+        if not isinstance(version, str) or not version:
+            return False, None
+        return True, version
+    except Exception:
+        return False, None
+
+
 def extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
     """Extract text from an LLM chat response across known shapes.
 
@@ -313,12 +332,22 @@ class OllamaBackend(LLMBackend):
             return []
 
     def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
-        """Issue a minimal ``/api/generate`` request so Ollama loads ``model``
-        into resident memory with a 30-minute ``keep_alive``. Best-effort:
-        errors are swallowed so callers never crash on warmup failure."""
+        """Probe ``/api/version`` to verify the server is Ollama, then issue a
+        minimal ``/api/generate`` request so it loads ``model`` into resident
+        memory with a 30-minute ``keep_alive``.  Best-effort: errors are
+        swallowed so callers never crash on warmup failure."""
         if not self._base_url or not model:
             return False
         try:
+            # Verify the server is actually Ollama before warming up —
+            # a non-Ollama HTTP server on the same port could return 200
+            # to the generate POST and produce a false positive.
+            version_to = min(timeout_sec, 5.0)
+            ok, _ = check_version(self._base_url, timeout=version_to)
+            if not ok:
+                return False
+
+            remaining = max(1.0, timeout_sec - version_to)
             resp = requests.post(
                 f"{self._base_url}/api/generate",
                 json={
@@ -328,7 +357,7 @@ class OllamaBackend(LLMBackend):
                     "keep_alive": "30m",
                     "options": {"num_predict": 1},
                 },
-                timeout=timeout_sec,
+                timeout=remaining,
             )
             return resp.status_code == 200
         except Exception:
