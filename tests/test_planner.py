@@ -641,11 +641,12 @@ class TestToolStepsOf:
     def test_multi_step_drops_final_synthesis_step(self):
         assert tool_steps_of(["a", "b", "reply"]) == ["a", "b"]
 
-    def test_single_step_has_no_tool_steps(self):
-        """A 1-step plan is reply-only by contract (rule 9), so it
-        contributes no tool steps. Engine uses this to skip the
-        direct-exec path and the progress nudge for pure-reply plans."""
-        assert tool_steps_of(["only"]) == []
+    def test_single_reply_step_has_no_tool_steps(self):
+        """A 1-step 'Reply to the user.' plan has no tool steps.
+        A 1-step tool plan like 'webSearch query='foo'' IS a tool step."""
+        assert tool_steps_of(["Reply to the user."]) == []
+        assert tool_steps_of(["Synthesis complete."]) == []
+        assert tool_steps_of(["webSearch query='foo'"]) == ["webSearch query='foo'"]
 
     def test_empty_plan(self):
         assert tool_steps_of([]) == []

@@ -336,15 +336,27 @@ def tool_steps_of(plan: Sequence[str]) -> List[str]:
     """Non-synthesis, non-directive tool steps of a plan.
 
     Drops any `searchMemory` directives (engine-internal) and the final
-    synthesis step. A 1-step plan is a reply-only plan by the planner's
-    contract (rule 9), so it has no tool steps and we return an empty
-    list — that lets the engine's plan-driven paths (direct-exec,
-    progress nudge) skip cleanly for the pure-reply case.
+    synthesis step. A 1-step plan that is a tool step (starts with a
+    known tool-like identifier — already validated by the engine's
+    allow-list guard at injection time) is returned as a tool step;
+    a 1-step "Reply to the user." plan has no tool steps (empty list).
     """
     steps = strip_memory_directives(plan)
-    if len(steps) > 1:
-        return list(steps[:-1])
-    return []
+    if not steps:
+        return []
+    if len(steps) == 1:
+        # Could be "Reply to the user." (no tool) or "webSearch ..." (tool).
+        # The engine's allow-list guard handles validation at plan-injection
+        # time; here we just strip the synthesis step if present. A single
+        # step that looks like a reply is not a tool step.
+        first = steps[0].strip()
+        if first.lower().startswith("reply") or first.lower().startswith(
+            "synthes"
+        ):
+            return []
+        return list(steps)
+    # 2+ steps: everything except the final synthesis step.
+    return list(steps[:-1])
 
 
 _TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")

@@ -1530,10 +1530,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 + memory_digest_text
             )
 
-        if len(action_plan) > 1:
-            # A single "Reply to the user." plan is the planner's
-            # positive no-op: memory/tools not needed. Injecting an
-            # ACTION PLAN block for it would just add noise.
+        # Inject the ACTION PLAN block when the plan has meaningful
+        # tool steps — i.e. more than 1 step OR a single step that
+        # references a known tool. The only case we skip is a single
+        # "Reply to the user." step (the planner's positive no-op for
+        # pure-direct-reply queries), which is noise to the chat model.
+        _plan_has_tool_step = (
+            len(action_plan) == 1
+            and action_plan[0].strip()
+            and any(
+                action_plan[0].strip().lower().startswith(t.lower())
+                for t in allowed_tools
+            )
+        )
+        if len(action_plan) > 1 or _plan_has_tool_step:
             guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
