@@ -1682,6 +1682,48 @@ class TestLlmWarmup:
 
         assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
 
+    def test_embed_warmup_stores_failure_on_exception(self):
+        """An exception in get_embedding_backend is caught and stored as False."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model="nomic-embed-text"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            mock_get_embed.side_effect = RuntimeError("backend init crashed")
+
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
+
+    def test_embed_warmup_stores_failure_on_warmup_exception(self):
+        """An exception in warm_up() is caught and stored as False."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model="nomic-embed-text"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            mock_embed_backend = MagicMock()
+            mock_embed_backend.warm_up.side_effect = ConnectionError("server down")
+            mock_get_embed.return_value = mock_embed_backend
+
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
+
 
 class TestWhisperWarmup:
     """Tests for the faster-whisper warmup transcribe."""

@@ -1581,7 +1581,13 @@ class VoiceListener(threading.Thread):
 
         if embed_model:
             def _warm_embed() -> None:
-                ok = get_embedding_backend(self.cfg).warm_up(embed_model, timeout_sec=chat_timeout)
+                try:
+                    ok = get_embedding_backend(self.cfg).warm_up(
+                        embed_model, timeout_sec=chat_timeout
+                    )
+                except Exception as exc:
+                    debug_log(f"embed warmup failed: {exc}", "voice")
+                    ok = False
                 self._llm_warmup_results["embed"] = (embed_model, ok)
 
             threads.append(threading.Thread(target=_warm_embed, daemon=True, name="warmup-embed"))
