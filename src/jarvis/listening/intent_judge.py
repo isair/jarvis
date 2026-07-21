@@ -160,6 +160,7 @@ STOP DETECTION:
 NOT DIRECTED:
 - No wake word AND not hot window -> directed=false
 - Wake word used only as a narrative mention ("I told my friend about {name}") -> directed=false
+- (INVALID) "statement about [topic], not a command or question" — with the wake word present to ADDRESS {name}, EVERY statement is directed. "Not a command or question" is never a valid reason for directed=false. Only the two rules above are valid reasons.
 
 Output JSON only:
 {{"directed": true/false, "query": "...", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief"}}
@@ -178,6 +179,7 @@ Examples:
 - Hot window, user says "I think absurdism is better" -> {{"directed": true, "query": "I think absurdism is better", "stop": false, "confidence": "high", "reasoning": "user statement in hot window"}}
 - "(during TTS)" segments only -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo"}}
 - "stop" -> {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
+- "Yeah, the light is very bright but the heat isn't too bad this week honestly Jarvis" -> {{"directed": true, "query": "Yeah, the light is very bright but the heat isn't too bad this week honestly", "stop": false, "confidence": "high", "reasoning": "wake word + statement about weather — directed"}}
 - No wake word, not hot window -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "no wake word"}}'''
 
     def __init__(self, config: Optional[IntentJudgeConfig] = None):

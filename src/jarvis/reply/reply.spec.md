@@ -261,23 +261,23 @@ The system injects fresh contextual information before each LLM call in the agen
 **Simple Single-Tool Flow:**
 ```
 User: "What's the weather in London?"
-Turn 1: LLM → {content: "", tool_calls: [{function: {name: "webSearch", arguments: {query: "London weather today"}}}]}
+Turn 1: LLM → {tool_calls: [{function: {name: "webSearch", arguments: {query: "London weather today"}}}]}
 Turn 2: LLM → {content: "It's 18°C and sunny in London today with light winds."}
 ```
 
 **Multi-Step Planning Flow:**
 ```
 User: "Book sushi for two tonight at seven"
-Turn 1: LLM → {content: "", thinking: "I need to check restaurant availability first", tool_calls: [{function: {name: "checkAvailability", arguments: {cuisine: "sushi", time: "19:00", party: 2}}}]}
+Turn 1: LLM → {thinking: "I need to check restaurant availability first", tool_calls: [{function: {name: "checkAvailability", arguments: {cuisine: "sushi", time: "19:00", party: 2}}}]}
 Turn 2: LLM → {content: "7:00 is fully booked. Would you prefer 6:30 PM or 8:15 PM?", thinking: "7:00 is unavailable, I should offer alternatives"}
 ```
 
 **Iterative Research Flow:**
 ```
 User: "Compare the latest iPhone models"
-Turn 1: LLM → {content: "", tool_calls: [{function: {name: "webSearch", arguments: {query: "iPhone 15 models comparison 2024"}}}]}
-Turn 2: LLM → {content: "", thinking: "I have basic specs but need pricing information", tool_calls: [{function: {name: "webSearch", arguments: {query: "iPhone 15 Pro Max price official"}}}]}
-Turn 3: LLM → {content: "", thinking: "I should also get user reviews for a complete comparison", tool_calls: [{function: {name: "webSearch", arguments: {query: "iPhone 15 Pro vs Pro Max reviews"}}}]}
+Turn 1: LLM → {tool_calls: [{function: {name: "webSearch", arguments: {query: "iPhone 15 models comparison 2024"}}}]}
+Turn 2: LLM → {thinking: "I have basic specs but need pricing information", tool_calls: [{function: {name: "webSearch", arguments: {query: "iPhone 15 Pro Max price official"}}}]}
+Turn 3: LLM → {thinking: "I should also get user reviews for a complete comparison", tool_calls: [{function: {name: "webSearch", arguments: {query: "iPhone 15 Pro vs Pro Max reviews"}}}]}
 Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 models: [detailed response]"}
 ```
 

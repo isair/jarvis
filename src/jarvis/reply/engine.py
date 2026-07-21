@@ -2063,6 +2063,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     assistant_msg["thinking"] = msg["thinking"]
                 if "tool_calls" in msg and msg["tool_calls"]:
                     assistant_msg["tool_calls"] = msg["tool_calls"]
+                    # OpenAI-compatible APIs require content to be absent (or
+                    # null) when tool_calls is present; empty string causes 400
+                    # errors on strict servers (e.g. Gemma-4 via OpenRouter).
+                    if not content:
+                        assistant_msg.pop("content", None)
 
         messages.append(assistant_msg)
 
