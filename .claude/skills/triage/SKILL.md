@@ -79,7 +79,7 @@ answer is almost always there. Follow this diagnosis flow:
 | `📝 Heard: "Jarvis, ..."` then `⏱️ LLM request timed out` | Chat model too slow for hardware. Same root cause as above. | Advise running setup wizard lowest option. |
 | Repeated `📝 Heard: "Thank you."` / `"you..."` / `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Check input level in OS sound settings; confirm intended mic. |
 | `Low confidence` lines only, no `Heard:` ever | Mic captures audio but utterances are under the confidence floor. Wrong device or mic placement. | Same as above. |
-| `⚠️  Chat model '...' warmup failed` + `⚠️  Intent judge '...' warmup failed` + CPU mode | Two different model variants (e.g. gemma4:e4b for chat, gemma4:e2b for intent) competing on CPU. | Run setup wizard lowest option to use one model for everything. |
+| `⚠️  Chat model '...' warmup failed` + `⚠️  Intent judge '...' warmup failed` | Two different model variants loaded (e.g. gemma4:e4b for chat, gemma4:e2b for intent). The `ℹ️ CUDA not available` warning in the log is Whisper-only (STT speed), but the LLM models (intent judge, chat) are served by Ollama and may also be on CPU. Two variants competing on CPU overwhelms most machines. | Run setup wizard lowest option to use one model for everything. |
 | Normal startup log, zero interaction lines (`📝 Heard:`, `🧠 Intent judge:`, `💬 Generating`) | User never spoke after launch, or didn't use the wake word. This is by far the most common. | Ask what they said and whether they said "Jarvis" first. |
 | `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Platform-specific download crash. | Manual `ollama pull ...` workaround. |
 | `LLM connection error: ... RemoteDisconnected` | Ollama process crashed or unreachable. | `ollama run <model>` health check; Ollama version. |
@@ -103,13 +103,21 @@ answer is almost always there. Follow this diagnosis flow:
     no interaction)
   - Mic is wrong/broken (check for "Error querying device" or "Low confidence")
   - Mic permissions denied
-  → Ask what they said, whether they said "Jarvis" first, and for fresh logs.
+  → Ask what they said and whether they used the wake word. Explain that
+    the wake word only needs to appear once in the first utterance, and can
+    be at the start or end of the sentence (e.g. "What time is it, Jarvis?").
+    After that, during the hot window, you can keep talking without repeating
+    it — even a long tangent, as long as you started with the wake word.
 
 - **`📝 Heard:` line exists** — the system detected speech. Check *what* it heard:
   - **"George" / "Georg"** — the wake word "Jarvis" was misheard by Whisper.
     Point it out directly.
-  - **Wake word present** (e.g. "Jarvis, open Chrome") — good. Move to step 2.
-  - **Random words, no wake word** — user didn't use the wake word. Explain it.
+  - **Wake word present** (e.g. "Jarvis, open Chrome" or "What do you think,
+    Jarvis?") — good. Move to step 2. The wake word can be at the start **or
+    end** of the sentence.
+  - **Random words, no wake word** — user didn't use the wake word. Explain
+    that only the first utterance needs it; within the hot window (follow-up
+    period after a response) you can keep talking without repeating it.
   - **"Thank you" / "you..." / "Thanks for watching"** — Whisper hallucinating
     on silent audio. Wrong mic device. Troubleshoot mic.
 
@@ -129,9 +137,11 @@ answer is almost always there. Follow this diagnosis flow:
 
 **3. Check startup for model loading issues.**
 
-- `⚠️ ... warmup failed` with **CPU mode** and **two different models** loaded
-  (e.g. `gemma4:e4b` for chat, `gemma4:e2b` for intent): two variants competing
-  on CPU overwhelms most machines.
+- `⚠️ ... warmup failed` with **two different models** loaded
+  (e.g. `gemma4:e4b` for chat, `gemma4:e2b` for intent): two variants
+  competing on CPU overwhelms most machines. The `ℹ️ CUDA not available`
+  warning in the log is Whisper-only (STT speed); the LLM models are served
+  by Ollama and may be on CPU too, but those are separate systems.
   → Advise setup wizard lowest option to unify on `gemma4:2b`.
 
 - `⚠️ ... warmup failed` but everything else healthy and no interaction lines:
