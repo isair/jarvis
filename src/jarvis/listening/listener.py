@@ -1582,9 +1582,14 @@ class VoiceListener(threading.Thread):
         if embed_model:
             def _warm_embed() -> None:
                 try:
-                    ok = get_embedding_backend(self.cfg).warm_up(
-                        embed_model, timeout_sec=chat_timeout
-                    )
+                    backend = get_embedding_backend(self.cfg)
+                    # Use embed() rather than warm_up() because embedding-only
+                    # models (e.g. nomic-embed-text, modernbert) are not served
+                    # on the chat endpoint — warm_up() sends a chat completion
+                    # which would fail for those models. A single-token embedding
+                    # request forces the runtime to load the model the same way.
+                    result = backend.embed("ping", embed_model, timeout_sec=chat_timeout)
+                    ok = result is not None
                 except Exception as exc:
                     debug_log(f"embed warmup failed: {exc}", "voice")
                     ok = False
