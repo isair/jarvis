@@ -60,6 +60,12 @@ look for.
 interaction lines (`📝 Heard:`) often appear near the bottom, past a 2000-char
 cutoff. Use the unbounded jq selector (`.body`) and read every line.
 
+**Read the log top to bottom, don't stop at the startup section.** The startup
+(lines like "Whisper loaded", "Piper download 73%") is often misleading — a
+Piper download that shows 73% in the truncated view may have completed at 100%
+ten lines later. Always scroll to the end to check for `📝 Heard:`, `🧠 Intent
+judge:`, or `❌ Failed` lines before diagnosing.
+
 **Scan for `📝 Heard:` lines first.** They are the most actionable signal in any
 log. If a `Heard:` line exists, the system detected speech — the question is
 what it heard and whether it matches the wake word. Do not ask "did it hear
@@ -74,10 +80,11 @@ answer is almost always there. Follow this diagnosis flow:
 
 | Symptom in log | Likely cause | Action |
 |----------------|--------------|--------|
+| `📝 Heard: "Jarvis."` then `🧠 Intent (wake word): not directed (Wake word detected, but no query followed it.)` | User said the wake word but didn't follow with a command. The wake word alone does nothing. | Explain that they need to say a command after the wake word (e.g. "Jarvis, what time is it?"). |
 | `📝 Heard: "...George..."` or `"...Georg..."` | Wake word "Jarvis" misheard as "George" by Whisper (very common phonetic confusion). | Tell them to use the correct wake word. |
 | `📝 Heard: "Jarvis, ..."` then `🧠 Intent judge: unavailable (timeout)` | Intent judge model too slow for hardware. Usually CPU-only or large model mismatch. | Advise running setup wizard lowest option. |
 | `📝 Heard: "Jarvis, ..."` then `⏱️ LLM request timed out` | Chat model too slow for hardware. Same root cause as above. | Advise running setup wizard lowest option. |
-| Repeated `📝 Heard: "Thank you."` / `"you..."` / `"Thanks for watching!"` with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Check input level in OS sound settings; confirm intended mic. |
+| Repeated `📝 Heard: "Thank you."` / `"you..."` / `"Thanks for watching!"` / garbled text (e.g. Devanagari characters, random phrases like "Mission success!") with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Check input level in OS sound settings; confirm intended mic. If garbled text appears in a different script, it's still a hallucination — the script doesn't matter. |
 | `Low confidence` lines only, no `Heard:` ever | Mic captures audio but utterances are under the confidence floor. Wrong device or mic placement. | Same as above. |
 | `⚠️  Chat model '...' warmup failed` + `⚠️  Intent judge '...' warmup failed` | Two different model variants loaded (e.g. gemma4:e4b for chat, gemma4:e2b for intent). The `ℹ️ CUDA not available` warning in the log is Whisper-only (STT speed), but the LLM models (intent judge, chat) are served by Ollama and may also be on CPU. Two variants competing on CPU overwhelms most machines. | Run setup wizard lowest option to use one model for everything. |
 | Normal startup log, zero interaction lines (`📝 Heard:`, `🧠 Intent judge:`, `💬 Generating`) | User never spoke after launch, or didn't use the wake word. This is by far the most common. | Ask what they said and whether they said "Jarvis" first. |
