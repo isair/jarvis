@@ -230,6 +230,11 @@ _PROMPT_TEMPLATE = (
     "11. Output ONLY the steps, no preamble, no trailing commentary, no "
     "JSON fences, no explanations.\n"
     "12. Write the steps in the same language the user wrote the query in.\n"
+    "13. Never emit `stop` as a plan step. The main assistant decides "
+    "when to stop based on its own judgement at runtime, not on a "
+    "pre-planned stop directive. If the user seems dismissive, emit a "
+    "single `Reply to the user.` step and let the assistant handle tone "
+    "and termination naturally.\n"
 )
 
 
@@ -293,6 +298,17 @@ def _is_trivial_plan(steps: List[str]) -> bool:
     positive "no memory, no tools needed" decision — those two cases
     must remain distinguishable, so this helper is advisory only."""
     return len(steps) <= 1
+
+
+def _is_stop_step(step: str) -> bool:
+    """True when a plan step is a bare ``stop`` directive.
+
+    The planner prompt forbids emitting ``stop`` as a plan step
+    (rule 13), but small models occasionally ignore instruction.
+    This guard strips trailing sentence punctuation so that
+    ``"stop."``, ``"stop!"``, etc. are also caught.
+    """
+    return step.strip().lower().rstrip(".,!?;:") == "stop"
 
 
 def is_search_memory_step(step: str) -> bool:
@@ -471,6 +487,19 @@ def plan_query(
 
     steps = _parse_plan(raw)
     if not steps:
+        return []
+    # Post-plan guard: reject plans where every step is "stop".
+    # The planner prompt forbids emitting "stop" (rule 13), but small
+    # models occasionally ignore instruction. A stop-only plan would
+    # produce a silent dismissal for any non-trivial query, which is
+    # never the right behaviour — the engine always adds "stop" to
+    # the allow-list separately. Return empty so the engine falls
+    # through to the tool router + chat model.
+    if steps and all(_is_stop_step(s) for s in steps):
+        debug_log(
+            "planner: rejecting stop-only plan (forbidden by rule 13)",
+            "planning",
+        )
         return []
     debug_log(
         f"planner: {len(steps)} step(s) — "

@@ -792,3 +792,86 @@ class TestPlanHasUnresolvedToolSteps:
         assert plan_has_unresolved_tool_steps(
             plan, ["chrome-devtools__navigate_page"]
         ) is False
+
+
+class TestStopOnlyPlanGuard:
+    """Post-plan guard in plan_query rejects stop-only plans."""
+
+    def test_stop_only_plan_returns_empty(self):
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct", return_value="stop"):
+            steps = plan_query(
+                cfg,
+                "why haven't you answered me",
+                "user: how's the weather?\nassistant: I can check that for you.",
+                [("getWeather", "Weather tool"), ("stop", "Stop tool")],
+            )
+        assert steps == [], (
+            "stop-only plan should be rejected and return empty list, "
+            "so the engine falls through to the tool router + chat model"
+        )
+
+    def test_case_variants_rejected(self):
+        """Guard handles case-insensitive stop variants."""
+        cfg = _cfg()
+        for variant in ["Stop", "STOP", "  stop  "]:
+            with patch.object(planner_mod, "call_llm_direct",
+                              return_value=variant):
+                steps = plan_query(
+                    cfg, "go away", "",
+                    [("stop", "Stop tool")],
+                )
+            assert steps == [], f"'{variant}' should be rejected"
+
+    def test_punctuated_stop_rejected(self):
+        """Guard strips trailing punctuation like 'stop.' or 'stop!'."""
+        cfg = _cfg()
+        for variant in ["stop.", "stop!", "stop?", "Stop."]:
+            with patch.object(planner_mod, "call_llm_direct",
+                              return_value=variant):
+                steps = plan_query(
+                    cfg, "go away", "",
+                    [("stop", "Stop tool")],
+                )
+            assert steps == [], f"'{variant}' should be rejected"
+
+    def test_multiple_stop_steps_also_rejected(self):
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct",
+                          return_value="stop\nstop"):
+            steps = plan_query(
+                cfg,
+                "just go away",
+                "",
+                [("stop", "Stop tool")],
+            )
+        assert steps == []
+
+    def test_stop_as_part_of_multi_step_plan_preserved(self):
+        """stop as one step among others is not rejected — the guard
+        only fires when EVERY step is a stop."""
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct",
+                          return_value="webSearch query='weather'\nstop"):
+            steps = plan_query(
+                cfg,
+                "check the weather",
+                "",
+                [("webSearch", "Web search"), ("stop", "Stop tool")],
+            )
+        assert len(steps) == 2
+
+
+class TestPlannerPromptRule13:
+    """Rule 13 forbids emitting 'stop' as a plan step."""
+
+    def test_prompt_contains_stop_rule(self):
+        prompt = planner_mod._PROMPT_TEMPLATE.lower()
+        assert "never emit `stop`" in prompt, (
+            "Planner prompt must explicitly forbid emitting 'stop' "
+            "as a plan step (rule 13)."
+        )
+        assert "main assistant decides when to stop" in prompt, (
+            "Rule 13 must explain that the main assistant handles "
+            "termination at runtime."
+        )

@@ -102,6 +102,14 @@ The planner prompt instructs the model to emit:
 - A final synthesis/reply step when any `searchMemory` or tool step
   was planned.
 - Steps in the same language the user wrote the query in.
+- Never emit `stop` as a plan step. The main assistant decides
+  when to stop at runtime; a pre-planned stop directive would
+  produce a silent dismissal for many non-trivial queries.
+  Instead, emit `Reply to the user.` for dismissive queries so
+  the assistant handles tone and termination naturally.
+  A deterministic post-plan guard in `plan_query` rejects any
+  plan where every step is `stop`, returning `[]` so the engine
+  falls through to the tool router and chat model.
 - Trust the tool router: when the available-tools catalogue contains
   a tool relevant to the query, plan to use it even for seemingly
   trivial requests (jokes, opinions, creative content). The tool
@@ -118,9 +126,13 @@ The planner prompt instructs the model to emit:
   `["Reply to the user."]` plan is the planner's *positive* decision
   that no memory or tools are needed — the engine uses that to skip
   the memory extractor, the tool router, and the direct-exec path
-  entirely. Only an **empty** list means "planner failed / disabled;
-  fall open to legacy safe defaults" (run memory enrichment + tool
-  router). The two states must stay distinguishable.
+  entirely. A single-step tool plan like `["getWeather query='tomorrow'"]`
+  is also preserved: `tool_steps_of` returns it as a tool step, the
+  engine injects the ACTION PLAN block, and direct-exec runs the tool
+  without waiting for the chat model. Only an **empty** list means
+  "planner failed / disabled; fall open to legacy safe defaults"
+  (run memory enrichment + tool router). The two states must stay
+  distinguishable.
 
 ### Engine integration
 
@@ -158,6 +170,8 @@ The engine consumes the plan in two phases.
   appended to the initial system message. Empty plan renders nothing.
   Single-step reply-only plans are not rendered either — they are
   noise to the chat model since the plan just says "reply".
+  Single-step tool plans ARE rendered so the model sees the planned
+  tool call in its context.
 - `progress_nudge(steps, tool_results_so_far)` produces a remainder
   hint injected after each tool result, naming the next planned step
   and reminding the model to substitute discovered entities and avoid

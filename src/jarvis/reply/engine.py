@@ -1797,12 +1797,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # all plan tool steps are exhausted, at which point it synthesises
         # a final reply from the accumulated results.
         # See planner.spec.md.
+        _plan_tool_steps = tool_steps_of(action_plan)
         if (
             use_text_tools
-            and len(action_plan) > 1
+            and _plan_tool_steps
             and not _plan_under_specified
         ):
-            _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = (
                 sum(1 for m in messages if m.get("tool_name"))
                 - _plan_steps_baseline
