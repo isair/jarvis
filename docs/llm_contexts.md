@@ -254,7 +254,7 @@ user input
 5. Give each digest its own timeout budget rather than sharing `llm_digest_timeout_sec` (today a slow memory digest can starve the max-turn digest).
 6. Consider single-model deployments: the FAST tier prefers a small dedicated model while the planner tracks `llm_chat_model`; loading a second model hurts cold-start latency on small hardware. (On an OpenAI-compatible chat provider an unset `fast_model` already resolves to the chat model, so every context rides the one served model.)
 7. Narrow `llm_thinking_enabled` to router/planner only, not every context.
-8. Reduce `intent_judge_timeout_sec` (15s) or race it against text-based wake detection to avoid blocking the audio loop.
+8. `intent_judge_timeout_sec` was already reduced from 15s → 6s. Consider racing it against text-based wake detection to avoid blocking the audio loop entirely.
 
 ---
 

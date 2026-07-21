@@ -39,7 +39,7 @@ def _cfg(**overrides):
         "ollama_chat_model": "gemma4:e2b",
         "fast_model": "",
         "planner_enabled": True,
-        "planner_timeout_sec": 6.0,
+        "planner_timeout_sec": 3.0,
     }
     base.update(overrides)
     # Mirror config load: Settings always carries the resolved active chat
