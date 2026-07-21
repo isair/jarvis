@@ -83,7 +83,8 @@ answer is almost always there. Follow this diagnosis flow:
 | Normal startup log, zero interaction lines (`📝 Heard:`, `🧠 Intent judge:`, `💬 Generating`) | User never spoke after launch, or didn't use the wake word. This is by far the most common. | Ask what they said and whether they said "Jarvis" first. |
 | `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Platform-specific download crash. | Manual `ollama pull ...` workaround. |
 | `LLM connection error: ... RemoteDisconnected` | Ollama process crashed or unreachable. | `ollama run <model>` health check; Ollama version. |
-| Piper voice download stuck (percentage stops advancing) | First-run ~60 MB TTS voice download with slow/unstable connection. | Wait or relaunch; check internet. |
+| `⚠️  large-v3-turbo is not supported by the installed Whisper engine, using large-v3 instead` | User selected `large-v3-turbo` as Whisper model but the installed engine doesn't support it. Falls back to `large-v3`, which is much larger and slower. | Run setup wizard and pick a supported model like `medium` or `small`. |
+| Piper voice download stuck (percentage stops advancing) | First-run ~60 MB TTS voice download with slow/unstable connection. Check the log fully — if download reached 100%, this isn't the issue. | Wait or relaunch; check internet. |
 | `❌ Failed to load Whisper model: ConnectTimeout` | HF blocked by firewall (common in China). | `HF_ENDPOINT=https://hf-mirror.com` env var or VPN. |
 | `❌ Microphone permission check failed: Error querying device -1` | No microphone detected on Windows. | Check Windows Sound Settings for input devices. |
 | `🔊 Downloading Piper voice` line at startup, nothing after | First launch — Piper voice is still downloading. Normal, just slow. | Reassure, ask them to wait or relaunch. |
