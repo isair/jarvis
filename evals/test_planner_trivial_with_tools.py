@@ -33,7 +33,7 @@ _TOOL_CATALOG = [
     ("stop", "End the turn and reply to the user."),
 ]
 
-_TOOL_NAMES = {t[0] for t in _TOOL_CATALOG}
+_TOOL_NAMES = {t[0] for t in _TOOL_CATALOG if t[0] != "stop"}
 
 
 def _tool_names_in_plan(plan):

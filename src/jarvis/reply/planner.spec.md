@@ -104,9 +104,9 @@ The planner prompt instructs the model to emit:
 - Steps in the same language the user wrote the query in.
 - Trust the tool router: when the available-tools catalogue contains
   a tool relevant to the query, plan to use it even for seemingly
-  trivial requests (jokes, opinions, creative content). The router
-  already judged the query needs external information — a reply-only
-  plan overrides that judgment and produces stale replies.
+  trivial requests (jokes, opinions, creative content). The tool
+  router already judged the query needs external information — a
+  reply-only plan overrides that judgment and produces stale replies.
 
 ### Parsing and hygiene
 
