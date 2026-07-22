@@ -84,6 +84,8 @@ class MockConfig:
     dictation_thinking_enabled: bool = False
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
+    project_intake_enabled: bool = True
+    project_templates_path: str = ""
 
 
 @pytest.fixture

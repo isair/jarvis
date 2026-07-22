@@ -321,6 +321,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
       "features", "list")
+    f("project_intake_enabled", "Project Intake",
+      "Guided multi-turn interview to build a project brief when starting new work",
+      "features", "bool")
+    f("project_templates_path", "Project Templates Path",
+      "Path to project_templates.json (intake question templates)",
+      "features", "str", nullable=True)
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",

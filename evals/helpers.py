@@ -281,6 +281,8 @@ class MockConfig:
     dialogue_memory_timeout: int = 300
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
+    project_intake_enabled: bool = True
+    project_templates_path: str = ""
 
 
 @dataclass
