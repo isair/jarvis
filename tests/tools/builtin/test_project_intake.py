@@ -155,6 +155,48 @@ class TestAbandon:
         assert get_gated_session(db) is None
 
 
+class TestRestartTriggerMidInterview:
+    """Saying the start-a-new-project trigger phrase again while a session
+    is already awaiting_type/in_progress must not be swallowed as free-text
+    input to the current question — see project_intake.spec.md "Restarting
+    mid-interview"."""
+
+    def test_restart_phrase_during_awaiting_type_does_not_advance(self, db, mock_config):
+        tool = ProjectIntakeTool()
+        tool.run({"input": "vamos começar um novo projeto"}, _make_context(db, mock_config))
+        session_before = db.get_active_intake_session()
+        assert session_before["status"] == "awaiting_type"
+
+        result = tool.run(
+            {"input": "vamos começar um novo projeto"}, _make_context(db, mock_config)
+        )
+        assert result.success is True
+        assert "projeto em curso" in result.reply_text.lower()
+        assert "esquece o projeto" in result.reply_text.lower()
+
+        session_after = db.get_active_intake_session()
+        assert session_after["status"] == "awaiting_type"
+        assert session_after["current_index"] == session_before["current_index"]
+        assert session_after["answers_json"] == session_before["answers_json"]
+
+    def test_restart_phrase_during_in_progress_does_not_advance(self, db, mock_config):
+        tool = ProjectIntakeTool()
+        tool.run({"input": "vamos começar um novo projeto"}, _make_context(db, mock_config))
+        tool.run({"input": "site institucional"}, _make_context(db, mock_config))  # -> in_progress, Q1
+        session_before = db.get_active_intake_session()
+        assert session_before["status"] == "in_progress"
+
+        result = tool.run(
+            {"input": "vamos começar um novo projeto"}, _make_context(db, mock_config)
+        )
+        assert result.success is True
+        assert "projeto em curso" in result.reply_text.lower()
+
+        session_after = db.get_active_intake_session()
+        assert session_after["current_index"] == session_before["current_index"]
+        assert session_after["answers_json"] == session_before["answers_json"]
+
+
 class TestObsidianWrite:
     def _complete_a_session(self, db, mock_config):
         tool = ProjectIntakeTool()

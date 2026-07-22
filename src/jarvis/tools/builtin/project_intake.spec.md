@@ -237,6 +237,26 @@ Obsidian, and delegation to Antigravity is a distinct, explicit action
 that only fires when asked — never automatically the moment intake
 finishes.
 
+### Restarting mid-interview
+
+If the user says the same start-a-new-project trigger phrasing again while
+a session is already `awaiting_type`/`in_progress` (e.g. "vamos começar um
+novo projeto" mid-interview), the gate still forces the tool call, so this
+must be handled inside `run()` rather than relying on the planner to
+notice. Deterministic substring match (same normalisation as the abandon
+check: NFKD-strip-accents + casefold) against the same trigger phrasing
+advertised in the tool's description ("novo projeto" / "outro projeto")
+is checked right after the abandon-phrase check and before the
+`awaiting_type`/`in_progress` branches. When it matches:
+
+- Reply: "Já tens um projeto em curso — queres terminar essa entrevista,
+  ou dizer 'esquece o projeto' para cancelar e começar de novo?"
+- `current_index` and `answers_json` are left untouched — the turn is not
+  treated as an answer to the pending question.
+
+This forces an explicit choice (finish or abandon) instead of silently
+swallowing the restart request as free-text input.
+
 ### Abandoning an in-progress interview
 
 If the user's `input` during `in_progress` or `awaiting_type` is clearly
@@ -288,3 +308,6 @@ abandon turn   → "Ok, cancelei o intake do projeto. Diz 'vamos começar um nov
   brief contains every Q/A pair in order.
 - Abandon-phrase test: mid-interview cancellation stops the gate from
   firing on the next turn.
+- Restart-trigger test: the start-a-new-project phrase said again during
+  `awaiting_type`/`in_progress` returns the "finish or abandon first"
+  reply and leaves `current_index`/`answers_json` untouched.

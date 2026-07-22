@@ -46,12 +46,27 @@ ABANDON_REPLY = (
     "quando quiseres recomeçar."
 )
 
+RESTART_MID_INTERVIEW_REPLY = (
+    "Já tens um projeto em curso — queres terminar essa entrevista, ou "
+    "dizer 'esquece o projeto' para cancelar e começar de novo?"
+)
+
 _ABANDON_PHRASES = [
     "esquece o projeto",
     "esquece isso",
     "cancela isto",
     "cancelar o projeto",
     "cancelar projeto",
+]
+
+# Substrings of the same start-a-new-project trigger phrasing the tool's
+# description advertises for routing (see the "starting a new session"
+# section of project_intake.spec.md). Reused here to recognise a restart
+# request mid-interview, which must not be swallowed as free-text input to
+# the current question.
+_RESTART_TRIGGER_PHRASES = [
+    "novo projeto",
+    "outro projeto",
 ]
 
 _FALLBACK_TEMPLATES: Dict[str, Any] = {
@@ -80,6 +95,10 @@ def _normalize(text: str) -> str:
 
 def _is_abandon_phrase(normalized_text: str) -> bool:
     return any(phrase in normalized_text for phrase in _ABANDON_PHRASES)
+
+
+def _is_restart_trigger_phrase(normalized_text: str) -> bool:
+    return any(phrase in normalized_text for phrase in _RESTART_TRIGGER_PHRASES)
 
 
 def load_templates(cfg: Any) -> Dict[str, Any]:
@@ -261,6 +280,12 @@ class ProjectIntakeTool(Tool):
         if _is_abandon_phrase(normalized):
             context.db.update_intake_session(session["id"], status="completed", abandoned=1)
             return ToolExecutionResult(success=True, reply_text=ABANDON_REPLY)
+
+        # A restart trigger mid-interview must not be treated as free-text
+        # input to the current question — ask the user to explicitly finish
+        # or abandon first. current_index/answers_json are left untouched.
+        if _is_restart_trigger_phrase(normalized):
+            return ToolExecutionResult(success=True, reply_text=RESTART_MID_INTERVIEW_REPLY)
 
         templates = load_templates(context.cfg)
 
