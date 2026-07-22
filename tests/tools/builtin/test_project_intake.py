@@ -227,6 +227,53 @@ class TestStaleSessionExpiry:
         assert get_gated_session(db) is not None
 
 
+class TestDbFailureHandling:
+    def test_awaiting_type_transition_db_failure_returns_friendly_error(self, db, mock_config):
+        tool = ProjectIntakeTool()
+        tool.run({"input": "vamos começar um novo projeto"}, _make_context(db, mock_config))
+
+        broken_db = Mock()
+        session = db.get_active_intake_session()
+        broken_db.get_active_intake_session.return_value = session
+        broken_db.update_intake_session.side_effect = RuntimeError("disk full")
+
+        result = tool.run(
+            {"input": "site institucional"}, _make_context(broken_db, mock_config)
+        )
+        assert result.success is False
+        assert result.reply_text
+
+        # Session state in the real DB must be untouched (still awaiting_type).
+        assert db.get_active_intake_session()["status"] == "awaiting_type"
+
+    def test_malformed_questions_json_triggers_friendly_abandon(self, db, mock_config):
+        tool = ProjectIntakeTool()
+        tool.run({"input": "vamos começar um novo projeto"}, _make_context(db, mock_config))
+        tool.run({"input": "site institucional"}, _make_context(db, mock_config))
+
+        session = db.get_active_intake_session()
+        db.update_intake_session(session["id"], questions_json="{not valid json")
+
+        result = tool.run({"input": "resposta qualquer"}, _make_context(db, mock_config))
+        assert result.success is True
+        assert "cancel" in result.reply_text.lower() or "recome" in result.reply_text.lower()
+
+        assert get_gated_session(db) is None
+
+    def test_malformed_answers_json_triggers_friendly_abandon(self, db, mock_config):
+        tool = ProjectIntakeTool()
+        tool.run({"input": "vamos começar um novo projeto"}, _make_context(db, mock_config))
+        tool.run({"input": "site institucional"}, _make_context(db, mock_config))
+
+        session = db.get_active_intake_session()
+        db.update_intake_session(session["id"], answers_json="{not valid json")
+
+        result = tool.run({"input": "resposta qualquer"}, _make_context(db, mock_config))
+        assert result.success is True
+
+        assert get_gated_session(db) is None
+
+
 class TestObsidianWrite:
     def _complete_a_session(self, db, mock_config):
         tool = ProjectIntakeTool()

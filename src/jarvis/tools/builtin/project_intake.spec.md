@@ -285,9 +285,18 @@ abandon turn   → "Ok, cancelei o intake do projeto. Diz 'vamos começar um nov
   falls back to `other` with a minimal built-in question set
   (name, target audience, success criteria, deadline) so the tool never
   hard-fails even with a broken config file.
-- Any write failure while advancing `current_index` → the turn returns
-  a friendly "não consegui guardar essa resposta, podes repetir?" and
-  does **not** advance the index, so the answer isn't silently dropped.
+- Any write failure while advancing `current_index`, or while persisting
+  the resolved project type on the `awaiting_type` → `in_progress`
+  transition → the turn returns a friendly error ("não consegui guardar
+  essa resposta, podes repetir?" / "não consegui guardar o tipo de
+  projeto, tenta outra vez.") and does **not** advance state, so the
+  answer isn't silently dropped or the session left half-written.
+- Malformed `questions_json`/`answers_json` on an `in_progress` session
+  (e.g. corrupted by a prior partial write) → rather than crashing the
+  turn — which, under the gate, would corrupt every subsequent turn too
+  — the session is marked `status='completed'`/`abandoned=1` and the
+  user gets a friendly message ("tive um problema com os dados desta
+  entrevista e tive de a cancelar…") inviting them to restart.
 - **Stale sessions auto-expire.** `get_gated_session()` checks the
   session's `updated_at` against `project_intake_stale_minutes` (default
   30). If the session has had no activity for longer than that, it's
@@ -327,3 +336,7 @@ abandon turn   → "Ok, cancelei o intake do projeto. Diz 'vamos começar um nov
 - Staleness test: a session with an `updated_at` older than
   `project_intake_stale_minutes` is auto-abandoned and `get_gated_session`
   returns `None`; a fresh session within the threshold still gates.
+- DB-failure tests: a write failure during the `awaiting_type` →
+  `in_progress` transition returns a friendly error without corrupting
+  the real session; malformed `questions_json`/`answers_json` triggers a
+  friendly abandon instead of crashing the turn.

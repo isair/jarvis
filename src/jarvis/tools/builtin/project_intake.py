@@ -51,6 +51,11 @@ RESTART_MID_INTERVIEW_REPLY = (
     "dizer 'esquece o projeto' para cancelar e começar de novo?"
 )
 
+CORRUPTED_SESSION_REPLY = (
+    "Tive um problema com os dados desta entrevista e tive de a cancelar. "
+    "Diz 'vamos começar um novo projeto' quando quiseres recomeçar."
+)
+
 _ABANDON_PHRASES = [
     "esquece o projeto",
     "esquece isso",
@@ -327,18 +332,35 @@ class ProjectIntakeTool(Tool):
             key = match_template(templates, text)
             tmpl = templates.get(key) or _FALLBACK_TEMPLATES["other"]
             questions = list(tmpl.get("questions") or []) or list(_FALLBACK_TEMPLATES["other"]["questions"])
-            context.db.update_intake_session(
-                session["id"],
-                project_type=key,
-                status="in_progress",
-                questions_json=json.dumps(questions),
-                current_index=0,
-            )
+            try:
+                ok = context.db.update_intake_session(
+                    session["id"],
+                    project_type=key,
+                    status="in_progress",
+                    questions_json=json.dumps(questions),
+                    current_index=0,
+                )
+            except Exception as e:
+                debug_log(f"projectIntake: failed to save resolved type: {e}", "tools")
+                ok = False
+            if not ok:
+                return ToolExecutionResult(
+                    success=False,
+                    reply_text="Não consegui guardar o tipo de projeto, tenta outra vez.",
+                )
             return ToolExecutionResult(success=True, reply_text=questions[0])
 
         # status == 'in_progress'
-        questions = json.loads(session["questions_json"] or "[]")
-        answers = json.loads(session["answers_json"] or "[]")
+        try:
+            questions = json.loads(session["questions_json"] or "[]")
+            answers = json.loads(session["answers_json"] or "[]")
+        except (ValueError, TypeError) as e:
+            debug_log(f"projectIntake: malformed session state, abandoning: {e}", "tools")
+            try:
+                context.db.update_intake_session(session["id"], status="completed", abandoned=1)
+            except Exception as db_e:
+                debug_log(f"projectIntake: failed to abandon corrupted session: {db_e}", "tools")
+            return ToolExecutionResult(success=True, reply_text=CORRUPTED_SESSION_REPLY)
         idx = int(session["current_index"] or 0)
         answers.append(text)
         next_idx = idx + 1
