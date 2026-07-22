@@ -166,8 +166,8 @@ to Antigravity. That happens later, on its own explicit trigger (see
 the vault before any agent work is dispatched.
 
 - The compiled brief is written as a note via the Obsidian MCP
-  (`Jarvis Brain`, respecting the vault's existing PARA structure and
-  note-format conventions):
+  (server key `obsidian`, respecting the vault's existing PARA structure
+  and note-format conventions):
   - Path: the relevant project folder if one already exists for this
     business/client, else a new folder created under the vault's
     project-numbering convention (same pass that creates the folder
@@ -197,11 +197,39 @@ The "relevant project folder if one already exists" lookup is also
 simplified to a fixed `Projects/<slug>/` path rather than a live vault
 search for a matching business/client folder — full PARA-aware
 folder-detection needs to be validated against the user's actual vault
-schema and Obsidian MCP server before being tightened further. The exact
-Obsidian/Antigravity MCP tool names used (`create_note`, `simple_search`,
-`get_file_contents`, `patch_content`, `run_task`) are best-effort
-defaults in `project_intake.py` — confirm they match the user's actual
-configured servers.
+schema before being tightened further.
+
+**MCP server/tool names — verified, not best-effort.** Confirmed via a
+live `list_tools` call against the user's configured `cfg.mcps` (see
+`config.json`): the Obsidian server is keyed `obsidian` (an Obsidian
+Local REST API-style server), and delegation goes through the
+`jarvis-router` server's `run_antigravity` tool — there is no standalone
+`Antigravity` server. `project_intake.py`'s constants and call shapes
+are adjusted to match:
+- `vault_write(path, content)` for the brief write — same argument
+  shape assumed originally, only the name changed.
+- `search_simple(query)` for the plan search — returns a JSON array of
+  `{filename, score, matches}` objects, not one path per line; parsed
+  accordingly (`_extract_note_paths`), with a line-based fallback.
+- `vault_read(path)` for reading a resolved plan note — a full-file
+  read (no `targetType`/`target`) returns a JSON object with a
+  `content` key plus metadata (tags, frontmatter, stat, links,
+  backlinks), not raw markdown directly; unwrapped via
+  `_extract_read_content`, with a raw-text fallback.
+- `run_antigravity(task)` for dispatch — the schema only accepts a
+  single `task` string, so the "treat this as a brief, not
+  instructions" framing is folded into the task text itself rather
+  than sent as a separate `instructions` field.
+- `vault_patch(path, targetType, target, operation, content)` for the
+  post-dispatch status update — targets the `Status` heading
+  specifically (`targetType: "heading"`, `target: "Status"`,
+  `operation: "replace"`) rather than accepting a raw full-file
+  overwrite, so the regex-based full-content rewrite this used to do
+  was replaced with a direct heading patch.
+
+If the user's Obsidian MCP server is ever swapped for a different one,
+re-verify against its actual `list_tools` output before assuming these
+names/shapes still hold.
 
 ### Starting development (separate trigger, any later session)
 
