@@ -197,6 +197,36 @@ class TestRestartTriggerMidInterview:
         assert session_after["answers_json"] == session_before["answers_json"]
 
 
+class TestStaleSessionExpiry:
+    def test_stale_session_is_auto_abandoned_and_does_not_gate(self, db, mock_config):
+        from datetime import datetime, timedelta, timezone
+
+        mock_config.project_intake_stale_minutes = 30
+        session_id = db.insert_intake_session()
+
+        stale_time = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
+        with db._lock:
+            db.conn.execute(
+                "UPDATE project_intake_sessions SET updated_at = ? WHERE id = ?",
+                (stale_time, session_id),
+            )
+            db.conn.commit()
+
+        assert get_gated_session(db, mock_config) is None
+
+        row = db.get_active_intake_session()
+        assert row is None  # session was marked completed/abandoned
+
+    def test_fresh_session_within_threshold_still_gates(self, db, mock_config):
+        mock_config.project_intake_stale_minutes = 30
+        db.insert_intake_session()
+        assert get_gated_session(db, mock_config) is not None
+
+    def test_missing_cfg_does_not_crash_and_uses_default_threshold(self, db):
+        db.insert_intake_session()
+        assert get_gated_session(db) is not None
+
+
 class TestObsidianWrite:
     def _complete_a_session(self, db, mock_config):
         tool = ProjectIntakeTool()

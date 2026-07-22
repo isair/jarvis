@@ -149,20 +149,54 @@ def compile_brief(project_label: str, questions: List[str], answers: List[str]) 
     return f"Brief do projeto '{project_label}' concluído:\n" + "\n".join(lines)
 
 
-def get_gated_session(db: Any) -> Optional[Any]:
+_DEFAULT_STALE_MINUTES = 30
+
+
+def _is_stale(session: Any, cfg: Any) -> bool:
+    threshold_minutes = getattr(cfg, "project_intake_stale_minutes", _DEFAULT_STALE_MINUTES)
+    if not threshold_minutes or threshold_minutes <= 0:
+        return False
+    updated_at = session["updated_at"]
+    if not updated_at:
+        return False
+    updated = datetime.fromisoformat(updated_at)
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - updated).total_seconds()
+    return age_seconds > threshold_minutes * 60
+
+
+def get_gated_session(db: Any, cfg: Any = None) -> Optional[Any]:
     """Pre-planner gate lookup. Fail-open: any DB error, or a return value
     that doesn't behave like a real row (e.g. an unconfigured test double),
     means 'no session' rather than crashing the turn.
+
+    A session that has gone stale (no activity for
+    ``cfg.project_intake_stale_minutes``, default 30) is treated as
+    abandoned: it's marked completed/abandoned in the DB and 'no session'
+    is returned, so a forgotten interview can't hijack every future turn
+    forever. See project_intake.spec.md "Fail-open behaviour".
     """
     try:
         session = db.get_active_intake_session()
         if session is None:
             return None
         session["status"]  # shape check — raises on non-row-like objects
-        return session
     except Exception as e:
         debug_log(f"project intake gate: session lookup failed (fail-open): {e}", "tools")
         return None
+
+    try:
+        if _is_stale(session, cfg):
+            debug_log(
+                f"project intake gate: session {session['id']} stale, auto-abandoning", "tools"
+            )
+            db.update_intake_session(session["id"], status="completed", abandoned=1)
+            return None
+    except Exception as e:
+        debug_log(f"project intake gate: staleness check failed (fail-open): {e}", "tools")
+
+    return session
 
 
 def _slugify(text: str) -> str:
@@ -262,7 +296,7 @@ class ProjectIntakeTool(Tool):
             else (context.redacted_text or "").strip()
         )
 
-        session = get_gated_session(context.db)
+        session = get_gated_session(context.db, context.cfg)
 
         if session is None:
             try:

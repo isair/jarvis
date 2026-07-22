@@ -86,6 +86,7 @@ class MockConfig:
     use_stdin: bool = True
     project_intake_enabled: bool = True
     project_templates_path: str = ""
+    project_intake_stale_minutes: int = 30
 
 
 @pytest.fixture

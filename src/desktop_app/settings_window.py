@@ -327,6 +327,9 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("project_templates_path", "Project Templates Path",
       "Path to project_templates.json (intake question templates)",
       "features", "str", nullable=True)
+    f("project_intake_stale_minutes", "Project Intake Stale Timeout",
+      "Minutes of inactivity before an abandoned intake session auto-expires",
+      "features", "int", min_val=1, max_val=1440, step=5, suffix="min")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",

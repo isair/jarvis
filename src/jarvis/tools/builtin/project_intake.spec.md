@@ -288,6 +288,16 @@ abandon turn   → "Ok, cancelei o intake do projeto. Diz 'vamos começar um nov
 - Any write failure while advancing `current_index` → the turn returns
   a friendly "não consegui guardar essa resposta, podes repetir?" and
   does **not** advance the index, so the answer isn't silently dropped.
+- **Stale sessions auto-expire.** `get_gated_session()` checks the
+  session's `updated_at` against `project_intake_stale_minutes` (default
+  30). If the session has had no activity for longer than that, it's
+  marked `status='completed'`/`abandoned=1` and `get_gated_session()`
+  returns `None`, so the turn falls through to normal routing instead of
+  being hijacked forever by a session the user walked away from — this
+  holds across app restarts too, since the session lives in the DB. The
+  staleness check itself fails open: any error while checking or
+  updating simply leaves the session active for that turn rather than
+  crashing.
 
 ### Config keys
 
@@ -295,6 +305,9 @@ abandon turn   → "Ok, cancelei o intake do projeto. Diz 'vamos começar um nov
   co-located with `config.json`.
 - `project_intake_enabled` — default `true`; when `false`, the gate
   never fires and the tool is excluded from the catalogue entirely.
+- `project_intake_stale_minutes` — default `30`; how long an intake
+  session can sit with no activity before it's treated as abandoned and
+  stops forcing the gate. See "Fail-open behaviour" above.
 
 ### Testing
 
@@ -311,3 +324,6 @@ abandon turn   → "Ok, cancelei o intake do projeto. Diz 'vamos começar um nov
 - Restart-trigger test: the start-a-new-project phrase said again during
   `awaiting_type`/`in_progress` returns the "finish or abandon first"
   reply and leaves `current_index`/`answers_json` untouched.
+- Staleness test: a session with an `updated_at` older than
+  `project_intake_stale_minutes` is auto-abandoned and `get_gated_session`
+  returns `None`; a fresh session within the threshold still gates.

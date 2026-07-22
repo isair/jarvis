@@ -838,7 +838,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # get_gated_session. See project_intake.spec.md "The gate".
     if getattr(cfg, "project_intake_enabled", True):
         from ..tools.builtin.project_intake import get_gated_session
-        _intake_session = get_gated_session(db)
+        _intake_session = get_gated_session(db, cfg)
         if _intake_session is not None:
             debug_log("project intake gate: active session, forcing projectIntake tool call", "tools")
             _intake_result = run_tool_with_retries(
