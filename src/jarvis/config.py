@@ -180,6 +180,10 @@ class Settings:
     # the LLM. False restores upstream behaviour (everything goes to the model).
     local_answers_enabled: bool
 
+    # Unified text+voice chat UI (Phase 2). Additive; default off — no runtime
+    # change when disabled. Turn types live in src/jarvis/core/turn.py.
+    chat_ui_enabled: bool
+
     # Cora Learning Loop v1 — structured lessons after conversation end.
     # Default false until live validation. Never auto-edits code/config/models.
     conversation_learning_enabled: bool
@@ -517,6 +521,9 @@ def get_default_config() -> Dict[str, Any]:
         "assistant_style": "butler",
         "local_answers_enabled": True,
         # Cora Learning Loop v1 — default off until live validation
+        # Unified text+voice chat UI (Phase 2) — additive, default off.
+        "chat_ui_enabled": False,
+
         "conversation_learning_enabled": False,
         "conversation_learning_mode": "safe_auto",
         "conversation_learning_max_items": 4,
@@ -792,6 +799,7 @@ def load_settings() -> Settings:
     conversation_learning_max_items = max(1, int(merged.get("conversation_learning_max_items", 4)))
     conversation_learning_timeout_sec = float(merged.get("conversation_learning_timeout_sec", 12.0))
     conversation_learning_min_recurrences = max(2, int(merged.get("conversation_learning_min_recurrences", 3)))
+    chat_ui_enabled = bool(merged.get("chat_ui_enabled", False))
     openai_realtime_enabled = bool(merged.get("openai_realtime_enabled", False))
     openai_realtime_model = str(
         merged.get("openai_realtime_model", "gpt-realtime-2.1") or "gpt-realtime-2.1"
@@ -1006,6 +1014,7 @@ def load_settings() -> Settings:
         conversation_learning_max_items=conversation_learning_max_items,
         conversation_learning_timeout_sec=conversation_learning_timeout_sec,
         conversation_learning_min_recurrences=conversation_learning_min_recurrences,
+        chat_ui_enabled=chat_ui_enabled,
         openai_realtime_enabled=openai_realtime_enabled,
         openai_realtime_model=openai_realtime_model,
         openai_realtime_transcription_model=openai_realtime_transcription_model,

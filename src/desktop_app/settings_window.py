@@ -310,6 +310,9 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("web_search_enabled", "Web Search",
       "Enable web search tool",
       "features", "bool")
+    f("chat_ui_enabled", "Chat UI (text input)",
+      "Show the unified text+voice chat window in the tray. Additive; off by default. Bundled mode only in Phase 2.",
+      "features", "bool")
     f("openai_realtime_enabled", "OpenAI Realtime (Premium)",
       "Use OpenAI Realtime audio-to-audio after wake word (API key from Windows Credential Manager: Cora.OpenAI). Default off.",
       "features", "bool")

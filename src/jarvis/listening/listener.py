@@ -1646,13 +1646,17 @@ class VoiceListener(threading.Thread):
 
         # Import reply engine
         from ..reply.engine import run_reply_engine
+        from ..daemon import _reply_lock  # shared single-flight gate (voice <-> text chat)
 
-        # Process the query (keep thinking tune playing during processing)
+        # Process the query (keep thinking tune playing during processing).
+        # Hold the shared reply lock so a text-chat turn and this voice turn can
+        # never run run_reply_engine concurrently on the shared DialogueMemory.
         try:
-            reply = run_reply_engine(
-                self.db, self.cfg, None, query, self.dialogue_memory,
-                language=self._last_detected_language,
-            )
+            with _reply_lock:
+                reply = run_reply_engine(
+                    self.db, self.cfg, None, query, self.dialogue_memory,
+                    language=self._last_detected_language,
+                )
         except Exception as e:
             # Log the error visibly - this should never happen silently
             print(f"\n  ❌ Reply engine error: {e}", flush=True)

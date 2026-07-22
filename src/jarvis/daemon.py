@@ -49,6 +49,9 @@ _global_stop_requested: bool = False
 _warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
+_global_cfg = None  # live Settings — set while the daemon runs in-process (chat submit)
+_global_db = None  # live Database — set while the daemon runs in-process (chat submit)
+_reply_lock = threading.Lock()  # single-flight guard: at most one chat reply in flight
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
 # Desktop app's stop_daemon() should wait at least this long + buffer
@@ -148,6 +151,118 @@ def get_tts_engine():
 def get_dictation_engine():
     """Get the global dictation engine (used by desktop app for history window)."""
     return _global_dictation_engine
+
+
+def get_cfg():
+    """Live Settings once the daemon runs in-process (bundled mode); None otherwise."""
+    return _global_cfg
+
+
+def get_db():
+    """Live Database once the daemon runs in-process (bundled mode); None otherwise."""
+    return _global_db
+
+
+def submit_user_text(user_message, turn_context):
+    """Run one text-chat turn through the SAME reply core the voice path uses.
+
+    Reuses the live cfg / db / DialogueMemory (the same conversation the voice
+    path uses). ``run_reply_engine`` already writes the user+assistant turn into
+    DialogueMemory, so this never double-writes. Single-flight: returns a BLOCKED
+    result if a reply is already in flight. TTS is a secondary output handled by
+    the caller (the chat worker), never here. Returns a ``TurnResult`` and never
+    raises for an expected failure.
+    """
+    from .core.turn import (
+        AssistantStatus, MemoryStatus, StructuredError, TurnResult, TurnStatus,
+        VerificationStatus, new_assistant_message,
+    )
+
+    if not _reply_lock.acquire(blocking=False):
+        return TurnResult(
+            status=TurnStatus.BLOCKED,
+            memory_status=MemoryStatus.PENDING,
+            structured_error=StructuredError("busy", "A reply is already in progress."),
+        )
+    try:
+        # After a stop request the daemon is tearing down (db may be closed and
+        # the live globals are stale), so refuse chat cleanly instead of running
+        # the engine against a closing db (finding 8a).
+        if is_stop_requested():
+            return TurnResult(
+                status=TurnStatus.FAILED,
+                memory_status=MemoryStatus.PENDING,
+                structured_error=StructuredError(
+                    "daemon_not_ready",
+                    "Chat is only available while Cora is running (bundled mode).",
+                ),
+            )
+        cfg = _global_cfg
+        db = _global_db
+        dm = _global_dialogue_memory
+        if cfg is None or db is None or dm is None:
+            return TurnResult(
+                status=TurnStatus.FAILED,
+                memory_status=MemoryStatus.PENDING,
+                structured_error=StructuredError(
+                    "daemon_not_ready",
+                    "Chat is only available while the daemon runs in-process (bundled mode).",
+                ),
+            )
+
+        # Snapshot memory so memory_status is truthful: run_reply_engine writes
+        # the turn on its normal path but SKIPS the local-answer, learning-command
+        # and stop-tool replies. We never write ourselves, so we detect whether
+        # the engine wrote by comparing the message count across the call.
+        try:
+            mem_before = len(getattr(dm, "_messages", []) or [])
+        except Exception:
+            mem_before = None
+
+        assistant = new_assistant_message(turn_context)
+        try:
+            from .reply.engine import run_reply_engine
+            # tts=None: like the voice path, the engine only returns text; the
+            # chat worker owns speaking so a TTS failure can never fail the turn.
+            reply = run_reply_engine(
+                db, cfg, None, user_message.text, dm,
+                language=user_message.language,
+            )
+        except Exception as e:  # engine faults become a structured result, not a crash
+            debug_log(f"chat submit reply failed: {type(e).__name__}", "chat")
+            assistant.status = AssistantStatus.FAILED
+            assistant.error = StructuredError("reply_error", type(e).__name__)
+            return TurnResult(
+                status=TurnStatus.FAILED, assistant_message=assistant,
+                memory_status=MemoryStatus.PENDING, structured_error=assistant.error,
+            )
+
+        # run_reply_engine persists the turn on its success path; we never re-write.
+        if reply is None or not str(reply).strip():
+            assistant.status = AssistantStatus.FAILED
+            assistant.error = StructuredError("empty_reply", "The model returned no text.")
+            return TurnResult(
+                status=TurnStatus.FAILED, assistant_message=assistant,
+                memory_status=MemoryStatus.PENDING, structured_error=assistant.error,
+            )
+
+        assistant.text = reply
+        assistant.status = AssistantStatus.COMPLETED
+        assistant.verification_status = VerificationStatus.SKIPPED  # no verifier yet (later phase)
+        # WRITTEN only if the engine actually persisted the turn; SKIPPED for
+        # local-answer / learning-command replies that return text without writing.
+        try:
+            mem_after = len(getattr(dm, "_messages", []) or [])
+            wrote = mem_before is not None and mem_after > mem_before
+        except Exception:
+            wrote = mem_before is None  # unmeasurable -> don't over-claim
+        return TurnResult(
+            status=TurnStatus.COMPLETED, assistant_message=assistant,
+            verification=VerificationStatus.SKIPPED,
+            memory_status=MemoryStatus.WRITTEN if wrote else MemoryStatus.SKIPPED,
+        )
+    finally:
+        _reply_lock.release()
 
 
 def _install_signal_handlers() -> None:
@@ -306,7 +421,7 @@ def _check_and_update_diary(
 def main() -> None:
     """Main daemon entry point."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
-    global _warm_profile_graph_listener
+    global _warm_profile_graph_listener, _global_cfg, _global_db
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -315,6 +430,9 @@ def main() -> None:
 
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
+    # Expose live cfg/db for the in-process chat submit path (bundled mode).
+    _global_cfg = cfg
+    _global_db = db
 
     debug_log("daemon started", "jarvis")
     print("✓ Daemon started", flush=True)

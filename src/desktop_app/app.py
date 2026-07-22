@@ -1374,6 +1374,18 @@ class JarvisSystemTray:
         self.dictation_history_action.triggered.connect(self.show_dictation_history)
         self.menu.addAction(self.dictation_history_action)
 
+        # 💬 Chat (unified text+voice) — only shown when the feature flag is on
+        self.chat_window = None
+        try:
+            from jarvis.config import load_config
+            _chat_enabled = bool(load_config().get("chat_ui_enabled", False))
+        except Exception:
+            _chat_enabled = False
+        if _chat_enabled:
+            self.chat_action = QAction("💬 Chat")
+            self.chat_action.triggered.connect(self.show_chat)
+            self.menu.addAction(self.chat_action)
+
         # Face window action
         self.face_action = QAction("👤 Show Face")
         self.face_action.triggered.connect(self.show_face_window)
@@ -1520,6 +1532,36 @@ class JarvisSystemTray:
         # For existing users: restart to apply changes
         if result == QWizard.DialogCode.Accepted or was_listening:
             self.start_daemon()
+
+    def show_chat(self) -> None:
+        """Open the unified text+voice chat window.
+
+        Chat needs the daemon running in-process (bundled mode) so it can reach
+        the live cfg/db/DialogueMemory. In dev/subprocess mode those live in the
+        daemon subprocess, so chat is unavailable (no fragile IPC in Phase 2).
+        """
+        from PyQt6.QtWidgets import QMessageBox
+        from jarvis import daemon as _daemon
+        # Robust in-process check: get_cfg() is set only inside the daemon process.
+        if _daemon.get_cfg() is None:
+            QMessageBox.information(
+                None, "💬 Cora Chat",
+                "Chat needs Cora running in-process (bundled mode).\n\n"
+                "Start Cora, or use a bundled build. Subprocess mode is not "
+                "supported yet.",
+            )
+            return
+        try:
+            from desktop_app.chat_window import ChatWindow
+            from jarvis.config import load_settings
+            if getattr(self, "chat_window", None) is None:
+                self.chat_window = ChatWindow(cfg=load_settings())
+            self.chat_window.show()
+            self.chat_window.raise_()
+            self.chat_window.activateWindow()
+        except Exception as e:
+            debug_log(f"failed to open chat window: {type(e).__name__}", "desktop")
+            QMessageBox.warning(None, "💬 Cora Chat", f"Could not open chat: {type(e).__name__}")
 
     def show_settings(self) -> None:
         """Show the settings window."""
