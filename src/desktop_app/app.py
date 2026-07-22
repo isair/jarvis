@@ -1241,6 +1241,28 @@ class MemoryViewerWindow(QMainWindow):
         event.accept()
 
 
+def should_run_daemon_inprocess(*, frozen: bool, environ) -> bool:
+    """Decide whether the daemon runs in-process (QThread) vs as a subprocess.
+
+    Frozen/bundled always runs in-process (existing behaviour, unchanged). For
+    source runs, an explicit ``JARVIS_INPROCESS_DAEMON`` opt-in (1/true/yes/on)
+    enables the in-process path so the desktop chat can reach the daemon's live
+    globals in the same process. Anything else — absent, empty, 0/false/no/off —
+    keeps the existing subprocess behaviour, and any unrecognised value fails
+    closed to subprocess. This never enables chat by itself (chat stays gated on
+    chat_ui_enabled) and never changes realtime/learning defaults.
+    """
+    if frozen:
+        return True
+    raw = (environ.get("JARVIS_INPROCESS_DAEMON") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("", "0", "false", "no", "off"):
+        return False
+    debug_log("JARVIS_INPROCESS_DAEMON has an unrecognised value; defaulting to subprocess", "desktop")
+    return False
+
+
 class JarvisSystemTray:
     """System tray application for Cora voice assistant."""
 
@@ -1798,8 +1820,9 @@ class JarvisSystemTray:
     def start_daemon(self) -> None:
         """Start the Cora daemon."""
         try:
-            if self.is_bundled:
-                # When bundled, run daemon in a QThread since Qt components may be used
+            if should_run_daemon_inprocess(frozen=self.is_bundled, environ=os.environ):
+                # In-process (QThread): frozen/bundled, or an explicit
+                # JARVIS_INPROCESS_DAEMON opt-in on a source run (Qt components may be used)
 
                 class DaemonThread(QThread):
                     """QThread to run the daemon."""
@@ -2078,7 +2101,7 @@ class JarvisSystemTray:
         debug_log(f"stop_daemon called: is_bundled={self.is_bundled}, daemon_thread={self.daemon_thread}, show_diary_dialog={show_diary_dialog}", "desktop")
 
         try:
-            if self.is_bundled and self.daemon_thread:
+            if self.daemon_thread:  # in-process path was chosen (bundled or JARVIS_INPROCESS_DAEMON)
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
                 self.log_signals.new_log.emit("⏸️ Stopping Cora daemon...\n")
@@ -2313,7 +2336,7 @@ class JarvisSystemTray:
 
     def check_daemon_status(self) -> None:
         """Check if the daemon process/thread is still running."""
-        if self.is_bundled and self.daemon_thread:
+        if self.daemon_thread:  # in-process daemon (bundled or JARVIS_INPROCESS_DAEMON)
             # Check if QThread is still running
             if self.daemon_thread.isFinished() and self.is_listening:
                 # Thread has terminated
