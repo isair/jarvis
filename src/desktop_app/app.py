@@ -62,7 +62,7 @@ from jarvis.debug import debug_log
 from jarvis.config import default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET
-from desktop_app.face_widget import FaceWindow
+from desktop_app.hud_window import HudFaceWindow
 
 
 _LOG_SEPARATOR = "─" * 50
@@ -1280,7 +1280,8 @@ class JarvisSystemTray:
         # Create face window (hidden by default)
         # Note: Creating the face window also initializes the SpeakingState singleton
         # in the main thread, which is important for cross-thread signal delivery
-        self.face_window = FaceWindow()
+        self.face_window = HudFaceWindow()
+        self.log_signals.new_log.connect(self.face_window.add_log_line)
 
         # Create dictation history window (hidden by default)
         from desktop_app.dictation_history import DictationHistoryWindow
