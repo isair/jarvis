@@ -1,0 +1,69 @@
+{
+  "website": {
+    "label": "Site / Loja Online",
+    "keywords": ["site", "website", "web site", "loja online", "landing page", "ecommerce", "e-commerce", "pagina web", "página web"],
+    "questions": [
+      "Qual é o objetivo principal do site? (vender, apresentar a marca, captar contactos/leads, agendar marcações...)",
+      "Quem é o público-alvo? (idade, zona geográfica, tipo de cliente)",
+      "Que produtos ou serviços tens de destacar, e quantos aproximadamente?",
+      "Precisas de loja online com pagamentos, ou só um catálogo/apresentação sem compra direta?",
+      "Já tens marca, logo e cores definidas, ou também precisas disso incluído?",
+      "Tens algum site (teu ou de concorrentes) que gostes como referência, ou algo que queiras claramente evitar?",
+      "Precisas de o site estar em mais do que uma língua?",
+      "Qual é o prazo desejado?",
+      "Qual é o orçamento aproximado?"
+    ]
+  },
+  "app": {
+    "label": "Aplicação Móvel ou Web",
+    "keywords": ["app", "aplicacao", "aplicação", "aplicativo", "mobile", "ios", "android"],
+    "questions": [
+      "Qual é o problema principal que a aplicação resolve para quem a usa?",
+      "Quem são os utilizadores-alvo?",
+      "Deve funcionar em telemóvel, computador, ou ambos?",
+      "Precisa de contas de utilizador e login?",
+      "Vai envolver pagamentos ou subscrições dentro da app?",
+      "Há alguma app parecida que conheças e queiras usar como referência (ou evitar)?",
+      "Qual é o prazo desejado?",
+      "Qual é o orçamento aproximado?"
+    ]
+  },
+  "marketing": {
+    "label": "Campanha de Marketing",
+    "keywords": ["campanha", "marketing", "anuncio", "anúncio", "publicidade", "ads", "promocao", "promoção"],
+    "questions": [
+      "Qual é o objetivo da campanha? (vendas, visibilidade de marca, lançamento de um produto...)",
+      "Quem é o público-alvo?",
+      "Que canais queres usar? (redes sociais, Google Ads, email, físico...)",
+      "Há uma data ou evento associado a esta campanha?",
+      "Já tens materiais criativos (fotos, vídeos, textos) ou é preciso criar de raiz?",
+      "Qual é o orçamento disponível para investimento em anúncios?",
+      "Como vais medir se a campanha correu bem?"
+    ]
+  },
+  "branding": {
+    "label": "Marca / Identidade Visual",
+    "keywords": ["marca", "branding", "logo", "identidade visual", "naming"],
+    "questions": [
+      "O negócio já tem nome definido, ou também precisas de ajuda a escolher um?",
+      "Como descreverias a personalidade da marca em 3 palavras?",
+      "Quem é o público-alvo desta marca?",
+      "Há marcas (de qualquer setor) cujo estilo visual admiras?",
+      "Há cores ou estilos que queres claramente evitar?",
+      "Onde vai ser usada a identidade visual? (site, redes sociais, loja física, embalagens...)",
+      "Qual é o prazo desejado?"
+    ]
+  },
+  "other": {
+    "label": "Outro / Genérico",
+    "keywords": [],
+    "questions": [
+      "Descreve em uma frase o que queres construir ou alcançar com este projeto.",
+      "Quem é o público-alvo ou principal beneficiário?",
+      "Qual é o resultado que consideras sucesso?",
+      "Há restrições importantes a considerar? (técnicas, legais, de recursos)",
+      "Qual é o prazo desejado?",
+      "Qual é o orçamento aproximado?"
+    ]
+  }
+}

@@ -14,6 +14,7 @@ from .nutrition.fetch_meals import FetchMealsTool
 from .nutrition.delete_meal import DeleteMealTool
 from .weather import WeatherTool
 from .stop import StopTool
+from .project_intake import ProjectIntakeTool, StartProjectDevelopmentTool
 
 # Import supporting functions that may still be used elsewhere
 
@@ -28,4 +29,6 @@ __all__ = [
     'DeleteMealTool',
     'WeatherTool',
     'StopTool',
+    'ProjectIntakeTool',
+    'StartProjectDevelopmentTool',
 ]
