@@ -797,6 +797,63 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
+    _INTAKE_TOOL_NAMES = ("projectIntake", "startProjectDevelopment")
+
+    def _deliver_intake_reply(raw_reply_text: Optional[str]) -> str:
+        """Print/speak/record and return a project-intake tool's reply_text
+        directly, bypassing the rest of the agentic loop.
+
+        Both projectIntake and startProjectDevelopment return a complete,
+        final user-facing answer per call (one question, an abandon
+        confirmation, a completion brief, or a status message) — never a
+        fragment a chat model should keep reasoning over. Letting the loop
+        continue risks the model re-invoking the tool with fabricated
+        "input" text, silently advancing multi-turn intake state more than
+        once within a single turn. See project_intake.spec.md "One
+        question per turn, by construction".
+        """
+        reply_text = (raw_reply_text or "").strip() or "Desculpa, algo correu mal no intake do projeto."
+        try:
+            if not getattr(cfg, "voice_debug", False):
+                print(f"\n🤖 Jarvis\n  {_indent_text(reply_text)}\n", flush=True)
+            else:
+                print(f"\n[jarvis]\n  {_indent_text(reply_text)}\n", flush=True)
+        except Exception as e:
+            debug_log(f"project intake reply formatting failed: {e}", "tools")
+        if tts is not None and tts.enabled:
+            tts.speak(reply_text)
+        if dialogue_memory is not None:
+            try:
+                dialogue_memory.add_message("user", redacted)
+                dialogue_memory.add_message("assistant", reply_text)
+            except Exception as e:
+                debug_log(f"project intake dialogue memory error: {e}", "memory")
+        return reply_text
+
+    # Project intake gate — deterministic, pre-planner hard override. When
+    # an intake interview is in progress, force the projectIntake tool call
+    # and skip planner/router/memory enrichment entirely for this turn, so
+    # a fresh planner/router pass can never derail a mid-interview turn.
+    # Fail-open: any DB error is treated as "no session" by
+    # get_gated_session. See project_intake.spec.md "The gate".
+    if getattr(cfg, "project_intake_enabled", True):
+        from ..tools.builtin.project_intake import get_gated_session
+        _intake_session = get_gated_session(db)
+        if _intake_session is not None:
+            debug_log("project intake gate: active session, forcing projectIntake tool call", "tools")
+            _intake_result = run_tool_with_retries(
+                db=db,
+                cfg=cfg,
+                tool_name="projectIntake",
+                tool_args={"input": redacted},
+                system_prompt="",
+                original_prompt=text,
+                redacted_text=redacted,
+                max_retries=1,
+                language=language,
+            )
+            return _deliver_intake_reply(_intake_result.reply_text)
+
     # Step 2: Check for recent dialogue context
     recent_messages = []
     is_new_conversation = True
@@ -867,6 +924,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # same as ``[]``: it's the planner deciding no memory or tools are
     # needed. Both cases are preserved for the engine to distinguish.
     _all_builtin_names = list(BUILTIN_TOOLS.keys())
+    if not getattr(cfg, "project_intake_enabled", True):
+        # When disabled, the gate above never fires and these tools are
+        # excluded from the catalogue entirely (see project_intake.spec.md
+        # "Config keys").
+        _all_builtin_names = [
+            n for n in _all_builtin_names
+            if n not in ("projectIntake", "startProjectDevelopment")
+        ]
     _all_mcp_names = list(mcp_tools.keys())
     _full_catalog_names = _all_builtin_names + _all_mcp_names
 
@@ -911,9 +976,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         routed_tools = list(_cached_routed)
         debug_log("tool router served from hot-window cache", "planning")
     else:
+        _routable_builtin_tools = (
+            {n: t for n, t in BUILTIN_TOOLS.items() if n in _all_builtin_names}
+            if not getattr(cfg, "project_intake_enabled", True)
+            else BUILTIN_TOOLS
+        )
         routed_tools = select_tools(
             query=redacted,
-            builtin_tools=BUILTIN_TOOLS,
+            builtin_tools=_routable_builtin_tools,
             mcp_tools=mcp_tools,
             strategy=strategy,
             llm_base_url=cfg.ollama_base_url,
@@ -1838,6 +1908,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 max_retries=1,
                                 language=language,
                             )
+                            if _name in _INTAKE_TOOL_NAMES:
+                                return _deliver_intake_reply(_plan_result.reply_text)
                             if _plan_result.reply_text:
                                 _plan_text = _maybe_digest_tool_result(
                                     cfg=cfg,
@@ -2123,6 +2195,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 max_retries=1,
                 language=language,
             )
+
+            # projectIntake / startProjectDevelopment: deliver the tool's
+            # reply_text as the final answer immediately — see
+            # _deliver_intake_reply's docstring.
+            if tool_name in _INTAKE_TOOL_NAMES:
+                return _deliver_intake_reply(result.reply_text)
 
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:
