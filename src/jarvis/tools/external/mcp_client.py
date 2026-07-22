@@ -330,6 +330,13 @@ def _flatten_content(content: Any) -> str:
             return str(content)
         except Exception:
             return ""
+    # Real MCP SDK content blocks (mcp.types.TextContent, etc.) are pydantic
+    # models, not dicts — pull `.text` directly. Falling through to
+    # str(model) instead produces a repr like "type='text' text='...'
+    # annotations=None meta=None" rather than the actual text.
+    text_attr = getattr(content, "text", None)
+    if isinstance(text_attr, str):
+        return text_attr
     try:
         return str(content)
     except Exception:

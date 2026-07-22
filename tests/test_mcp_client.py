@@ -460,6 +460,57 @@ def test_mcp_client_list_and_invoke(monkeypatch):
 
 
 @pytest.mark.unit
+class TestFlattenContent:
+    """_flatten_content must extract usable text from real MCP SDK content
+    blocks (mcp.types.TextContent etc.), which are pydantic models, not
+    plain dicts. Reproduces a live-observed bug: a real stdio server's
+    response content fell through to ``str(pydantic_model)``, producing a
+    repr string like "type='text' text='...' annotations=None meta=None"
+    instead of the actual text — silently corrupting every downstream
+    consumer of ``invoke_tool``'s "text" field."""
+
+    def test_extracts_text_from_real_sdk_text_content(self):
+        from mcp.types import TextContent
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        block = TextContent(type="text", text="hello world")
+        assert _flatten_content([block]) == "hello world"
+
+    def test_extracts_text_from_multiple_real_sdk_text_content_blocks(self):
+        from mcp.types import TextContent
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        blocks = [
+            TextContent(type="text", text="first"),
+            TextContent(type="text", text="second"),
+        ]
+        assert _flatten_content(blocks) == "first\nsecond"
+
+    def test_still_handles_plain_dict_content(self):
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        assert _flatten_content([{"type": "text", "text": "plain dict"}]) == "plain dict"
+
+    def test_still_handles_plain_string_content(self):
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        assert _flatten_content("already a string") == "already a string"
+
+    def test_result_to_dict_uses_real_text_not_repr(self):
+        from mcp.types import TextContent
+        from jarvis.tools.external.mcp_client import _result_to_dict
+
+        class FakeResponse:
+            def __init__(self):
+                self.content = [TextContent(type="text", text='{"content": "note body"}')]
+                self.isError = False
+                self.meta = None
+
+        result = _result_to_dict(FakeResponse())
+        assert result["text"] == '{"content": "note body"}'
+
+
+@pytest.mark.unit
 class TestResolveCommand:
     """Tests for _resolve_command PATH fallback logic."""
 
