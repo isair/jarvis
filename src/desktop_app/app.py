@@ -258,6 +258,16 @@ def get_crash_paths() -> tuple[Path, Path, Path]:
     return crash_log, crash_marker, previous_crash
 
 
+def should_show_hud_on_startup() -> bool:
+    """Whether the face/HUD window should auto-open on startup.
+
+    Controlled by JARVIS_SHOW_HUD, mirroring the JARVIS_VOICE_DEBUG pattern
+    (see src/jarvis/config.py) so shortcuts/launchers can request the HUD
+    without a dedicated CLI flag.
+    """
+    return os.environ.get("JARVIS_SHOW_HUD", "0") == "1"
+
+
 def check_previous_crash() -> Optional[str]:
     """
     Check if previous session crashed and return crash details if so.
@@ -1295,6 +1305,11 @@ class JarvisSystemTray:
 
         # Show tray icon
         self.tray_icon.show()
+
+        # Auto-open the face/HUD window when requested (e.g. by a launcher shortcut)
+        if should_show_hud_on_startup():
+            debug_log("JARVIS_SHOW_HUD set, auto-opening face window", "desktop")
+            self.show_face_window()
 
         # Register cleanup on app exit
         self.app.aboutToQuit.connect(self.cleanup_on_exit)

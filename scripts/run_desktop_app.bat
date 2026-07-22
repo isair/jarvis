@@ -1,14 +1,20 @@
 @echo off
 REM Run script for the Jarvis Desktop App on Windows
 REM Uses the project's mamba environment
-REM Usage: run_desktop_app.bat [--voice-debug]
+REM Usage: run_desktop_app.bat [--voice-debug] [--hud]
 
 REM Parse arguments
 set "VOICE_DEBUG=0"
+set "SHOW_HUD=0"
 :parse_args
 if "%~1"=="" goto done_args
 if "%~1"=="--voice-debug" (
     set "VOICE_DEBUG=1"
+    shift
+    goto parse_args
+)
+if "%~1"=="--hud" (
+    set "SHOW_HUD=1"
     shift
     goto parse_args
 )
@@ -19,6 +25,9 @@ goto parse_args
 echo Testing Jarvis Desktop App locally...
 if "%VOICE_DEBUG%"=="1" (
     echo    Voice debug: ENABLED
+)
+if "%SHOW_HUD%"=="1" (
+    echo    HUD: auto-opening on startup
 )
 echo.
 
@@ -70,6 +79,11 @@ echo.
 REM Set voice debug environment variable if requested
 if "%VOICE_DEBUG%"=="1" (
     set "JARVIS_VOICE_DEBUG=1"
+)
+
+REM Set HUD auto-open environment variable if requested
+if "%SHOW_HUD%"=="1" (
+    set "JARVIS_SHOW_HUD=1"
 )
 
 "%MAMBA_ENV%\python.exe" -m desktop_app

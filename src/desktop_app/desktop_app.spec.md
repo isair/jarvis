@@ -95,6 +95,8 @@ The central controller that manages:
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
 
+**Auto-opening the FaceWindow (HUD) on startup**: set `JARVIS_SHOW_HUD=1` in the environment (mirrors the `JARVIS_VOICE_DEBUG` pattern in `jarvis.config`) and the tray calls `show_face_window()` right after the tray icon is shown. `scripts/run_desktop_app.bat` exposes this as a `--hud` flag for local runs; a desktop shortcut can set the env var directly to launch straight into the HUD.
+
 ### Tray Menu: GPU Library Recovery (Windows)
 
 `cuda_recovery.py` exposes the `🎮 Reinstall GPU libraries` action. The tray adds it only when running on Windows, an NVIDIA driver is detected (`%SystemRoot%\System32\nvcuda.dll` exists), and the bundled `install_cuda.ps1` script is on disk. Clicking it confirms with the user, then re-runs `install_cuda.ps1` via `ShellExecuteW` with the `runas` verb so UAC elevates the process before it writes into `Program Files\Jarvis\cuda`. This is the only user-facing recovery path when the original Inno Setup install of cuBLAS/cuDNN fails — the installer's own task fires once per install and the script's marker file used to make subsequent reinstalls skip the CUDA step. The runtime probe in `jarvis.listening.listener._print_cuda_unavailable_hint` points users at this action by name when it falls back to CPU.
