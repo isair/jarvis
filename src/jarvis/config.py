@@ -122,6 +122,10 @@ class Settings:
     tts_piper_noise_w: float  # Phoneme width variation
     tts_piper_sentence_silence: float  # Post-sentence silence in seconds
 
+    # Phase 3B.1: per-item TTS callbacks (root fix for the shared completion-slot
+    # clobber, T-F1). Additive; default False keeps exact Phase-3A behaviour.
+    tts_per_item_callbacks: bool
+
     # Voice Input & Audio
     voice_device: str | None
     sample_rate: int
@@ -497,6 +501,7 @@ def get_default_config() -> Dict[str, Any]:
         "tts_piper_noise_scale": 0.8,  # Audio variation (higher = more expressive)
         "tts_piper_noise_w": 1.0,  # Phoneme width variation (higher = more lively)
         "tts_piper_sentence_silence": 0.2,  # Post-sentence silence in seconds
+        "tts_per_item_callbacks": False,  # Phase 3B.1 per-item TTS callbacks (T-F1 fix)
 
         # Voice Input & Audio
         "voice_device": None,
@@ -738,6 +743,7 @@ def load_settings() -> Settings:
     tts_piper_noise_scale = float(merged.get("tts_piper_noise_scale", 0.8))
     tts_piper_noise_w = float(merged.get("tts_piper_noise_w", 1.0))
     tts_piper_sentence_silence = float(merged.get("tts_piper_sentence_silence", 0.2))
+    tts_per_item_callbacks = bool(merged.get("tts_per_item_callbacks", False))
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
@@ -977,6 +983,7 @@ def load_settings() -> Settings:
         tts_piper_noise_scale=tts_piper_noise_scale,
         tts_piper_noise_w=tts_piper_noise_w,
         tts_piper_sentence_silence=tts_piper_sentence_silence,
+        tts_per_item_callbacks=tts_per_item_callbacks,
 
         # Voice Input & Audio
         voice_device=voice_device,

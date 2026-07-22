@@ -587,6 +587,7 @@ def main() -> None:
         piper_noise_scale=cfg.tts_piper_noise_scale,
         piper_noise_w=cfg.tts_piper_noise_w,
         piper_sentence_silence=cfg.tts_piper_sentence_silence,
+        piper_per_item_callbacks=cfg.tts_per_item_callbacks,  # Phase 3B.1 (default False)
     )
     _global_tts_engine = tts  # Expose for face widget speaking animation
     if tts.enabled:

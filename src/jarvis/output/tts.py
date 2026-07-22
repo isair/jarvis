@@ -11,11 +11,31 @@ import re
 import sys
 import time
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
 from ..debug import debug_log
+
+
+@dataclass(frozen=True)
+class _TTSItem:
+    """One queued TTS request carrying its OWN callbacks (Phase 3B.1).
+
+    When ``PiperTTS`` runs with ``per_item_callbacks=True``, the completion and
+    duration callbacks travel with the queued item, so a later ``speak()`` can
+    never overwrite an earlier item's callback (the T-F1 cross-channel clobber).
+    An empty ``text`` is the stop sentinel (``_STOP_ITEM``).
+    """
+
+    text: str
+    completion_callback: Optional[Callable[[], None]] = None
+    duration_callback: Optional[Callable[[float], None]] = None
+
+
+# Sentinel enqueued by stop() to wake the worker (empty text => skipped).
+_STOP_ITEM = _TTSItem(text="")
 
 
 # ============================================================================
@@ -626,8 +646,12 @@ class PiperTTS:
         noise_scale: float = 0.667,
         noise_w: float = 0.8,
         sentence_silence: float = 0.2,
+        per_item_callbacks: bool = False,
     ) -> None:
         self.enabled = enabled
+        # Phase 3B.1: when True, each queued item fires its OWN callbacks (T-F1
+        # root fix). Default False keeps the exact Phase-3A instance-slot behaviour.
+        self._per_item_callbacks = per_item_callbacks
         self.voice = voice  # Not used in Piper, kept for interface compatibility
         self.rate = rate    # Not directly supported, use length_scale instead
         self.model_path = model_path
@@ -637,8 +661,9 @@ class PiperTTS:
         self.noise_w = noise_w
         self.sentence_silence = sentence_silence
 
-        # Threading and queue setup (same pattern as other TTS engines)
-        self._q: queue.Queue[str] = queue.Queue()
+        # Threading and queue setup (same pattern as other TTS engines).
+        # Holds _TTSItem so each request can carry its own callbacks (3B.1).
+        self._q: "queue.Queue[_TTSItem]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
@@ -757,7 +782,7 @@ class PiperTTS:
             pass
         self._stop.set()
         try:
-            self._q.put_nowait("")
+            self._q.put_nowait(_STOP_ITEM)
         except Exception:
             pass
         self._thread.join(timeout=2.0)
@@ -771,12 +796,18 @@ class PiperTTS:
         # Lazy start the worker thread
         if self._thread is None:
             self.start()
-        self._completion_callback = completion_callback
-        self._duration_callback = duration_callback
+        # Instance-slot mirror, maintained ONLY in flag-OFF mode where
+        # _speak_once reads it at fire time (exact Phase-3A behaviour, incl. the
+        # T-F1 clobber). Under flag-ON the item carries its own callbacks and the
+        # slots are never read, so we skip the writes (no dead store / retained
+        # callback reference).
+        if not self._per_item_callbacks:
+            self._completion_callback = completion_callback
+            self._duration_callback = duration_callback
         # Preprocess text for speech
         processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait(processed_text)
+            self._q.put_nowait(_TTSItem(processed_text, completion_callback, duration_callback))
         except Exception:
             pass
 
@@ -793,18 +824,23 @@ class PiperTTS:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                text = self._q.get(timeout=0.5)
+                item = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if not text:
+            if item is None or not item.text:  # stop sentinel / empty
                 continue
             try:
-                self._speak_once(text)
+                self._speak_once(item)
             except Exception as e:
                 debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
                 continue
 
-    def _speak_once(self, text: str) -> None:
+    def _speak_once(self, item: "_TTSItem") -> None:
+        text = item.text
+        # Pick the callbacks for THIS playback: per-item (3B.1, no clobber) or
+        # the instance slots read at fire time (exact Phase-3A behaviour).
+        _completion_cb = item.completion_callback if self._per_item_callbacks else None
+        _duration_cb = item.duration_callback if self._per_item_callbacks else None
         self._is_speaking.set()
         self._last_spoken_text = text
         self._should_interrupt.clear()
@@ -867,10 +903,12 @@ class PiperTTS:
             exact_duration = len(full_audio) / self._sample_rate
             debug_log(f"Piper TTS synthesis complete: {exact_duration:.2f}s, {len(full_audio)} samples", "tts")
 
-            # Notify listener of exact duration for precise echo detection
-            if self._duration_callback is not None:
+            # Notify listener of exact duration for precise echo detection.
+            # Per-item callback (3B.1) or the instance slot read at fire time (OFF).
+            dur_cb = _duration_cb if self._per_item_callbacks else self._duration_callback
+            if dur_cb is not None:
                 try:
-                    self._duration_callback(exact_duration)
+                    dur_cb(exact_duration)
                 except Exception as e:
                     debug_log(f"Piper TTS duration callback error: {e}", "tts")
 
@@ -935,13 +973,19 @@ class PiperTTS:
             self._is_speaking.clear()
             self._notify_speaking_state(False)
 
-            # Call completion callback if set and not interrupted
-            if self._completion_callback is not None and not interrupted:
+            # Call completion callback if set and not interrupted. Per-item
+            # (3B.1) or the instance slot read at fire time (OFF = Phase-3A,
+            # including the T-F1 clobber). Fire EXACTLY ONE of the two.
+            cmp_cb = _completion_cb if self._per_item_callbacks else self._completion_callback
+            if cmp_cb is not None and not interrupted:
                 try:
-                    self._completion_callback()
+                    cmp_cb()
                 except Exception as e:
                     print(f"  ⚠️ Piper TTS completion callback error: {e}", flush=True)
-                self._completion_callback = None
+                if not self._per_item_callbacks:
+                    # Phase-3A cleared the shared slot after firing; per-item has
+                    # no shared slot to clear.
+                    self._completion_callback = None
 
     def _notify_speaking_state(self, is_speaking: bool) -> None:
         """Notify the face widget of speaking state changes."""
@@ -981,6 +1025,7 @@ def create_tts_engine(
     piper_noise_scale: float = 0.667,
     piper_noise_w: float = 0.8,
     piper_sentence_silence: float = 0.2,
+    piper_per_item_callbacks: bool = False,
 ):
     """Factory function to create the appropriate TTS engine.
 
@@ -1010,6 +1055,7 @@ def create_tts_engine(
             noise_scale=piper_noise_scale,
             noise_w=piper_noise_w,
             sentence_silence=piper_sentence_silence,
+            per_item_callbacks=piper_per_item_callbacks,
         )
 
 
