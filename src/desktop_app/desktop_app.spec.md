@@ -19,7 +19,8 @@ src/desktop_app/
 ├── splash_screen.py     # Animated startup splash
 ├── setup_wizard.py      # First-run setup wizard
 ├── settings_window.py   # Auto-generated settings UI from config metadata
-├── face_widget.py       # Animated face visualization
+├── face_widget.py       # Animated face visualization (fallback when QtWebEngine unavailable)
+├── hud_window.py        # HudFaceWindow: HTML/JS HUD (face_hud.html) driven by real state/log data
 ├── themes.py            # Qt stylesheets and color palette
 ├── diary_dialog.py      # End-of-session diary update dialog
 ├── memory_viewer.py     # Flask-based memory browser
@@ -90,12 +91,19 @@ The central controller that manages:
 |--------|---------|
 | **LogViewerWindow** | Real-time log output from the daemon, with "Report Issue" button |
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
-| **FaceWindow** | Animated face that reacts to speaking state |
+| **HudFaceWindow** | HTML/JS HUD (`desktop_assets/face_hud.html`) rendered in a QWebEngineView; falls back to the old painted `LowPolyFaceWidget` (`face_widget.py`) when QtWebEngine is unavailable |
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
 
-**Auto-opening the FaceWindow (HUD) on startup**: set `JARVIS_SHOW_HUD=1` in the environment (mirrors the `JARVIS_VOICE_DEBUG` pattern in `jarvis.config`) and the tray calls `show_face_window()` right after the tray icon is shown. `scripts/run_desktop_app.bat` exposes this as a `--hud` flag for local runs; a desktop shortcut can set the env var directly to launch straight into the HUD.
+**Auto-opening the HudFaceWindow (HUD) on startup**: set `JARVIS_SHOW_HUD=1` in the environment (mirrors the `JARVIS_VOICE_DEBUG` pattern in `jarvis.config`) and the tray calls `show_face_window()` right after the tray icon is shown. `scripts/run_desktop_app.bat` exposes this as a `--hud` flag for local runs; a desktop shortcut can set the env var directly to launch straight into the HUD.
+
+**HudFaceWindow (`hud_window.py`)**: hosts `face_hud.html` in a `QWebEngineView` and drives its existing JS hooks with real assistant data instead of the HTML's own placeholder data:
+- `window.setJarvisState(state)` — a `QTimer` polls `JarvisStateManager.state` (from `face_widget.py`) every 300ms and calls this on change. Polling (not just the manager's Qt signal) is required because in dev mode the daemon runs as a separate process and only shares state via the cross-process state file.
+- `window.addJarvisLogLine(line)` — connected directly to the same `log_signals.new_log` stream `LogViewerWindow` already receives from the daemon (both bundled-QThread and subprocess-dev modes), so the HUD's "REGISTO DO SISTEMA" panel shows genuine `debug_log` lines rather than fictional content.
+- `window.playJarvisAudio(dataUrl)` — **not wired yet**. Feeding real TTS audio into the HUD's analyser needs new cross-process IPC to ship audio bytes from the daemon (subprocess in dev mode) to the desktop app process; out of scope until that IPC exists.
+
+All JS calls go through `page().runJavaScript()` with the argument JSON-encoded (`json.dumps`), since log lines are untrusted daemon stdout and must be embedded as a proper string literal rather than concatenated raw.
 
 ### Tray Menu: GPU Library Recovery (Windows)
 
