@@ -184,6 +184,11 @@ class Settings:
     # change when disabled. Turn types live in src/jarvis/core/turn.py.
     chat_ui_enabled: bool
 
+    # Which chat window to open when chat_ui_enabled (Phase 3A). "classic" =
+    # the Phase 2 ChatWindow (default, fail-closed); "modern" = ModernChatWindow.
+    # Unknown values normalise to "classic".
+    chat_ui_mode: str
+
     # Cora Learning Loop v1 — structured lessons after conversation end.
     # Default false until live validation. Never auto-edits code/config/models.
     conversation_learning_enabled: bool
@@ -523,6 +528,8 @@ def get_default_config() -> Dict[str, Any]:
         # Cora Learning Loop v1 — default off until live validation
         # Unified text+voice chat UI (Phase 2) — additive, default off.
         "chat_ui_enabled": False,
+        # Chat window flavour (Phase 3A) — classic (default) | modern.
+        "chat_ui_mode": "classic",
 
         "conversation_learning_enabled": False,
         "conversation_learning_mode": "safe_auto",
@@ -800,6 +807,9 @@ def load_settings() -> Settings:
     conversation_learning_timeout_sec = float(merged.get("conversation_learning_timeout_sec", 12.0))
     conversation_learning_min_recurrences = max(2, int(merged.get("conversation_learning_min_recurrences", 3)))
     chat_ui_enabled = bool(merged.get("chat_ui_enabled", False))
+    chat_ui_mode = str(merged.get("chat_ui_mode", "classic") or "classic").strip().lower()
+    if chat_ui_mode not in ("classic", "modern"):
+        chat_ui_mode = "classic"  # fail closed
     openai_realtime_enabled = bool(merged.get("openai_realtime_enabled", False))
     openai_realtime_model = str(
         merged.get("openai_realtime_model", "gpt-realtime-2.1") or "gpt-realtime-2.1"
@@ -1015,6 +1025,7 @@ def load_settings() -> Settings:
         conversation_learning_timeout_sec=conversation_learning_timeout_sec,
         conversation_learning_min_recurrences=conversation_learning_min_recurrences,
         chat_ui_enabled=chat_ui_enabled,
+        chat_ui_mode=chat_ui_mode,
         openai_realtime_enabled=openai_realtime_enabled,
         openai_realtime_model=openai_realtime_model,
         openai_realtime_transcription_model=openai_realtime_transcription_model,

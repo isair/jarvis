@@ -1397,7 +1397,8 @@ class JarvisSystemTray:
         self.menu.addAction(self.dictation_history_action)
 
         # 💬 Chat (unified text+voice) — only shown when the feature flag is on
-        self.chat_window = None
+        self.chat_window = None          # classic (Phase 2)
+        self.modern_chat_window = None   # modern (Phase 3A)
         try:
             from jarvis.config import load_config
             _chat_enabled = bool(load_config().get("chat_ui_enabled", False))
@@ -1574,13 +1575,27 @@ class JarvisSystemTray:
             )
             return
         try:
-            from desktop_app.chat_window import ChatWindow
-            from jarvis.config import load_settings
-            if getattr(self, "chat_window", None) is None:
-                self.chat_window = ChatWindow(cfg=load_settings())
-            self.chat_window.show()
-            self.chat_window.raise_()
-            self.chat_window.activateWindow()
+            from jarvis.config import load_config, load_settings
+            # Fail-closed: read the raw string, normalise, unknown -> classic.
+            mode = str(load_config().get("chat_ui_mode", "classic") or "classic").strip().lower()
+            if mode not in ("classic", "modern"):
+                mode = "classic"
+
+            cfg = load_settings()
+            if mode == "modern":
+                from desktop_app.modern_chat_window import ModernChatWindow
+                if getattr(self, "modern_chat_window", None) is None:
+                    self.modern_chat_window = ModernChatWindow(cfg=cfg)
+                win = self.modern_chat_window
+            else:
+                from desktop_app.chat_window import ChatWindow
+                if getattr(self, "chat_window", None) is None:
+                    self.chat_window = ChatWindow(cfg=cfg)
+                win = self.chat_window
+
+            win.show()
+            win.raise_()
+            win.activateWindow()
         except Exception as e:
             debug_log(f"failed to open chat window: {type(e).__name__}", "desktop")
             QMessageBox.warning(None, "💬 Cora Chat", f"Could not open chat: {type(e).__name__}")

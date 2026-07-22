@@ -31,7 +31,13 @@ class LearningStore:
     def __init__(self, db) -> None:
         # Accept jarvis.memory.db.Database or a sqlite3 connection-like wrapper.
         self._db = db
-        self._lock = threading.RLock()
+        # Reuse the Database RLock so writes on the SHARED connection serialize
+        # with every other writer on that connection (diary, meals, and the
+        # Phase 3A ConversationStore). A private lock here would let this store's
+        # transactions interleave with theirs on one sqlite3 connection
+        # ("cannot start a transaction within a transaction" / premature commit).
+        # Falls back to a private RLock for a bare-connection test double.
+        self._lock = getattr(db, "_lock", None) or threading.RLock()
 
     def _conn(self) -> sqlite3.Connection:
         return self._db.conn
