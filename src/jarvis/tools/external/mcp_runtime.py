@@ -47,6 +47,16 @@ _DEFAULT_INVOKE_TIMEOUT_SEC = 120.0
 _SETUP_TIMEOUT_SEC = 30.0
 _SHUTDOWN_THREAD_JOIN_SEC = 5.0
 
+def _resolve_invoke_timeout(server_cfg: Dict[str, Any]) -> float:
+    """Return the invoke timeout for ``server_cfg``: its ``timeout_sec``
+    override if set and valid, otherwise ``_DEFAULT_INVOKE_TIMEOUT_SEC``."""
+    raw = server_cfg.get("timeout_sec")
+    if raw is None:
+        return _DEFAULT_INVOKE_TIMEOUT_SEC
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_INVOKE_TIMEOUT_SEC
 
 _runtime_lock = threading.Lock()
 _runtime: Optional["_PersistentMCPRuntime"] = None
@@ -120,7 +130,7 @@ class _PersistentMCPRuntime:
         server_cfg: Dict[str, Any],
         tool_name: str,
         arguments: Optional[Dict[str, Any]],
-        timeout: float = _DEFAULT_INVOKE_TIMEOUT_SEC,
+        timeout: Optional[float] = None,
     ) -> Any:
         """Call a tool on the named server, retrying once if the worker died.
 
@@ -129,7 +139,14 @@ class _PersistentMCPRuntime:
         died during the call (e.g. the subprocess crashed), the timeout
         is converted to ``_WorkerDeadError`` so this method's retry path
         can replace the worker transparently.
+
+        When ``timeout`` is not given, it is read from ``server_cfg``'s
+        ``timeout_sec`` (falling back to ``_DEFAULT_INVOKE_TIMEOUT_SEC``),
+        so servers whose tools legitimately run long can opt into a
+        longer budget without every caller having to know about it.
         """
+        if timeout is None:
+            timeout = _resolve_invoke_timeout(server_cfg)
         worker = self._get_worker(server_name, server_cfg)
         try:
             return worker.invoke(tool_name, arguments, timeout)

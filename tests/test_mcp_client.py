@@ -302,6 +302,111 @@ def test_list_tools_uses_persistent_session(
 
 
 @pytest.mark.unit
+def test_invoke_tool_honours_per_server_timeout_sec(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """A server config's ``timeout_sec`` must bound how long ``invoke_tool``
+    waits for a slow tool, overriding the runtime's 120s default. Without
+    this, servers whose tools legitimately run long (e.g. delegating a
+    dev task to an external agent) cannot opt into a longer budget, and
+    fast servers cannot opt into a shorter one to fail fast.
+    """
+    import asyncio
+    import concurrent.futures
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    class SlowConn:
+        async def __aenter__(self_):
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    class SlowSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def call_tool(_self, name, arguments):
+                    await asyncio.sleep(0.5)
+                    return type("R", (), {"content": "done", "isError": False, "meta": None})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    _patch_mcp_doubles(monkeypatch, SlowConn, SlowSession)
+
+    client = MCPClient(
+        {
+            "slow": {
+                "transport": "stdio",
+                "command": "/bin/true",
+                "args": [],
+                "timeout_sec": 0.05,
+            }
+        }
+    )
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        client.invoke_tool("slow", "alpha", {})
+
+
+@pytest.mark.unit
+def test_invoke_tool_defaults_timeout_when_unset(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """When a server config has no ``timeout_sec``, the runtime must still
+    fall back to its module-level default rather than waiting forever.
+    """
+    import asyncio
+    import concurrent.futures
+    from jarvis.tools.external.mcp_client import MCPClient
+    from jarvis.tools.external import mcp_runtime as _runtime_mod
+
+    monkeypatch.setattr(_runtime_mod, "_DEFAULT_INVOKE_TIMEOUT_SEC", 0.05)
+
+    class SlowConn:
+        async def __aenter__(self_):
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    class SlowSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def call_tool(_self, name, arguments):
+                    await asyncio.sleep(0.5)
+                    return type("R", (), {"content": "done", "isError": False, "meta": None})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    _patch_mcp_doubles(monkeypatch, SlowConn, SlowSession)
+
+    client = MCPClient(
+        {"nolimit": {"transport": "stdio", "command": "/bin/true", "args": []}}
+    )
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        client.invoke_tool("nolimit", "alpha", {})
+
+
+@pytest.mark.unit
 def test_absolute_path_command_skips_which(monkeypatch, tmp_path):
     """Absolute paths to executables should use os.path.isfile, not shutil.which."""
     from jarvis.tools.external.mcp_client import MCPClient
