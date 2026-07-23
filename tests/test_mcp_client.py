@@ -302,6 +302,77 @@ def test_list_tools_uses_persistent_session(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("raw", ["soon", "nan", "-5", "0", [], {}])
+def test_resolve_invoke_timeout_rejects_invalid_values(raw):
+    """Non-numeric, non-finite, or non-positive ``timeout_sec`` values must
+    fall back to the safe default rather than being passed through to
+    ``Future.result(timeout=...)``, whose wait semantics are undefined for
+    values like ``nan`` or non-positive numbers.
+    """
+    from jarvis.tools.external.mcp_runtime import (
+        _resolve_invoke_timeout,
+        _DEFAULT_INVOKE_TIMEOUT_SEC,
+    )
+
+    assert _resolve_invoke_timeout({"timeout_sec": raw}) == _DEFAULT_INVOKE_TIMEOUT_SEC
+
+
+@pytest.mark.unit
+def test_list_tools_honours_per_server_timeout_sec(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """Discovery (``list_tools``) must respect the same ``timeout_sec``
+    override as ``invoke_tool`` — a server configured with a long budget
+    because its subprocess is slow to spin up needs that same budget for
+    the first discovery call, not just subsequent tool invocations.
+    """
+    import asyncio
+    import concurrent.futures
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    class SlowConn:
+        async def __aenter__(self_):
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    class SlowSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def list_tools(_self):
+                    await asyncio.sleep(0.5)
+                    return type("LR", (), {"tools": []})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    _patch_mcp_doubles(monkeypatch, SlowConn, SlowSession)
+
+    client = MCPClient(
+        {
+            "slow": {
+                "transport": "stdio",
+                "command": "/bin/true",
+                "args": [],
+                "timeout_sec": 0.05,
+            }
+        }
+    )
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        client.list_tools("slow")
+
+
+@pytest.mark.unit
 def test_invoke_tool_honours_per_server_timeout_sec(
     monkeypatch, shutdown_persistent_runtime
 ):

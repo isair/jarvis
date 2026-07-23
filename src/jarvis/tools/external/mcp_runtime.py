@@ -29,12 +29,21 @@ self-terminate after that long without activity. Stateful servers
 (chrome-devtools-mcp) should leave it unset so the underlying
 process (Chrome) stays resident. Stateless servers (e.g. transcript
 fetchers) can opt in to free their subprocess between bursts of use.
+
+Optional invoke timeout
+------------------------
+A server config may set ``timeout_sec`` to bound how long a single
+``call_tool`` or ``list_tools`` round trip waits, overriding
+``_DEFAULT_INVOKE_TIMEOUT_SEC``. Servers whose tools legitimately run
+long (e.g. delegating a task to an external CLI agent) should raise
+this; a bare ``concurrent.futures.TimeoutError`` propagates on expiry.
 """
 
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import math
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -49,14 +58,21 @@ _SHUTDOWN_THREAD_JOIN_SEC = 5.0
 
 def _resolve_invoke_timeout(server_cfg: Dict[str, Any]) -> float:
     """Return the invoke timeout for ``server_cfg``: its ``timeout_sec``
-    override if set and valid, otherwise ``_DEFAULT_INVOKE_TIMEOUT_SEC``."""
+    override if set, finite, and positive, otherwise
+    ``_DEFAULT_INVOKE_TIMEOUT_SEC``. Non-finite or non-positive values are
+    rejected rather than passed to ``Future.result(timeout=...)``, whose
+    wait semantics are undefined for ``nan`` and meaningless for <= 0."""
     raw = server_cfg.get("timeout_sec")
     if raw is None:
         return _DEFAULT_INVOKE_TIMEOUT_SEC
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
         return _DEFAULT_INVOKE_TIMEOUT_SEC
+    if not math.isfinite(value) or value <= 0:
+        return _DEFAULT_INVOKE_TIMEOUT_SEC
+    return value
+
 
 _runtime_lock = threading.Lock()
 _runtime: Optional["_PersistentMCPRuntime"] = None
@@ -171,10 +187,16 @@ class _PersistentMCPRuntime:
         services subsequent ``call_tool`` requests. This avoids the
         startup cost of spawning the server twice (once for discovery,
         once for the first invocation).
+
+        Honours the same ``timeout_sec`` override as ``invoke()`` — a
+        server whose subprocess is slow to spin up (justifying a longer
+        ``timeout_sec``) needs that same budget for discovery, not just
+        for subsequent tool invocations.
         """
+        timeout = _resolve_invoke_timeout(server_cfg)
         worker = self._get_worker(server_name, server_cfg)
         try:
-            return worker.list_tools(_DEFAULT_INVOKE_TIMEOUT_SEC)
+            return worker.list_tools(timeout)
         except _WorkerDeadError:
             debug_log(
                 f"MCP worker '{server_name}' died during list_tools; restarting",
@@ -182,7 +204,7 @@ class _PersistentMCPRuntime:
             )
             self._drop_worker(server_name)
             worker = self._get_worker(server_name, server_cfg)
-            return worker.list_tools(_DEFAULT_INVOKE_TIMEOUT_SEC)
+            return worker.list_tools(timeout)
 
     def _get_worker(
         self, server_name: str, server_cfg: Dict[str, Any]
