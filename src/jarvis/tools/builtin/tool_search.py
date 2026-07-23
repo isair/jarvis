@@ -13,17 +13,7 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..selection import select_tools, ToolSelectionStrategy
 from ...debug import debug_log
-
-
-def _resolve_router_model(cfg) -> str:
-    for candidate in (
-        getattr(cfg, "tool_router_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
+from ...llm import get_embedding_backend, get_llm_backend, resolve_model, Tier
 
 
 class ToolSearchTool(Tool):
@@ -95,11 +85,12 @@ class ToolSearchTool(Tool):
                 builtin_tools=BUILTIN_TOOLS,
                 mcp_tools=mcp_tools,
                 strategy=strategy,
-                llm_base_url=getattr(cfg, "ollama_base_url", ""),
-                llm_model=_resolve_router_model(cfg),
+                llm_backend=get_llm_backend(cfg),
+                llm_model=resolve_model(cfg, Tier.FAST),
                 llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-                embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-                embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+                embedding_backend=get_embedding_backend(cfg),
+                embed_model=cfg.embedding_model,
+                embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             )
         except Exception as e:
             debug_log(f"toolSearchTool: select_tools failed: {e}", "tools")

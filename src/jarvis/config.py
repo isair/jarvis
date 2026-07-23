@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -36,6 +37,11 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
 
 # The default chat model (first in the supported list)
 DEFAULT_CHAT_MODEL = "gemma4:e2b"
+# Ollama-path default for the fast tier (voice intent, tool routing, and the
+# other real-time classification passes). On an OpenAI-compatible chat
+# provider an unset fast model resolves to the active chat model instead —
+# this pull-name only exists on Ollama.
+DEFAULT_FAST_MODEL = "gemma4:e2b"
 
 
 def get_supported_model_ids() -> set[str]:
@@ -77,6 +83,21 @@ class Settings:
     sqlite_vss_path: str | None
 
     # LLM & AI Models
+    # Provider-aware fields (see src/jarvis/llm/llm.spec.md). The
+    # `ollama_*` fields below are kept as aliases so any caller still
+    # reading them keeps working when the provider is Ollama.
+    llm_provider: str  # "ollama" | "openai_compatible"
+    llm_base_url: str
+    llm_api_key: str
+    llm_chat_model: str
+    embedding_provider: str  # "" (= same as llm_provider) | "ollama" | "openai_compatible"
+    embedding_base_url: str
+    embedding_api_key: str
+    embedding_model: str
+    # Disk-format aliases. Older config files name these fields, so they
+    # stay readable here; the loader promotes their values into the
+    # provider-aware fields above so everything inside the codebase reads
+    # ``llm_*`` / ``embedding_*`` only.
     ollama_base_url: str
     ollama_embed_model: str
     ollama_chat_model: str
@@ -160,9 +181,14 @@ class Settings:
     echo_energy_threshold: float
     echo_tolerance: float
 
-    # Intent Judge (LLM-based intent classification)
-    # Always used when available, falls back to simple wake word detection
-    intent_judge_model: str
+    # Fast tier — the small, warm, low-latency model behind the real-time
+    # classification passes (the Model tiers table in llm.spec.md is the
+    # authoritative context list).
+    # Always resolved at config load: an explicit user value wins; unset
+    # resolves to the small Ollama default on the Ollama chat path and to
+    # the active chat model on an OpenAI-compatible provider. Read via
+    # ``jarvis.llm.resolve_model(cfg, Tier.FAST)``.
+    fast_model: str
     intent_judge_timeout_sec: float
 
     # Transcript Buffer - ambient speech context for intent judge
@@ -195,12 +221,6 @@ class Settings:
     # Agentic Loop
     agentic_max_turns: int
     tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
-    # When `tool_selection_strategy == "llm"`, this model does the routing.
-    # Empty string means "reuse `ollama_chat_model`" (the default).
-    tool_router_model: str
-    # Optional override for the post-turn evaluator LLM. Empty string means
-    # "fall back to intent_judge_model, then ollama_chat_model" (the default).
-    evaluator_model: str
     # None = auto (on for SMALL models, off for LARGE). Explicit true/false forces.
     evaluator_enabled: Optional[bool]
     # Upper bound on toolSearchTool invocations per reply turn. The cap
@@ -212,12 +232,6 @@ class Settings:
     # the next turn's system message. This cap stops nudge ping-pong when
     # the model keeps producing prose despite the nudge.
     evaluator_nudge_max: int
-    # Optional override for the pre-loop task-list planner model. Empty
-    # string means "fall back to tool_router_model → intent_judge_model →
-    # ollama_chat_model" (the default). The planner is a small
-    # classification-shaped pass so it rides the same small-model chain
-    # as the router and the evaluator.
-    planner_model: str
     # Whether the pre-loop planner is enabled. True = planner always runs;
     # False = planner never runs (legacy behaviour, with the
     # compound_query fallback still active). Default True — the planner
@@ -286,11 +300,38 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 
 def _save_json(path: Path, data: Dict[str, Any]) -> bool:
-    """Save config data to JSON file. Returns True on success."""
+    """Save config data to JSON file. Returns True on success.
+
+    Writes to a temp file in the same directory and ``os.replace()``s it
+    over the target, so a crash mid-write leaves the existing config
+    untouched instead of truncated.
+
+    Restricts the saved file to ``0o600`` on POSIX so credentials in
+    config (``llm_api_key``, ``embedding_api_key``, ``brave_search_api_key``)
+    are not readable by other users on multi-user systems. ``chmod`` is a
+    no-op on Windows but is wrapped in a try so platform quirks never
+    fail the save.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            try:
+                tmp_path.chmod(0o600)
+            except OSError:
+                pass
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise
         return True
     except Exception:
         return False
@@ -315,6 +356,45 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
             print("📢 Upgraded TTS engine: system → piper (neural voice with auto-download)", flush=True)
             print("   To revert: set \"tts_engine\": \"system\" in config.json", flush=True)
         cfg_json["_config_version"] = 1
+        modified = True
+
+    # Migration v2: promote any ``ollama_*`` keys on disk into the
+    # provider-aware ``llm_*`` / ``embedding_*`` shape. Default
+    # ``llm_provider`` is ``"ollama"`` so existing installs keep their
+    # behaviour. The old keys are left in place on disk so a downgrade
+    # to an older Jarvis build still finds them.
+    if migration_version < 2:
+        if "llm_provider" not in cfg_json:
+            cfg_json["llm_provider"] = "ollama"
+        ollama_url = cfg_json.get("ollama_base_url")
+        if ollama_url and not cfg_json.get("llm_base_url"):
+            cfg_json["llm_base_url"] = ollama_url
+        chat_model = cfg_json.get("ollama_chat_model")
+        if chat_model and not cfg_json.get("llm_chat_model"):
+            cfg_json["llm_chat_model"] = chat_model
+        embed_model = cfg_json.get("ollama_embed_model")
+        if embed_model and not cfg_json.get("embedding_model"):
+            cfg_json["embedding_model"] = embed_model
+        cfg_json["_config_version"] = 2
+        modified = True
+
+    # Migration v3: fold the per-context model keys into the two-tier
+    # model system. An explicitly chosen judge (or, failing that, router)
+    # model becomes ``fast_model``; the old default value does not promote,
+    # so default upgrades keep reaching existing installs. The retired keys
+    # are removed — every fast-tier context reads ``fast_model`` now.
+    if migration_version < 3:
+        if not str(cfg_json.get("fast_model", "") or "").strip():
+            for old_key in ("intent_judge_model", "tool_router_model"):
+                candidate = str(cfg_json.get(old_key, "") or "").strip()
+                if candidate and candidate != DEFAULT_FAST_MODEL:
+                    cfg_json["fast_model"] = candidate
+                    print(f"🧠 Model tiers: kept your {old_key} as fast_model ({candidate})", flush=True)
+                    break
+        for dead_key in ("intent_judge_model", "tool_router_model",
+                         "evaluator_model", "planner_model"):
+            cfg_json.pop(dead_key, None)
+        cfg_json["_config_version"] = 3
         modified = True
 
     # Save migrated config
@@ -356,6 +436,21 @@ def _ensure_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _expand_path(value: Any) -> Optional[str]:
+    """Normalise a user-supplied path setting: tilde-expanded string or None.
+
+    User-authored config files and our docs use paths like
+    "~/.local/share/jarvis/jarvis.db"; without expansion, mkdir creates or
+    fails on a literal '~' directory and the daemon dies at boot (#467).
+    """
+    if value in (None, "", "null"):
+        return None
+    try:
+        return str(Path(str(value)).expanduser())
+    except Exception:
+        return str(value)
+
+
 def _ensure_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -383,6 +478,19 @@ def get_default_config() -> Dict[str, Any]:
         "sqlite_vss_path": None,
 
         # LLM & AI Models
+        # Provider-aware fields. Default provider is ``ollama`` so a fresh
+        # install needs no extra configuration. The ``ollama_*`` fields are
+        # disk-format aliases for older config files; the loader promotes
+        # their values into ``llm_*`` / ``embedding_*`` so everything inside
+        # the codebase reads the provider-aware keys only.
+        "llm_provider": "ollama",
+        "llm_base_url": "",  # falls back to ollama_base_url when empty
+        "llm_api_key": "",
+        "llm_chat_model": "",  # falls back to ollama_chat_model when empty
+        "embedding_provider": "",  # "" = same as llm_provider
+        "embedding_base_url": "",
+        "embedding_api_key": "",
+        "embedding_model": "",  # falls back to ollama_embed_model when empty
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
         "ollama_chat_model": DEFAULT_CHAT_MODEL,
@@ -471,8 +579,12 @@ def get_default_config() -> Dict[str, Any]:
         # Intent Judge (LLM-based intent classification)
         # Always used when available, falls back to simple wake word detection
         "llm_thinking_enabled": False,  # Enable thinking/reasoning mode for chat (slower but may improve quality)
-        "intent_judge_model": "gemma4:e2b",  # Model for intent judging (needs reasoning ability)
-        "intent_judge_timeout_sec": 15.0,  # Max time to wait for intent judge response
+        # Fast tier: the small, quick model behind real-time work (voice
+        # intent, tool routing, quick classifications). Empty = automatic:
+        # DEFAULT_FAST_MODEL on the Ollama chat path, the chat model on an
+        # OpenAI-compatible provider.
+        "fast_model": "",
+        "intent_judge_timeout_sec": 6.0,
         "intent_judge_thinking_enabled": False,  # Enable thinking for intent judge (adds latency to wake detection)
 
         # Transcript Buffer - used for both retention and context passed to intent judge
@@ -501,27 +613,16 @@ def get_default_config() -> Dict[str, Any]:
         # Agentic Loop
         "agentic_max_turns": 8,
         "tool_selection_strategy": "llm",
-        # Empty string = reuse intent_judge_model (small, fast, already warm
-        # for wake-word paths), falling back to ollama_chat_model only if the
-        # judge model isn't set. Override to decouple routing from both —
-        # useful when you want routing on a dedicated smaller model.
-        "tool_router_model": "",
-        # Empty string = reuse intent_judge_model, falling through to
-        # ollama_chat_model only if the judge isn't set. Override to pin the
-        # evaluator to a dedicated small/fast model.
-        "evaluator_model": "",
         # None = auto (on for small models, off for large). Set true/false to force.
         "evaluator_enabled": None,
         # Cap the number of toolSearchTool invocations per reply.
         "tool_search_max_calls": 3,
         # Cap the number of evaluator-driven nudges per reply.
         "evaluator_nudge_max": 2,
-        # Task-list planner (see src/jarvis/reply/planner.spec.md). Empty
-        # model string = reuse tool_router_model → intent_judge_model →
-        # ollama_chat_model.
-        "planner_model": "",
+        # Task-list planner (see src/jarvis/reply/planner.spec.md). Runs on
+        # the chat model; the fast tier resolves its steps for small models.
         "planner_enabled": True,
-        "planner_timeout_sec": 6.0,
+        "planner_timeout_sec": 3.0,
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -596,13 +697,43 @@ def load_settings() -> Settings:
     voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
 
     # Normalize/convert fields
-    db_path = str(merged.get("db_path") or _default_db_path())
-    sqlite_vss_path = merged.get("sqlite_vss_path")
+    db_path = _expand_path(merged.get("db_path")) or _default_db_path()
+    sqlite_vss_path = _expand_path(merged.get("sqlite_vss_path"))
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
 
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
+
+    # Provider-aware fields. The two field sets are per-provider: the
+    # ``ollama_*`` fields are authoritative when the provider is Ollama,
+    # the ``llm_*`` / ``embedding_*`` fields when it is OpenAI-compatible.
+    # Resolving the active model this way (rather than a blanket
+    # ``llm_chat_model or ollama_chat_model``) keeps the Ollama model
+    # picker — which writes ``ollama_chat_model`` — authoritative on the
+    # Ollama path, so a stale ``llm_chat_model`` (e.g. promoted by the v2
+    # migration) can never shadow it.
+    llm_provider = str(merged.get("llm_provider", "ollama") or "ollama").strip().lower()
+    if llm_provider not in ("ollama", "openai_compatible"):
+        llm_provider = "ollama"
+    llm_base_url = str(merged.get("llm_base_url", "") or "").strip() or ollama_base_url
+    llm_api_key = str(merged.get("llm_api_key", "") or "").strip()
+    if llm_provider == "openai_compatible":
+        llm_chat_model = str(merged.get("llm_chat_model", "") or "").strip() or ollama_chat_model
+    else:
+        llm_chat_model = ollama_chat_model
+    embedding_provider_raw = str(merged.get("embedding_provider", "") or "").strip().lower()
+    if embedding_provider_raw not in ("", "ollama", "openai_compatible"):
+        embedding_provider_raw = ""
+    embedding_provider = embedding_provider_raw
+    embedding_base_url = str(merged.get("embedding_base_url", "") or "").strip()
+    embedding_api_key = str(merged.get("embedding_api_key", "") or "").strip()
+    # Effective embedding provider inherits the chat provider when unset.
+    _effective_embed_provider = embedding_provider or llm_provider
+    if _effective_embed_provider == "openai_compatible":
+        embedding_model = str(merged.get("embedding_model", "") or "").strip() or ollama_embed_model
+    else:
+        embedding_model = ollama_embed_model
     use_stdin = bool(merged.get("use_stdin", False))
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
@@ -619,14 +750,12 @@ def load_settings() -> Settings:
     tts_chatterbox_device = str(merged.get("tts_chatterbox_device", "cuda")).lower()
     if tts_chatterbox_device not in ("cuda", "auto", "cpu"):
         tts_chatterbox_device = "cuda"  # Default to cuda if invalid value
-    tts_chatterbox_audio_prompt_val = merged.get("tts_chatterbox_audio_prompt")
-    tts_chatterbox_audio_prompt = None if tts_chatterbox_audio_prompt_val in (None, "", "null") else str(tts_chatterbox_audio_prompt_val)
+    tts_chatterbox_audio_prompt = _expand_path(merged.get("tts_chatterbox_audio_prompt"))
     tts_chatterbox_exaggeration = float(merged.get("tts_chatterbox_exaggeration", 0.5))
     tts_chatterbox_cfg_weight = float(merged.get("tts_chatterbox_cfg_weight", 0.5))
 
     # Piper TTS settings
-    tts_piper_model_path_val = merged.get("tts_piper_model_path")
-    tts_piper_model_path = None if tts_piper_model_path_val in (None, "", "null") else str(tts_piper_model_path_val)
+    tts_piper_model_path = _expand_path(merged.get("tts_piper_model_path"))
     tts_piper_speaker_val = merged.get("tts_piper_speaker")
     try:
         tts_piper_speaker = None if tts_piper_speaker_val in (None, "", "null") else int(tts_piper_speaker_val)
@@ -645,7 +774,9 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "medium"))
+    # whisper_model accepts a size name ("medium") or a local model
+    # directory; _expand_path is a no-op for plain names.
+    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
@@ -669,9 +800,19 @@ def load_settings() -> Settings:
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
-    # Intent Judge - always used when available
-    intent_judge_model = str(merged.get("intent_judge_model", "gemma4:e2b"))
-    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 10.0))
+    # Fast tier — the small, warm model behind the real-time classification
+    # passes (see the Model tiers table in llm.spec.md for the context
+    # list). An explicit value wins; the
+    # automatic default is the small Ollama pull on the Ollama chat path and
+    # the active chat model on an OpenAI-compatible provider, where that
+    # pull-name does not exist and the chat model is the one name the user's
+    # server is known to serve.
+    fast_model = str(merged.get("fast_model", "") or "").strip()
+    if not fast_model:
+        fast_model = (
+            llm_chat_model if llm_provider == "openai_compatible" else DEFAULT_FAST_MODEL
+        )
+    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 6.0))
 
     # Transcript Buffer - ambient speech context for intent judge (separate from dialogue)
     transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 120.0))
@@ -700,20 +841,17 @@ def load_settings() -> Settings:
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
         tool_selection_strategy = "llm"
-    tool_router_model = str(merged.get("tool_router_model", "") or "").strip()
-    evaluator_model = str(merged.get("evaluator_model", "") or "").strip()
     _eval_raw = merged.get("evaluator_enabled", None)
     evaluator_enabled: Optional[bool]
     if _eval_raw is None:
         evaluator_enabled = None
     else:
         evaluator_enabled = bool(_eval_raw)
-    planner_model = str(merged.get("planner_model", "") or "").strip()
     planner_enabled = bool(merged.get("planner_enabled", True))
     try:
-        planner_timeout_sec = float(merged.get("planner_timeout_sec", 6.0))
+        planner_timeout_sec = float(merged.get("planner_timeout_sec", 3.0))
     except (TypeError, ValueError):
-        planner_timeout_sec = 6.0
+        planner_timeout_sec = 3.0
     try:
         tool_search_max_calls = int(merged.get("tool_search_max_calls", 3))
     except (TypeError, ValueError):
@@ -761,7 +899,15 @@ def load_settings() -> Settings:
         db_path=db_path,
         sqlite_vss_path=sqlite_vss_path,
 
-        # LLM & AI Models
+        # LLM & AI Models — provider-aware
+        llm_provider=llm_provider,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_chat_model=llm_chat_model,
+        embedding_provider=embedding_provider,
+        embedding_base_url=embedding_base_url,
+        embedding_api_key=embedding_api_key,
+        embedding_model=embedding_model,
         ollama_base_url=ollama_base_url,
         ollama_embed_model=ollama_embed_model,
         ollama_chat_model=ollama_chat_model,
@@ -838,8 +984,8 @@ def load_settings() -> Settings:
         hot_window_seconds=hot_window_seconds,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
-        # Intent Judge - always used when available
-        intent_judge_model=intent_judge_model,
+        # Fast tier (voice intent, tool routing, quick classifications)
+        fast_model=fast_model,
         intent_judge_timeout_sec=intent_judge_timeout_sec,
 
         # Transcript Buffer
@@ -855,12 +1001,9 @@ def load_settings() -> Settings:
         tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
-        tool_router_model=tool_router_model,
-        evaluator_model=evaluator_model,
         evaluator_enabled=evaluator_enabled,
         tool_search_max_calls=tool_search_max_calls,
         evaluator_nudge_max=evaluator_nudge_max,
-        planner_model=planner_model,
         planner_enabled=planner_enabled,
         planner_timeout_sec=planner_timeout_sec,
 

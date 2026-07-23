@@ -1501,6 +1501,7 @@ class TestWhisperRateLimitRetry:
 def _make_listener_for_warmup(
     chat_model: str = "llama3.1",
     judge_model: str | None = "gemma4:e2b",
+    embed_model: str = "",
     base_url: str = "http://127.0.0.1:11434",
 ):
     """Construct a VoiceListener with enough stubs to exercise warmup only."""
@@ -1516,9 +1517,11 @@ def _make_listener_for_warmup(
 
                 mock_cfg = _create_mock_config()
                 mock_cfg.ollama_chat_model = chat_model
+                mock_cfg.llm_chat_model = chat_model
+                mock_cfg.embedding_model = embed_model
                 mock_cfg.ollama_base_url = base_url
                 mock_cfg.llm_tools_timeout_sec = 8.0
-                mock_cfg.intent_judge_model = judge_model or ""
+                mock_cfg.fast_model = judge_model or ""
                 mock_cfg.intent_judge_timeout_sec = 10.0
                 mock_cfg.intent_judge_thinking_enabled = False
                 mock_cfg.wake_word = "jarvis"
@@ -1528,7 +1531,7 @@ def _make_listener_for_warmup(
 
                 if judge_model is not None:
                     listener._intent_judge = IntentJudge(
-                        IntentJudgeConfig(model=judge_model, ollama_base_url=base_url)
+                        IntentJudgeConfig(model=judge_model, cfg=mock_cfg)
                     )
                 else:
                     listener._intent_judge = None
@@ -1544,9 +1547,9 @@ class TestLlmWarmup:
             chat_model="llama3.1", judge_model="gemma4:e2b"
         )
         with patch(
-            "jarvis.listening.listener.warm_up_ollama_model", return_value=True
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
         ) as chat_warm, patch(
-            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
         ) as judge_warm:
             threads = listener._start_llm_warmup()
             for t in threads:
@@ -1563,7 +1566,7 @@ class TestLlmWarmup:
         listener = _make_listener_for_warmup(
             chat_model="llama3.1", judge_model="llama3.1"
         )
-        with patch("jarvis.listening.listener.warm_up_ollama_model", return_value=True) as warm:
+        with patch("jarvis.listening.listener.warm_up_chat_model", return_value=True) as warm:
             threads = listener._start_llm_warmup()
             for t in threads:
                 t.join(timeout=2.0)
@@ -1577,7 +1580,7 @@ class TestLlmWarmup:
         """Judge still warms when chat model is absent."""
         listener = _make_listener_for_warmup(chat_model="", judge_model="gemma4:e2b")
         with patch(
-            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
         ) as warm:
             threads = listener._start_llm_warmup()
             for t in threads:
@@ -1601,9 +1604,9 @@ class TestLlmWarmup:
             chat_model="llama3.1", judge_model="gemma4:e2b"
         )
         with patch(
-            "jarvis.listening.listener.warm_up_ollama_model", return_value=False
+            "jarvis.listening.listener.warm_up_chat_model", return_value=False
         ), patch(
-            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=False
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=False
         ):
             threads = listener._start_llm_warmup()
             for t in threads:
@@ -1611,6 +1614,115 @@ class TestLlmWarmup:
 
         assert listener._llm_warmup_results["chat"] == ("llama3.1", False)
         assert listener._llm_warmup_results["judge"] == ("gemma4:e2b", False)
+
+    def test_warms_embed_model_separately(self):
+        """Embed model gets its own warmup thread when distinct from chat."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model="nomic-embed-text"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ) as chat_warm, patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ) as judge_warm, patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            mock_embed_backend = MagicMock()
+            mock_embed_backend.embed.return_value = [0.1, 0.2, 0.3]
+            mock_get_embed.return_value = mock_embed_backend
+
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert len(threads) == 3
+        assert chat_warm.call_args.args[1] == "llama3.1"
+        assert mock_embed_backend.embed.call_args.args == ("ping", "nomic-embed-text")
+        assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", True)
+
+    def test_skips_embed_warmup_when_empty(self):
+        """No embed warmup thread when embedding_model is not configured."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model=""
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert len(threads) == 2
+        assert not mock_get_embed.called
+        assert "embed" not in listener._llm_warmup_results
+
+    def test_embed_warmup_records_failure(self):
+        """None from embed() surfaces in the results dict as False."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model="nomic-embed-text"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            mock_embed_backend = MagicMock()
+            mock_embed_backend.embed.return_value = None
+            mock_get_embed.return_value = mock_embed_backend
+
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
+
+    def test_embed_warmup_stores_failure_on_backend_init_exception(self):
+        """An exception in get_embedding_backend is caught and stored as False."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model="nomic-embed-text"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            mock_get_embed.side_effect = RuntimeError("backend init crashed")
+
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
+
+    def test_embed_warmup_stores_failure_on_embed_exception(self):
+        """An exception in embed() is caught and stored as False."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", embed_model="nomic-embed-text"
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ), patch(
+            "jarvis.listening.listener.get_embedding_backend"
+        ) as mock_get_embed:
+            mock_embed_backend = MagicMock()
+            mock_embed_backend.embed.side_effect = ConnectionError("server down")
+            mock_get_embed.return_value = mock_embed_backend
+
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
 
 
 class TestWhisperWarmup:
@@ -1640,8 +1752,9 @@ class TestWhisperWarmup:
 
                             mock_cfg = _create_mock_config()
                             mock_cfg.ollama_chat_model = ""
+                            mock_cfg.llm_chat_model = ""
                             mock_cfg.ollama_base_url = ""
-                            mock_cfg.intent_judge_model = ""
+                            mock_cfg.fast_model = ""
                             listener = VoiceListener(
                                 MagicMock(), mock_cfg, MagicMock(), MagicMock()
                             )

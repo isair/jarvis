@@ -78,7 +78,7 @@ def _make_cfg():
     cfg = MockConfig()
     cfg.ollama_base_url = OLLAMA_URL
     cfg.ollama_chat_model = PERF_MODEL
-    cfg.intent_judge_model = PERF_MODEL
+    cfg.fast_model = PERF_MODEL
     # Let size-aware defaults kick in (evaluator + digests ON for small).
     cfg.evaluator_enabled = None
     cfg.memory_digest_enabled = None
@@ -86,8 +86,6 @@ def _make_cfg():
     # Force the LLM-based router so its timing shows up in the report.
     # MockConfig doesn't set this attribute, and the engine's default varies.
     cfg.tool_selection_strategy = "llm"
-    cfg.tool_router_model = ""  # fall through the router chain
-    cfg.evaluator_model = ""
     return cfg
 
 

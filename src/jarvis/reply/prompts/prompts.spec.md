@@ -91,7 +91,7 @@ The reply engine detects model size early and passes it to `_build_initial_syste
 ```python
 from jarvis.reply.prompts import detect_model_size, get_system_prompts
 
-model_size = detect_model_size(cfg.ollama_chat_model)
+model_size = detect_model_size(cfg.llm_chat_model)
 prompts = get_system_prompts(model_size)
 
 # Build system message from prompts.to_list()

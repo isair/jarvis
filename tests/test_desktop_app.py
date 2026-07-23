@@ -46,6 +46,97 @@ class TestEntryPointImports:
         )
 
 
+class TestOllamaRuntimeFlags:
+    """The desktop startup must only launch/verify Ollama when a local
+    provider actually uses it. A pure OpenAI-compatible setup should skip
+    the Ollama server-start and model-verification entirely."""
+
+    def _flags(self, **provider):
+        from types import SimpleNamespace
+        from desktop_app.app import _ollama_runtime_flags
+        return _ollama_runtime_flags(SimpleNamespace(**provider))
+
+    def test_default_ollama_needs_everything(self):
+        needed, chat_on_ollama = self._flags(llm_provider="ollama", embedding_provider="")
+        assert needed is True
+        assert chat_on_ollama is True
+
+    def test_pure_openai_compatible_skips_ollama(self):
+        """Chat and embeddings both remote: no local server, no model checks."""
+        needed, chat_on_ollama = self._flags(
+            llm_provider="openai_compatible", embedding_provider="")
+        assert needed is False
+        assert chat_on_ollama is False
+
+    def test_openai_chat_with_ollama_embeddings_still_needs_server(self):
+        """Chat remote but embeddings on Ollama: the server must be up, but
+        the chat-model verification does not apply (the chat model isn't an
+        Ollama model)."""
+        needed, chat_on_ollama = self._flags(
+            llm_provider="openai_compatible", embedding_provider="ollama")
+        assert needed is True
+        assert chat_on_ollama is False
+
+    def test_ollama_chat_with_openai_embeddings_needs_server_and_chat_check(self):
+        needed, chat_on_ollama = self._flags(
+            llm_provider="ollama", embedding_provider="openai_compatible")
+        assert needed is True
+        assert chat_on_ollama is True
+
+    def test_missing_attrs_default_to_ollama(self):
+        """A cfg-like object without provider attrs defaults to the Ollama
+        path (fail-safe — never skip Ollama setup by accident)."""
+        from types import SimpleNamespace
+        from desktop_app.app import _ollama_runtime_flags
+        needed, chat_on_ollama = _ollama_runtime_flags(SimpleNamespace())
+        assert needed is True
+        assert chat_on_ollama is True
+
+
+class TestOpenAICompatStartupCheck:
+    """At startup Jarvis can't launch a third-party LLM server, so it must
+    check reachability and warn the user early rather than failing silently
+    on the first request."""
+
+    def test_reachable_when_models_listed(self):
+        from types import SimpleNamespace
+        from desktop_app.app import _check_openai_compat_reachable
+        cfg = SimpleNamespace(
+            llm_provider="openai_compatible", llm_base_url="http://x/v1",
+            llm_api_key="", llm_chat_model="m", embedding_provider="")
+
+        class _Backend:
+            def list_models(self, timeout_sec=4.0):
+                return ["m-chat"]
+
+        with patch("jarvis.llm.get_llm_backend", return_value=_Backend()):
+            assert _check_openai_compat_reachable(cfg) is True
+
+    def test_unreachable_when_listing_empty_or_raises(self):
+        from types import SimpleNamespace
+        from desktop_app.app import _check_openai_compat_reachable
+        cfg = SimpleNamespace(llm_provider="openai_compatible", llm_base_url="http://x/v1")
+
+        class _Empty:
+            def list_models(self, timeout_sec=4.0):
+                return []
+
+        with patch("jarvis.llm.get_llm_backend", return_value=_Empty()):
+            assert _check_openai_compat_reachable(cfg) is False
+
+        with patch("jarvis.llm.get_llm_backend", side_effect=RuntimeError("boom")):
+            assert _check_openai_compat_reachable(cfg) is False
+
+    def test_unreachable_message_names_url_not_key(self):
+        from types import SimpleNamespace
+        from desktop_app.app import _openai_compat_unreachable_message
+        cfg = SimpleNamespace(llm_base_url="http://localhost:1234/v1", llm_api_key="sk-secret")
+        msg = _openai_compat_unreachable_message(cfg)
+        assert "http://localhost:1234/v1" in msg
+        assert "sk-secret" not in msg
+        assert "Settings" in msg
+
+
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 

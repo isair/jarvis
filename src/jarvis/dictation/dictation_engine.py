@@ -19,20 +19,27 @@ import time
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
+from ..utils.audio_lock import portaudio_lock
 from .history import DictationHistory
 
 # Optional imports — graceful degradation when dependencies are missing.
+# sounddevice raises OSError (not ImportError) when the PortAudio shared
+# library itself is missing, so both must be treated as "no audio".
 try:
     import sounddevice as sd
     import numpy as np
-except ImportError:
+except (ImportError, OSError) as _audio_import_error:
     sd = None
     np = None
+    debug_log(f"audio backend unavailable, dictation disabled: {_audio_import_error!r}", "dictation")
 
+# pynput can fail with non-ImportError exceptions too (e.g. no X display
+# on headless Linux), and a broken hotkey backend must not crash the app.
 try:
     from pynput import keyboard as pynput_keyboard
-except ImportError:
+except Exception as _pynput_import_error:
     pynput_keyboard = None
+    debug_log(f"pynput unavailable, dictation hotkey disabled: {_pynput_import_error!r}", "dictation")
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +129,11 @@ def _play_beep_sd(wav_data: bytes) -> None:
     data_start = idx + 8  # skip 'data' + size u32
     pcm = wav_data[data_start:]
     samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-    with _suppress_stderr():
-        sd.play(samples, samplerate=44100, blocking=True)
+    # sd.play opens and closes a stream internally — lifecycle work that
+    # must be serialised with every other PortAudio user (see audio_lock).
+    with portaudio_lock:
+        with _suppress_stderr():
+            sd.play(samples, samplerate=44100, blocking=True)
 
 
 # ---------------------------------------------------------------------------
@@ -433,43 +443,32 @@ def _apply_custom_dictionary(text: str, dictionary: list) -> str:
     return text
 
 
-def _llm_clean_dictation(text: str, ollama_base_url: str, model: str = "gemma4:e2b", thinking: bool = False) -> str:
-    """Use the local LLM to remove filler words and tidy dictation output.
-
-    Falls back to the original text if the LLM is unreachable or slow.
-    """
-    try:
-        import requests
-    except ImportError:
+def _llm_clean_dictation(text: str, cfg, *, model: str = "gemma4:e2b", thinking: bool = False) -> str:
+    """Use the configured chat backend to remove filler words and tidy
+    dictation output. Falls back to the original text if the LLM is
+    unreachable, slow, or returns nothing usable."""
+    if cfg is None:
         return text
 
-    prompt = (
-        "Clean the following dictated text. Remove filler words, hesitations, "
-        "and false starts. Keep the meaning and language identical. Return ONLY "
-        "the cleaned text, nothing else.\n\n"
-        f"{text}"
-    )
+    from ..llm import get_llm_backend
 
+    system_prompt = (
+        "Clean dictated text by removing filler words, hesitations, and false "
+        "starts. Keep the meaning and language identical. Return ONLY the "
+        "cleaned text, nothing else."
+    )
     try:
-        resp = requests.post(
-            f"{ollama_base_url}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "think": thinking,
-            },
-            timeout=5,
+        cleaned = get_llm_backend(cfg).direct(
+            model, system_prompt, text,
+            timeout_sec=5.0,
+            thinking=thinking,
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            cleaned = data.get("response", "").strip()
-            if cleaned:
-                debug_log(f"LLM filler removal: {text!r} → {cleaned!r}", "dictation")
-                return cleaned
+        if cleaned and cleaned.strip():
+            cleaned = cleaned.strip()
+            debug_log(f"LLM filler removal: {text!r} → {cleaned!r}", "dictation")
+            return cleaned
     except Exception as exc:
         debug_log(f"LLM filler removal failed (using raw text): {exc}", "dictation")
-
     return text
 
 
@@ -560,14 +559,15 @@ def _close_stream(stream: Any) -> None:
     """Stop and close a sounddevice InputStream, swallowing errors."""
     if stream is None:
         return
-    try:
-        stream.stop()
-    except Exception as exc:
-        debug_log(f"stream.stop() failed: {exc}", "dictation")
-    try:
-        stream.close()
-    except Exception as exc:
-        debug_log(f"stream.close() failed: {exc}", "dictation")
+    with portaudio_lock:
+        try:
+            stream.stop()
+        except Exception as exc:
+            debug_log(f"stream.stop() failed: {exc}", "dictation")
+        try:
+            stream.close()
+        except Exception as exc:
+            debug_log(f"stream.close() failed: {exc}", "dictation")
 
 
 # ---------------------------------------------------------------------------
@@ -625,8 +625,8 @@ class DictationEngine:
         voice_device: Optional[str] = None,
         filler_removal: bool = False,
         custom_dictionary: Optional[list] = None,
-        ollama_base_url: str = "http://127.0.0.1:11434",
-        ollama_model: str = "gemma4:e2b",
+        cfg: Any = None,
+        chat_model: str = "gemma4:e2b",
         thinking: bool = False,
     ) -> None:
         self._whisper_model_ref = whisper_model_ref
@@ -643,8 +643,8 @@ class DictationEngine:
         self._voice_device = voice_device
         self._filler_removal = filler_removal
         self._custom_dictionary = custom_dictionary or []
-        self._ollama_base_url = ollama_base_url
-        self._ollama_model = ollama_model
+        self._cfg = cfg
+        self._chat_model = chat_model
         self._thinking = thinking
 
         # Parse hotkey
@@ -662,6 +662,11 @@ class DictationEngine:
         self._max_frames = MAX_RECORD_SECONDS * sample_rate
         self._lock = threading.Lock()
         self._started = False
+        # Monotonic recording-session token. Each press increments it; the
+        # _begin_recording worker only mutates engine state while its token
+        # is still current, so a stale worker from a superseded press can
+        # never clobber a newer session or leak a live stream.
+        self._session = 0
 
         # Double-tap detection for hands-free mode
         self._last_hotkey_release_time: float = 0.0
@@ -847,18 +852,50 @@ class DictationEngine:
     # ------------------------------------------------------------------
 
     def _start_recording(self) -> None:
+        # Flip state only, then hand the heavy work (device query, stream
+        # open/start, beep) to a worker thread. This runs on the pynput
+        # hook thread: Windows silently unhooks callbacks that take too
+        # long, and opening PortAudio streams there raced the listener's
+        # audio threads into a native abort (#462).
         with self._lock:
             if self._recording:
                 return
             self._recording = True
+            self._session += 1
+            token = self._session
 
+        threading.Thread(
+            target=self._begin_recording, args=(token,), daemon=True
+        ).start()
+
+    def _abandon_session(self, token: int) -> bool:
+        """Roll back a failed session if *token* is still current.
+
+        Returns True when this worker owned the active session (so the
+        caller should fire the end callback); False when a newer press has
+        superseded it and no state may be touched.
+        """
+        with self._lock:
+            if self._session != token or not self._recording:
+                return False
+            self._recording = False
+            return True
+
+    def _begin_recording(self, token: int) -> None:
+        """Worker: open the audio stream and start capturing."""
         # Check Whisper readiness
         model = self._whisper_model_ref()
         backend = self._whisper_backend_ref()
         if model is None and backend != "mlx":
             debug_log("whisper model not loaded — dictation skipped", "dictation")
-            self._recording = False
+            self._abandon_session(token)
             return
+
+        # Bail early if the press was already released/superseded while the
+        # worker was starting up — avoids firing callbacks for a dead press.
+        with self._lock:
+            if self._session != token or not self._recording:
+                return
 
         debug_log("dictation recording started", "dictation")
         self._audio_frames = []
@@ -896,32 +933,46 @@ class DictationEngine:
             native_rate = self._target_sample_rate
 
         try:
-            with _suppress_stderr():
-                self._stream = sd.InputStream(
-                    samplerate=native_rate,
-                    channels=1,
-                    dtype="float32",
-                    blocksize=int(native_rate * 0.1),
-                    callback=self._audio_callback,
-                    **stream_kwargs,
-                )
+            with portaudio_lock:
+                with _suppress_stderr():
+                    stream = sd.InputStream(
+                        samplerate=native_rate,
+                        channels=1,
+                        dtype="float32",
+                        blocksize=int(native_rate * 0.1),
+                        callback=self._audio_callback,
+                        **stream_kwargs,
+                    )
             self._stream_sample_rate = native_rate
             if native_rate != self._target_sample_rate:
                 debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
-            self._recording = False
-            if self._on_dictation_end:
+            if self._abandon_session(token) and self._on_dictation_end:
                 self._on_dictation_end()
             return
 
         try:
-            self._stream.start()
+            with portaudio_lock:
+                stream.start()
         except Exception as exc:
             debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
-            self._recording = False
-            if self._on_dictation_end:
+            _close_stream(stream)
+            if self._abandon_session(token) and self._on_dictation_end:
                 self._on_dictation_end()
+            return
+
+        # The hotkey may have been released (or pressed again, starting a
+        # newer session) while the stream was opening on this worker. Only
+        # the still-current session may store its stream; anything else is
+        # torn down instead of leaking a live microphone capture.
+        with self._lock:
+            if self._session == token and self._recording:
+                self._stream = stream
+                stream = None
+        if stream is not None:
+            debug_log("dictation session superseded before stream opened — closing", "dictation")
+            _close_stream(stream)
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
         """sounddevice callback — accumulate audio frames."""
@@ -1050,7 +1101,7 @@ class DictationEngine:
 
             # LLM-based filler word removal
             if text and self._filler_removal:
-                text = _llm_clean_dictation(text, self._ollama_base_url, self._ollama_model, thinking=self._thinking)
+                text = _llm_clean_dictation(text, self._cfg, model=self._chat_model, thinking=self._thinking)
 
             if text:
                 duration = len(audio) / self._target_sample_rate

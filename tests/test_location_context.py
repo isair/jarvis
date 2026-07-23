@@ -29,12 +29,16 @@ class DummyTTS:
 def _make_cfg(**overrides):
     # Minimal settings object with required attributes referenced in engine
     base = {
+        'llm_provider': 'ollama',
+        'llm_base_url': 'http://127.0.0.1:11434',
+        'llm_chat_model': 'gemma4',
+        'embedding_model': 'nomic-embed-text',
         'ollama_base_url': 'http://127.0.0.1:11434',
         'ollama_chat_model': 'gemma4',
         'ollama_embed_model': 'nomic-embed-text',
         'llm_profile_select_timeout_sec': 0.1,
         'llm_tools_timeout_sec': 0.1,
-        'llm_embed_timeout_sec': 0.1,
+        'llm_embedding_timeout_sec': 0.1,
         'llm_chat_timeout_sec': 0.1,
         'agentic_max_turns': 1,
         'active_profiles': ['developer'],

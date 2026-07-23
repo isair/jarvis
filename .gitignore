@@ -22,3 +22,4 @@ qt.conf
 
 # Auto-generated version file (created at build time)
 src/jarvis/_version.py
+.reasonix/

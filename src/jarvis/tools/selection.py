@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 from ..debug import debug_log
+from ..llm import LLMBackend
 
 if TYPE_CHECKING:
     from .base import Tool
@@ -160,16 +161,15 @@ def _select_embedding(
     query: str,
     builtin_tools: Dict[str, "Tool"],
     mcp_tools: Dict[str, "ToolSpec"],
-    embed_base_url: str,
+    embedding_backend: LLMBackend,
     embed_model: str,
     embed_timeout_sec: float,
 ) -> List[str]:
     """Rank tools by cosine similarity between query and tool description embeddings."""
     import numpy as np
-    from ..memory.embeddings import get_embedding
 
     # Embed the query.
-    query_vec = get_embedding(query, embed_base_url, embed_model, timeout_sec=embed_timeout_sec)
+    query_vec = embedding_backend.embed(query, embed_model, timeout_sec=embed_timeout_sec)
     if query_vec is None:
         debug_log("Embedding tool selection: failed to embed query, falling back to all tools", "planning")
         return _all_tool_names(builtin_tools, mcp_tools)
@@ -191,7 +191,7 @@ def _select_embedding(
         all_tools[name] = _tool_summary(name, spec.description)
 
     for name, summary in all_tools.items():
-        tool_vec = get_embedding(summary, embed_base_url, embed_model, timeout_sec=embed_timeout_sec)
+        tool_vec = embedding_backend.embed(summary, embed_model, timeout_sec=embed_timeout_sec)
         if tool_vec is None:
             continue
         tool_arr = np.array(tool_vec, dtype=np.float32)
@@ -238,7 +238,7 @@ def _select_llm(
     query: str,
     builtin_tools: Dict[str, "Tool"],
     mcp_tools: Dict[str, "ToolSpec"],
-    llm_base_url: str,
+    llm_backend: LLMBackend,
     llm_model: str,
     llm_timeout_sec: float,
     context_hint: Optional[str] = None,
@@ -255,8 +255,6 @@ def _select_llm(
     missing or partial (e.g. location failed to resolve) — the router simply
     has less context and falls back to tool-selection on content.
     """
-    from ..llm import call_llm_direct
-
     catalogue_lines: List[str] = []
     for name, tool in builtin_tools.items():
         if name in _ALWAYS_INCLUDED:
@@ -328,8 +326,8 @@ def _select_llm(
     )
 
     try:
-        resp = call_llm_direct(
-            llm_base_url, llm_model, sys_prompt, user_prompt,
+        resp = llm_backend.direct(
+            llm_model, sys_prompt, user_prompt,
             timeout_sec=llm_timeout_sec,
         )
     except Exception as e:
@@ -380,9 +378,11 @@ def select_tools(
     builtin_tools: Dict[str, "Tool"],
     mcp_tools: Dict[str, "ToolSpec"],
     strategy: ToolSelectionStrategy = ToolSelectionStrategy.ALL,
-    llm_base_url: str = "",
+    *,
+    llm_backend: Optional[LLMBackend] = None,
     llm_model: str = "",
     llm_timeout_sec: float = 8.0,
+    embedding_backend: Optional[LLMBackend] = None,
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
     context_hint: Optional[str] = None,
@@ -391,15 +391,19 @@ def select_tools(
     Return a list of tool names relevant to *query*.
 
     Args:
-        query:            User's text query.
-        builtin_tools:    Registry of builtin Tool instances.
-        mcp_tools:        Registry of discovered MCP ToolSpec entries.
-        strategy:         ToolSelectionStrategy enum value.
-        llm_base_url:     Ollama base URL (needed for llm/embedding strategies).
-        llm_model:        Chat model name (needed for "llm" strategy).
-        llm_timeout_sec:  Timeout for the LLM call.
-        embed_model:      Embedding model name (needed for "embedding" strategy).
-        embed_timeout_sec: Timeout for embedding calls.
+        query:              User's text query.
+        builtin_tools:      Registry of builtin Tool instances.
+        mcp_tools:          Registry of discovered MCP ToolSpec entries.
+        strategy:           ToolSelectionStrategy enum value.
+        llm_backend:        Chat backend (needed for "llm" strategy). Construct
+                            from settings via ``get_llm_backend(cfg)``.
+        llm_model:          Chat model name (needed for "llm" strategy).
+        llm_timeout_sec:    Timeout for the LLM call.
+        embedding_backend:  Embedding backend (needed for "embedding" strategy).
+                            Construct via ``get_embedding_backend(cfg)``.
+        embed_model:        Embedding model name (needed for "embedding" strategy).
+        embed_timeout_sec:  Timeout for embedding calls.
+        context_hint:       Optional facts/dialogue surface for the LLM router.
 
     Returns:
         List of tool name strings.
@@ -407,14 +411,20 @@ def select_tools(
     if strategy == ToolSelectionStrategy.KEYWORD:
         return _select_keyword(query, builtin_tools, mcp_tools)
     elif strategy == ToolSelectionStrategy.EMBEDDING:
+        if embedding_backend is None:
+            debug_log("Embedding tool selection: no backend supplied, falling back to all tools", "planning")
+            return _all_tool_names(builtin_tools, mcp_tools)
         return _select_embedding(
             query, builtin_tools, mcp_tools,
-            llm_base_url, embed_model, embed_timeout_sec,
+            embedding_backend, embed_model, embed_timeout_sec,
         )
     elif strategy == ToolSelectionStrategy.LLM:
+        if llm_backend is None:
+            debug_log("LLM tool selection: no backend supplied, falling back to keyword strategy", "planning")
+            return _select_keyword(query, builtin_tools, mcp_tools)
         return _select_llm(
             query, builtin_tools, mcp_tools,
-            llm_base_url, llm_model, llm_timeout_sec,
+            llm_backend, llm_model, llm_timeout_sec,
             context_hint=context_hint,
         )
     else:

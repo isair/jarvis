@@ -1,11 +1,11 @@
-"""Behaviour test: memory enrichment extractor runs on the router model chain.
+"""Behaviour test: memory enrichment extractor runs on the fast tier.
 
-The extractor used to run on the big chat model, which paged in the heavy
-weights just to emit a tiny JSON blob. It's now routed through
-``resolve_tool_router_model`` so it rides the already-warm small model.
+The extractor emits a tiny JSON blob, so paging in the heavy chat-model
+weights for it would waste the turn's latency budget. It rides the fast
+tier (``resolve_model(cfg, Tier.FAST)``) — the already-warm small model.
 
-This test locks that in at the engine call-site — if somebody ever reverts to
-``cfg.ollama_chat_model`` there, the assertion fails.
+This test locks that in at the engine call-site — if somebody ever reverts
+to the chat model there, the assertion fails.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ import pytest
 
 
 @pytest.mark.unit
-def test_enrichment_extractor_uses_router_model_chain():
+def test_enrichment_extractor_uses_fast_tier():
     from jarvis.reply import engine as engine_mod
+    from jarvis.llm import resolve_model, Tier
 
     captured: dict[str, str] = {}
 
@@ -28,8 +29,8 @@ def test_enrichment_extractor_uses_router_model_chain():
     cfg = MagicMock()
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.ollama_chat_model = "big-chat"
-    cfg.intent_judge_model = "small-judge"
-    cfg.tool_router_model = ""
+    cfg.llm_chat_model = "big-chat"
+    cfg.fast_model = "small-judge"
     cfg.llm_tools_timeout_sec = 5.0
     cfg.llm_thinking_enabled = False
     cfg.memory_enrichment_source = "diary"
@@ -43,26 +44,13 @@ def test_enrichment_extractor_uses_router_model_chain():
         engine_mod.extract_search_params_for_memory(
             "hello",
             cfg.ollama_base_url,
-            engine_mod.resolve_tool_router_model(cfg),
+            resolve_model(cfg, Tier.FAST),
             timeout_sec=cfg.llm_tools_timeout_sec,
             thinking=cfg.llm_thinking_enabled,
             context_hint="",
         )
 
     assert captured["chat_model"] == "small-judge", (
-        "enrichment extractor should resolve via resolve_tool_router_model, "
-        "not cfg.ollama_chat_model"
-    )
-
-
-@pytest.mark.unit
-def test_resolve_tool_router_model_is_public():
-    """The symbol is imported cross-layer (daemon, memory viewer, listener),
-    so it must stay part of the public API — underscore-prefixed names are not
-    allowed."""
-    from jarvis.reply import engine
-
-    assert hasattr(engine, "resolve_tool_router_model")
-    assert not hasattr(engine, "_resolve_tool_router_model"), (
-        "the private alias was removed — callers should use the public name"
+        "enrichment extractor should resolve via the fast tier, "
+        "not cfg.llm_chat_model"
     )

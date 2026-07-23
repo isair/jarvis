@@ -34,6 +34,8 @@ def test_plan_injects_action_plan_block_into_system_message(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools, no direct-exec
+
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → native tools, no direct-exec
     mock_config.evaluator_enabled = False
 
     captured_system_messages: list[str] = []
@@ -92,6 +94,8 @@ def test_small_model_direct_execs_planned_tools_without_chat_llm(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
     mock_config.evaluator_enabled = False
 
     chat_call_count = [0]
@@ -175,6 +179,8 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"
+
+    mock_config.llm_chat_model = "gemma4:e2b"
     mock_config.evaluator_enabled = False
 
     captured_system_messages: list[str] = []
@@ -223,6 +229,8 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
 
     chat_call_count = [0]
 
@@ -289,6 +297,8 @@ def test_paraphrased_plan_falls_back_to_tool_router(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools
+
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → native tools
     mock_config.evaluator_enabled = False
 
     select_tools_called = [0]
@@ -342,6 +352,8 @@ def test_paraphrased_plan_skips_direct_exec_for_small_models(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → direct-exec path
+
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → direct-exec path
     mock_config.evaluator_enabled = False
 
     resolver_calls = [0]
@@ -396,6 +408,8 @@ def test_router_always_runs_and_plan_tools_are_unioned(
     from jarvis.tools.types import ToolExecutionResult
 
     mock_config.ollama_chat_model = "gpt-oss:20b"
+
+    mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.evaluator_enabled = False
 
     router_calls = [0]
@@ -473,6 +487,8 @@ def test_direct_exec_fires_despite_prior_query_tool_carryover(
 
     mock_config.ollama_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
 
+    mock_config.llm_chat_model = "gemma4:e2b"  # SMALL → use_text_tools
+
     # Simulate a prior query that used a tool — this is what happens after the
     # "scientists similar to Einstein" query that ran webSearch successfully.
     # We need both a text message (so has_recent_messages() returns True) AND
@@ -523,4 +539,195 @@ def test_direct_exec_fires_despite_prior_query_tool_carryover(
     assert "getWeather" in invoked_tools, (
         "direct-exec must fire for the current plan's getWeather step even when "
         "prior-query tool results are present in dialogue carryover"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Planner fast-path skip: when the tool router returns no real tools and
+# the query is short, the engine skips the planner CHAT-tier LLM call and
+# uses a reply-only plan.  See engine.py _skip_planner block.
+# ---------------------------------------------------------------------------
+
+
+def test_planner_skipped_when_router_returns_no_tools_and_query_is_short(
+    mock_config, db, dialogue_memory
+):
+    """Router returns only ['stop'] → planner skipped for short query."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.llm_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = False
+
+    plan_query_calls = []
+
+    def fake_plan_query(*args, **kwargs):
+        plan_query_calls.append(1)
+        return ["Reply to the user."]
+
+    def fake_chat(*args, **kwargs):
+        return {"message": {"role": "assistant", "content": "Hi there!"}}
+
+    # The extractor should NOT be called — the reply-only plan skips
+    # memory enrichment.
+    extractor_calls = []
+
+    def fake_extractor(*args, **kwargs):
+        extractor_calls.append(1)
+        return {"keywords": []}
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["stop"]), \
+         patch.object(engine_mod, "extract_search_params_for_memory",
+                       side_effect=fake_extractor), \
+         patch.object(engine_mod, "plan_query", side_effect=fake_plan_query):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="hello",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert len(plan_query_calls) == 0, (
+        f"plan_query should NOT be called when router returns no tools "
+        f"and query is short; was called {len(plan_query_calls)}×"
+    )
+    assert len(extractor_calls) == 0, (
+        "memory extractor should NOT be called when planner is skipped "
+        "(reply-only plan means no memory enrichment)"
+    )
+
+
+def test_planner_runs_when_router_returns_real_tools(
+    mock_config, db, dialogue_memory
+):
+    """Router returns real tools → planner still runs even for short query."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.llm_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = False
+
+    plan_query_calls = []
+
+    def fake_plan_query(*args, **kwargs):
+        plan_query_calls.append(1)
+        return ["getWeather location='London'", "Reply to the user."]
+
+    def fake_chat(*args, **kwargs):
+        return {"message": {"role": "assistant", "content": "It's sunny!"}}
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools",
+                       return_value=["getWeather", "stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", side_effect=fake_plan_query):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="what's the weather",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert len(plan_query_calls) == 1, (
+        f"plan_query MUST be called when router returns real tools; "
+        f"was called {len(plan_query_calls)}×"
+    )
+
+
+def test_planner_runs_when_query_is_long_even_without_tools(
+    mock_config, db, dialogue_memory
+):
+    """Router returns only ['stop'] but query is >8 words → planner runs."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.llm_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = False
+
+    plan_query_calls = []
+
+    def fake_plan_query(*args, **kwargs):
+        plan_query_calls.append(1)
+        return ["searchMemory topic='user dietary preferences'",
+                "Reply to the user."]
+
+    def fake_chat(*args, **kwargs):
+        return {"message": {"role": "assistant", "content": "You like pizza."}}
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools", return_value=["stop"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", side_effect=fake_plan_query):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="what do you know about my dietary preferences and restrictions",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert len(plan_query_calls) == 1, (
+        f"plan_query MUST be called for longer tool-free queries "
+        f"that may need memory; was called {len(plan_query_calls)}×"
+    )
+
+
+def test_planner_not_skipped_on_router_fallback_to_all_tools(
+    mock_config, db, dialogue_memory
+):
+    """Router falls back to all tools (timeout/no-match) → planner runs.
+    The full-catalog fallback carries no signal, so skipping the planner
+    would be wrong — only the router's positive 'none' decision qualifies."""
+    from jarvis.reply import engine as engine_mod
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.ollama_chat_model = "gpt-oss:20b"
+    mock_config.llm_chat_model = "gpt-oss:20b"
+    mock_config.evaluator_enabled = False
+
+    plan_query_calls = []
+
+    def fake_plan_query(*args, **kwargs):
+        plan_query_calls.append(1)
+        return ["Reply to the user."]
+
+    def fake_chat(*args, **kwargs):
+        return {"message": {"role": "assistant", "content": "Hi!"}}
+
+    with patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
+         patch.object(engine_mod, "select_tools",
+                       return_value=["webSearch", "getWeather", "stop",
+                                     "logMeal", "setTimer"]), \
+         patch.object(
+             engine_mod,
+             "extract_search_params_for_memory",
+             return_value={"keywords": []},
+         ), \
+         patch.object(engine_mod, "plan_query", side_effect=fake_plan_query):
+        engine_mod.run_reply_engine(
+            db=db,
+            cfg=mock_config,
+            tts=None,
+            text="hi",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert len(plan_query_calls) == 1, (
+        f"plan_query MUST be called when router falls back to all tools; "
+        f"the 'all tools' fallback carries no signal and must not skip "
+        f"the planner. Was called {len(plan_query_calls)}×"
     )

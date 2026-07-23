@@ -332,7 +332,7 @@ jobs:
             ---
 
             ### ⚡ Prerequisites
-            - [Ollama](https://ollama.com/download) (all platforms)
+            - [Ollama](https://ollama.com/download) (default), or any OpenAI-compatible server (LM Studio, Jan, llama.cpp, vLLM, oMLX, LocalAI, …)
 
             ### 📦 Downloads
             | Platform | File | Notes |
@@ -471,7 +471,7 @@ jobs:
             ---
 
             ### ⚡ Prerequisites
-            - [Ollama](https://ollama.com/download) (all platforms)
+            - [Ollama](https://ollama.com/download) (default), or any OpenAI-compatible server (LM Studio, Jan, llama.cpp, vLLM, oMLX, LocalAI, …)
 
             ### 📦 Downloads
             | Platform | File | Notes |

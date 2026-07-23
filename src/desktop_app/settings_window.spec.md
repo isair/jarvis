@@ -38,6 +38,7 @@ FieldMeta (dataclass)
 | `int` (nullable) | QCheckBox + QSpinBox | Checkbox enables/disables the spinbox |
 | `float` | QDoubleSpinBox | With bounds, step, suffix |
 | `str` | QLineEdit | Placeholder if nullable |
+| `password` | QLineEdit (EchoMode.Password) | Masked input for API keys; same value extraction as `str` |
 | `choice` | QComboBox | Pre-defined options |
 | `device` | QComboBox | Dynamically populated from sounddevice |
 | `list` | QListWidget + Add/Edit/Remove buttons | Stores as JSON array in config |
@@ -49,19 +50,43 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 ## Categories (Sidebar Order)
 
 1. LLM & AI Models
-2. Text-to-Speech
-3. Piper TTS
-4. Chatterbox TTS
-5. Voice Input (includes microphone device selection)
-6. Wake Word
-7. Speech Recognition (Whisper)
-8. Voice Activity Detection
-9. Timing & Windows
-10. Memory & Dialogue
-11. Location
-12. Features (includes Dictation Mode toggle and hotkey)
-13. MCP Servers
-14. Advanced
+2. LLM Provider
+3. Text-to-Speech
+4. Piper TTS
+5. Chatterbox TTS
+6. Voice Input (includes microphone device selection)
+7. Wake Word
+8. Speech Recognition (Whisper)
+9. Voice Activity Detection
+10. Timing & Windows
+11. Memory & Dialogue
+12. Location
+13. Features (includes Dictation Mode toggle and hotkey)
+14. MCP Servers
+15. Advanced
+
+### LLM Provider
+
+Selects the local runtime that serves the LLM and holds the provider-aware
+connection fields: `llm_provider` (Ollama / OpenAI-compatible), `llm_base_url`,
+`llm_api_key` (password), `llm_chat_model`, and the four `embedding_*` fields
+(`embedding_provider`, `embedding_base_url`, `embedding_api_key`,
+`embedding_model`). The model fields are free-text `str` — an OpenAI-compatible
+server's model name is not in the Ollama `SUPPORTED_CHAT_MODELS` catalogue.
+
+Every connection/credential/model field is nullable: leaving it empty falls
+back to the Ollama settings on the "LLM & AI Models" page. A default Ollama
+install therefore never needs to open this page, and the minimal-config save
+behaviour keeps these keys out of `config.json` until the user sets them.
+
+Unlike the setup wizard's provider page, the settings window does **not**
+clear the OpenAI-compatible fields when the user switches `llm_provider` back
+to Ollama: it is metadata-driven with no cross-field logic, and a blanket
+clear would wipe the supported "Ollama chat + remote embeddings" split
+(`llm_provider: ollama` with `embedding_provider: openai_compatible`). Stale
+values are harmless because the backend resolves per-provider: the Ollama path
+uses `ollama_base_url` / `ollama_chat_model` and `OllamaBackend` ignores any
+API key. To drop a leftover value, clear that field and save.
 
 ## Hardware Device Selection
 

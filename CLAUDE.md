@@ -1,5 +1,7 @@
 Data privacy comes first, always.
 
+Jarvis is offline-first by principle. Do not add integrations that depend on a specific proprietary cloud vendor (e.g. ElevenLabs TTS, or any SaaS that requires shipping user audio/text/data to a third party's servers), not even as an opt-in feature. The line is the offline path: a backend is acceptable only if it can run fully locally. Generic, self-hostable protocols where the user points at their own endpoint (Ollama, OpenAI-compatible servers, LM Studio) are fine precisely because they can be local; a vendor-locked cloud service with no local option is not. When a feature request asks for such a service, decline it on principle and redirect to the offline equivalent (e.g. better local TTS voices rather than cloud TTS).
+
 All user-facing command line output should make use of emojis. Especially an initial emoji to start off the lines that depict what the line is about. Output should make use of indentation spacing to establish a visual hierarchy and aim to make output as easy to sift through as possible. Exception: Windows .bat scripts cannot use emojis (cmd.exe doesn't render Unicode properly).
 
 Any important point in our logical flows should have debug logs using the `debug_log` method from `src/jarvis/debug.py`. Avoid excessive logging to keep the logs easily readable and actionable.
@@ -28,6 +30,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
 | `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract, hygiene rules (deflection, attribution, topic separation), post-process scrub, and bulk-sweep clean button | Two-layer defence: prompt + deterministic scrub; corrupted summaries poison every downstream consumer |
 | `src/jarvis/memory/recall_gate.spec.md` | Deterministic skip-enrichment heuristic when the hot window covers a follow-up | Fail-open; language-agnostic via `\w{3,}` + `re.UNICODE`; planner intent always wins |
+| `src/jarvis/llm/llm.spec.md` | Pluggable LLM backend abstraction: `LLMBackend` ABC, `OllamaBackend`, `OpenAICompatibleBackend`, factory dispatch on `llm_provider`, `get_embedding_backend` override, config migrations, the two-tier model system (`Tier.FAST` / `Tier.CHAT` via `resolve_model`), function-style helpers | Provider-agnostic interface so Jarvis can run on Ollama, OpenAI-compatible (LM Studio / oMLX / llama.cpp / vLLM / LocalAI), or Anthropic-compatible servers; every context states its tier instead of defining a model fallback chain |
 
 The LLM contexts graph at `docs/llm_contexts.md` maps every LLM call in the app (model, gating, inputs, outputs, limits, flow). Keep it up-to-date at all times: any change that adds, removes, or alters an LLM context (model resolution, timeout, cap, prompt source, gating flag, data-flow edge) must update `docs/llm_contexts.md` in the same PR.
 
@@ -106,6 +109,23 @@ Before running `git commit --amend`, always check `git log --oneline -3` first t
 Always use British English everywhere (e.g. "colour" not "color", "behaviour" not "behavior", "initialise" not "initialize").
 
 Do not use em dashes (—) in GitHub issue/PR/discussion replies or any user-facing writing. Prefer a comma, a full stop, a colon, or parentheses depending on the clause. This applies to replies you post on the user's behalf and to text generated for them.
+
+## Code, comments, specs, docs: describe the current state, not the history
+
+The codebase is ours and releases are versioned. Git carries the history; the code carries the present. Anything you write that lives in a file (code comments, docstrings, `*.spec.md`, `docs/*`, READMEs) should describe what the system *is*, not what it *was* or how it *changed*. Avoid:
+
+- "previously did X", "used to be Y", "this fixes the regression where…"
+- "refactored to", "migrated from", "now uses", "no longer reads"
+- "PR 2.5b will…", "deferred to follow-up", "TODO(PR X): drop this once…"
+- Phases tables, migration rollouts, "Done / Pending" status columns inside specs
+
+Commit messages and PR descriptions are the right place for "what changed and why" — they exist to be read in sequence. Files under `src/`, `docs/`, and `*.spec.md` are read as the present-day reference; historical narrative there ages badly and confuses future readers.
+
+## Refactor completely or not at all
+
+If you're touching every legacy call site, finish the job. Don't leave compat shims, fallback parameters, `SimpleNamespace` defaults, or `TODO(PR X)` markers for paths you are also rewriting in the same change. The whole point of doing the refactor is that the legacy shape goes away — keeping a half-converted state means future readers have to figure out which version of the contract is canonical, and the reasoning behind the old shape sits in the codebase as dead weight.
+
+The exception is genuinely external boundaries the codebase does not own: on-disk config files written by a previous release, third-party API shapes, persisted database rows. Those need migration paths because users depend on them. Internal function signatures, helper modules, and call patterns inside `src/` are ours to change cleanly.
 
 ## Prompt-engineering: denial-template mirroring
 

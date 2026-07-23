@@ -132,7 +132,7 @@ I have opened YouTube for you.
 
 | Platform | Requirement |
 |----------|-------------|
-| **All** | [Ollama](https://ollama.com/download) |
+| **All** | [Ollama](https://ollama.com/download) (default), or any OpenAI-compatible server you already run (LM Studio, Jan, llama.cpp, vLLM, oMLX, LocalAI, …) — see [Configuration → LLM Provider](#configuration) |
 
 ### 2. Download Jarvis
 
@@ -179,7 +179,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 | Better quality | 16GB+ | `gemma4:e4b` |
 | High-end | 24GB+ | `gpt-oss:20b` |
 
-> **Note:** VRAM requirements include the intent judge model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification. The default model shares this, so no extra VRAM is needed.
+> **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
 
 The setup wizard will guide you through model selection and installation on first launch.
 
@@ -191,6 +191,54 @@ Most users won't need to change anything. Open **⚙️ Settings** from the tray
   <img src="docs/img/settings-window.png" alt="Settings Window" width="500">
   <img src="docs/img/settings-mcp.png" alt="Settings - MCP Servers" width="500">
 </p>
+
+<details>
+<summary><strong>LLM Provider (Ollama or OpenAI-compatible)</strong></summary>
+
+By default Jarvis runs everything locally through [Ollama](https://ollama.com): no API keys, nothing leaves your machine. If you already run an OpenAI-compatible server you can point Jarvis at it instead. Your data still only travels to the servers you control.
+
+Pick the provider in the Setup Wizard's first step, or under **⚙️ Settings → 🔌 LLM Provider**. No JSON editing required. On the OpenAI-compatible page the wizard does the legwork for you: it auto-detects running local servers, offers a one-click preset for your app, and when you press **Connect** it loads the server's model list and checks the chosen model for chat, tool calling, and embeddings, so you know it works before you finish setup.
+
+Tested local servers (all run on your own machine):
+
+| App | Default base URL | Notes |
+|-----|------------------|-------|
+| LM Studio | `http://localhost:1234/v1` | Chat, tool calling, and embeddings. |
+| Ollama (OpenAI API) | `http://localhost:11434/v1` | The native Ollama path is the default; the OpenAI shape works too. |
+| Jan | `http://localhost:1337/v1` | Chat and tool calling. |
+| llama.cpp (`llama-server`) | `http://localhost:8080/v1` | Tool calling depends on the model. |
+| LocalAI | `http://localhost:8080/v1` | Feature support depends on the backend model. |
+| vLLM | `http://localhost:8000/v1` | Tool calling depends on the model. |
+| oMLX (Apple Silicon) | varies | No embeddings endpoint, so memory uses keyword search unless you route embeddings to Ollama (below). |
+
+For reference, the underlying config keys are:
+
+```json
+{
+  "llm_provider": "openai_compatible",
+  "llm_base_url": "http://localhost:1234/v1",
+  "llm_api_key": "",
+  "llm_chat_model": "your-served-model-name"
+}
+```
+
+- `llm_base_url`: your server's OpenAI API base URL.
+- `llm_api_key`: only if your server requires one; leave empty otherwise.
+- `llm_chat_model`: whatever model name your server exposes.
+- `fast_model` (optional): the small, quick model used for real-time work (voice intent, tool routing, quick classifications). Leave empty for automatic: `gemma4:e2b` on Ollama, your chat model on an OpenAI-compatible server. Set it to pin a dedicated small model.
+
+**Embeddings** (used for memory search) can run on a different backend. If your chat server has no embeddings endpoint, memory falls back to keyword search. To keep full semantic memory, route embeddings to Ollama (the wizard offers this automatically when it detects a server that cannot embed):
+
+```json
+{
+  "embedding_provider": "ollama",
+  "embedding_model": "nomic-embed-text"
+}
+```
+
+Leave `embedding_provider` empty to use the same provider as chat. With no working embeddings, memory search degrades gracefully to keyword search.
+
+</details>
 
 <details>
 <summary><strong>Speech Recognition (Whisper)</strong></summary>
@@ -230,16 +278,15 @@ Both thresholds are exposed in the Settings window under *Whisper*.
 <details>
 <summary><strong>Voice Interface (Advanced)</strong></summary>
 
-**LLM Intent Judge** - Jarvis uses `gemma4:e2b` for intelligent voice intent classification (echo detection, query extraction, stop commands). This model is automatically installed alongside your chosen chat model during setup. The intent judge cannot be disabled but gracefully falls back to simpler text matching if Ollama is unavailable.
+**LLM Intent Judge** - Jarvis uses a small LLM for intelligent voice intent classification (echo detection, query extraction, stop commands). On the default Ollama setup this is `gemma4:e2b`, installed automatically alongside your chosen chat model during setup. On an OpenAI-compatible provider the judge uses your served chat model instead, so there is nothing extra to install. The intent judge cannot be disabled but gracefully falls back to simpler text matching if the LLM server is unavailable.
 
-**Tool Router** - When `"tool_selection_strategy": "llm"` (the default), Jarvis asks a small LLM to pick which tools are relevant for each query, shrinking the tool catalogue the chat model sees. By default this routing call reuses the intent-judge model — it's already warm and small enough not to stall the turn. Override with `"tool_router_model": "<name>"` to dedicate a different model to routing. Other strategies: `"keyword"` (fast, no LLM), `"embedding"` (nomic-embed-text), `"all"` (no filtering).
+**Tool Router** - When `"tool_selection_strategy": "llm"` (the default), Jarvis asks the fast model to pick which tools are relevant for each query, shrinking the tool catalogue the chat model sees. It's already warm and small enough not to stall the turn. Other strategies: `"keyword"` (fast, no LLM), `"embedding"` (nomic-embed-text), `"all"` (no filtering).
 
 **Task-list Planner** - Before the agentic loop, Jarvis runs a short planning pass that decomposes multi-step queries into an ordered list of sub-tasks. For small models (`gemma4:e2b` class), each planned step is directly resolved to a concrete tool call without relying on the chat model to re-plan turn-by-turn. This significantly improves multi-step reliability. Config options:
 
 ```json
 {
   "planner_enabled": true,          // set to false to disable the planner entirely
-  "planner_model": "",              // override which model plans (default: reuses tool_router_model chain)
   "planner_timeout_sec": 6.0        // per-call timeout for plan and step-resolver LLM calls
 }
 ```

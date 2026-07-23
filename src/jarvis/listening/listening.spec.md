@@ -60,6 +60,22 @@ This document outlines the voice listening architecture. The system uses a **tra
 
 ## Key Design Principles
 
+### 0. Serialised PortAudio Lifecycle
+
+All stream lifecycle calls (`InputStream`/`OutputStream` construction,
+`start`/`stop`/`close`/`abort`) run under the process-wide
+`jarvis.utils.audio_lock.portaudio_lock`, shared with the dictation engine,
+TTS, and the thinking tune. PortAudio documents stream open/close as not
+thread safe; unserialised calls across threads abort the whole app on
+Windows (#462, #401, #422). The run loop uses `_serialised_stream` instead
+of the raw `with stream:` context manager. Two deliberate exceptions: the
+Windows mic-permission probe opens its stream *without* the lock (that open
+can hang indefinitely when Windows blocks mic access, and hanging while
+holding the process-wide lock would freeze every audio user), and its
+timeout path abandons a blocked stream instead of aborting/closing it from
+another thread — the check thread may still be inside `start()`/`stop()`
+on it, and a cross-thread close is a native use-after-free.
+
 ### 1. Transcript-First
 
 Instead of extracting post-wake-word audio, we:
@@ -114,8 +130,8 @@ On small models, a caveat line is appended above a more involved example to set 
 
 **What gets warmed:**
 - **Whisper** — loading the model; additionally a silent-audio transcribe so the first real utterance doesn't pay the cold-decode cost. Both the MLX and faster-whisper backends do this.
-- **Chat model** (`cfg.ollama_chat_model`) — a minimal Ollama `/api/generate` request with `keep_alive=30m` so the weights stay resident.
-- **Intent judge model** (`cfg.intent_judge_model`) — same pattern. If it points at the same Ollama model as the chat model, a single warmup covers both roles (Ollama loads the weights once).
+- **Chat model** (`cfg.llm_chat_model`) — verifies the server is actually Ollama via `GET /api/version`, then issues a minimal `/api/generate` request with `keep_alive=30m` so the weights stay resident.
+- **Intent judge model** (the fast tier: `resolve_model(cfg, Tier.FAST)`) — same pattern. If it points at the same Ollama model as the chat model, a single warmup covers both roles (Ollama loads the weights once).
 
 **Concurrency:** LLM warmups run in daemon threads started before Whisper loads, so they overlap with Whisper initialisation. After Whisper finishes, the listener joins the warmup threads with a **single 60 s budget** shared across them all. If the budget is exhausted, the listener continues (with a `⏳ Some models still warming — continuing anyway` notice) and the first engagement pays the cold-load cost on demand.
 
@@ -290,8 +306,8 @@ If the intent judge later rejects the query (and no hot window override applies)
 {
   "transcript_buffer_duration_sec": 120,
 
-  "intent_judge_model": "gemma4:e2b",
-  "intent_judge_timeout_sec": 15.0,
+  "fast_model": "gemma4:e2b",
+  "intent_judge_timeout_sec": 6.0,
 
   "hot_window_seconds": 3.0,
   "echo_tolerance": 0.3

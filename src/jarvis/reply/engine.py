@@ -12,7 +12,33 @@ from ..system_prompt import build_system_prompt
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
-from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
+from ..llm import (
+    extract_text_from_response,
+    get_embedding_backend,
+    get_llm_backend,
+    resolve_model,
+    Tier,
+    ToolsNotSupportedError,
+)
+
+
+def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
+                       tools=None, thinking=False):
+    """Local indirection: route the engine's chat call through the active
+    backend (Ollama or OpenAI-compatible, per ``cfg.llm_provider``) so the
+    runtime swap is transparent to the rest of the engine.
+
+    Kept as a module-level function so tests can patch this single symbol
+    to capture every chat call rather than reaching into the backend ABC.
+    """
+    backend = get_llm_backend(cfg)
+    return backend.chat(
+        cfg.llm_chat_model, messages,
+        timeout_sec=timeout_sec,
+        extra_options=extra_options,
+        tools=tools,
+        thinking=thinking,
+    )
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -143,29 +169,6 @@ def _format_tool_schema_hint(
             f"{key}: {type_hint}{marker}" if type_hint else f"{key}{marker}"
         )
     return f"{tool_name}(" + ", ".join(parts) + ")"
-
-
-def resolve_tool_router_model(cfg) -> str:
-    """Pick the LLM model for tool routing.
-
-    Resolution order: explicit `tool_router_model` → `intent_judge_model` →
-    `ollama_chat_model`. Routing is a small classification job (the same
-    shape as intent judging), so reusing the judge model gives a small, fast
-    default that is already warm on wake-word paths — the chat model is only
-    a last resort because its weights are expensive to page in mid-reply.
-
-    Extracted as a helper so the resolution order can be unit-tested and so
-    the listener's warmup path (listener.py) stays in sync with the reply
-    engine's selection path without the call sites drifting.
-    """
-    for candidate in (
-        getattr(cfg, "tool_router_model", ""),
-        getattr(cfg, "intent_judge_model", ""),
-        getattr(cfg, "ollama_chat_model", ""),
-    ):
-        if candidate:
-            return candidate
-    return ""
 
 
 def _text_tool_call_guidance(allowed_names: list[str]) -> str:
@@ -566,7 +569,7 @@ def _maybe_digest_tool_result(
     tool_digest_cfg = getattr(cfg, "tool_result_digest_enabled", None)
     if tool_digest_cfg is None:
         tool_digest_enabled = (
-            detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL
+            detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL
         )
     else:
         tool_digest_enabled = bool(tool_digest_cfg)
@@ -579,8 +582,8 @@ def _maybe_digest_tool_result(
             query=query,
             tool_name=tool_name,
             tool_result=raw_tool_result,
-            ollama_base_url=cfg.ollama_base_url,
-            ollama_chat_model=cfg.ollama_chat_model,
+            cfg=cfg,
+            chat_model=cfg.llm_chat_model,
             timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
@@ -986,11 +989,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             builtin_tools=_routable_builtin_tools,
             mcp_tools=mcp_tools,
             strategy=strategy,
-            llm_base_url=cfg.ollama_base_url,
-            llm_model=resolve_tool_router_model(cfg),
+            llm_backend=get_llm_backend(cfg),
+            llm_model=resolve_model(cfg, Tier.FAST),
             llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-            embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-            embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+            embedding_backend=get_embedding_backend(cfg),
+            embed_model=cfg.embedding_model,
+            embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
         # Don't cache the router's "fall open to all tools" fallback. That
@@ -1057,16 +1061,54 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
-    try:
-        action_plan = plan_query(
-            cfg=cfg,
-            query=redacted,
-            dialogue_context=_dialogue_ctx,
-            tools=_planner_tool_catalog,
+
+    # Fast-path: skip the planner when the tool router found no real tools
+    # AND the query is short. The planner's main job is decomposing multi-step
+    # tool queries and gating memory enrichment; for short, tool-free queries
+    # like "hello" / "how are you" / "tell me a joke", it adds a CHAT-tier
+    # LLM round-trip whose only output is "Reply to the user." — pure overhead.
+    #
+    # Gate: the router returned only system tools (just "stop"), meaning it
+    # positively decided no tools are needed. The router's "fall open to all
+    # tools" path (timeout / empty / no-match) is NOT treated as tool-free
+    # because it carries no signal — the router gave up rather than ruling
+    # tools out. We also require the query to be short (< 8 words) so
+    # longer tool-free queries that might need memory still reach the
+    # planner for a `searchMemory` directive. Language-agnostic: word count
+    # splits on whitespace, which works for every script-separated language.
+    _router_said_no_tools = (
+        routed_tools is not None
+        and len(routed_tools) <= 1
+        and ("stop" in routed_tools or not routed_tools)
+    )
+    _query_word_count = len(redacted.split()) if redacted else 0
+    _skip_planner = (
+        _router_said_no_tools
+        and _query_word_count <= 8
+        and getattr(cfg, "planner_enabled", True)
+    )
+    if _skip_planner:
+        # Positive signal: no tools, no memory needed. The warm profile
+        # (injected unconditionally below) provides user-context for the
+        # chat model; memory enrichment is skipped as if the planner had
+        # emitted a single "Reply to the user." step.
+        action_plan = ["Reply to the user."]
+        debug_log(
+            f"planner skipped: router returned no tools, query is "
+            f"{_query_word_count} words — using reply-only plan",
+            "planning",
         )
-    except Exception as _plan_exc:  # pragma: no cover — defensive
-        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
-        action_plan = []
+    else:
+        try:
+            action_plan = plan_query(
+                cfg=cfg,
+                query=redacted,
+                dialogue_context=_dialogue_ctx,
+                tools=_planner_tool_catalog,
+            )
+        except Exception as _plan_exc:  # pragma: no cover — defensive
+            debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
+            action_plan = []
     if action_plan:
         _plan_preview = " | ".join(s[:50] for s in action_plan)
         print(
@@ -1217,7 +1259,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log("memory extractor served from hot-window cache", "memory")
             else:
                 search_params = extract_search_params_for_memory(
-                    _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
+                    _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
                     context_hint=context_hint,
@@ -1247,13 +1289,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             context_results = search_conversation_memory_by_keywords(
                 db=db,
                 keywords=keywords,
+                cfg=cfg,
                 from_time=from_time,
                 to_time=to_time,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_embed_model=cfg.ollama_embed_model,
-                timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
+                timeout_sec=float(getattr(cfg, 'llm_embedding_timeout_sec', 10.0)),
                 voice_debug=cfg.voice_debug,
-                max_results=cfg.memory_enrichment_max_results
+                max_results=cfg.memory_enrichment_max_results,
             )
             if context_results:
                 raw_diary_entries = list(context_results)
@@ -1348,7 +1389,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Opt-in/out via `memory_digest_enabled` (default: auto-on for SMALL).
     digest_cfg = getattr(cfg, "memory_digest_enabled", None)
     if digest_cfg is None:
-        digest_enabled = (detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL)
+        digest_enabled = (detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL)
     else:
         digest_enabled = bool(digest_cfg)
 
@@ -1358,8 +1399,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 query=redacted,
                 diary_entries=raw_diary_entries,
                 graph_parts=raw_graph_parts,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
+                chat_model=cfg.llm_chat_model,
                 timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
@@ -1446,7 +1487,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 7: Messages-based loop with tool handling
     # Detect model size for prompt selection
-    model_size = detect_model_size(cfg.ollama_chat_model)
+    model_size = detect_model_size(cfg.llm_chat_model)
     # Start with native tool calling. If the model returns HTTP 400 (tools not supported),
     # we automatically switch to text-based tool calling (markdown fences in system prompt).
     #
@@ -1458,7 +1499,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # the wasted round-trip and prompt confusion of starting native and falling back mid-turn.
     use_text_tools = (model_size == ModelSize.SMALL)
     prompts = get_system_prompts(model_size)
-    debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model} (use_text_tools={use_text_tools})", "planning")
+    debug_log(f"Model size detected: {model_size.value} for {cfg.llm_chat_model} (use_text_tools={use_text_tools})", "planning")
 
     # Compound-query decomposition for small models.
     # When a query contains a conjunction joining two question-clauses, the
@@ -1559,10 +1600,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 + memory_digest_text
             )
 
-        if len(action_plan) > 1:
-            # A single "Reply to the user." plan is the planner's
-            # positive no-op: memory/tools not needed. Injecting an
-            # ACTION PLAN block for it would just add noise.
+        # Inject the ACTION PLAN block when the plan has meaningful
+        # tool steps — i.e. more than 1 step OR a single step that
+        # references a known tool. The only case we skip is a single
+        # "Reply to the user." step (the planner's positive no-op for
+        # pure-direct-reply queries), which is noise to the chat model.
+        _plan_has_tool_step = (
+            len(action_plan) == 1
+            and action_plan[0].strip()
+            and any(
+                action_plan[0].strip().lower().startswith(t.lower())
+                for t in allowed_tools
+            )
+        )
+        if len(action_plan) > 1 or _plan_has_tool_step:
             guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
@@ -1816,12 +1867,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # all plan tool steps are exhausted, at which point it synthesises
         # a final reply from the accumulated results.
         # See planner.spec.md.
+        _plan_tool_steps = tool_steps_of(action_plan)
         if (
             use_text_tools
-            and len(action_plan) > 1
+            and _plan_tool_steps
             and not _plan_under_specified
         ):
-            _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = (
                 sum(1 for m in messages if m.get("tool_name"))
                 - _plan_steps_baseline
@@ -1986,13 +2037,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 has_tool_calls = " (has tool_calls)" if msg.get("tool_calls") else ""
                 debug_log(f"    [{i}] {role}: {content}{has_tool_calls}", "planning")
 
-        # Send messages to Ollama — try native tool calling first, fall back to text-based
-        # if the model returns HTTP 400 (native tools API not supported).
+        # Send messages to the configured chat backend — try native tool calling
+        # first, fall back to text-based if the model returns HTTP 400 (native
+        # tools API not supported).
         _dump_tools_schema = None if use_text_tools else tools_json_schema
+        _chat_model = cfg.llm_chat_model
         try:
             llm_resp = chat_with_messages(
-                base_url=cfg.ollama_base_url,
-                chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
@@ -2003,7 +2055,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 session_id=_dump_session_id,
                 turn=turn,
                 query=text,
-                model=cfg.ollama_chat_model,
+                model=_chat_model,
                 messages=messages,
                 tools_schema=_dump_tools_schema,
                 use_text_tools=use_text_tools,
@@ -2014,7 +2066,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # for the rest of this session and rebuild the system message to include tool
             # descriptions as plain text with markdown fence instructions.
             debug_log(
-                f"⚠️ Native tools API not supported by {cfg.ollama_chat_model!r}, "
+                f"⚠️ Native tools API not supported by {_chat_model!r}, "
                 "falling back to text-based tool calling (markdown fences)",
                 "planning",
             )
@@ -2022,8 +2074,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             messages[0] = {"role": "system", "content": _build_initial_system_message()}
             _update_system_message_with_context(messages)
             llm_resp = chat_with_messages(
-                base_url=cfg.ollama_base_url,
-                chat_model=cfg.ollama_chat_model,
+                cfg=cfg,
                 messages=messages,
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
@@ -2034,7 +2085,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 session_id=_dump_session_id,
                 turn=turn,
                 query=text,
-                model=cfg.ollama_chat_model,
+                model=_chat_model,
                 messages=messages,
                 tools_schema=None,
                 use_text_tools=True,
@@ -2428,7 +2479,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             malformed_fallback = False
         elif _is_malformed_json_response(content):
             debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
-            model_name = (cfg.ollama_chat_model or "").lower()
+            model_name = cfg.llm_chat_model.lower()
             is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
             candidate_reply = (
                 "I had trouble understanding that request. "

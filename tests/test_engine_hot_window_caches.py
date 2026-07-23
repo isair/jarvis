@@ -26,9 +26,10 @@ def _mock_cfg():
     cfg = Mock()
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.ollama_chat_model = "test-large"
+    cfg.llm_chat_model = "test-large"
     cfg.voice_debug = False
     cfg.llm_tools_timeout_sec = 8.0
-    cfg.llm_embed_timeout_sec = 10.0
+    cfg.llm_embedding_timeout_sec = 10.0
     cfg.llm_chat_timeout_sec = 45.0
     cfg.llm_digest_timeout_sec = 8.0
     cfg.memory_enrichment_max_results = 5
@@ -139,7 +140,7 @@ def test_router_fallback_to_all_tools_is_not_cached(
 @patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
 @patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
 @patch("src.jarvis.memory.graph.GraphMemoryStore")
-@patch("src.jarvis.reply.engine.select_tools", return_value=[])
+@patch("src.jarvis.reply.engine.select_tools", return_value=["webSearch"])
 @patch("src.jarvis.reply.engine.plan_query", return_value=[])
 @patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={"keywords": ["x"], "questions": []})
 @patch("src.jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[])
@@ -214,7 +215,7 @@ def test_warm_profile_cached_across_turns(
 @patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
 @patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
 @patch("src.jarvis.memory.graph.GraphMemoryStore")
-@patch("src.jarvis.reply.engine.select_tools", return_value=[])
+@patch("src.jarvis.reply.engine.select_tools", return_value=["webSearch"])
 @patch(
     "src.jarvis.reply.engine.plan_query",
     return_value=["searchMemory topic='justin bieber'", "reply"],

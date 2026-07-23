@@ -95,7 +95,7 @@ Called from the reply engine (Step 6) before `generate_tools_json_schema()` and 
 - Default: `"llm"`
 - Valid values: `"all"`, `"keyword"`, `"embedding"`, `"llm"`
 
-- Key: `tool_router_model`
+- Key: `fast_model` (the shared fast tier)
 - Type: `str`
-- Default: `""` (empty string — resolves to `intent_judge_model`, then `ollama_chat_model`)
-- Effect: when `tool_selection_strategy == "llm"`, this model is used for the routing call. Resolution order for the empty default: `intent_judge_model` first (small, fast, already warm for wake-word paths and structurally the same classification job), then `ollama_chat_model` as a last resort. Override `tool_router_model` explicitly to decouple routing from both — useful when you want routing on a dedicated third model.
+- Default: `""` (empty string — automatic: the small Ollama default on the Ollama chat path, the chat model on an OpenAI-compatible provider)
+- Effect: when `tool_selection_strategy == "llm"`, routing runs on the fast tier (`resolve_model(cfg, Tier.FAST)`): small, fast, already warm for wake-word paths, and structurally the same classification job as intent judging. Set `fast_model` to pin every fast-tier context (routing included) to a specific model.

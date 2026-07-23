@@ -15,9 +15,10 @@ def _mock_cfg():
     cfg = Mock()
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.ollama_chat_model = "test-large"  # avoid SMALL-model text-tool path
+    cfg.llm_chat_model = "test-large"  # avoid SMALL-model text-tool path
     cfg.voice_debug = False
     cfg.llm_tools_timeout_sec = 8.0
-    cfg.llm_embed_timeout_sec = 10.0
+    cfg.llm_embedding_timeout_sec = 10.0
     cfg.llm_chat_timeout_sec = 45.0
     cfg.llm_digest_timeout_sec = 8.0
     cfg.memory_enrichment_max_results = 5
@@ -171,6 +172,7 @@ def test_tool_carryover_text_tool_mode(
     """
     cfg = _mock_cfg()
     cfg.ollama_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
+    cfg.llm_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
 
     mock_tool.return_value = Mock(
         reply_text="Paris is the capital of France.", error_message=None,

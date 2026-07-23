@@ -17,12 +17,16 @@ from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
 from rapidfuzz import fuzz
+from contextlib import contextmanager
+
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
+from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
-from .intent_judge import IntentJudge, create_intent_judge, warm_up_ollama_model
+from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
 from ..debug import debug_log
+from ..llm import get_embedding_backend
 from ..utils.location import is_location_available
 
 if TYPE_CHECKING:
@@ -337,6 +341,31 @@ def _clear_corrupted_whisper_cache(error_message: str) -> bool:
     except OSError as e:
         debug_log(f"failed to clear corrupted cache: {e}", "voice")
         return False
+
+
+
+@contextmanager
+def _serialised_stream(stream):
+    """Like ``with stream:`` but with lifecycle calls under portaudio_lock.
+
+    sounddevice's context manager calls start() on enter and stop()/close()
+    on exit; those are the thread-unsafe PortAudio lifecycle operations that
+    must be serialised process-wide (see jarvis.utils.audio_lock).
+    """
+    with portaudio_lock:
+        stream.start()
+    try:
+        yield stream
+    finally:
+        with portaudio_lock:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 class VoiceListener(threading.Thread):
@@ -1484,12 +1513,14 @@ class VoiceListener(threading.Thread):
         return resolved_device
 
     def _start_llm_warmup(self) -> list[threading.Thread]:
-        """Pre-load chat and intent judge models into Ollama memory.
+        """Pre-load chat and intent judge models via the active backend.
 
-        Starts up to two daemon threads concurrently so warmup overlaps
-        with Whisper initialisation. When both models point at the same
-        Ollama model, a single warmup covers both (Ollama loads the
-        weights once; ``keep_alive`` keeps them resident for every caller).
+        Warmup goes through ``warm_up_chat_model`` → ``LLMBackend.warm_up``,
+        so it pages models into Ollama's resident memory on the Ollama path
+        and sends a minimal inference to load the model on an OpenAI-
+        compatible server. Starts up to two daemon threads concurrently so
+        warmup overlaps with Whisper initialisation. When both models point
+        at the same model, a single warmup covers both.
 
         Results land in ``self._llm_warmup_results`` keyed by role. The
         caller joins the returned threads with a shared deadline before
@@ -1497,34 +1528,40 @@ class VoiceListener(threading.Thread):
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
 
-        chat_model = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
-        base_url = str(getattr(self.cfg, "ollama_base_url", "") or "").strip()
-        chat_timeout = max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0)
+        chat_model = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
+        # Cap warmup at 60s total: the join budget is hardcoded at 60s (see
+        # warmup-join logic below), so a longer per-thread timeout would
+        # leave daemon threads running after the deadline.
+        chat_timeout = min(
+            max(float(getattr(self.cfg, "llm_tools_timeout_sec", 8.0)), 60.0),
+            60.0,
+        )
         judge = self._intent_judge
         judge_model = judge.config.model if judge is not None else ""
         shared_judge = bool(chat_model) and judge_model == chat_model
 
         # Tool router — only warmed when the LLM selection strategy is active
-        # AND the router points at a model distinct from chat/judge. An empty
-        # `tool_router_model` means "reuse the intent-judge model (small, fast,
-        # already loaded for wake-word paths) or the chat model as a last
-        # resort". Resolve the same way the reply engine does so warmup targets
-        # whatever the engine will actually call. Skipping warmup for non-LLM
-        # strategies avoids loading a model that won't be used this session.
+        # AND it points at a model distinct from chat/judge. Routing runs on
+        # the fast tier; resolving through the same tier helper the reply
+        # engine uses keeps warmup targeting whatever the engine will actually
+        # call. Skipping warmup for non-LLM strategies avoids loading a model
+        # that won't be used this session.
         strategy = str(getattr(self.cfg, "tool_selection_strategy", "") or "").lower()
-        # Use the same resolution helper the reply engine uses so warmup
-        # targets the model the engine will actually call. Keeping a single
-        # source of truth prevents drift between warmup and runtime.
-        from ..reply.engine import resolve_tool_router_model
-        router_model_effective = resolve_tool_router_model(self.cfg)
+        from ..llm import resolve_model, Tier
+        router_model_effective = resolve_model(self.cfg, Tier.FAST)
         router_model = router_model_effective if strategy == "llm" else ""
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
+        embed_model = str(getattr(self.cfg, "embedding_model", "") or "").strip()
+        shared_embed = bool(embed_model) and embed_model in {
+            m for m in (chat_model, judge_model, router_model) if m
+        }
+
         threads: list[threading.Thread] = []
 
-        if chat_model and base_url:
+        if chat_model:
             def _warm_chat() -> None:
-                ok = warm_up_ollama_model(base_url, chat_model, timeout=chat_timeout)
+                ok = warm_up_chat_model(self.cfg, chat_model, timeout=chat_timeout)
                 self._llm_warmup_results["chat"] = (chat_model, ok)
                 # When chat and judge share a model, one warmup covers both.
                 if shared_judge:
@@ -1532,6 +1569,10 @@ class VoiceListener(threading.Thread):
                 # Router reusing chat_model is already covered.
                 if router_model and router_model == chat_model:
                     self._llm_warmup_results["router"] = (chat_model, ok)
+                # When the embed model matches chat, the chat warmup already
+                # loaded the model into memory; no separate embed thread runs.
+                if shared_embed and embed_model == chat_model:
+                    self._llm_warmup_results["embed"] = (chat_model, ok)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
@@ -1541,15 +1582,40 @@ class VoiceListener(threading.Thread):
                 self._llm_warmup_results["judge"] = (judge_model, ok)
                 if router_model and router_model == judge_model:
                     self._llm_warmup_results["router"] = (judge_model, ok)
+                if shared_embed and embed_model == judge_model:
+                    self._llm_warmup_results["embed"] = (judge_model, ok)
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
 
-        if router_model and base_url and not shared_router:
+        if router_model and not shared_router:
             def _warm_router() -> None:
-                ok = warm_up_ollama_model(base_url, router_model, timeout=chat_timeout)
+                ok = warm_up_chat_model(self.cfg, router_model, timeout=chat_timeout)
                 self._llm_warmup_results["router"] = (router_model, ok)
+                if shared_embed and embed_model == router_model:
+                    self._llm_warmup_results["embed"] = (router_model, ok)
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
+
+        if embed_model and not shared_embed:
+            def _warm_embed() -> None:
+                try:
+                    backend = get_embedding_backend(self.cfg)
+                    # Use embed() rather than warm_up() because embedding-only
+                    # models (e.g. nomic-embed-text, modernbert) are not served
+                    # on the chat endpoint — warm_up() sends a chat completion
+                    # which would fail for those models. A single-token embedding
+                    # request forces the runtime to load the model the same way.
+                    # Use the embed method's own default timeout (15s) rather than
+                    # the full chat_timeout (60s) since this probe is sub-second.
+                    embed_timeout = min(chat_timeout, 15.0)
+                    result = backend.embed("ping", embed_model, timeout_sec=embed_timeout)
+                    ok = result is not None
+                except Exception as exc:
+                    debug_log(f"embed warmup failed: {exc}", "voice")
+                    ok = False
+                self._llm_warmup_results["embed"] = (embed_model, ok)
+
+            threads.append(threading.Thread(target=_warm_embed, daemon=True, name="warmup-embed"))
 
         for t in threads:
             t.start()
@@ -1557,6 +1623,7 @@ class VoiceListener(threading.Thread):
         debug_log(
             f"LLM warmup started (chat={chat_model or 'n/a'}, "
             f"judge={judge_model or 'n/a'}, router={router_model or 'n/a'}, "
+            f"embed={embed_model or 'n/a'}, "
             f"shared_judge={shared_judge}, shared_router={shared_router})",
             "voice",
         )
@@ -1614,38 +1681,51 @@ class VoiceListener(threading.Thread):
                 print("  🔐 Checking microphone permission...", flush=True)
                 mic_ok = threading.Event()
                 mic_error: list = [None]
-                mic_stream: list = [None]
 
                 def _mic_check():
+                    # Deliberately NOT under portaudio_lock: this probe's
+                    # open/start can hang indefinitely when Windows blocks
+                    # mic access at the system level (that is what the 5s
+                    # timeout below is for), and hanging while holding the
+                    # process-wide lock would freeze every other audio user
+                    # (listener, dictation, TTS). The probe runs once at
+                    # startup before the listener's main stream opens, so
+                    # the residual open/open race is minimal; the quick
+                    # stop/close after a successful start stays guarded.
+                    stream = None
                     try:
                         stream = sd.InputStream(
                             samplerate=self._samplerate, channels=1,
                             dtype="float32", blocksize=int(self._samplerate * 0.1),
                         )
-                        mic_stream[0] = stream
                         stream.start()
                         time.sleep(0.15)
-                        stream.stop()
-                        stream.close()
-                        mic_stream[0] = None
+                        with portaudio_lock:
+                            stream.stop()
+                            stream.close()
+                        stream = None
                         mic_ok.set()
                     except Exception as exc:
                         mic_error[0] = exc
+                        if stream is not None:
+                            try:
+                                with portaudio_lock:
+                                    stream.close()
+                            except Exception:
+                                pass
 
                 check_thread = threading.Thread(target=_mic_check, daemon=True)
                 check_thread.start()
                 check_thread.join(timeout=5.0)
 
                 if check_thread.is_alive():
-                    # Clean up the stream if the thread is still blocked
+                    # Do NOT abort/close the stream from this thread: the
+                    # check thread may still be blocked inside start()/stop()
+                    # on it, and closing a stream under another thread's feet
+                    # is a native use-after-free that aborts the whole app on
+                    # Windows (#401). Abandon it — the daemon check thread
+                    # will finish the stop/close itself if it ever unblocks.
                     debug_log("microphone permission check timed out after 5s", "voice")
-                    stream_ref = mic_stream[0]
-                    if stream_ref is not None:
-                        try:
-                            stream_ref.abort()
-                            stream_ref.close()
-                        except Exception:
-                            pass
                     print("  ⚠️  Microphone permission check timed out", flush=True)
                     print("     This may indicate Windows is blocking microphone access.", flush=True)
                     print("     Continuing anyway — voice input may not work.", flush=True)
@@ -1963,6 +2043,7 @@ class VoiceListener(threading.Thread):
             _print_status("chat", "Chat model", "💬")
             _print_status("judge", "Intent judge", "🧠")
             _print_status("router", "Tool router", "🔧")
+            _print_status("embed", "Embed model", "📐")
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")
@@ -2042,14 +2123,15 @@ class VoiceListener(threading.Thread):
         self._stream_samplerate = self._samplerate
         open_error = None
         try:
-            stream = sd.InputStream(
-                samplerate=self._samplerate,
-                channels=1,
-                dtype="float32",
-                blocksize=self._frame_samples,
-                callback=self._on_audio,
-                **stream_kwargs,
-            )
+            with portaudio_lock:
+                stream = sd.InputStream(
+                    samplerate=self._samplerate,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=self._frame_samples,
+                    callback=self._on_audio,
+                    **stream_kwargs,
+                )
         except Exception as e:
             error_msg = str(e).lower()
             is_rate_error = "sample rate" in error_msg or "9987" in error_msg
@@ -2066,14 +2148,15 @@ class VoiceListener(threading.Thread):
                         native_frame_samples = max(1, int(native_rate * 30 / 1000))
                         print(f"  ⚠️  Device doesn't support {self._samplerate} Hz — using {native_rate} Hz with resampling", flush=True)
                         debug_log(f"retrying stream at native {native_rate} Hz", "voice")
-                        stream = sd.InputStream(
-                            samplerate=native_rate,
-                            channels=1,
-                            dtype="float32",
-                            blocksize=native_frame_samples,
-                            callback=self._on_audio,
-                            **stream_kwargs,
-                        )
+                        with portaudio_lock:
+                            stream = sd.InputStream(
+                                samplerate=native_rate,
+                                channels=1,
+                                dtype="float32",
+                                blocksize=native_frame_samples,
+                                callback=self._on_audio,
+                                **stream_kwargs,
+                            )
                     else:
                         open_error = e
                 except Exception:
@@ -2098,11 +2181,12 @@ class VoiceListener(threading.Thread):
             return
 
         # Main audio processing loop
-        with stream:
+        with _serialised_stream(stream):
             # Verify stream is actually recording (helps catch permission issues)
             if not stream.active:
                 try:
-                    stream.start()
+                    with portaudio_lock:
+                        stream.start()
                 except Exception as e:
                     error_msg = str(e).lower()
                     debug_log(f"failed to start audio stream: {e}", "voice")
@@ -2127,7 +2211,7 @@ class VoiceListener(threading.Thread):
             # things out for it. Classification lives in model_variants so
             # it stays in sync when supported models change.
             from ..reply.prompts.model_variants import detect_model_size, ModelSize
-            chat_model_name = str(getattr(self.cfg, "ollama_chat_model", "") or "").strip()
+            chat_model_name = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
             if chat_model_name and detect_model_size(chat_model_name) == ModelSize.SMALL:
                 print(
                     f"  ⚠️  Small model in use ({chat_model_name}). Assume it can't infer — spell out the steps for anything more involved:",

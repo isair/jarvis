@@ -98,6 +98,10 @@ class TestEvaluateTurn:
         c = _C()
         for k, v in overrides.items():
             setattr(c, k, v)
+        # Mirror config load: Settings always carries the resolved active
+        # chat model in llm_chat_model (= ollama_chat_model on Ollama).
+        if not hasattr(c, "llm_chat_model"):
+            c.llm_chat_model = c.ollama_chat_model
         return c
 
     def test_terminal_path(self):
@@ -331,7 +335,7 @@ class TestEvaluateTurn:
         assert "TOOLS ALREADY INVOKED THIS REPLY" in sent
         assert "none yet" in sent
 
-    def test_evaluator_model_override_used(self):
+    def test_evaluator_runs_on_fast_model(self):
         captured = {}
 
         def _capture(**kwargs):
@@ -339,27 +343,7 @@ class TestEvaluateTurn:
             return '{"terminal": true, "nudge": "", "reason": ""}'
 
         cfg = self._cfg(
-            evaluator_model="dedicated-evaluator",
-            intent_judge_model="judge-model",
-            ollama_chat_model="chat-model",
-        )
-        with patch(
-            "jarvis.reply.evaluator.call_llm_direct",
-            side_effect=_capture,
-        ):
-            evaluate_turn("q", "r", [], 1, cfg)
-        assert captured.get("chat_model") == "dedicated-evaluator"
-
-    def test_evaluator_model_falls_back_to_intent_judge(self):
-        captured = {}
-
-        def _capture(**kwargs):
-            captured.update(kwargs)
-            return '{"terminal": true, "nudge": "", "reason": ""}'
-
-        cfg = self._cfg(
-            evaluator_model="",
-            intent_judge_model="judge-model",
+            fast_model="judge-model",
             ollama_chat_model="chat-model",
         )
         with patch(
@@ -368,6 +352,24 @@ class TestEvaluateTurn:
         ):
             evaluate_turn("q", "r", [], 1, cfg)
         assert captured.get("chat_model") == "judge-model"
+
+    def test_evaluator_falls_back_to_chat_model_when_fast_unset(self):
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return '{"terminal": true, "nudge": "", "reason": ""}'
+
+        cfg = self._cfg(
+            fast_model="",
+            ollama_chat_model="chat-model",
+        )
+        with patch(
+            "jarvis.reply.evaluator.call_llm_direct",
+            side_effect=_capture,
+        ):
+            evaluate_turn("q", "r", [], 1, cfg)
+        assert captured.get("chat_model") == "chat-model"
 
 
 class TestEvaluatorGarbledTurnGuidance:

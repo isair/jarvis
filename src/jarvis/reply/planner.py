@@ -40,7 +40,23 @@ import re
 from typing import List, Optional, Sequence, Tuple
 
 from ..debug import debug_log
-from ..llm import call_llm_direct
+from ..llm import get_llm_backend, resolve_model, Tier
+
+
+def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
+                    timeout_sec=10.0, thinking=False, num_ctx=4096,
+                    temperature=None):
+    """Local indirection: route the planner's chat call through the
+    backend configured by ``cfg.llm_provider``.
+
+    Kept module-level so tests can patch this single symbol to intercept
+    every planner LLM call without reaching into the backend ABC.
+    """
+    return get_llm_backend(cfg).direct(
+        chat_model, system_prompt, user_content,
+        timeout_sec=timeout_sec, thinking=thinking,
+        num_ctx=num_ctx, temperature=temperature,
+    )
 
 
 # Hard cap on plan length. Small models happily emit 10+ step plans that
@@ -134,25 +150,6 @@ def _normalise_url_args(args: dict) -> dict:
     return out
 
 
-def resolve_planner_model(cfg) -> str:
-    """Pick the LLM for planning.
-
-    Planning quality scales directly with the chat model: the plan is
-    the scaffolding the chat model then follows, so the two must be
-    matched. A weaker planner on top of a stronger chat model produces
-    bad scaffolding the chat model then has to fight against; and the
-    chat model is the one the user picked during setup as their
-    quality target. An explicit `planner_model` override still wins —
-    useful for benchmarking a dedicated planner — but the default is
-    to track the chat model verbatim so upgrading the chat model
-    automatically upgrades the plans.
-    """
-    override = getattr(cfg, "planner_model", "") or ""
-    if override:
-        return override
-    return getattr(cfg, "ollama_chat_model", "") or ""
-
-
 _PROMPT_TEMPLATE = (
     "You are a planning assistant. You run BEFORE anything else: before "
     "any memory lookup, before any tool is selected. Your job is to "
@@ -219,13 +216,25 @@ _PROMPT_TEMPLATE = (
     "8. Final step is always a synthesis/reply step when any "
     "searchMemory or tool steps were planned: "
     "`Reply to the user with the combined findings.`\n"
-    "9. For trivial greetings, small-talk, opinions or questions the "
-    "assistant can answer directly, emit a single step: "
-    "`Reply to the user.`\n"
+    "9. For trivial greetings, small-talk, or opinions the assistant can "
+    "answer perfectly well from its own knowledge, consider a single "
+    "`Reply to the user.` step — but ONLY when no AVAILABLE TOOL would "
+    "meaningfully improve the answer. If a relevant tool is listed in "
+    "AVAILABLE TOOLS (e.g. `webSearch` for a joke, a recipe, creative "
+    "content, or any request where freshness or variety matters), PLAN "
+    "TO USE IT. The AVAILABLE TOOLS list already indicates the query "
+    "likely needs external information; a reply-only plan overrides "
+    "that and produces a stale or dismissive answer. When in doubt, "
+    "prefer a tool step over a direct reply.\n"
     "10. Maximum {max_steps} steps. Do not number them — one step per line.\n"
     "11. Output ONLY the steps, no preamble, no trailing commentary, no "
     "JSON fences, no explanations.\n"
     "12. Write the steps in the same language the user wrote the query in.\n"
+    "13. Never emit `stop` as a plan step. The main assistant decides "
+    "when to stop based on its own judgement at runtime, not on a "
+    "pre-planned stop directive. If the user seems dismissive, emit a "
+    "single `Reply to the user.` step and let the assistant handle tone "
+    "and termination naturally.\n"
 )
 
 
@@ -291,6 +300,17 @@ def _is_trivial_plan(steps: List[str]) -> bool:
     return len(steps) <= 1
 
 
+def _is_stop_step(step: str) -> bool:
+    """True when a plan step is a bare ``stop`` directive.
+
+    The planner prompt forbids emitting ``stop`` as a plan step
+    (rule 13), but small models occasionally ignore instruction.
+    This guard strips trailing sentence punctuation so that
+    ``"stop."``, ``"stop!"``, etc. are also caught.
+    """
+    return step.strip().lower().rstrip(".,!?;:") == "stop"
+
+
 def is_search_memory_step(step: str) -> bool:
     """Is this step the planner's `searchMemory` directive?"""
     return step.strip().lower().startswith(SEARCH_MEMORY_DIRECTIVE.lower())
@@ -332,15 +352,27 @@ def tool_steps_of(plan: Sequence[str]) -> List[str]:
     """Non-synthesis, non-directive tool steps of a plan.
 
     Drops any `searchMemory` directives (engine-internal) and the final
-    synthesis step. A 1-step plan is a reply-only plan by the planner's
-    contract (rule 9), so it has no tool steps and we return an empty
-    list — that lets the engine's plan-driven paths (direct-exec,
-    progress nudge) skip cleanly for the pure-reply case.
+    synthesis step. A 1-step plan that is a tool step (starts with a
+    known tool-like identifier — already validated by the engine's
+    allow-list guard at injection time) is returned as a tool step;
+    a 1-step "Reply to the user." plan has no tool steps (empty list).
     """
     steps = strip_memory_directives(plan)
-    if len(steps) > 1:
-        return list(steps[:-1])
-    return []
+    if not steps:
+        return []
+    if len(steps) == 1:
+        # Could be "Reply to the user." (no tool) or "webSearch ..." (tool).
+        # The engine's allow-list guard handles validation at plan-injection
+        # time; here we just strip the synthesis step if present. A single
+        # step that looks like a reply is not a tool step.
+        first = steps[0].strip()
+        if first.lower().startswith("reply") or first.lower().startswith(
+            "synthes"
+        ):
+            return []
+        return list(steps)
+    # 2+ steps: everything except the final synthesis step.
+    return list(steps[:-1])
 
 
 _TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
@@ -419,15 +451,17 @@ def plan_query(
     if not getattr(cfg, "planner_enabled", True):
         return []
 
-    base_url = getattr(cfg, "ollama_base_url", "") or ""
-    model = resolve_planner_model(cfg)
-    if not base_url or not model:
+    # Planning runs on the CHAT tier: the plan is the scaffolding the chat
+    # model then follows, so the two must be matched — a weaker planner on a
+    # stronger chat model produces scaffolding the chat model fights against.
+    model = resolve_model(cfg, Tier.CHAT)
+    if not model:
         return []
 
     effective_timeout = float(
         timeout_sec
         if timeout_sec is not None
-        else getattr(cfg, "planner_timeout_sec", 6.0)
+        else getattr(cfg, "planner_timeout_sec", 3.0)
     )
 
     system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
@@ -435,7 +469,7 @@ def plan_query(
 
     try:
         raw = call_llm_direct(
-            base_url=base_url,
+            cfg=cfg,
             chat_model=model,
             system_prompt=system_prompt,
             user_content=user_content,
@@ -453,6 +487,19 @@ def plan_query(
 
     steps = _parse_plan(raw)
     if not steps:
+        return []
+    # Post-plan guard: reject plans where every step is "stop".
+    # The planner prompt forbids emitting "stop" (rule 13), but small
+    # models occasionally ignore instruction. A stop-only plan would
+    # produce a silent dismissal for any non-trivial query, which is
+    # never the right behaviour — the engine always adds "stop" to
+    # the allow-list separately. Return empty so the engine falls
+    # through to the tool router + chat model.
+    if steps and all(_is_stop_step(s) for s in steps):
+        debug_log(
+            "planner: rejecting stop-only plan (forbidden by rule 13)",
+            "planning",
+        )
         return []
     debug_log(
         f"planner: {len(steps)} step(s) — "
@@ -689,15 +736,14 @@ def resolve_next_tool_call(
         )
         return fast
 
-    base_url = getattr(cfg, "ollama_base_url", "") or ""
-    model = resolve_planner_model(cfg)
-    if not base_url or not model:
+    model = resolve_model(cfg, Tier.CHAT)
+    if not model:
         return None
 
     effective_timeout = float(
         timeout_sec
         if timeout_sec is not None
-        else getattr(cfg, "planner_timeout_sec", 6.0)
+        else getattr(cfg, "planner_timeout_sec", 3.0)
     )
 
     user_content = (
@@ -710,7 +756,7 @@ def resolve_next_tool_call(
 
     try:
         raw = call_llm_direct(
-            base_url=base_url,
+            cfg=cfg,
             chat_model=model,
             system_prompt=_STEP_RESOLVER_SYSTEM,
             user_content=user_content,
@@ -788,7 +834,6 @@ __all__ = [
     "MAX_STEPS",
     "MIN_QUERY_CHARS",
     "SEARCH_MEMORY_DIRECTIVE",
-    "resolve_planner_model",
     "plan_query",
     "format_plan_block",
     "progress_nudge",
