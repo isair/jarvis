@@ -51,6 +51,9 @@ class TestKnowledgeGraphConsoleLogging:
                 ollama_embed_model="test",
                 force=True,
                 timeout_sec=5.0,
+                # These tests assert the graph-write console logging, which is
+                # now gated (Phase 4). Enable the gate so the writer runs.
+                legacy_knowledge_auto_write_enabled=True,
             )
 
     def test_logs_count_when_new_facts_stored(self, db, dialogue_memory, capsys):

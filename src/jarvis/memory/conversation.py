@@ -1656,6 +1656,7 @@ def update_diary_from_dialogue_memory(
     on_token: Optional[Callable[[str], None]] = None,
     thinking: bool = False,
     graph_picker_model: Optional[str] = None,
+    legacy_knowledge_auto_write_enabled: bool = False,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
@@ -1723,6 +1724,28 @@ def update_diary_from_dialogue_memory(
             # Non-blocking — if this fails, the diary update still succeeded.
             # Uses a dedicated timeout (30s) rather than the diary chat timeout,
             # so graph updates don't inflate the diary flush wall time.
+            #
+            # Phase 4 gate — legacy_knowledge_auto_write_enabled (default False).
+            # This is the only AUTOMATIC conversation-driven writer into the
+            # legacy Knowledge Graph (the manual desktop "import diary → graph"
+            # endpoint is now gated by the same flag), and it was previously
+            # ungated: it ran on every
+            # diary flush regardless of conversation_learning_enabled. That is
+            # how fabricated/hallucinated "facts" (e.g. a false address rule,
+            # invented self-improvement plans) accumulated into the User /
+            # Directives branches that build_warm_profile injects into EVERY
+            # system prompt. With the gate OFF the diary summary above is already
+            # persisted and mark_saved_up_to has run; we simply stop the graph
+            # from growing out of conversation and return. Retrieval / warm
+            # profile over EXISTING nodes is unaffected (reads only).
+            if not legacy_knowledge_auto_write_enabled:
+                debug_log(
+                    "legacy graph auto-write gated OFF "
+                    "(legacy_knowledge_auto_write_enabled=False); "
+                    "skipping conversation→graph update",
+                    "memory",
+                )
+                return summary_id
             try:
                 from .graph import GraphMemoryStore
                 from .graph_ops import update_graph_from_dialogue
