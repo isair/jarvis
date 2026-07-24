@@ -324,7 +324,7 @@ def main() -> None:
     port = int(svc.config.bind_port)
     if host not in ("127.0.0.1", "localhost", "::1"):
         host = "127.0.0.1"
-    print(f"🛡️ Security Center on http://{host}:{port} (READ-ONLY)", flush=True)
+    print(f"Security Center on http://{host}:{port} (READ-ONLY)", flush=True)
     app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
