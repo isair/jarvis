@@ -37,6 +37,14 @@ class _TTSItem:
 # Sentinel enqueued by stop() to wake the worker (empty text => skipped).
 _STOP_ITEM = _TTSItem(text="")
 
+# Playback watchdog: the most wall-clock a single playback may run PAST its known
+# audio duration before we abort a stuck OutputStream. A wireless output that
+# drops mid-playback can leave the stream `active` forever; without this bound the
+# single TTS worker would spin in the wait-loop, strand `_is_speaking=True`, and
+# block ALL further voice/chat TTS. Generous enough to never trip on real,
+# slightly-buffered playback.
+_PLAYBACK_TIMEOUT_MARGIN_SEC = 8.0
+
 
 # ============================================================================
 # Piper TTS Model Configuration
@@ -944,7 +952,14 @@ class PiperTTS:
                 )
                 self._audio_stream.start()
 
-            # Wait for playback to complete
+            # Wait for playback to complete. Watchdog: if the OutputStream never
+            # goes inactive within (audio duration + margin) — e.g. a wireless
+            # device dropped mid-playback — abort it so the single worker thread
+            # is not stranded forever (which would keep _is_speaking=True and
+            # block all further voice/chat TTS). A timeout is NOT an interrupt:
+            # we let the completion callback fire so the caller recovers (voice
+            # cooldown/mic reopen, chat turn release).
+            play_deadline = time.time() + exact_duration + _PLAYBACK_TIMEOUT_MARGIN_SEC
             try:
                 while self._audio_stream is not None and self._audio_stream.active:
                     if self._should_interrupt.is_set():
@@ -953,6 +968,16 @@ class PiperTTS:
                             if self._audio_stream is not None:
                                 self._audio_stream.abort()
                         break
+                    if time.time() > play_deadline:
+                        debug_log("Piper TTS playback timed out; stream aborted", "tts")
+                        print("  ⚠️ Piper TTS playback timed out; stream aborted", flush=True)
+                        with self._audio_lock:
+                            if self._audio_stream is not None:
+                                try:
+                                    self._audio_stream.abort()
+                                except Exception:
+                                    pass
+                        break  # not `interrupted`: completion still fires (recovery)
                     time.sleep(0.05)
             finally:
                 with self._audio_lock:
