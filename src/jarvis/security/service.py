@@ -110,6 +110,8 @@ class SecurityCenterService:
         }
 
     def overview(self) -> dict[str, Any]:
+        from copy import deepcopy
+
         latest = self.store.load_latest_snapshot()
         alerts = [a for a in self.store.load_alerts(limit=200) if a.get("status") in (None, "New", "Investigating", "Acknowledged")]
         baseline = self.store.load_baseline()
@@ -117,9 +119,10 @@ class SecurityCenterService:
         scores = {}
         protection = []
         if latest:
-            # Recompute lightly from stored snapshot without recollecting
-            all_alerts = self.store.load_alerts(limit=200)
-            scores = compute_scores(latest, all_alerts, self.config, changes=changes)
+            # Score from re-detection on latest snapshot (not historical JSONL) so old
+            # acknowledged/new noise from prior buggy runs does not inflate risk cards.
+            live_alerts = detect_alerts(deepcopy(latest), self.config, baseline=baseline, changes=changes)
+            scores = compute_scores(latest, live_alerts, self.config, changes=changes)
             protection = protection_status(latest)
         return {
             "enabled": self.config.enabled,
