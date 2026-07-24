@@ -213,6 +213,13 @@ def test_redaction_secrets_and_html():
     cmd = redact_command_line("password=hunter2 " + ("x" * 1000), max_len=50)
     assert len(cmd) <= 50
     assert "<script>" not in sanitize_for_html("<script>alert(1)</script>")
+    from jarvis.security.redact_ext import scrub_obj
+
+    preserved = scrub_obj({"id": "a" * 32, "sha256": "b" * 64, "path": r"C:\Users\Alice\x.exe", "cmd": "Bearer tok123"})
+    assert preserved["id"] == "a" * 32
+    assert preserved["sha256"] == "b" * 64
+    assert "[USER]" in preserved["path"]
+    assert "REDACTED" in preserved["cmd"]
 
 
 @pytest.mark.unit
