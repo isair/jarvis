@@ -152,17 +152,36 @@ def _answer_arithmetic(folded: str, original: str) -> Optional[str]:
 
 # ------------------------------------------------------------------- public
 
-def try_local_answer(text: str, now: Optional[datetime] = None) -> Optional[str]:
+def try_local_answer(text: str, now: Optional[datetime] = None, cfg=None) -> Optional[str]:
     """Return a deterministic Romanian answer, or None to use the full pipeline.
 
     Args:
         text: the user's query, already stripped of the wake word.
         now: injected for testing; defaults to the real local clock.
+        cfg: settings object. When provided, enables deterministic
+             identity/capability answers (Phase 4 · Section D), which
+             self-gate on ``cfg.identity_registry_enabled`` (default OFF).
     """
     if not text or not text.strip():
         return None
     now = now or datetime.now()
     folded = _fold(text)
+
+    # Phase 4 · Section D — identity / capability questions ("cine ești",
+    # "ce poți face", "ce voce/model", "cum funcționează memoria ta",
+    # "la ce ești conectată") answered deterministically from a runtime
+    # registry instead of being invented by the model. answer_identity_question
+    # returns None unless cfg.identity_registry_enabled is set AND the text is a
+    # reflexive/second-person identity question (it rejects command prefixes like
+    # "memorează…"/"spune-mi despre…"), so this is inert until the owner opts in.
+    if cfg is not None:
+        try:
+            from .identity_registry import answer_identity_question
+            _ida = answer_identity_question(text, cfg)
+            if _ida:
+                return _ida
+        except Exception:
+            pass
 
     for handler in (
         lambda: _answer_date(folded, now),
