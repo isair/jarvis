@@ -480,6 +480,24 @@ def main() -> None:
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
 
+    # Security Center background monitor (opt-in, READ-ONLY, fail-open).
+    try:
+        if bool(getattr(cfg, "security_center_enabled", False)):
+            from .security.monitor import SecurityMonitor
+            from .security.service import SecurityCenterService
+            from .security.config import load_security_config
+            from .security.paths import default_security_root
+
+            _root = default_security_root(db_path=getattr(cfg, "db_path", None))
+            _sec_cfg = load_security_config(_root)
+            _sec_cfg.enabled = True
+            _sec_cfg.bind_port = int(getattr(cfg, "security_center_bind_port", 5051) or 5051)
+            _sec = SecurityCenterService(root=_root, db_path=getattr(cfg, "db_path", None), config=_sec_cfg)
+            SecurityMonitor(_sec).start()
+            print("✓ Security Center monitor started (READ-ONLY)", flush=True)
+    except Exception as _sec_exc:
+        debug_log(f"security monitor start failed (ignored): {type(_sec_exc).__name__}", "security")
+
     # Initialize dictation engine (hold-to-dictate)
     dictation = None
     if bool(getattr(cfg, "dictation_enabled", True)):

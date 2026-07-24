@@ -159,6 +159,10 @@ class Settings:
     whisper_min_audio_duration: float
     whisper_min_word_length: int
 
+    # Cora Security Center (Phase 1 READ-ONLY). Default OFF; never auto-enables.
+    security_center_enabled: bool
+    security_center_bind_port: int
+
     # Voice Activity Detection (VAD)
     vad_enabled: bool
     vad_aggressiveness: int
@@ -550,6 +554,10 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
 
+        # Cora Security Center (Phase 1 READ-ONLY) — default off
+        "security_center_enabled": False,
+        "security_center_bind_port": 5051,
+
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
         "vad_aggressiveness": 2,
@@ -869,6 +877,10 @@ def load_settings() -> Settings:
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
+    security_center_enabled = bool(merged.get("security_center_enabled", False))
+    security_center_bind_port = int(merged.get("security_center_bind_port", 5051) or 5051)
+    if security_center_bind_port < 1024 or security_center_bind_port > 65535:
+        security_center_bind_port = 5051
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
@@ -949,6 +961,9 @@ def load_settings() -> Settings:
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
+
+        security_center_enabled=security_center_enabled,
+        security_center_bind_port=security_center_bind_port,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,

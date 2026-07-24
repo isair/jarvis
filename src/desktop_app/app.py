@@ -1267,6 +1267,9 @@ class JarvisSystemTray:
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
+        # Security Center window (created lazily; feature-flagged in menu)
+        self.security_center_window = None
+
         # Create face window (hidden by default)
         # Note: Creating the face window also initializes the SpeakingState singleton
         # in the main thread, which is important for cross-thread signal delivery
@@ -1367,6 +1370,12 @@ class JarvisSystemTray:
         self.memory_action = QAction("🧠 Memory Viewer")
         self.memory_action.triggered.connect(self.show_memory_viewer)
         self.menu.addAction(self.memory_action)
+
+        # Security Center — always show entry; server binds localhost only.
+        # Background monitor remains gated by security_center_enabled.
+        self.security_action = QAction("🛡️ Security Center")
+        self.security_action.triggered.connect(self.show_security_center)
+        self.menu.addAction(self.security_action)
 
         # Dictation history action
         self.dictation_history_action = QAction("🎙️ Dictation History")
@@ -1617,6 +1626,30 @@ class JarvisSystemTray:
         self.memory_viewer.show()
         self.memory_viewer.raise_()
         self.memory_viewer.activateWindow()
+
+    def show_security_center(self) -> None:
+        """Open Security Center on localhost (READ-ONLY dashboard)."""
+        try:
+            from desktop_app.security_center_window import SecurityCenterWindow
+            if self.security_center_window is None:
+                port = 5051
+                try:
+                    from jarvis.config import load_config
+                    port = int(load_config().get("security_center_bind_port", 5051) or 5051)
+                except Exception:
+                    port = 5051
+                self.security_center_window = SecurityCenterWindow(port=port)
+            self.security_center_window.show()
+            self.security_center_window.raise_()
+            self.security_center_window.activateWindow()
+        except Exception as e:
+            debug_log(f"security center open failed: {e}", "desktop")
+            self.tray_icon.showMessage(
+                "Security Center",
+                f"Failed to open: {e}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                4000,
+            )
 
     def show_dictation_history(self) -> None:
         """Show the dictation history window and bring it to front."""
