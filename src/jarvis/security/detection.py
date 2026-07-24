@@ -31,7 +31,13 @@ def diff_baseline(baseline: Optional[dict[str, Any]], current: dict[str, Any]) -
     if not baseline or "snapshot" not in baseline:
         return {"status": "no_baseline", "added": [], "removed": [], "modified": []}
 
+    from jarvis.security.redact_ext import scrub_obj
+    from jarvis.security.store import _baseline_view
+
     b = baseline["snapshot"]
+    # Always compare like-for-like metadata views (avoids false added/removed on first audit)
+    if "processes_indexed" not in current:
+        current = scrub_obj(_baseline_view(current))
     changes: dict[str, list[dict[str, Any]]] = {"added": [], "removed": [], "modified": []}
 
     def set_of(items: list[dict[str, Any]], key: str) -> set[str]:
@@ -326,22 +332,53 @@ def detect_alerts(
             )
 
     # Listening on all interfaces from unknown process
+    _system_listeners = {
+        "system",
+        "svchost",
+        "services",
+        "lsass",
+        "wininit",
+        "spoolsv",
+        "smss",
+        "csrss",
+        "winlogon",
+        "jhi_service",
+    }
     for lst in snapshot.get("listening") or []:
         addr = str(lst.get("address") or "")
         if addr in ("0.0.0.0", "::"):
-            # find process trust if present in snapshot processes
+            pname = str(lst.get("process") or "").lower().replace(".exe", "")
+            if pname in _system_listeners:
+                continue
+            # Prefer full process record (path/publisher) when available
             path = str(lst.get("path") or "")
-            proc = {"name": lst.get("process"), "path": path, "publisher": "", "signature": "", "sha256": "", "command_line": ""}
+            matched = next(
+                (
+                    p
+                    for p in (snapshot.get("processes") or [])
+                    if str(p.get("name") or "").lower().replace(".exe", "") == pname
+                    and (not path or str(p.get("path") or "").lower() == path.lower())
+                ),
+                None,
+            )
+            proc = matched or {
+                "name": lst.get("process"),
+                "path": path,
+                "publisher": "",
+                "signature": "",
+                "sha256": "",
+                "command_line": "",
+            }
             trust = classify_process(proc, cfg, baseline_hashes=baseline_hashes)
             if trust["trust_level"] in ("unknown", "suspicious", "critical"):
                 alerts.append(
                     _alert(
-                        fingerprint=_fid("listen", addr, str(lst.get("port")), path),
+                        fingerprint=_fid("listen", addr, str(lst.get("port")), str(proc.get("path") or path)),
                         severity="high",
                         category="network",
                         title=f"Unknown process listening on all interfaces :{lst.get('port')}",
                         artifact=str(lst.get("process") or ""),
-                        path=path,
+                        path=str(proc.get("path") or path),
                         connection=f"{addr}:{lst.get('port')}",
                         reason="; ".join(trust["reasons"]) or "untrusted listener",
                         evidence=[str(lst)],

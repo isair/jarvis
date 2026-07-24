@@ -108,18 +108,20 @@ def compute_scores(
         nw += w["network"]["firewall_disabled"]; nw_ev.append("firewall_off")
     cards["network"] = ScoreCard("Network Risk", _clamp(nw), "Listening / firewall risk", nw_ev, "medium", lim[:3])
 
-    # Malware indicators
+    # Malware indicators (each weight applied at most once — avoid alert-count inflation)
     mw = 0.0
     mw_ev: list[str] = []
+    mw_seen: set[str] = set()
     for a in alerts:
         cat = a.get("category")
         title = str(a.get("title", "")).lower()
-        if cat == "remote_access" and "tool" in title:
-            mw += w["malware_indicators"]["remote_tool_keyword"]; mw_ev.append("remote_tool")
-        if "trusted_name" in str(a.get("reason", "")):
-            mw += w["malware_indicators"]["trusted_name_bad_path"]; mw_ev.append("name_spoof")
-        if "temp" in title and "signature" in title:
-            mw += w["malware_indicators"]["unsigned_temp_exe"]; mw_ev.append("temp_unsigned")
+        reason = str(a.get("reason", "")).lower()
+        if cat == "remote_access" and "tool" in title and "remote_tool" not in mw_seen:
+            mw += w["malware_indicators"]["remote_tool_keyword"]; mw_ev.append("remote_tool"); mw_seen.add("remote_tool")
+        if "trusted_name_untrusted_path" in reason and "name_spoof" not in mw_seen:
+            mw += w["malware_indicators"]["trusted_name_bad_path"]; mw_ev.append("name_spoof"); mw_seen.add("name_spoof")
+        if "temp" in title and "signature" in title and "temp_unsigned" not in mw_seen:
+            mw += w["malware_indicators"]["unsigned_temp_exe"]; mw_ev.append("temp_unsigned"); mw_seen.add("temp_unsigned")
     cards["malware_indicators"] = ScoreCard("Malware Indicators", _clamp(mw), "Heuristic malware / tool indicators", mw_ev, "low", ["Absence of indicators is not proof of cleanliness"])
 
     # Hygiene
@@ -129,7 +131,7 @@ def compute_scores(
     if sb.get("UEFISecureBootEnabled") == 0:
         hy += w["hygiene"]["secure_boot_off"]; hy_ev.append("secure_boot_off")
     av = snapshot.get("antivirus") or {}
-    if av.get("RealTime") is False and not av.get("running_av_processes"):
+    if av.get("RealTime") is False and not (av.get("running_av_processes") or []):
         hy += w["hygiene"]["defender_and_av_off"]; hy_ev.append("av_off")
     if profiles and all(not p.get("enabled") for p in profiles):
         hy += w["hygiene"]["firewall_off"]; hy_ev.append("fw_off")
@@ -188,11 +190,12 @@ def protection_status(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         items.append(ProtectionItem(name, state, detail, perm))
 
     av = snapshot.get("antivirus") or {}
-    if av.get("running_av_processes"):
-        add("Antivirus", "Healthy", f"Running: {', '.join(av.get('running_av_processes') or [])}")
+    av_procs = [str(x) for x in (av.get("running_av_processes") or []) if x]
+    if av_procs:
+        add("Antivirus", "Healthy", f"Running: {', '.join(av_procs)} (Defender RT may be off when third-party AV is active)")
     elif av.get("RealTime") is True:
         add("Antivirus", "Healthy", "Defender real-time on")
-    elif av.get("PermissionRequired"):
+    elif av.get("PermissionRequired") or av.get("permission_required"):
         add("Antivirus", "Permission Required", "Cannot query Defender", True)
     else:
         add("Antivirus", "Critical", "No real-time AV detected")
@@ -229,7 +232,7 @@ def protection_status(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         add("TPM", "Unknown", str(tpm))
 
     bl = snapshot.get("bitlocker") or {}
-    if bl.get("PermissionRequired"):
+    if bl.get("PermissionRequired") or bl.get("permission_required"):
         add("BitLocker", "Permission Required", "", True)
     else:
         add("BitLocker", "Unknown", str(bl)[:120])

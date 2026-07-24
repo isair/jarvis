@@ -329,6 +329,38 @@ def test_false_positive_cora_cursor_paths():
         cfg,
     )
     assert cursor["trust_level"] in ("trusted", "authorized_project", "baseline_known")
+    norton = classify_process(
+        {
+            "name": "NortonUI.exe",
+            "path": "C:\\Program Files\\Norton\\Suite\\NortonUI.exe",
+            "publisher": "",
+            "signature": "Unknown",
+            "sha256": "",
+            "command_line": "",
+        },
+        cfg,
+    )
+    assert norton["trust_level"] in ("trusted", "authorized_project", "baseline_known")
+
+
+@pytest.mark.unit
+def test_first_audit_baseline_has_no_diff(sec_root: Path):
+    snap = _snap(
+        users=[{"name": "Administrator", "enabled": True, "password_required": True}],
+        administrators=["TEST\\Administrator"],
+        services=[{"name": "Spooler", "start_mode": "Auto", "path": "C:\\Windows\\spoolsv.exe", "state": "Running"}],
+        scheduled_tasks=[{"path": "\\", "name": "X", "action": "cmd.exe", "state": "Ready"}],
+        run_keys={"HKCU\\Run": {"OneDrive": "onedrive.exe"}},
+        listening=[{"address": "127.0.0.1", "port": 5050, "process": "python", "path": "C:\\py\\python.exe"}],
+        hosts_file={"sha256": "aaa", "extra_lines": []},
+        processes=[],
+    )
+    svc = SecurityCenterService(root=sec_root, collector=FakeCollector(snap), config=SecurityConfig())
+    result = svc.run_audit(create_baseline_if_missing=True)
+    assert result["baseline_created"] is True
+    assert result["changes"]["added"] == []
+    assert result["changes"]["removed"] == []
+    assert result["changes"]["modified"] == []
 
 
 @pytest.mark.unit
