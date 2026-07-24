@@ -266,6 +266,51 @@ def get_lessons() -> Response:
         return jsonify({"error": type(e).__name__, "lessons": [], "count": 0}), 500
 
 
+@app.route("/api/audit")
+def get_audit() -> Response:
+    """Read-only brain-foundation audit snapshot (Phase 4 · Section I).
+
+    ALWAYS returns HTTP 200 so the SPA never breaks. Strictly read-only:
+    delegates to ``build_audit_snapshot`` which opens no write path, mutates
+    no store, and scrubs/hides sensitive content itself. Gated by
+    ``cfg.audit_panel_enabled`` (default False): when the flag is off we
+    short-circuit to ``{"enabled": false}`` with empty collections rather
+    than touching any store.
+    """
+    try:
+        from jarvis.audit_snapshot import build_audit_snapshot
+        from jarvis.memory.db import Database
+
+        cfg = load_settings()
+
+        if not bool(getattr(cfg, "audit_panel_enabled", False)):
+            return jsonify({
+                "enabled": False,
+                "capabilities": [],
+                "owner_profile": {},
+                "memory": {},
+                "improvement_candidates": [],
+                "development": {},
+                "flags": {},
+                "errors": [],
+            })
+
+        db_path = _get_db_path()
+        db = Database(db_path, sqlite_vss_path=None)
+        try:
+            snap = build_audit_snapshot(cfg, db)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+        snap["enabled"] = True
+        return jsonify(snap)
+    except Exception as e:
+        # Never break the SPA — degrade to an empty, still-200 payload.
+        return jsonify({"error": type(e).__name__, "capabilities": [], "flags": {}}), 200
+
+
 @app.route("/api/memory/<int:memory_id>")
 def get_memory(memory_id: int) -> Response:
     """Get a single memory by ID."""
@@ -522,6 +567,19 @@ def graph_import_diary() -> Response:
     def generate():
         try:
             settings = load_settings()
+            # Phase 4 gate: this manual diary→graph import is a SECOND legacy-KG
+            # writer. Respect legacy_knowledge_auto_write_enabled (default OFF)
+            # so a user click cannot re-open the ungated ingestion the automatic
+            # gate closes. The owner enables the flag to run a deliberate import.
+            if not bool(getattr(settings, "legacy_knowledge_auto_write_enabled", False)):
+                yield json.dumps({
+                    "type": "complete",
+                    "message": ("Scrierea în graful de cunoștințe (legacy) este OPRITĂ "
+                                "(legacy_knowledge_auto_write_enabled=false). "
+                                "Activeaz-o în Setări pentru a importa jurnalul în graf."),
+                    "processed": 0, "total": 0,
+                }) + "\n"
+                return
             db_path = _get_db_path()
             db = Database(db_path, sqlite_vss_path=None)
             # Run the best-child picker on the small router-chain model so
@@ -2117,6 +2175,9 @@ def index() -> str:
             <button class="tab" data-tab="lessons">
                 <span>📌</span> Lessons
             </button>
+            <button class="tab" data-tab="audit">
+                <span>🧠</span> Audit
+            </button>
         </div>
 
         <div class="tab-content">
@@ -2218,6 +2279,22 @@ def index() -> str:
                     <div class="loading"><div class="spinner"></div></div>
                 </div>
             </div>
+
+            <div id="audit-content" class="tab-pane" style="display: none;">
+                <div class="alpha-disclaimer">
+                    <span class="alpha-badge">Read-only</span>
+                    <div class="alpha-body">
+                        <p>
+                            🧠 Read-only audit of Cora's brain foundation — capabilities, owner
+                            profile, state-memory groups and self-improvement candidates. Nothing
+                            here is editable; sensitive content is hidden or scrubbed at source.
+                        </p>
+                    </div>
+                </div>
+                <div class="memory-list" id="audit-list">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -2247,10 +2324,12 @@ def index() -> str:
         const memoriesPane = document.getElementById('memories-content');
         const mealsPane = document.getElementById('meals-content');
         const lessonsPane = document.getElementById('lessons-content');
+        const auditPane = document.getElementById('audit-content');
         const graphContent = document.getElementById('graph-content');
         const memoriesContent = memoriesPane.querySelector('.memory-list');
         const mealsContent = mealsPane.querySelector('.memory-list');
         const lessonsContent = document.getElementById('lessons-list');
+        const auditContent = document.getElementById('audit-list');
         const tabs = document.querySelectorAll('.tab');
 
         // Shared utilities
@@ -2580,6 +2659,7 @@ def index() -> str:
             graphContent.style.display = 'none';
             mealsPane.style.display = 'none';
             lessonsPane.style.display = 'none';
+            auditPane.style.display = 'none';
 
             if (currentTab === 'memories') {
                 memoriesPane.style.display = '';
@@ -2590,6 +2670,9 @@ def index() -> str:
             } else if (currentTab === 'lessons') {
                 lessonsPane.style.display = '';
                 loadLessons();
+            } else if (currentTab === 'audit') {
+                auditPane.style.display = '';
+                loadAudit();
             } else {
                 mealsPane.style.display = '';
                 loadMeals();
@@ -2618,6 +2701,134 @@ def index() -> str:
                 `).join('');
             } catch (e) {
                 lessonsContent.innerHTML = '<div class="empty">Failed to load lessons</div>';
+            }
+        }
+
+        // Read-only audit tab (Phase 4 · Section I). Everything is rendered
+        // defensively: any missing key degrades to an empty section rather
+        // than throwing. The snapshot is already scrubbed/hidden server-side,
+        // so we display previews verbatim (including any "[ascuns]" markers).
+        function auditBadge(status) {
+            const s = String(status || '').toUpperCase();
+            return `<span class="badge">${escapeHtml(s || 'UNKNOWN')}</span>`;
+        }
+
+        function auditMemorySection(memory) {
+            const groups = memory && typeof memory === 'object' ? memory : {};
+            const order = [
+                'confirmed', 'pending_confirmation', 'candidate',
+                'quarantined', 'superseded', 'forgotten',
+            ];
+            const keys = order.filter(k => k in groups)
+                .concat(Object.keys(groups).filter(k => !order.includes(k)));
+            if (!keys.length) return '';
+            const blocks = keys.map(k => {
+                const items = Array.isArray(groups[k]) ? groups[k] : [];
+                const rows = items.map(it => `
+                    <div class="memory-card">
+                        <div class="memory-meta">
+                            <span class="badge">${escapeHtml(it.type || '')}</span>
+                            <span class="badge">${escapeHtml(it.status || '')}</span>
+                            <span class="muted">${escapeHtml(it.updated_at || '')}</span>
+                        </div>
+                        <div class="memory-title">${escapeHtml(it.subject_key || '')}</div>
+                        <div class="memory-body">${escapeHtml(it.value_preview || '')}</div>
+                    </div>
+                `).join('');
+                return `
+                    <div class="memory-card">
+                        <div class="memory-title">${escapeHtml(k)} <span class="muted">(${items.length})</span></div>
+                        ${rows || '<div class="muted">— none —</div>'}
+                    </div>
+                `;
+            }).join('');
+            return `<div class="memory-title" style="margin-top:1rem;">🗂️ Memory</div>${blocks}`;
+        }
+
+        async function loadAudit() {
+            try {
+                const res = await fetch('/api/audit');
+                const data = await res.json();
+
+                if (data && data.enabled === false) {
+                    auditContent.innerHTML =
+                        '<div class="empty">Audit panel is disabled (audit_panel_enabled = false).</div>';
+                    return;
+                }
+
+                const parts = [];
+
+                // Flags summary
+                const flags = (data && data.flags) || {};
+                const flagKeys = Object.keys(flags);
+                if (flagKeys.length) {
+                    const chips = flagKeys.map(k =>
+                        `<span class="badge">${escapeHtml(k)}: ${flags[k] ? 'on' : 'off'}</span>`
+                    ).join(' ');
+                    parts.push(`
+                        <div class="memory-card">
+                            <div class="memory-title">🚩 Flags</div>
+                            <div class="memory-meta">${chips}</div>
+                        </div>
+                    `);
+                }
+
+                // Capabilities
+                const caps = Array.isArray(data && data.capabilities) ? data.capabilities : [];
+                if (caps.length) {
+                    const rows = caps.map(c => `
+                        <div class="memory-card">
+                            <div class="memory-meta">
+                                ${auditBadge(c.status)}
+                                <span class="muted">${escapeHtml(c.key || '')}</span>
+                            </div>
+                            <div class="memory-title">${escapeHtml(c.label || c.key || '')}</div>
+                            ${c.detail ? `<div class="memory-body">${escapeHtml(c.detail)}</div>` : ''}
+                        </div>
+                    `).join('');
+                    parts.push(`<div class="memory-title">🧩 Capabilities <span class="muted">(${caps.length})</span></div>${rows}`);
+                }
+
+                // Owner profile (key/value)
+                const prof = (data && data.owner_profile) || {};
+                const profKeys = Object.keys(prof);
+                if (profKeys.length) {
+                    const rows = profKeys.map(k => `
+                        <div class="memory-meta">
+                            <span class="badge">${escapeHtml(k)}</span>
+                            <span class="muted">${escapeHtml(typeof prof[k] === 'object' ? JSON.stringify(prof[k]) : String(prof[k]))}</span>
+                        </div>
+                    `).join('');
+                    parts.push(`
+                        <div class="memory-card">
+                            <div class="memory-title">👤 Owner Profile</div>
+                            ${rows}
+                        </div>
+                    `);
+                }
+
+                // Memory groups
+                parts.push(auditMemorySection(data && data.memory));
+
+                // Improvement candidates
+                const imps = Array.isArray(data && data.improvement_candidates) ? data.improvement_candidates : [];
+                if (imps.length) {
+                    const rows = imps.map(it => `
+                        <div class="memory-card">
+                            <div class="memory-meta">
+                                <span class="muted">${escapeHtml(it.updated_at || '')}</span>
+                            </div>
+                            <div class="memory-title">${escapeHtml(it.subject_key || '')}</div>
+                            <div class="memory-body">confidence ${(Number(it.confidence || 0) * 100).toFixed(0)}% · ${escapeHtml(it.value_preview || '')}</div>
+                        </div>
+                    `).join('');
+                    parts.push(`<div class="memory-title" style="margin-top:1rem;">💡 Improvement Candidates <span class="muted">(${imps.length})</span></div>${rows}`);
+                }
+
+                const html = parts.filter(Boolean).join('');
+                auditContent.innerHTML = html || '<div class="empty">No audit data</div>';
+            } catch (e) {
+                auditContent.innerHTML = '<div class="empty">Failed to load audit</div>';
             }
         }
 
