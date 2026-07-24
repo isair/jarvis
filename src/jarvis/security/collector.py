@@ -92,7 +92,10 @@ class WindowsReadOnlyCollector:
         snap["browser_extensions"] = self._browser_extensions(limitations)
         snap["recent_executables"] = self._recent_exes(limitations)
         snap["firewall"] = self._firewall(limitations)
-        snap["antivirus"] = self._antivirus(limitations)
+        snap["antivirus"] = self._antivirus(
+            limitations,
+            process_names=[str(p.get("name") or "") for p in (snap.get("processes") or [])],
+        )
         snap["secure_boot"] = self._secure_boot(limitations)
         snap["tpm"] = self._tpm(limitations)
         snap["bitlocker"] = self._bitlocker(limitations)
@@ -181,10 +184,25 @@ class WindowsReadOnlyCollector:
         return out
 
     def _administrators(self, lim: list[str]) -> list[str]:
-        # German/English group name
-        for group in ("Administrators", "Administratoren"):
+        # Language-independent well-known SID for Administrators
+        data = self._ps_json(
+            "$ErrorActionPreference='Stop'; "
+            "try { Get-LocalGroupMember -SID 'S-1-5-32-544' | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress } "
+            "catch { '[]' }",
+            lim,
+            "admins_sid",
+        )
+        if data:
+            if isinstance(data, str):
+                return [data]
+            if isinstance(data, list):
+                return [str(x) for x in data]
+        # Fallback localized display names (EN/DE/RO/FR)
+        for group in ("Administrators", "Administratoren", "Administratori", "Administrateurs"):
             data = self._ps_json(
-                f"try {{ Get-LocalGroupMember -Group {json.dumps(group)} | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress }} catch {{ '[]' }}",
+                "$ErrorActionPreference='Stop'; "
+                f"try {{ Get-LocalGroupMember -Group {json.dumps(group)} | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress }} "
+                "catch { '[]' }",
                 lim,
                 f"admins_{group}",
             )
@@ -416,20 +434,27 @@ $out | ConvertTo-Json -Compress -Depth 4
     def _remote_surface(self, lim: list[str]) -> dict[str, Any]:
         data = self._ps_json(
             "$rdp=(Get-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections;"
-            "$svcs=Get-Service TermService,WinRM,sshd,RemoteRegistry,RemoteAccess,UmRdpService -EA SilentlyContinue | "
-            "Select-Object Name,Status,StartType | ConvertTo-Json -Compress;"
-            "@{fDenyTSConnections=$rdp;services=( $svcs | ConvertFrom-Json )} | ConvertTo-Json -Compress -Depth 4",
+            "$svcs=@(); Get-Service TermService,WinRM,sshd,RemoteRegistry,RemoteAccess,UmRdpService -EA SilentlyContinue | ForEach-Object {"
+            "  $svcs += @{Name=$_.Name; Status=$_.Status.ToString(); StartType=$_.StartType.ToString()} "
+            "}; @{fDenyTSConnections=$rdp; services=$svcs} | ConvertTo-Json -Compress -Depth 5",
             lim,
             "remote_surface",
         )
         if not isinstance(data, dict):
             return {"fDenyTSConnections": None, "services": [], "permission_required": True}
+        services = data.get("services")
+        if isinstance(services, dict):
+            # PowerShell sometimes wraps arrays
+            if "value" in services and isinstance(services["value"], list):
+                services = services["value"]
+            else:
+                services = [services]
+        if not isinstance(services, list):
+            services = []
         return {
             "fDenyTSConnections": data.get("fDenyTSConnections"),
             "rdp_enabled": data.get("fDenyTSConnections") == 0,
-            "services": data.get("services") if isinstance(data.get("services"), list) else (
-                [data["services"]] if isinstance(data.get("services"), dict) else []
-            ),
+            "services": services,
         }
 
     def _hosts(self, lim: list[str]) -> dict[str, Any]:
@@ -535,27 +560,34 @@ $out | ConvertTo-Json -Compress -Depth 4
             data = [data]
         return {"profiles": [{"name": p.get("Name"), "enabled": bool(p.get("Enabled"))} for p in data]}
 
-    def _antivirus(self, lim: list[str]) -> dict[str, Any]:
+    def _antivirus(self, lim: list[str], process_names: Optional[list[str]] = None) -> dict[str, Any]:
         data = self._ps_json(
             "try { $s=Get-MpComputerStatus; @{AntivirusEnabled=$s.AntivirusEnabled;RealTime=$s.RealTimeProtectionEnabled;PermissionRequired=$false} | ConvertTo-Json -Compress } "
             "catch { @{AntivirusEnabled=$null;RealTime=$null;PermissionRequired=$true;Error=$_.Exception.Message} | ConvertTo-Json -Compress }",
             lim,
             "antivirus",
         )
-        # Also detect Norton/Avast processes as active AV hint
-        code, out, _ = self.ps(
-            "Get-Process NortonSvc,aswEngSrv,MsMpEng -EA SilentlyContinue | Select-Object -ExpandProperty ProcessName | ConvertTo-Json -Compress",
-            10.0,
-        )
-        procs = []
-        if code == 0 and out.strip():
-            try:
-                parsed = json.loads(out)
-                procs = [parsed] if isinstance(parsed, str) else list(parsed or [])
-            except json.JSONDecodeError:
-                pass
+        # Prefer already-collected process names (avoids Get-Process multi-name exit quirks)
+        av_markers = ("nortonsvc", "nortonui", "nortonsecurity", "aswengsrv", "avastsvc", "msmpeng", "securityhealthservice")
+        procs: list[str] = []
+        for raw in process_names or []:
+            base = str(raw or "").lower().replace(".exe", "")
+            if base in av_markers:
+                procs.append(str(raw))
+        if not procs:
+            code, out, _ = self.ps(
+                "Get-Process | Where-Object { $_.ProcessName -match 'Norton|aswEng|MsMpEng|Avast' } | "
+                "Select-Object -ExpandProperty ProcessName -Unique | ConvertTo-Json -Compress",
+                15.0,
+            )
+            if code == 0 and out.strip():
+                try:
+                    parsed = json.loads(out)
+                    procs = [parsed] if isinstance(parsed, str) else [str(x) for x in (parsed or [])]
+                except json.JSONDecodeError:
+                    pass
         result = data if isinstance(data, dict) else {"permission_required": True}
-        result["running_av_processes"] = procs
+        result["running_av_processes"] = sorted(set(procs))
         return result
 
     def _secure_boot(self, lim: list[str]) -> dict[str, Any]:

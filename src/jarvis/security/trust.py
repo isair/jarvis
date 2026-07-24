@@ -31,10 +31,13 @@ def classify_process(proc: dict[str, Any], cfg: SecurityConfig, *, baseline_hash
             in_authorized_path = True
             break
 
-    # Built-in safe-ish Windows paths
+    # Built-in safe-ish Windows / vendor install paths (no personal usernames)
     if re.search(r"\\windows\\(system32|syswow64)\\", path_l):
         in_authorized_path = True
         reasons.append("system_path")
+    if re.search(r"\\program files( \(x86\))?\\", path_l):
+        in_authorized_path = True
+        reasons.append("program_files_path")
 
     # Cora/Jarvis heuristics without hardcoding username
     if "cora" in path_l or "jarvis" in path_l or "coralauncher" in path_l:
@@ -43,22 +46,59 @@ def classify_process(proc: dict[str, Any], cfg: SecurityConfig, *, baseline_hash
     if "\\cursor\\" in path_l or path_l.endswith("\\cursor.exe"):
         in_authorized_path = True
         reasons.append("cursor_path")
+    if "\\norton\\" in path_l or "\\avast\\" in path_l:
+        in_authorized_path = True
+        reasons.append("av_vendor_path")
+
+    # Well-known system process names without path (often PID 4 / protected)
+    _system_names = {
+        "system",
+        "svchost",
+        "services",
+        "lsass",
+        "wininit",
+        "spoolsv",
+        "smss",
+        "csrss",
+        "winlogon",
+        "registry",
+        "memory compression",
+    }
+    if name in _system_names and not path:
+        level = "trusted"
+        reasons.append("system_process_name")
+        return {
+            "trust_level": level,
+            "reasons": reasons,
+            "name_trusted": True,
+            "publisher_trusted": pub_trusted,
+            "signature_ok": sig_ok,
+            "authorized_path": True,
+        }
 
     hash_known = bool(sha and baseline_hashes and sha in baseline_hashes)
 
-    # Suspicious: trusted name but weird location
-    if name_trusted and path and not in_authorized_path and not pub_trusted:
+    # Suspicious: trusted name but weird location (Temp/Downloads/AppData roaming drop)
+    weird_drop = bool(re.search(r"\\(temp|downloads|appdata\\local\\temp)\\", path_l))
+    if name_trusted and path and not in_authorized_path and not pub_trusted and weird_drop:
         level = "suspicious"
         reasons.append("trusted_name_untrusted_path")
-    elif name_trusted and signature in ("notsigned", "hashmismatch", "not signed"):
+    elif name_trusted and path and not in_authorized_path and not pub_trusted and not weird_drop:
+        # Name matches allowlist but path is unusual — keep unknown, not auto-critical
+        level = "unknown"
+        reasons.append("trusted_name_unfamiliar_path")
+    elif name_trusted and signature in ("notsigned", "hashmismatch", "not signed") and weird_drop:
         level = "suspicious"
         reasons.append("trusted_name_bad_signature")
-    elif in_authorized_path and (pub_trusted or sig_ok or name_trusted):
+    elif in_authorized_path and (pub_trusted or sig_ok or name_trusted or "program_files_path" in reasons or "av_vendor_path" in reasons):
         level = "authorized_project" if ("cora" in path_l or "jarvis" in path_l or "cursor" in path_l) else "trusted"
         reasons.append("path_and_identity_ok")
     elif pub_trusted and sig_ok:
         level = "trusted"
         reasons.append("publisher_and_signature")
+    elif name_trusted and in_authorized_path:
+        level = "trusted"
+        reasons.append("trusted_name_authorized_path")
     elif hash_known:
         level = "baseline_known"
         reasons.append("baseline_hash")
