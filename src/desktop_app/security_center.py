@@ -8,13 +8,12 @@ Phase 1: READ-ONLY. Alert status updates touch only local JSONL store.
 from __future__ import annotations
 
 import html
-from typing import Any, Optional
+from typing import Optional
 
 from flask import Flask, Response, jsonify, request
 
 from jarvis.security.models import ALERT_STATUSES
 from jarvis.security.paths import default_security_root
-from jarvis.security.redact_ext import sanitize_for_html
 from jarvis.security.service import SecurityCenterService
 
 app = Flask(__name__)
@@ -56,7 +55,14 @@ def api_overview() -> Response:
 
 @app.route("/api/alerts")
 def api_alerts() -> Response:
-    limit = min(int(request.args.get("limit", 100)), 500)
+    raw = request.args.get("limit", "100")
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid_limit"}), 400
+    if limit < 1:
+        return jsonify({"ok": False, "error": "invalid_limit"}), 400
+    limit = min(limit, 500)
     return jsonify({"alerts": get_service().store.load_alerts(limit=limit)})
 
 

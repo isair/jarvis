@@ -10,7 +10,7 @@ import json
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from jarvis.security.atomic_io import atomic_write_json
 

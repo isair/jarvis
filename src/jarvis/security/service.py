@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -14,6 +15,79 @@ from jarvis.security.paths import default_security_root, ensure_layout
 from jarvis.security.reports import render_markdown_report
 from jarvis.security.risk import compute_scores, protection_status
 from jarvis.security.store import SecurityStore
+
+
+class _CrossProcessAuditLock:
+    """Best-effort exclusive lock so daemon monitor + UI cannot dual-write the store."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._fh: Any = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fh = None
+        try:
+            fh = open(self.path, "a+b")
+            fh.seek(0)
+            if fh.read(1) == b"":
+                fh.write(b"0")
+                fh.flush()
+            fh.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._fh = fh
+            return True
+        except OSError:
+            if fh is not None:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+            return False
+
+    def release(self) -> None:
+        fh = self._fh
+        self._fh = None
+        if fh is None:
+            return
+        try:
+            fh.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            fh.close()
+        except OSError:
+            pass
+
+
+_BUSY = {
+    "ok": False,
+    "error": "audit_in_progress",
+    "snapshot": {},
+    "baseline_created": False,
+    "baseline": {},
+    "changes": {"status": "busy", "added": [], "removed": [], "modified": []},
+    "alerts": [],
+    "scores": {},
+    "protection": [],
+    "report_path": "",
+    "report_markdown": "",
+}
 
 
 class SecurityCenterService:
@@ -40,25 +114,18 @@ class SecurityCenterService:
             authorized_prefixes=list(self.config.authorized_path_prefixes),
         )
         self._audit_lock = threading.Lock()
+        self._file_lock = _CrossProcessAuditLock(self.root / "config" / "audit.lock")
 
     def run_audit(self, *, create_baseline_if_missing: bool = True) -> dict[str, Any]:
         if not self._audit_lock.acquire(blocking=False):
-            return {
-                "ok": False,
-                "error": "audit_in_progress",
-                "snapshot": {},
-                "baseline_created": False,
-                "baseline": {},
-                "changes": {"status": "busy", "added": [], "removed": [], "modified": []},
-                "alerts": [],
-                "scores": {},
-                "protection": [],
-                "report_path": "",
-                "report_markdown": "",
-            }
+            return dict(_BUSY)
+        if not self._file_lock.acquire():
+            self._audit_lock.release()
+            return dict(_BUSY)
         try:
             return self._run_audit_unlocked(create_baseline_if_missing=create_baseline_if_missing)
         finally:
+            self._file_lock.release()
             self._audit_lock.release()
 
     def _run_audit_unlocked(self, *, create_baseline_if_missing: bool = True) -> dict[str, Any]:

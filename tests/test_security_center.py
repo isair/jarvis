@@ -417,6 +417,28 @@ def test_flask_api_localhost_contract(sec_root: Path):
     # reject OS-like fake action status
     r4 = client.post("/api/alerts/x/status", json={"status": "KillProcess"})
     assert r4.status_code == 400
+    # invalid / non-positive limit must not 500
+    assert client.get("/api/alerts?limit=abc").status_code == 400
+    assert client.get("/api/alerts?limit=0").status_code == 400
+    assert client.get("/api/alerts?limit=-3").status_code == 400
+    r5 = client.get("/api/alerts?limit=2")
+    assert r5.status_code == 200
+    assert "alerts" in r5.get_json()
+
+
+@pytest.mark.unit
+def test_cross_process_audit_lock_busy(sec_root: Path):
+    from jarvis.security.service import SecurityCenterService, _CrossProcessAuditLock
+
+    lock = _CrossProcessAuditLock(sec_root / "config" / "audit.lock")
+    assert lock.acquire() is True
+    try:
+        svc = SecurityCenterService(root=sec_root, config=SecurityConfig(enabled=False))
+        out = svc.run_audit(create_baseline_if_missing=False)
+        assert out["ok"] is False
+        assert out["error"] == "audit_in_progress"
+    finally:
+        lock.release()
 
 
 @pytest.mark.unit
