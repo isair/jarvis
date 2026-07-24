@@ -210,6 +210,40 @@ class Settings:
     conversation_learning_timeout_sec: float
     conversation_learning_min_recurrences: int
 
+    # ── Cora Brain Foundation (Phase 4) — ALL default-OFF / inactive ──────
+    # Every flag here is a safety gate. Defaults keep runtime behaviour
+    # byte-identical to pre-Phase-4 until the owner explicitly opts in.
+    #
+    # B — gate the LEGACY Knowledge Graph auto-writer. When False (default),
+    # the ungated conversation→graph write in update_diary_from_dialogue_memory
+    # is suppressed; the diary summary itself is unaffected.
+    legacy_knowledge_auto_write_enabled: bool
+    # C — inject the authoritative, deterministic Owner Profile block into the
+    # system prompt (both voice + local chat). owner_profile_max_chars caps the
+    # rendered block so it never inflates the tool-schema risk on small models.
+    owner_profile_enabled: bool
+    owner_profile_max_chars: int
+    # D — deterministic identity/capability answers (who are you / what can you
+    # do / what voice / what model / how does memory work / what are you wired to)
+    # answered before the LLM, from a runtime-sourced registry (never invented).
+    identity_registry_enabled: bool
+    # E — new state/provenance memory store active; memory_require_confirmation
+    # forces remember→pending→confirm before anything becomes authoritative.
+    state_memory_enabled: bool
+    memory_require_confirmation: bool
+    # F — controlled internet learning pipeline (allowlisted, provenance-tracked).
+    internet_learning_enabled: bool
+    # G — post-conversation self-evaluation producing improvement_candidate only.
+    self_eval_enabled: bool
+    # H — owner-triggered development mode master switch + coding-agent provider.
+    # "disabled" (default) selects the no-op provider; the state machine still
+    # runs but can never invoke a real agent until the owner both enables the
+    # switch and selects a real provider.
+    owner_triggered_development_enabled: bool
+    development_agent_provider: str
+    # I — read-only audit tab in the Memory Viewer.
+    audit_panel_enabled: bool
+
     # OpenAI Realtime premium voice backend (default off). API key is read
     # only from Windows Credential Manager target ``Cora.OpenAI`` — never from
     # config.json / .env / DB.
@@ -559,6 +593,19 @@ def get_default_config() -> Dict[str, Any]:
         "conversation_learning_timeout_sec": 12.0,
         "conversation_learning_min_recurrences": 3,
 
+        # ── Cora Brain Foundation (Phase 4) — ALL default-OFF / inactive ──
+        "legacy_knowledge_auto_write_enabled": False,
+        "owner_profile_enabled": False,
+        "owner_profile_max_chars": 600,
+        "identity_registry_enabled": False,
+        "state_memory_enabled": False,
+        "memory_require_confirmation": True,
+        "internet_learning_enabled": False,
+        "self_eval_enabled": False,
+        "owner_triggered_development_enabled": False,
+        "development_agent_provider": "disabled",  # "disabled" | "claude_cli"
+        "audit_panel_enabled": False,
+
         # OpenAI Realtime premium (off until paid live test)
         "openai_realtime_enabled": False,
         "openai_realtime_model": "gpt-realtime-2.1",
@@ -848,6 +895,25 @@ def load_settings() -> Settings:
     conversation_learning_max_items = max(1, int(merged.get("conversation_learning_max_items", 4)))
     conversation_learning_timeout_sec = float(merged.get("conversation_learning_timeout_sec", 12.0))
     conversation_learning_min_recurrences = max(2, int(merged.get("conversation_learning_min_recurrences", 3)))
+
+    # ── Cora Brain Foundation (Phase 4) — parse + validate, fail-safe ──────
+    legacy_knowledge_auto_write_enabled = bool(
+        merged.get("legacy_knowledge_auto_write_enabled", False))
+    owner_profile_enabled = bool(merged.get("owner_profile_enabled", False))
+    owner_profile_max_chars = max(120, min(4000, int(merged.get("owner_profile_max_chars", 600))))
+    identity_registry_enabled = bool(merged.get("identity_registry_enabled", False))
+    state_memory_enabled = bool(merged.get("state_memory_enabled", False))
+    memory_require_confirmation = bool(merged.get("memory_require_confirmation", True))
+    internet_learning_enabled = bool(merged.get("internet_learning_enabled", False))
+    self_eval_enabled = bool(merged.get("self_eval_enabled", False))
+    owner_triggered_development_enabled = bool(
+        merged.get("owner_triggered_development_enabled", False))
+    development_agent_provider = str(
+        merged.get("development_agent_provider", "disabled") or "disabled").strip().lower()
+    if development_agent_provider not in ("disabled", "claude_cli"):
+        development_agent_provider = "disabled"  # fail-safe to the no-op provider
+    audit_panel_enabled = bool(merged.get("audit_panel_enabled", False))
+
     chat_ui_enabled = bool(merged.get("chat_ui_enabled", False))
     chat_ui_mode = str(merged.get("chat_ui_mode", "classic") or "classic").strip().lower()
     if chat_ui_mode not in ("classic", "modern"):
@@ -1075,6 +1141,20 @@ def load_settings() -> Settings:
         conversation_learning_max_items=conversation_learning_max_items,
         conversation_learning_timeout_sec=conversation_learning_timeout_sec,
         conversation_learning_min_recurrences=conversation_learning_min_recurrences,
+
+        # Cora Brain Foundation (Phase 4) — default-OFF / inactive
+        legacy_knowledge_auto_write_enabled=legacy_knowledge_auto_write_enabled,
+        owner_profile_enabled=owner_profile_enabled,
+        owner_profile_max_chars=owner_profile_max_chars,
+        identity_registry_enabled=identity_registry_enabled,
+        state_memory_enabled=state_memory_enabled,
+        memory_require_confirmation=memory_require_confirmation,
+        internet_learning_enabled=internet_learning_enabled,
+        self_eval_enabled=self_eval_enabled,
+        owner_triggered_development_enabled=owner_triggered_development_enabled,
+        development_agent_provider=development_agent_provider,
+        audit_panel_enabled=audit_panel_enabled,
+
         chat_ui_enabled=chat_ui_enabled,
         chat_ui_mode=chat_ui_mode,
         openai_realtime_enabled=openai_realtime_enabled,

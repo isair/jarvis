@@ -311,6 +311,45 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Maximum turns in agentic tool-use loops",
       "memory", "int", min_val=1, max_val=30)
 
+    # --- Cora Brain Foundation (Phase 4) — ALL default-OFF / inactive ---
+    f("legacy_knowledge_auto_write_enabled", "Legacy KG Auto-Write",
+      "Let conversations grow the legacy Knowledge Graph. OFF (default) stops "
+      "ungated fact accumulation into the always-injected warm profile.",
+      "memory", "bool")
+    f("owner_profile_enabled", "Owner Profile",
+      "Inject the authoritative, deterministic Owner Profile rules into the "
+      "system prompt (takes precedence over memory/web). Default off.",
+      "memory", "bool")
+    f("owner_profile_max_chars", "Owner Profile Budget",
+      "Max characters of the compact Owner Profile block (keeps the prompt small).",
+      "memory", "int", min_val=120, max_val=4000, step=20)
+    f("identity_registry_enabled", "Identity Answers",
+      "Answer who-are-you / what-can-you-do / what-voice / what-model / how-memory "
+      "deterministically from a runtime registry (never invented). Default off.",
+      "memory", "bool")
+    f("state_memory_enabled", "State Memory",
+      "Enable the new state/provenance memory store (candidate→confirmed). Default off.",
+      "memory", "bool")
+    f("memory_require_confirmation", "Require Memory Confirmation",
+      "Require an explicit confirm before anything remembered becomes authoritative.",
+      "memory", "bool")
+    f("internet_learning_enabled", "Internet Learning",
+      "Controlled, allowlisted internet research with sources. Default off.",
+      "memory", "bool")
+    f("self_eval_enabled", "Self-Evaluation",
+      "After conversations, propose improvement_candidates only (never self-edits). Default off.",
+      "memory", "bool")
+    f("owner_triggered_development_enabled", "Owner-Triggered Development",
+      "Master switch for owner-commanded develop-and-test. Isolated only; never "
+      "pushes/merges/deploys. Default off.",
+      "memory", "bool")
+    f("development_agent_provider", "Development Agent",
+      "Coding agent used by development mode. 'disabled' = no-op provider (safe default).",
+      "memory", "choice", choices=[("disabled", "Disabled"), ("claude_cli", "Claude CLI")])
+    f("audit_panel_enabled", "Audit Panel",
+      "Show the read-only brain audit tab in the Memory Viewer. Default off.",
+      "memory", "bool")
+
     # --- Location ---
     f("location_enabled", "Enable Location",
       "Allow location-aware responses",
