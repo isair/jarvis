@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from jarvis.utils.atomic_write import atomic_write_json
+from jarvis.security.atomic_io import atomic_write_json
 
 
 # Documented score weights (0–100 contribution caps per category).

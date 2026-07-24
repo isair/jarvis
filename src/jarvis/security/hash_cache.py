@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from jarvis.utils.atomic_write import atomic_write_json
+from jarvis.security.atomic_io import atomic_write_json
 
 
 class HashCache:

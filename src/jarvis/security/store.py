@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from jarvis.security.paths import ensure_layout
 from jarvis.security.redact_ext import scrub_obj
-from jarvis.utils.atomic_write import atomic_write_json, atomic_write_text
+from jarvis.security.atomic_io import atomic_write_json, atomic_write_text
 
 
 def utc_now_iso() -> str:
