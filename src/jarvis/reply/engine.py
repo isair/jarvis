@@ -835,7 +835,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         try:
             from .local_answers import try_local_answer
 
-            local = try_local_answer(text)
+            # Thread cfg so the Phase 4 identity/capability handler (self-gated
+            # on cfg.identity_registry_enabled, default OFF) can answer
+            # "cine ești / ce poți face / ..." deterministically.
+            local = try_local_answer(text, cfg=cfg)
         except Exception as e:  # never let this shadow the real pipeline
             debug_log(f"local answer check failed: {e}", "planning")
             local = None
@@ -843,6 +846,39 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"local deterministic answer (no LLM): {local!r}", "planning")
             print(f"  ⚡ Răspuns local (fără LLM): {local}", flush=True)
             return local
+
+    # Step 0b (state memory): Phase 4 · Section E explicit memory commands over
+    # the state/provenance store — memorize→pending→(readback)→confirm, correct,
+    # forget, "ce ai învățat". Gated by state_memory_enabled (default OFF), so
+    # inert until the owner opts in. Takes precedence over the legacy learning
+    # commands below, replacing the unsafe commit-at-0.95-no-confirm path.
+    if bool(getattr(cfg, "state_memory_enabled", False)) and dialogue_memory is not None:
+        try:
+            from ..memory.state_store import StateStore
+            from ..memory.learning.commands import try_state_memory_command
+
+            _cid = getattr(dialogue_memory, "conversation_id", None) or "interactive"
+            _ss = StateStore(
+                db,
+                require_confirmation=bool(getattr(cfg, "memory_require_confirmation", True)),
+            )
+            _smc = try_state_memory_command(
+                text,
+                state_store=_ss,
+                dialogue_memory=dialogue_memory,
+                conversation_id=str(_cid),
+            )
+            if _smc.handled and _smc.reply:
+                debug_log("state memory command handled", "memory")
+                print("  🗃️ Comandă memorie (state): procesată", flush=True)
+                if tts is not None and getattr(tts, "enabled", False):
+                    try:
+                        tts.speak(_smc.reply)
+                    except Exception:
+                        pass
+                return _smc.reply
+        except Exception as e:
+            debug_log(f"state memory command failed (ignored): {type(e).__name__}", "memory")
 
     # Step 0b: Learning Loop voice commands (memorize / forget / what learned).
     # Gated by conversation_learning_enabled (default false).
@@ -1176,6 +1212,35 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 dialogue_memory.hot_cache_put(_wp_cache_key, warm_profile_block)
         except Exception as e:
             debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+
+    # Step 3.6: Owner Profile (Phase 4 · Section C) — authoritative, deterministic,
+    # config-sourced rules that take precedence over the graph-derived warm
+    # profile and any untrusted memory/web context. Gated by
+    # ``owner_profile_enabled`` (default False → empty block → zero runtime
+    # change). Rendered compact and capped by ``owner_profile_max_chars`` so it
+    # never inflates the tool-schema risk on small models. Deterministic (no LLM,
+    # no cache-invalidation coupling).
+    owner_profile_block = ""
+    try:
+        if bool(getattr(cfg, "owner_profile_enabled", False)):
+            from ..owner_profile import (
+                load_owner_profile,
+                render_owner_profile_block,
+                default_owner_profile_path,
+            )
+            _op = load_owner_profile(default_owner_profile_path(), enabled=True)
+            owner_profile_block = render_owner_profile_block(
+                _op,
+                max_chars=int(getattr(cfg, "owner_profile_max_chars", 600)),
+                language=getattr(cfg, "response_language", None) or "ro",
+            )
+            if owner_profile_block:
+                debug_log(
+                    f"owner profile block injected ({len(owner_profile_block)} chars)",
+                    "memory",
+                )
+    except Exception as e:
+        debug_log(f"owner profile load failed (non-fatal): {e}", "memory")
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
@@ -1516,6 +1581,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append(
                 "Always respond in English regardless of the language the user speaks in."
             )
+
+        if owner_profile_block:
+            # Owner Profile FIRST (Phase 4 · Section C): the authoritative,
+            # owner-authored rules outrank the graph-derived warm profile and
+            # every untrusted (memory/web/RAG/tool) block below. Injected ahead
+            # of the warm profile so the precedence clause is read before the
+            # graph "STANDING INSTRUCTIONS" block — and it explicitly states it
+            # wins on conflict. Single builder ⇒ reaches voice + local chat.
+            guidance.append("\n" + owner_profile_block)
 
         if warm_profile_block:
             # Pre-query, query-agnostic user context. Lives OUTSIDE the

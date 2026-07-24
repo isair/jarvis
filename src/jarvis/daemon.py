@@ -51,6 +51,7 @@ _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
 _global_cfg = None  # live Settings — set while the daemon runs in-process (chat submit)
 _global_db = None  # live Database — set while the daemon runs in-process (chat submit)
+_global_state_store = None  # Phase 4 state/provenance memory — only when state_memory_enabled
 _reply_lock = threading.Lock()  # single-flight guard: at most one chat reply in flight
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
@@ -388,6 +389,9 @@ def _check_and_update_diary(
                 on_token=on_token,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
                 graph_picker_model=graph_picker_model,
+                # Phase 4: gate the ungated legacy KG auto-writer (default OFF).
+                legacy_knowledge_auto_write_enabled=bool(
+                    getattr(cfg, 'legacy_knowledge_auto_write_enabled', False)),
             )
 
             # Flush any remaining tokens in IPC mode
@@ -421,7 +425,7 @@ def _check_and_update_diary(
 def main() -> None:
     """Main daemon entry point."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
-    global _warm_profile_graph_listener, _global_cfg, _global_db
+    global _warm_profile_graph_listener, _global_cfg, _global_db, _global_state_store
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -433,6 +437,20 @@ def main() -> None:
     # Expose live cfg/db for the in-process chat submit path (bundled mode).
     _global_cfg = cfg
     _global_db = db
+
+    # Phase 4 · Section E — state/provenance memory store. Default OFF: nothing
+    # is instantiated unless the owner enables state_memory_enabled, so runtime
+    # is byte-identical until opt-in.
+    if bool(getattr(cfg, "state_memory_enabled", False)):
+        try:
+            from .memory.state_store import StateStore
+            _global_state_store = StateStore(
+                db, require_confirmation=bool(getattr(cfg, "memory_require_confirmation", True)))
+            debug_log("state memory store initialised", "memory")
+            print("🗃️ State memory store: ON", flush=True)
+        except Exception as e:
+            debug_log(f"state store init failed (non-fatal): {e}", "memory")
+            _global_state_store = None
 
     debug_log("daemon started", "jarvis")
     print("✓ Daemon started", flush=True)
