@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List, Optional
 
-__all__ = ["build_audit_snapshot", "AUDIT_MEMORY_STATES"]
+__all__ = ["build_audit_snapshot", "build_legacy_kg_audit", "AUDIT_MEMORY_STATES"]
 
 AUDIT_MEMORY_STATES = (
     "confirmed", "pending_confirmation", "candidate",
@@ -133,4 +133,143 @@ def build_audit_snapshot(cfg, db=None) -> Dict[str, Any]:
         except Exception as e:  # pragma: no cover - defensive
             snap["errors"].append(f"improvements: {type(e).__name__}")
 
+    # Legacy Knowledge Graph read-only contamination audit (Phase 4 · B prep).
+    # Never mutates the graph. Quarantine for Module E state items is separate
+    # (snap["memory"]["quarantined"]); legacy KG has no delete/quarantine here.
+    try:
+        snap["legacy_kg"] = build_legacy_kg_audit(cfg)
+    except Exception as e:  # pragma: no cover - defensive
+        snap["legacy_kg"] = {"status": "error", "suspect_nodes": [], "old_directives": []}
+        snap["errors"].append(f"legacy_kg: {type(e).__name__}")
+
     return snap
+
+
+_SUSPECT_MARKERS = (
+    "i don't know", "i do not know", "nu știu", "nu stiu",
+    "as an ai", "ca asistent", "hallucin", "invent",
+    "i cannot", "nu pot", "deflect", "oferă-te să",
+    "let me search", "pot să caut",
+)
+
+
+def build_legacy_kg_audit(cfg) -> Dict[str, Any]:
+    """Read-only scan of User/Directives branches for suspect / contaminated text.
+
+    Opens the graph DB with SQLite ``mode=ro`` — never creates tables, never
+    seeds branches, never commits. Does not quarantine or delete nodes.
+    """
+    import sqlite3
+
+    out: Dict[str, Any] = {
+        "status": "ok",
+        "suspect_nodes": [],
+        "old_directives": [],
+        "user_nodes_preview": [],
+        "note": (
+            "Read-only (sqlite mode=ro). Legacy KG has no quarantine API; "
+            "Module E StateStore.quarantine covers state_memory only. "
+            "Keep legacy_knowledge_auto_write_enabled=false to stop new writes."
+        ),
+    }
+    db_path = getattr(cfg, "db_path", None)
+    if not db_path:
+        out["status"] = "no_db"
+        return out
+
+    from pathlib import Path
+    from .memory.graph import BRANCH_USER, BRANCH_DIRECTIVES, FIXED_BRANCH_IDS
+
+    path = Path(str(db_path))
+    if not path.is_file():
+        out["status"] = "no_db_file"
+        return out
+
+    try:
+        # URI read-only: fails closed if the file cannot be opened without writes.
+        uri = path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+    except Exception as e:
+        out["status"] = f"unavailable:{type(e).__name__}"
+        return out
+
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT id, name, description, data, parent_id FROM memory_nodes"
+            ).fetchall()
+        except Exception as e:
+            out["status"] = f"read_failed:{type(e).__name__}"
+            return out
+
+        # parent_id map for branch resolution without GraphMemoryStore writes
+        parent_of = {str(r["id"]): (r["parent_id"] if r["parent_id"] is not None else None) for r in rows}
+
+        def _resolve_branch(node_id: str) -> str:
+            if not node_id or node_id == "root":
+                return ""
+            if node_id in FIXED_BRANCH_IDS:
+                return node_id
+            current = node_id
+            for _ in range(32):
+                parent = parent_of.get(current)
+                if parent is None or parent == "root":
+                    return ""
+                if parent in FIXED_BRANCH_IDS:
+                    return str(parent)
+                current = str(parent)
+            return ""
+
+        for r in rows:
+            try:
+                nid = str(r["id"] or "")
+                name = str(r["name"] or "")
+                data = (r["data"] or "").strip() if r["data"] is not None else ""
+                branch = _resolve_branch(nid)
+                preview = _safe_preview(data)
+                entry = {
+                    "id": nid,
+                    "name": name,
+                    "branch": branch,
+                    "data_preview": preview,
+                    "data_chars": len(data),
+                }
+                if branch == BRANCH_DIRECTIVES and data:
+                    out["old_directives"].append(entry)
+                if branch == BRANCH_USER and data:
+                    out["user_nodes_preview"].append(entry)
+                low = (name + " " + data).lower()
+                if data and any(m in low for m in _SUSPECT_MARKERS):
+                    suspect = dict(entry)
+                    suspect["reason"] = "suspect_phrase"
+                    out["suspect_nodes"].append(suspect)
+                if (
+                    branch in (BRANCH_USER, BRANCH_DIRECTIVES)
+                    and nid not in FIXED_BRANCH_IDS
+                    and len(data) > 800
+                ):
+                    heavy = dict(entry)
+                    heavy["reason"] = "oversized_payload"
+                    if not any(
+                        s.get("id") == heavy["id"] and s.get("reason") == "oversized_payload"
+                        for s in out["suspect_nodes"]
+                    ):
+                        out["suspect_nodes"].append(heavy)
+            except Exception:
+                continue
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    out["suspect_nodes"] = out["suspect_nodes"][:100]
+    out["old_directives"] = out["old_directives"][:100]
+    out["user_nodes_preview"] = out["user_nodes_preview"][:50]
+    out["counts"] = {
+        "suspect": len(out["suspect_nodes"]),
+        "old_directives": len(out["old_directives"]),
+        "user_preview": len(out["user_nodes_preview"]),
+    }
+    return out

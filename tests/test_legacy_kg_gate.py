@@ -94,3 +94,52 @@ class TestLegacyKgGate:
         graph_mock.assert_called_once()
         out = capsys.readouterr().out
         assert "Knowledge graph: learned 1 new fact" in out
+
+
+@pytest.mark.unit
+class TestLegacyKgMemoryViewerGate:
+    """Manual Memory Viewer writers must honour the same B gate."""
+
+    def test_helper_defaults_fail_closed(self, monkeypatch):
+        from desktop_app import memory_viewer as mv
+
+        class _S:
+            legacy_knowledge_auto_write_enabled = False
+
+        monkeypatch.setattr(mv, "load_settings", lambda: _S())
+        assert mv._legacy_kg_auto_write_enabled() is False
+
+    def test_helper_true_when_flag_on(self, monkeypatch):
+        from desktop_app import memory_viewer as mv
+
+        class _S:
+            legacy_knowledge_auto_write_enabled = True
+
+        monkeypatch.setattr(mv, "load_settings", lambda: _S())
+        assert mv._legacy_kg_auto_write_enabled() is True
+
+    def test_create_blocked_when_gate_off(self, monkeypatch):
+        from desktop_app import memory_viewer as mv
+
+        monkeypatch.setattr(mv, "_legacy_kg_auto_write_enabled", lambda: False)
+        client = mv.app.test_client()
+        resp = client.post("/api/graph/node", json={"name": "x"})
+        assert resp.status_code == 403
+        body = resp.get_json()
+        assert body["legacy_knowledge_auto_write_enabled"] is False
+
+    def test_update_blocked_when_gate_off(self, monkeypatch):
+        from desktop_app import memory_viewer as mv
+
+        monkeypatch.setattr(mv, "_legacy_kg_auto_write_enabled", lambda: False)
+        client = mv.app.test_client()
+        resp = client.put("/api/graph/node/abc", json={"name": "x"})
+        assert resp.status_code == 403
+
+    def test_delete_blocked_when_gate_off(self, monkeypatch):
+        from desktop_app import memory_viewer as mv
+
+        monkeypatch.setattr(mv, "_legacy_kg_auto_write_enabled", lambda: False)
+        client = mv.app.test_client()
+        resp = client.delete("/api/graph/node/abc")
+        assert resp.status_code == 403

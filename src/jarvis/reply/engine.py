@@ -1221,6 +1221,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # never inflates the tool-schema risk on small models. Deterministic (no LLM,
     # no cache-invalidation coupling).
     owner_profile_block = ""
+    _owner_profile_obj = None
     try:
         if bool(getattr(cfg, "owner_profile_enabled", False)):
             from ..owner_profile import (
@@ -1228,9 +1229,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 render_owner_profile_block,
                 default_owner_profile_path,
             )
-            _op = load_owner_profile(default_owner_profile_path(), enabled=True)
+            _owner_profile_obj = load_owner_profile(
+                default_owner_profile_path(), enabled=True
+            )
             owner_profile_block = render_owner_profile_block(
-                _op,
+                _owner_profile_obj,
                 max_chars=int(getattr(cfg, "owner_profile_max_chars", 600)),
                 language=getattr(cfg, "response_language", None) or "ro",
             )
@@ -1241,6 +1244,26 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
     except Exception as e:
         debug_log(f"owner profile load failed (non-fatal): {e}", "memory")
+
+    # When Owner Profile is ON and declares supersedes_graph_directives, drop
+    # the legacy Directives warm-profile section so contaminated standing
+    # instructions cannot compete with authoritative owner rules. User facts
+    # from the User branch remain (identity context, not imperative rules).
+    if (
+        _owner_profile_obj is not None
+        and bool(getattr(_owner_profile_obj, "supersedes_graph_directives", True))
+        and warm_profile_block
+    ):
+        try:
+            _marker = "STANDING INSTRUCTIONS FROM THE USER"
+            if _marker in warm_profile_block:
+                warm_profile_block = warm_profile_block.split(_marker, 1)[0].rstrip()
+                debug_log(
+                    "owner profile supersedes: omitted legacy Directives from warm profile",
+                    "memory",
+                )
+        except Exception as e:
+            debug_log(f"owner supersedes warm-profile trim failed: {e}", "memory")
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only

@@ -383,6 +383,27 @@ def get_graph_store() -> GraphMemoryStore:
     return _graph_store
 
 
+def _legacy_kg_auto_write_enabled() -> bool:
+    """Phase 4 · B — fail-closed gate for ALL legacy Knowledge Graph writers."""
+    try:
+        settings = load_settings()
+        return bool(getattr(settings, "legacy_knowledge_auto_write_enabled", False))
+    except Exception:
+        return False
+
+
+def _legacy_kg_write_blocked_response():
+    """JSON 403 when legacy KG writes are gated OFF (do not delete code paths)."""
+    return jsonify({
+        "error": (
+            "Scrierea în Knowledge Graph (legacy) este OPRITĂ "
+            "(legacy_knowledge_auto_write_enabled=false). "
+            "Activeaz-o în Setări pentru modificări manuale / consolidare."
+        ),
+        "legacy_knowledge_auto_write_enabled": False,
+    }), 403
+
+
 @app.route("/api/graph/nodes")
 def graph_get_all_nodes() -> Response:
     """Get all nodes for the graph visualisation."""
@@ -434,6 +455,8 @@ def graph_get_node(node_id: str) -> Response:
 @app.route("/api/graph/node", methods=["POST"])
 def graph_create_node() -> Response:
     """Create a new memory node."""
+    if not _legacy_kg_auto_write_enabled():
+        return _legacy_kg_write_blocked_response()
     store = get_graph_store()
     try:
         body = request.get_json()
@@ -463,6 +486,8 @@ def graph_create_node() -> Response:
 @app.route("/api/graph/node/<node_id>", methods=["PUT"])
 def graph_update_node(node_id: str) -> Response:
     """Update an existing memory node."""
+    if not _legacy_kg_auto_write_enabled():
+        return _legacy_kg_write_blocked_response()
     store = get_graph_store()
     try:
         body = request.get_json()
@@ -488,6 +513,8 @@ def graph_update_node(node_id: str) -> Response:
 @app.route("/api/graph/node/<node_id>", methods=["DELETE"])
 def graph_delete_node(node_id: str) -> Response:
     """Delete a memory node."""
+    if not _legacy_kg_auto_write_enabled():
+        return _legacy_kg_write_blocked_response()
     store = get_graph_store()
     try:
         if node_id == "root":
@@ -678,6 +705,20 @@ def graph_consolidate_all() -> Response:
     def generate():
         try:
             settings = load_settings()
+            # Same Phase-4 · B gate as diary import / auto-write: consolidate
+            # rewrites node data via LLM and must not run while the gate is OFF.
+            if not bool(getattr(settings, "legacy_knowledge_auto_write_enabled", False)):
+                yield json.dumps({
+                    "type": "complete",
+                    "message": ("Scrierea în graful de cunoștințe (legacy) este OPRITĂ "
+                                "(legacy_knowledge_auto_write_enabled=false). "
+                                "Activeaz-o în Setări pentru consolidare."),
+                    "nodes": 0,
+                    "total_before": 0,
+                    "total_after": 0,
+                    "total_delta": 0,
+                }) + "\n"
+                return
             picker_model = resolve_tool_router_model(settings)
             store = get_graph_store()
 

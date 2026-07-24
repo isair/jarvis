@@ -24,3 +24,6 @@ qt.conf
 src/jarvis/_version.py
 # stray pytest marker artifacts (Windows updater-fallback test)
 *.marker
+
+# Local live-DB audit dumps (may contain conversation previews) — never commit
+LEGACY-KG-AUDIT-REPORT.json
