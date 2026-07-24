@@ -243,6 +243,9 @@ class Settings:
     development_agent_provider: str
     # I — read-only audit tab in the Memory Viewer.
     audit_panel_enabled: bool
+    # J — Cora Security Center (Phase 1 READ-ONLY). Default OFF; never auto-enables.
+    security_center_enabled: bool
+    security_center_bind_port: int
 
     # OpenAI Realtime premium voice backend (default off). API key is read
     # only from Windows Credential Manager target ``Cora.OpenAI`` — never from
@@ -605,6 +608,8 @@ def get_default_config() -> Dict[str, Any]:
         "owner_triggered_development_enabled": False,
         "development_agent_provider": "disabled",  # "disabled" | "claude_cli"
         "audit_panel_enabled": False,
+        "security_center_enabled": False,
+        "security_center_bind_port": 5051,
 
         # OpenAI Realtime premium (off until paid live test)
         "openai_realtime_enabled": False,
@@ -913,6 +918,10 @@ def load_settings() -> Settings:
     if development_agent_provider not in ("disabled", "claude_cli"):
         development_agent_provider = "disabled"  # fail-safe to the no-op provider
     audit_panel_enabled = bool(merged.get("audit_panel_enabled", False))
+    security_center_enabled = bool(merged.get("security_center_enabled", False))
+    security_center_bind_port = int(merged.get("security_center_bind_port", 5051) or 5051)
+    if security_center_bind_port < 1024 or security_center_bind_port > 65535:
+        security_center_bind_port = 5051
 
     chat_ui_enabled = bool(merged.get("chat_ui_enabled", False))
     chat_ui_mode = str(merged.get("chat_ui_mode", "classic") or "classic").strip().lower()
@@ -1154,6 +1163,8 @@ def load_settings() -> Settings:
         owner_triggered_development_enabled=owner_triggered_development_enabled,
         development_agent_provider=development_agent_provider,
         audit_panel_enabled=audit_panel_enabled,
+        security_center_enabled=security_center_enabled,
+        security_center_bind_port=security_center_bind_port,
 
         chat_ui_enabled=chat_ui_enabled,
         chat_ui_mode=chat_ui_mode,

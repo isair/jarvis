@@ -349,6 +349,13 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("audit_panel_enabled", "Audit Panel",
       "Show the read-only brain audit tab in the Memory Viewer. Default off.",
       "memory", "bool")
+    f("security_center_enabled", "Security Center Monitor",
+      "Enable the local READ-ONLY Security Center background monitor. "
+      "Never blocks/kills processes. Default off — enable explicitly.",
+      "memory", "bool")
+    f("security_center_bind_port", "Security Center Port",
+      "Localhost-only Flask port for the Security Center UI (default 5051).",
+      "memory", "int", min_val=1024, max_val=65535)
 
     # --- Location ---
     f("location_enabled", "Enable Location",
