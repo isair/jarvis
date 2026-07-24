@@ -126,6 +126,15 @@ class Settings:
     # clobber, T-F1). Additive; default False keeps exact Phase-3A behaviour.
     tts_per_item_callbacks: bool
 
+    # Supertonic 3 (voice F5) — primary TTS engine when tts_engine == "supertonic".
+    # Runs a persistent worker from an ISOLATED runtime; Piper is the fallback.
+    tts_supertonic_runtime_path: str  # dir with .venv/, service.py, supertonic-3/
+    tts_supertonic_voice: str         # built-in female voice id (F1..F5)
+    tts_supertonic_language: str      # synthesis language code, e.g. "ro"
+    tts_supertonic_steps: int         # diffusion steps (quality/speed, ~5..12)
+    tts_supertonic_speed: float       # 1.0 = natural pace
+    tts_supertonic_timeout_sec: float  # per-request synth timeout before fallback
+
     # Voice Input & Audio
     voice_device: str | None
     sample_rate: int
@@ -503,6 +512,14 @@ def get_default_config() -> Dict[str, Any]:
         "tts_piper_sentence_silence": 0.2,  # Post-sentence silence in seconds
         "tts_per_item_callbacks": False,  # Phase 3B.1 per-item TTS callbacks (T-F1 fix)
 
+        # Supertonic 3 (voice F5) — primary engine when "tts_engine": "supertonic"
+        "tts_supertonic_runtime_path": r"C:\Users\Administrator\Downloads\cora-labs\supertonic3-cora",
+        "tts_supertonic_voice": "F5",       # built-in female voice (F1..F5)
+        "tts_supertonic_language": "ro",    # Romanian
+        "tts_supertonic_steps": 10,         # diffusion steps
+        "tts_supertonic_speed": 1.0,        # natural pace
+        "tts_supertonic_timeout_sec": 60.0,  # per-request synth timeout -> Piper fallback
+
         # Voice Input & Audio
         "voice_device": None,
         "sample_rate": 16000,
@@ -714,7 +731,7 @@ def load_settings() -> Settings:
     active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
     tts_engine = str(merged.get("tts_engine", "piper")).lower()
-    if tts_engine not in ("piper", "chatterbox"):
+    if tts_engine not in ("piper", "chatterbox", "supertonic"):
         tts_engine = "piper"  # Default to piper if invalid value
     tts_voice_val = merged.get("tts_voice")
     tts_voice = None if tts_voice_val in (None, "", "null") else str(tts_voice_val)
@@ -744,6 +761,25 @@ def load_settings() -> Settings:
     tts_piper_noise_w = float(merged.get("tts_piper_noise_w", 1.0))
     tts_piper_sentence_silence = float(merged.get("tts_piper_sentence_silence", 0.2))
     tts_per_item_callbacks = bool(merged.get("tts_per_item_callbacks", False))
+
+    # Supertonic 3 (F5) settings
+    tts_supertonic_runtime_path = str(
+        merged.get("tts_supertonic_runtime_path",
+                   r"C:\Users\Administrator\Downloads\cora-labs\supertonic3-cora"))
+    tts_supertonic_voice = str(merged.get("tts_supertonic_voice", "F5"))
+    tts_supertonic_language = str(merged.get("tts_supertonic_language", "ro"))
+    try:
+        tts_supertonic_steps = int(merged.get("tts_supertonic_steps", 10))
+    except Exception:
+        tts_supertonic_steps = 10
+    try:
+        tts_supertonic_speed = float(merged.get("tts_supertonic_speed", 1.0))
+    except Exception:
+        tts_supertonic_speed = 1.0
+    try:
+        tts_supertonic_timeout_sec = float(merged.get("tts_supertonic_timeout_sec", 60.0))
+    except Exception:
+        tts_supertonic_timeout_sec = 60.0
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
@@ -984,6 +1020,14 @@ def load_settings() -> Settings:
         tts_piper_noise_w=tts_piper_noise_w,
         tts_piper_sentence_silence=tts_piper_sentence_silence,
         tts_per_item_callbacks=tts_per_item_callbacks,
+
+        # Supertonic 3 (F5)
+        tts_supertonic_runtime_path=tts_supertonic_runtime_path,
+        tts_supertonic_voice=tts_supertonic_voice,
+        tts_supertonic_language=tts_supertonic_language,
+        tts_supertonic_steps=tts_supertonic_steps,
+        tts_supertonic_speed=tts_supertonic_speed,
+        tts_supertonic_timeout_sec=tts_supertonic_timeout_sec,
 
         # Voice Input & Audio
         voice_device=voice_device,

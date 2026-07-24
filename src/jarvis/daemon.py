@@ -588,6 +588,14 @@ def main() -> None:
         piper_noise_w=cfg.tts_piper_noise_w,
         piper_sentence_silence=cfg.tts_piper_sentence_silence,
         piper_per_item_callbacks=cfg.tts_per_item_callbacks,  # Phase 3B.1 (default False)
+        # Supertonic 3 (F5) — primary engine when tts_engine == "supertonic";
+        # the Piper params above serve as its automatic per-response fallback.
+        supertonic_runtime_path=cfg.tts_supertonic_runtime_path,
+        supertonic_voice=cfg.tts_supertonic_voice,
+        supertonic_language=cfg.tts_supertonic_language,
+        supertonic_steps=cfg.tts_supertonic_steps,
+        supertonic_speed=cfg.tts_supertonic_speed,
+        supertonic_timeout_sec=cfg.tts_supertonic_timeout_sec,
     )
     _global_tts_engine = tts  # Expose for face widget speaking animation
     if tts.enabled:

@@ -56,6 +56,7 @@ class FieldMeta:
 CATEGORIES = [
     ("llm", "🤖 LLM & AI Models"),
     ("tts", "🔊 Text-to-Speech"),
+    ("supertonic", "🌟 Supertonic 3 (F5)"),
     ("piper", "🎵 Piper TTS"),
     ("chatterbox", "🎭 Chatterbox TTS"),
     ("voice_input", "🎤 Voice Input"),
@@ -130,7 +131,7 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("tts_enabled", "Enable TTS", "Enable text-to-speech output",
       "tts", "bool")
     f("tts_engine", "TTS Engine", "Speech synthesis engine",
-      "tts", "choice", choices=[("piper", "Piper (Neural)"), ("chatterbox", "Chatterbox (Voice Cloning)")])
+      "tts", "choice", choices=[("supertonic", "Supertonic 3 (F5)"), ("piper", "Piper (Neural)"), ("chatterbox", "Chatterbox (Voice Cloning)")])
     f("tts_rate", "Speech Rate", "Words per minute (200 = normal)",
       "tts", "int", min_val=80, max_val=400, step=10, suffix="WPM", nullable=True)
 
@@ -168,6 +169,27 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("tts_chatterbox_audio_prompt", "Voice Clone Audio",
       "Path to audio file for voice cloning (leave empty to disable)",
       "chatterbox", "str", nullable=True)
+
+    # --- Supertonic 3 (F5) ---
+    f("tts_supertonic_voice", "Voice",
+      "Built-in Supertonic female voice",
+      "supertonic", "choice",
+      choices=[("F1", "F1"), ("F2", "F2"), ("F3", "F3"), ("F4", "F4"), ("F5", "F5")])
+    f("tts_supertonic_language", "Language",
+      "Synthesis language code (e.g. ro)",
+      "supertonic", "str")
+    f("tts_supertonic_steps", "Diffusion Steps",
+      "Higher = smoother but slower (5–12)",
+      "supertonic", "int", min_val=5, max_val=12, step=1)
+    f("tts_supertonic_speed", "Speed",
+      "1.0 = natural pace",
+      "supertonic", "float", min_val=0.5, max_val=2.0, step=0.05)
+    f("tts_supertonic_timeout_sec", "Synth Timeout",
+      "Max seconds per request before falling back to Piper",
+      "supertonic", "float", min_val=10, max_val=180, step=5, suffix="s")
+    f("tts_supertonic_runtime_path", "Runtime Path",
+      "Folder with the isolated Supertonic .venv, service.py and model",
+      "supertonic", "str")
 
     # --- Voice Input ---
     f("voice_device", "Input Device",
