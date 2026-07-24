@@ -64,7 +64,6 @@ class SecurityCenterService:
     def _run_audit_unlocked(self, *, create_baseline_if_missing: bool = True) -> dict[str, Any]:
         snapshot = self.collector.collect()
         self.hash_cache.save()
-        self.store.save_snapshot(snapshot, keep=self.config.snapshot_retention)
 
         baseline = self.store.load_baseline()
         if baseline is None and create_baseline_if_missing:
@@ -74,7 +73,10 @@ class SecurityCenterService:
             baseline_just_created = False
 
         changes = diff_baseline(baseline, snapshot)
+        # detect_alerts also annotates process trust onto the snapshot
         alerts = detect_alerts(snapshot, self.config, baseline=baseline, changes=changes)
+        # Persist AFTER trust annotations so UI/Processes tab has classifications
+        self.store.save_snapshot(snapshot, keep=self.config.snapshot_retention)
         # Persist new alerts (skip duplicates by fingerprint recently)
         existing = {a.get("fingerprint") for a in self.store.load_alerts(limit=500)}
         for a in alerts:
