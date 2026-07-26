@@ -238,6 +238,32 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return None
 
+    @staticmethod
+    def _encode_tool_call_arguments(
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """JSON-encode ``tool_calls[*].function.arguments`` in assistant messages.
+
+        The OpenAI API spec requires ``arguments`` to be a JSON string, but
+        ``normalise_openai_response`` decodes it to a dict for internal use.
+        When that assistant message is sent back to the server on the next
+        turn, we must re-encode it.
+        """
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            tc_list = msg.get("tool_calls")
+            if not isinstance(tc_list, list):
+                continue
+            for tc in tc_list:
+                func = tc.get("function")
+                if not isinstance(func, dict):
+                    continue
+                args = func.get("arguments")
+                if isinstance(args, dict):
+                    func["arguments"] = json.dumps(args)
+        return messages
+
     def chat(
         self,
         chat_model: str,
@@ -248,6 +274,7 @@ class OpenAICompatibleBackend(LLMBackend):
         thinking: bool = False,
     ) -> Optional[Dict[str, Any]]:
         sanitised = strip_nonstandard_message_fields(messages)
+        sanitised = self._encode_tool_call_arguments(sanitised)
         payload: Dict[str, Any] = {
             "model": chat_model,
             "messages": sanitised,
