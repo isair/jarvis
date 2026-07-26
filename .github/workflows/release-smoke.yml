@@ -1,0 +1,293 @@
+name: Release Smoke Test
+
+on:
+  workflow_dispatch:
+    # Manually triggered from the Actions tab.
+    # Runs on the develop branch by default.
+
+concurrency:
+  group: release-smoke-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Windows: build + smoke test ──────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v5
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 📝 Generate version file
+        shell: pwsh
+        run: |
+          $version = "dev-$($env:GITHUB_SHA.Substring(0,7))"
+          @"
+          # Auto-generated at build time
+          VERSION = "$version"
+          RELEASE_CHANNEL = "develop"
+          "@ | Out-File -FilePath src/jarvis/_version.py -Encoding utf8
+          Write-Host "Generated version file with VERSION=$version"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper|nvidia-)' } | Set-Content requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/desktop_app/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable (onedir)
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 🔍 Smoke test bundled app
+        shell: pwsh
+        run: |
+          Write-Host "=== Smoke Test: Jarvis Desktop (Windows) ==="
+          $result = & dist\Jarvis\Jarvis.exe --smoke-test 2>&1
+          $exitCode = $LASTEXITCODE
+          Write-Host $result
+          if ($exitCode -ne 0) {
+            Write-Host "SMOKE TEST FAILED (exit code: $exitCode)"
+            exit 1
+          }
+          Write-Host "Smoke test passed"
+
+      - name: 🛠️ Install Inno Setup
+        run: |
+          choco install innosetup -y
+
+      - name: 📦 Build Windows installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="dev-${{ github.sha }}" installer\windows\jarvis_setup.iss
+
+      - name: 📦 Package installer as Jarvis-Windows-x64.zip
+        run: |
+          Copy-Item dist\Jarvis-Setup-x64.exe dist\Jarvis.exe
+          cd dist
+          Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
+
+      - name: 📤 Upload Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-Windows
+          path: dist/Jarvis-Windows-x64.zip
+
+  # ── macOS: build + smoke test (arm64 + x64) ─────────────────────────────
+  build-macos:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v5
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 📝 Generate version file
+        run: |
+          VERSION="dev-${GITHUB_SHA:0:7}"
+          cat > src/jarvis/_version.py << EOF
+          # Auto-generated at build time
+          VERSION = "$VERSION"
+          RELEASE_CHANNEL = "develop"
+          EOF
+          echo "Generated version file with VERSION=$VERSION"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
+          else
+            grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          fi
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/desktop_app/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build application
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 🔍 Smoke test bundled app
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo " Smoke Test: Jarvis Desktop (macOS ${{ matrix.arch }})"
+          echo "═══════════════════════════════════════════"
+          chmod +x dist/Jarvis.app/Contents/MacOS/Jarvis
+          dist/Jarvis.app/Contents/MacOS/Jarvis --smoke-test
+          echo "✅ Smoke test passed"
+
+      - name: 📦 Package macOS build
+        run: |
+          cd dist
+          ditto -c -k --keepParent Jarvis.app Jarvis-macOS-${{ matrix.arch }}.zip
+
+      - name: 📤 Upload macOS artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-macOS-${{ matrix.arch }}
+          path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
+
+  # ── Linux: build + smoke test ───────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 🧹 Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: 📥 Checkout code
+        uses: actions/checkout@v5
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 portaudio19-dev binutils xvfb
+
+      - name: 📝 Generate version file
+        run: |
+          VERSION="dev-${GITHUB_SHA:0:7}"
+          cat > src/jarvis/_version.py << EOF
+          # Auto-generated at build time
+          VERSION = "$VERSION"
+          RELEASE_CHANNEL = "develop"
+          EOF
+          echo "Generated version file with VERSION=$VERSION"
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/desktop_app/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 🔍 Smoke test bundled app
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo " Smoke Test: Jarvis Desktop (Linux)"
+          echo "═══════════════════════════════════════════"
+          xvfb-run --auto-servernum dist/Jarvis/Jarvis --smoke-test
+          echo "✅ Smoke test passed"
+
+      - name: 📦 Package Linux build
+        run: |
+          cd dist
+          tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
+
+      - name: 📤 Upload Linux artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-Linux
+          path: dist/Jarvis-Linux-x64.tar.gz
+
+  # ── Gate: fast-forward main → develop ──────────────────────────────────
+  release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: success()
+    timeout-minutes: 5
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout full history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: develop
+
+      - name: 🔀 Fast-forward main to develop
+        run: |
+          set -euo pipefail
+
+          echo "Current state:"
+          echo "   develop HEAD (tested): ${{ github.sha }}"
+
+          # Fetch main so we can verify the fast-forward is safe
+          git fetch origin main
+
+          MAIN_SHA=$(git rev-parse origin/main)
+          TESTED_SHA="${{ github.sha }}"
+
+          echo "   origin/main:  $MAIN_SHA"
+          echo "   tested SHA:   $TESTED_SHA"
+
+          # Verify the tested commit is a descendant of main (fast-forward possible)
+          if git merge-base --is-ancestor "$MAIN_SHA" "$TESTED_SHA"; then
+            echo "main is an ancestor of the tested commit - fast-forward is safe"
+          else
+            echo "main has diverged - fast-forward is not possible"
+            echo "   This means commits were pushed directly to main."
+            echo "   Please rebase or merge manually."
+            exit 1
+          fi
+
+          echo ""
+          echo "Fast-forwarding main to $TESTED_SHA..."
+
+          git checkout main
+          git merge --ff-only "$TESTED_SHA"
+
+          echo ""
+          echo "Pushing main..."
+          git push origin main
+
+          NEW_MAIN_SHA=$(git rev-parse main)
+          echo ""
+          echo "Release complete!"
+          echo "   main is now at: $NEW_MAIN_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

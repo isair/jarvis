@@ -53,6 +53,7 @@ class MockConfig:
     # branch get the legacy alias promoted into ``llm_chat_model`` by
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
+    whisper_model: str = "small"
     embedding_provider: str = ""
     embedding_base_url: str = ""
     embedding_api_key: str = ""
@@ -92,10 +93,12 @@ class MockConfig:
     location_ip_address: Optional[str] = None
     location_auto_detect: bool = False
     location_cgnat_resolve_public_ip: bool = False
+    location_cache_minutes: int = 60
     dialogue_memory_timeout: int = 300
     llm_thinking_enabled: bool = False
     intent_judge_thinking_enabled: bool = False
     dictation_thinking_enabled: bool = False
+    dictation_hotkey: str = "ctrl+alt+space"
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
 

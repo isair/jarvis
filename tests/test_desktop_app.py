@@ -1146,3 +1146,187 @@ class TestMemoryViewerModulePath:
         assert module_path == "desktop_app.memory_viewer", (
             f"Module path should be 'desktop_app.memory_viewer', found '{module_path}'"
         )
+
+
+class TestDaemonSmokeTest:
+    """Tests for the --smoke-test flag on the daemon entry point."""
+
+    def test_smoke_test_prints_marker_and_returns(self):
+        """daemon.main(smoke_test=True) prints SMOKE_TEST_INIT_OK and returns."""
+        from unittest.mock import patch, MagicMock
+        import io
+
+        # Mock all heavy dependencies so the smoke test path runs without
+        # needing a real database, Whisper model, TTS engine, etc.
+        with patch("jarvis.daemon.load_settings") as mock_load, \
+             patch("jarvis.daemon.Database") as mock_db, \
+             patch("jarvis.daemon.initialize_mcp_tools", return_value=({}, {})), \
+             patch("jarvis.daemon.DialogueMemory") as mock_dm, \
+             patch("jarvis.daemon.get_location_context", return_value="Location: Test"), \
+             patch("jarvis.daemon.create_tts_engine") as mock_tts, \
+             patch("jarvis.daemon.VoiceListener") as mock_vl, \
+             patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph:
+
+            from tests.conftest import MockConfig
+            mock_load.return_value = MockConfig(db_path=":memory:")
+
+            mock_db_instance = MagicMock()
+            mock_db.return_value = mock_db_instance
+
+            mock_dm_instance = MagicMock()
+            mock_dm.return_value = mock_dm_instance
+
+            mock_tts_instance = MagicMock()
+            mock_tts_instance.enabled = False
+            mock_tts.return_value = mock_tts_instance
+
+            mock_vl_instance = MagicMock()
+            mock_vl.return_value = mock_vl_instance
+
+            mock_graph_instance = MagicMock()
+            mock_graph_instance.migrate_legacy_shape.return_value = False
+            mock_graph.return_value = mock_graph_instance
+
+            # Capture stdout
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                from jarvis.daemon import main
+                main(smoke_test=True)
+
+            output = captured.getvalue()
+            assert "SMOKE_TEST_INIT_OK" in output, (
+                f"Expected SMOKE_TEST_INIT_OK marker in output, got:\n{output}"
+            )
+            # Verify cleanup happened
+            mock_db_instance.close.assert_called_once()
+
+    def test_normal_mode_does_not_print_marker(self):
+        """daemon.main(smoke_test=False) does NOT print SMOKE_TEST_INIT_OK."""
+        # This test verifies the smoke test marker is exclusive to smoke_test mode.
+        # We mock enough to reach the branching point but the main loop would
+        # block forever, so we raise an exception right before it.
+        from unittest.mock import patch, MagicMock
+        import io
+
+        class StopBeforeMainLoop(Exception):
+            pass
+
+        with patch("jarvis.daemon.load_settings") as mock_load, \
+             patch("jarvis.daemon.Database") as mock_db, \
+             patch("jarvis.daemon.initialize_mcp_tools", return_value=({}, {})), \
+             patch("jarvis.daemon.DialogueMemory") as mock_dm, \
+             patch("jarvis.daemon.get_location_context", return_value="Location: Test"), \
+             patch("jarvis.daemon.create_tts_engine") as mock_tts, \
+             patch("jarvis.daemon.VoiceListener") as mock_vl, \
+             patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph, \
+             patch("jarvis.daemon.time.sleep", side_effect=StopBeforeMainLoop()):
+
+            from tests.conftest import MockConfig
+            mock_load.return_value = MockConfig(db_path=":memory:")
+
+            mock_db_instance = MagicMock()
+            mock_db.return_value = mock_db_instance
+
+            mock_dm_instance = MagicMock()
+            mock_dm.return_value = mock_dm_instance
+
+            mock_tts_instance = MagicMock()
+            mock_tts_instance.enabled = False
+            mock_tts.return_value = mock_tts_instance
+
+            mock_vl_instance = MagicMock()
+            mock_vl.return_value = mock_vl_instance
+
+            mock_graph_instance = MagicMock()
+            mock_graph_instance.migrate_legacy_shape.return_value = False
+            mock_graph.return_value = mock_graph_instance
+
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                from jarvis.daemon import main
+                try:
+                    main(smoke_test=False)
+                except StopBeforeMainLoop:
+                    pass
+
+            output = captured.getvalue()
+            assert "SMOKE_TEST_INIT_OK" not in output, (
+                "SMOKE_TEST_INIT_OK should not appear in normal mode"
+            )
+            assert "✓ Daemon started" in output, (
+                f"Expected normal startup output, got:\n{output}"
+            )
+
+
+class TestDesktopSmokeTest:
+    """Tests for the --smoke-test flag on the desktop app entry point."""
+
+    def test_smoke_test_main_calls_daemon_with_smoke_flag(self):
+        """_smoke_test_main() calls daemon_main(smoke_test=True)."""
+        from unittest.mock import patch, MagicMock
+
+        mock_qapp = MagicMock()
+        mock_qapp.instance.return_value = mock_qapp
+
+        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
+             patch("jarvis.daemon.main") as mock_daemon_main:
+
+            from desktop_app.app import _smoke_test_main
+            result = _smoke_test_main()
+
+            mock_daemon_main.assert_called_once_with(smoke_test=True)
+            assert result == 0
+
+    def test_smoke_test_main_prints_pass_on_success(self):
+        """_smoke_test_main() prints SMOKE_TEST_PASSED when daemon succeeds."""
+        from unittest.mock import patch, MagicMock
+        import io
+
+        mock_qapp = MagicMock()
+        mock_qapp.instance.return_value = mock_qapp
+
+        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
+             patch("jarvis.daemon.main") as mock_daemon_main:
+
+            mock_daemon_main.return_value = None
+
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                from desktop_app.app import _smoke_test_main
+                result = _smoke_test_main()
+
+            output = captured.getvalue()
+            assert "SMOKE_TEST_PASSED" in output, (
+                f"Expected SMOKE_TEST_PASSED in output, got:\n{output}"
+            )
+            assert result == 0
+
+    def test_smoke_test_main_returns_1_on_daemon_failure(self):
+        """_smoke_test_main() returns 1 when daemon_main raises."""
+        from unittest.mock import patch, MagicMock
+
+        mock_qapp = MagicMock()
+        mock_qapp.instance.return_value = mock_qapp
+
+        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
+             patch("jarvis.daemon.main", side_effect=RuntimeError("Simulated init failure")):
+
+            from desktop_app.app import _smoke_test_main
+            result = _smoke_test_main()
+
+            assert result == 1, f"Expected exit code 1 on failure, got {result}"
+
+    def test_main_routes_smoke_test_flag(self):
+        """main() detects --smoke-test and calls _smoke_test_main()."""
+        from unittest.mock import patch
+
+        # The smoke test flag detection is a simple string check in sys.argv.
+        # We test it by patching _smoke_test_main to verify it is called.
+        with patch("desktop_app.app.sys.argv", ["Jarvis.exe", "--smoke-test"]), \
+             patch("desktop_app.app._smoke_test_main", return_value=42) as mock_smoke:
+
+            from desktop_app.app import main
+            result = main()
+
+            mock_smoke.assert_called_once()
+            assert result == 42  # return value propagated from _smoke_test_main

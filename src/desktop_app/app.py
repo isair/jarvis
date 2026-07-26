@@ -2314,8 +2314,46 @@ def _run_setup_wizard() -> bool:
         return False
 
 
+def _smoke_test_main() -> int:
+    """Smoke-test entry point for CI: verify Qt + daemon initialise without crashing.
+
+    Creates a minimal QApplication, runs the daemon init, and exits.
+    Returns 0 on success, 1 on failure.
+    """
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    # Offscreen rendering when no display is available (Linux CI).
+    if sys.platform == 'linux' and not os.environ.get('DISPLAY'):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
+    print("✅ Qt initialised successfully", flush=True)
+
+    from jarvis.daemon import main as daemon_main
+    try:
+        daemon_main(smoke_test=True)
+    except Exception as exc:
+        print(f"❌ Daemon initialisation failed: {exc}", flush=True)
+        traceback.print_exc()
+        return 1
+
+    print("SMOKE_TEST_PASSED", flush=True)
+    return 0
+
+
 def main() -> int:
     """Main entry point for the desktop app."""
+    # Smoke-test fast path: runs before any UI, crash logging, or setup checks.
+    if "--smoke-test" in set(sys.argv[1:]):
+        return _smoke_test_main()
+
     # Fix Windows console encoding for Unicode/emoji characters
     # Only for non-frozen apps - frozen apps redirect stdout to crash log
     if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
