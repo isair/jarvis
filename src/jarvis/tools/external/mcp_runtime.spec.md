@@ -71,6 +71,7 @@ Each server entry in `config.mcps` is a dict consumed by
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `idle_timeout_sec` | float \| null | null | If set, the worker self-terminates after that many seconds with an empty queue. Stateful servers (browser automation) must leave this unset. |
+| `timeout_sec` | float \| null | 120 (`_DEFAULT_INVOKE_TIMEOUT_SEC`) | Bounds a single `call_tool` round trip and `list_tools` discovery. Servers whose tools legitimately run long (e.g. delegating a task to an external CLI agent) should raise this; a bare `concurrent.futures.TimeoutError` propagates on expiry. Non-finite or non-positive values fall back to the default. |
 
 ## Test contract
 
