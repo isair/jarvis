@@ -1134,10 +1134,7 @@ class VoiceListener(threading.Thread):
                         # Priority 4 wake word detection as a safety net.
                         ww_wake = getattr(self.cfg, "wake_word", "jarvis")
                         ww_aliases = set(getattr(self.cfg, "wake_aliases", [])) | {ww_wake}
-                        has_real_wake = (
-                            self._wake_timestamp is not None
-                            or is_wake_word_detected(text_lower, ww_wake, list(ww_aliases))
-                        )
+                        has_real_wake = is_wake_word_detected(text_lower, ww_wake, list(ww_aliases))
                         if has_real_wake:
                             debug_log(
                                 f"⚠️ Intent judge rejected wake-worded utterance "

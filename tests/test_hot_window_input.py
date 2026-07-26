@@ -956,21 +956,28 @@ class TestEarlyBeepFeedback:
 
     @patch("builtins.print")
     def test_beep_stops_when_intent_judge_rejects(self, _print):
-        """Early beep is stopped if intent judge rejects the input."""
+        """Early beep continues when intent judge rejects a wake-worded utterance.
+
+        The safety net catches wake-worded statements the judge incorrectly
+        flags as not directed — the wake word is present so the query is
+        accepted and the beep continues.
+        """
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
         listener.cfg.tune_enabled = True
 
         # Install judge that rejects — speech has wake word so early beep fires,
-        # but judge says not directed so beep should be stopped.
+        # but the safety net catches it and falls through to wake word detection.
         _install_intent_judge(listener, _make_judgment(
             directed=False, query="", confidence="high",
             reasoning="narrative mention"))
 
         listener._process_transcript("jarvis is a cool name", utterance_energy=0.01)
 
-        # Query should NOT be accepted (judge rejected + fallback wake word
-        # check won't find a query after "jarvis")
-        assert not _is_beeping(listener)
+        # Query should be accepted (safety net catches wake-worded utterances
+        # the judge incorrectly rejects)
+        assert _accepted_query(listener) == "is a cool name"
+        # Beep should continue — wake word was present
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -1428,7 +1435,8 @@ class TestStaleWakeTimestampAcrossUtterances:
         utterance that lacks a wake word."""
         listener, _ = _create_listener(echo_tolerance=0.3, hot_window_seconds=3.0)
 
-        # First utterance: has "jarvis", judge rejects as not directed
+        # First utterance: has "jarvis", judge rejects as not directed.
+        # The safety net catches this and accepts the query via wake word detection.
         _install_intent_judge(listener, _make_judgment(
             directed=False, query="", confidence="high",
             reasoning="statement to self, not directed"))
@@ -1440,8 +1448,13 @@ class TestStaleWakeTimestampAcrossUtterances:
             utterance_start_time=now,
             utterance_end_time=now + 2.0,
         )
-        assert _accepted_query(listener) == ""
+        # Safety net accepts the query since the wake word is present
+        assert _accepted_query(listener) != "", (
+            "Wake-worded utterance should be accepted by safety net")
 
+        # Reset state as if the assistant processed the query (simulates
+        # the natural reply cycle that clears state between utterances)
+        listener.state_manager.clear_collection()
         # Second utterance: no wake word, judge hallucinates directed=true
         # (e.g. because the earlier "jarvis" is still in its context buffer)
         _install_intent_judge(listener, _make_judgment(
@@ -1455,10 +1468,12 @@ class TestStaleWakeTimestampAcrossUtterances:
             utterance_end_time=now + 6.0,
         )
 
-        # Must be rejected — no wake word in this utterance, no hot window
+        # Must be rejected — no wake word in this utterance, no hot window,
+        # and the safety net only checks the current utterance text, not
+        # stale _wake_timestamp from the previous utterance.
         assert _accepted_query(listener) == "", (
             "Second utterance without wake word must not be accepted just "
-            "because a prior utterance set _wake_timestamp")
+            "because a prior utterance had one")
         listener.state_manager.stop()
 
 
