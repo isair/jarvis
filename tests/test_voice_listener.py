@@ -1179,7 +1179,7 @@ class TestCorruptedWhisperCacheRecovery:
                             assert not snapshot_dir.exists()
 
     def test_corrupted_cache_retry_also_fails(self, tmp_path):
-        """When retry after cache clear also fails, model remains None."""
+        """When retry after cache clear also fails, fallback configs are still tried."""
         # Create a fake cache directory
         snapshot_dir = tmp_path / "models--Systran--faster-whisper-medium" / "snapshots" / "abc123"
         snapshot_dir.mkdir(parents=True)
@@ -1207,8 +1207,8 @@ class TestCorruptedWhisperCacheRecovery:
                             listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
                             listener.run()
 
-                            # First attempt + retry = 2 calls
-                            assert mock_class.call_count == 2
+                            # The loop tried fallback configs (not just config 1's retry)
+                            assert mock_class.call_count > 2, "Expected fallback configs to be tried"
                             assert listener.model is None
 
     def test_corrupted_cache_parent_model_dir_deleted(self, tmp_path):
@@ -1258,7 +1258,7 @@ class TestCorruptedWhisperCacheRecovery:
                             assert not model_dir.exists()
 
     def test_unparseable_cache_path_shows_manual_instructions(self, capsys):
-        """When error path can't be parsed, shows manual cleanup instructions."""
+        """When error path can't be parsed, fallback configs are still tried with manual hints."""
         error_msg = "Unable to open file 'model.bin' somehow"
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
@@ -1281,8 +1281,8 @@ class TestCorruptedWhisperCacheRecovery:
                             listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
                             listener.run()
 
-                            # Should NOT retry (can't parse path)
-                            mock_class.assert_called_once()
+                            # The loop tried fallback configs (not just the first one)
+                            assert mock_class.call_count > 2, "Expected fallback configs to be tried"
                             assert listener.model is None
 
                             # Should show manual cleanup hint
@@ -1290,7 +1290,7 @@ class TestCorruptedWhisperCacheRecovery:
                             assert "whisper model cache" in captured.out.lower()
 
     def test_rmtree_oserror_prevents_retry(self, tmp_path):
-        """When shutil.rmtree raises OSError, model stays None and no retry occurs."""
+        """When shutil.rmtree raises OSError, fallback configs are still tried."""
         snapshot_dir = tmp_path / "models--Systran--faster-whisper-medium" / "snapshots" / "abc123"
         snapshot_dir.mkdir(parents=True)
         (snapshot_dir / "model.bin").write_bytes(b"corrupted")
@@ -1319,12 +1319,12 @@ class TestCorruptedWhisperCacheRecovery:
                                 listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
                                 listener.run()
 
-                                # Only the initial attempt — no retry since cache could not be cleared
-                                mock_class.assert_called_once()
+                                # The loop tried fallback configs (not just the first one)
+                                assert mock_class.call_count > 2, "Expected fallback configs to be tried"
                                 assert listener.model is None
 
     def test_no_models_ancestor_prevents_cache_clear(self, tmp_path):
-        """When error path has no models-- ancestor, cache is not cleared and model stays None."""
+        """When error path has no models-- ancestor, fallback configs are still tried."""
         # Create a path without a models-- segment
         plain_dir = tmp_path / "some" / "random" / "path"
         plain_dir.mkdir(parents=True)
@@ -1352,9 +1352,57 @@ class TestCorruptedWhisperCacheRecovery:
                             listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
                             listener.run()
 
-                            # No retry — _clear_corrupted_whisper_cache returns False
-                            mock_class.assert_called_once()
+                            # The loop tried fallback configs (not just the first one)
+                            assert mock_class.call_count > 2, "Expected fallback configs to be tried"
                             assert listener.model is None
+
+
+    def test_corrupted_cache_retry_fails_then_fallback_succeeds(self, tmp_path):
+        """When cache recovery retry fails, fallback to next device/compute config succeeds."""
+        mock_whisper_model = MagicMock()
+
+        # Create a fake cache directory
+        snapshot_dir = tmp_path / "models--Systran--faster-whisper-medium" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "model.bin").write_bytes(b"corrupted")
+
+        error_msg = f"Unable to open file 'model.bin' in model '{snapshot_dir}'"
+        call_count = 0
+
+        def whisper_model_side_effect(model_name, device, compute_type, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Config 1 ("auto", "int8"): first call fails, retry also fails
+            if call_count <= 2:
+                raise RuntimeError(error_msg)
+            # Config 2 ("auto", "float16"): third call succeeds
+            return mock_whisper_model
+
+        with patch("jarvis.listening.listener.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
+                with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
+                    with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
+                        with patch("jarvis.listening.listener.sd") as mock_sd:
+                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            mock_sd.InputStream.side_effect = Exception("Stop test here")
+
+                            from jarvis.listening.listener import VoiceListener
+
+                            mock_db = MagicMock()
+                            mock_cfg = _create_mock_config(whisper_model="medium")
+                            mock_tts = MagicMock()
+                            mock_dialogue_memory = MagicMock()
+
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener.run()
+
+                            # Call 1 (config 1 initial), call 2 (config 1 retry), call 3 (config 2, succeeds)
+                            assert mock_class.call_count == 3
+                            assert listener.model == mock_whisper_model
+
+                            # The corrupted snapshot directory should have been deleted
+                            assert not snapshot_dir.exists()
 
 
 class TestWhisperRateLimitRetry:
