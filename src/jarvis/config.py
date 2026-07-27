@@ -78,6 +78,10 @@ def _default_db_path() -> str:
     return str(base / "jarvis.db")
 
 
+def _default_project_templates_path() -> str:
+    return str(default_config_path().parent / "project_templates.json")
+
+
 @dataclass(frozen=True)
 class Settings:
     # Database & Storage
@@ -274,6 +278,11 @@ class Settings:
 
     # MCP Integration
     mcps: Dict[str, Any]
+
+    # Project Intake
+    project_intake_enabled: bool
+    project_templates_path: str
+    project_intake_stale_minutes: int
 
 
 
@@ -648,6 +657,11 @@ def get_default_config() -> Dict[str, Any]:
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
+
+        # Project Intake (guided multi-turn project brief interviews)
+        "project_intake_enabled": True,
+        "project_templates_path": _default_project_templates_path(),
+        "project_intake_stale_minutes": 30,
     }
 
 
@@ -871,6 +885,11 @@ def load_settings() -> Settings:
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
+    project_intake_enabled = bool(merged.get("project_intake_enabled", True))
+    project_templates_path = str(
+        merged.get("project_templates_path") or _default_project_templates_path()
+    )
+    project_intake_stale_minutes = int(merged.get("project_intake_stale_minutes", 30))
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
@@ -1014,4 +1033,9 @@ def load_settings() -> Settings:
 
         # MCP Integration
         mcps=mcps,
+
+        # Project Intake
+        project_intake_enabled=project_intake_enabled,
+        project_templates_path=project_templates_path,
+        project_intake_stale_minutes=project_intake_stale_minutes,
     )

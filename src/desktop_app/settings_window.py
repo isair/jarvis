@@ -374,6 +374,15 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
       "features", "list")
+    f("project_intake_enabled", "Project Intake",
+      "Guided multi-turn interview to build a project brief when starting new work",
+      "features", "bool")
+    f("project_templates_path", "Project Templates Path",
+      "Path to project_templates.json (intake question templates)",
+      "features", "str", nullable=True)
+    f("project_intake_stale_minutes", "Project Intake Stale Timeout",
+      "Minutes of inactivity before an abandoned intake session auto-expires",
+      "features", "int", min_val=1, max_val=1440, step=5, suffix="min")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",

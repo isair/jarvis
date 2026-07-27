@@ -58,6 +58,16 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Planner precedence**: when the planner explicitly emitted a `searchMemory` step, the gate is bypassed — the planner has more signal than coverage and overriding it would silently drop intent. The gate only short-circuits the fail-open empty-plan path.
 - **Rationale**: prevents re-running diary/graph lookups when the hot window already grounds the follow-up (e.g. "his most famous song" after a Bieber webSearch).
 
+## 3c. Project Intake Gate (pre-planner force-route)
+
+- **File**: [src/jarvis/tools/builtin/project_intake.py](src/jarvis/tools/builtin/project_intake.py) — `get_gated_session()`; wired into [src/jarvis/reply/engine.py](src/jarvis/reply/engine.py) right after redaction, before recent-dialogue lookup, MCP refresh, the tool router (#7), and the planner (#12).
+- **Trigger**: once per reply, before anything else in `run_reply_engine`. Gated on `cfg.project_intake_enabled` (default `True`).
+- **Model / gating**: NO LLM — deterministic SQLite lookup (`Database.get_active_intake_session()`).
+- **Inputs**: none beyond DB state — no query text is inspected.
+- **Output**: if a non-completed `project_intake_sessions` row exists, forces `run_tool_with_retries(tool_name="projectIntake", tool_args={"input": redacted})` directly, prints/speaks/records the tool's `reply_text` verbatim, and returns immediately — the router, planner, memory enrichment, and the entire agentic LLM loop are all skipped for this turn. Fail-open on any DB error or malformed row shape (`get_gated_session` catches and treats it as "no session", falling through to normal routing).
+- **Rationale**: multi-turn interview state must survive turns deterministically; a fresh planner/router call every turn has no guarantee of recognising "mid-interview" the way a small local model might miss it. See `project_intake.spec.md` "Why a gate, not just a tool".
+- **Data-flow edge**: this is also the first builtin tool invocation in the app that calls out to an MCP server (Obsidian "Jarvis Brain") directly from tool code rather than via the LLM's own tool-call loop — see `ProjectIntakeTool.run()` → `write_brief_to_obsidian()` on interview completion, and the separate `StartProjectDevelopmentTool` for the later Antigravity hand-off trigger.
+
 ## 4. Memory Digest (optional, SMALL models)
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_memory_for_query()` + `_distil_batch()`.
@@ -222,12 +232,14 @@ Driven by `detect_model_size(model_name) → SMALL (≤7B) | LARGE (8B+)`:
 - Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`
 - Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
 - Caps: `agentic_max_turns` (8), `tool_search_max_calls` (3), `_LLM_MAX_SELECTED` (5), `_DIGEST_MAX_CHARS` (400), `_TOOL_DIGEST_MAX_CHARS` (600)
+- Non-LLM gates: `project_intake_enabled` (default `True`, see #3c), `project_templates_path`
 
 ## Flow
 
 ```
 user input
-  └─▶ [2] Intent Judge            (voice only, SMALL)
+  └─▶ [3c] Project Intake Gate    (no LLM — active session? force projectIntake tool, return, done)
+        └─▶ [2] Intent Judge            (voice only, SMALL)
         └─▶ [7] Tool router (narrows catalogue for the planner)
               └─▶ [12] Planner (gates memory; advisory for the router allow-list)
                     ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)

@@ -101,6 +101,9 @@ class MockConfig:
     dictation_hotkey: str = "ctrl+alt+space"
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
+    project_intake_enabled: bool = True
+    project_templates_path: str = ""
+    project_intake_stale_minutes: int = 30
 
     def __post_init__(self) -> None:
         # Mirror ``load_settings``: when the provider-aware fields are

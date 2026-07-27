@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>Jarvis HUD v6.4 - Widescreen Dynamic Layout</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@500;600;700&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  :root {
+    --primary: #00f0ff;
+    --primary-dim: rgba(0, 240, 255, 0.2);
+    --primary-glow: rgba(0, 240, 255, 0.4);
+    --bg-dark: rgba(4, 10, 16, 0.65);
+    --bg-darker: rgba(2, 5, 8, 0.85);
+    --text: #6fd8ff;
+    --text-muted: #3fa9d4;
+    --accent-green: #39ff14;
+    --accent-red: #ff073a;
+    --accent-orange: #ffb700;
+  }
+
+  body {
+    background: #14273a;
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.1px;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    position: relative;
+  }
+
+  .grid-bg {
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0, 240, 255, 0.09) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 240, 255, 0.09) 1px, transparent 1px);
+    background-size: 36px 36px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .scanlines {
+    position: fixed; inset: 0;
+    background: linear-gradient(
+      rgba(18, 16, 16, 0) 50%, 
+      rgba(0, 0, 0, 0.22) 50%
+    );
+    background-size: 100% 4px;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0.35;
+  }
+  .vignette {
+    position: fixed; inset: 0;
+    background: radial-gradient(circle at center, transparent 25%, rgba(2, 4, 8, 0.45) 100%);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .corner {
+    position: fixed; width: 45px; height: 45px;
+    border: 2px solid rgba(0, 240, 255, 0.35);
+    pointer-events: none;
+    z-index: 10;
+  }
+  .corner.tl { top: 15px; left: 15px; border-right: none; border-bottom: none; }
+  .corner.tr { top: 15px; right: 15px; border-left: none; border-bottom: none; }
+  .corner.bl { bottom: 15px; left: 15px; border-right: none; border-top: none; }
+  .corner.br { bottom: 15px; right: 15px; border-left: none; border-top: none; }
+
+  .topbar {
+    position: absolute; top: 0; left: 0; right: 0; height: 46px;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 40px;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.25);
+    background: var(--bg-darker);
+    z-index: 5;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    padding: 6px 18px;
+    font-size: 11.5px;
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: rgba(0, 240, 255, 0.05);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    letter-spacing: 1px;
+  }
+  .tab:hover, .tab.active {
+    color: #fff;
+    background: rgba(0, 240, 255, 0.2);
+    border-color: var(--primary);
+    box-shadow: 0 0 10px var(--primary-glow);
+  }
+  .clock-box {
+    margin-left: auto;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 16px; color: #fff; letter-spacing: 2px;
+    text-shadow: 0 0 8px var(--primary-glow);
+    text-align: right;
+  }
+  .clock-box .tz { font-size: 9px; color: var(--text-muted); display: block; }
+
+  .ticker {
+    position: absolute; top: 46px; left: 0; right: 0; height: 28px;
+    overflow: hidden; white-space: nowrap;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.15);
+    background: rgba(2, 6, 10, 0.8);
+    display: flex; align-items: center;
+    font-size: 14px; color: #fff;
+    font-weight: 600;
+    text-shadow: 0 0 6px var(--primary-glow);
+    z-index: 4;
+  }
+  .ticker span { display: inline-block; padding-left: 100%; animation: scrollTicker 32s linear infinite; }
+  @keyframes scrollTicker { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
+
+  .column-left {
+    position: absolute;
+    top: 90px; left: 40px; width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    z-index: 3;
+  }
+  .column-mid-right {
+    position: absolute;
+    top: 90px; right: 400px; width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    z-index: 3;
+  }
+  .column-extreme-right {
+    position: absolute;
+    top: 90px; right: 40px; width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    z-index: 3;
+  }
+
+  .panel {
+    position: relative;
+    width: 100%;
+    border: 1px solid rgba(0, 240, 255, 0.20);
+    background: var(--bg-dark);
+    padding: 16px 20px;
+    line-height: 1.5;
+    backdrop-filter: blur(5px);
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.04), inset 0 0 12px rgba(0, 240, 255, 0.05);
+  }
+  .panel::before {
+    content: ''; position: absolute; top: -1px; left: -1px;
+    width: 10px; height: 10px; border-top: 2px solid var(--primary); border-left: 2px solid var(--primary);
+  }
+  .panel::after {
+    content: ''; position: absolute; bottom: -1px; right: -1px;
+    width: 10px; height: 10px; border-bottom: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  }
+  .panel-title {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 13px; font-weight: 700; letter-spacing: 1.5px; color: var(--text-muted);
+    border-bottom: 1px solid rgba(0, 240, 255, 0.15);
+    padding-bottom: 6px; margin-bottom: 12px;
+    display: flex; justify-content: space-between;
+    text-shadow: 0 0 4px var(--primary-glow);
+    text-transform: uppercase;
+  }
+  .badge {
+    background: rgba(0, 240, 255, 0.18); color: #fff;
+    border-radius: 4px; padding: 0 6px; font-size: 9px;
+  }
+
+  .sidebar {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .side-item {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px solid rgba(0, 240, 255, 0.15);
+    background: rgba(3, 12, 18, 0.5);
+    padding: 10px 16px; margin-bottom: 8px;
+    font-size: 13px; color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .side-item:hover {
+    background: rgba(0, 240, 255, 0.1);
+    border-color: var(--primary);
+    transform: translateX(6px);
+  }
+  .side-item.active { 
+    background: rgba(0, 240, 255, 0.18); 
+    border-color: var(--primary); 
+    box-shadow: inset 0 0 10px var(--primary-glow);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 6px var(--primary); }
+
+  .side-footer {
+    width: 100%;
+    font-size: 10px; color: var(--text-muted); line-height: 1.4;
+    padding: 4px 10px;
+  }
+
+  .storage-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .bar-row { display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
+  .bar-row span { width: 45px; font-family: 'Rajdhani', sans-serif; font-size: 12px; font-weight: 600; color: #fff; }
+  .bar-track { flex: 1; height: 7px; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0,240,255,0.15); }
+  .bar-fill { height: 100%; background: var(--primary); box-shadow: 0 0 6px var(--primary-glow); transition: width 0.5s ease; }
+  
+  .sys-specs {
+    border-top: 1px dashed rgba(0, 240, 255, 0.15);
+    padding-top: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .spec-item { display: flex; justify-content: space-between; }
+  .spec-item span:first-child { font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 12px; }
+  .spec-item span.val { color: var(--text); font-weight: 500; }
+
+  .battery-container {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(0, 240, 255, 0.15);
+  }
+  .battery-info { font-size: 11.5px; display: flex; flex-direction: column; gap: 2px; }
+  .battery-info span.title { font-family: 'Rajdhani', sans-serif; font-weight: bold; color: #fff; font-size: 12.5px; }
+  .battery-3d {
+    position: relative; width: 50px; height: 68px;
+    border: 1.5px solid rgba(0, 240, 255, 0.35);
+    border-radius: 4px; background: rgba(0, 15, 25, 0.6);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.1);
+    display: flex; flex-direction: column-reverse;
+    padding: 3px; gap: 2px;
+  }
+  .battery-3d::before {
+    content: ''; position: absolute; top: -5px; left: 50%; transform: translateX(-50%);
+    width: 16px; height: 4px; background: rgba(0, 240, 255, 0.5); border-radius: 1px;
+  }
+  .battery-segment {
+    height: 9px; background: linear-gradient(90deg, #00f0ff, #0088cc);
+    box-shadow: 0 0 4px rgba(0, 240, 255, 0.4); border-radius: 1px;
+  }
+
+  .markets-panel { display: flex; flex-direction: column; }
+  .market-item { margin-bottom: 12px; display: flex; flex-direction: column; }
+  .market-item:last-child { margin-bottom: 0; }
+  .market-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .market-name { font-family: 'Rajdhani', sans-serif; font-size: 13.5px; font-weight: bold; color: #fff; letter-spacing: 0.5px; }
+  .market-val { color: var(--text); font-weight: 500; }
+  .market-change { font-size: 10px; font-weight: bold; display: flex; align-items: center; gap: 3px; }
+  .market-change.up { color: var(--accent-green); }
+  .market-change.down { color: var(--accent-red); }
+  .sparkline-canvas { width: 100%; height: 22px; margin-top: 4px; background: rgba(0, 240, 255, 0.015); border-bottom: 1px solid rgba(0, 240, 255, 0.05); }
+
+  .news-panel { display: flex; flex-direction: column; }
+  .news-container { display: flex; flex-direction: column; gap: 10px; }
+  .news-item {
+    padding: 8px 12px; background: rgba(0, 240, 255, 0.02);
+    border-left: 2px solid var(--primary-dim); transition: all 0.3s ease;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .news-item:hover {
+    background: rgba(0, 240, 255, 0.06); border-left-color: var(--primary);
+  }
+  .news-header { display: flex; justify-content: space-between; font-size: 9px; font-family: 'Rajdhani', sans-serif; font-weight: 600; letter-spacing: 0.5px; }
+  .news-tag { color: var(--accent-orange); text-transform: uppercase; }
+  .news-time { color: var(--text-muted); }
+  .news-title { color: #fff; line-height: 1.4; font-weight: 500; font-size: 11px; }
+
+  .network-panel { display: flex; flex-direction: column; }
+  .net-row { display: flex; justify-content: space-between; font-size: 11.5px; }
+  .net-row span:first-child { font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 12px; color: var(--text-muted); }
+  .net-graph-placeholder { height: 20px; border-bottom: 1px dashed rgba(0, 240, 255, 0.2); margin-top: 6px; }
+
+  .email-panel { display: flex; flex-direction: column; }
+  .email-item { padding: 8px 0; border-bottom: 1px solid rgba(0, 240, 255, 0.08); display: flex; flex-direction: column; gap: 3px; }
+  .email-item:last-child { border-bottom: none; }
+  .email-from { color: #fff; font-family: 'Rajdhani', sans-serif; font-size: 12.5px; font-weight: 600; display: flex; justify-content: space-between; letter-spacing: 0.5px; }
+  .email-time { font-size: 9px; font-weight: normal; color: var(--text-muted); }
+  .email-subj { color: var(--text-muted); font-size: 11px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .projects-panel { display: flex; flex-direction: column; }
+  .project-item { padding: 5px 0; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .project-name { font-family: 'Rajdhani', sans-serif; font-weight: 600; color: #fff; font-size: 12.5px; }
+  .project-status { font-family: 'Rajdhani', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+  .project-status.active { color: var(--accent-green); }
+  .project-status.paused { color: var(--accent-orange); }
+
+  .weather-panel { display: flex; flex-direction: column; }
+  .weather-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .weather-card {
+    background: rgba(0, 20, 30, 0.3); border: 1px solid rgba(0, 240, 255, 0.08);
+    padding: 8px 12px; border-radius: 2px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .weather-label { font-family: 'Rajdhani', sans-serif; font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .weather-val { font-size: 12px; font-weight: bold; color: #fff; }
+
+  .log-panel {
+    position: absolute; bottom: 20px; left: 380px; width: 620px; height: 340px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  .log-container {
+    flex: 1; overflow-y: hidden; display: flex; flex-direction: column-reverse;
+  }
+  .log-line { font-size: 11px; color: var(--text-muted); padding: 3px 0; display: flex; line-height: 1.4; }
+  .log-line .t { color: #00bcd4; margin-right: 8px; font-weight: bold; }
+  .log-line .msg { flex: 1; }
+
+  .center-wrap {
+    position: absolute; top: 46%; left: 48%;
+    transform: translate(-50%, -50%);
+    width: 920px; height: 920px;
+    z-index: 2;
+  }
+  .status-tag {
+    /* Nested back inside .center-wrap and positioned by PERCENTAGE (not a
+       fixed pixel value) so it stays just below the outermost ring
+       regardless of how big the canvas/.center-wrap are sized. draw()'s
+       outermost ring sits at radius 430 out of a CX/CY of 460 (i.e.
+       96.7% of .center-wrap's height down from its top) - if the canvas
+       is resized again, keep this percentage in step with
+       (CY + outerRingRadius) / canvasHeight, not a pixel guess.
+       See face_widget.spec.md "Layout: .status-tag and .quote". */
+    position: absolute; top: calc(96.7% + 10px); left: 0; right: 0;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px; font-weight: bold; letter-spacing: 4px; color: #d8fbff;
+    text-shadow: 0 0 8px var(--primary-glow), 0 0 4px var(--primary-glow);
+    text-align: center;
+    width: 100%;
+    z-index: 3;
+  }
+
+  .quote {
+    /* Bottom-left corner, clear of the (much taller) log panel and the
+       doubled-size core, both of which now dominate the centre column. */
+    position: absolute; bottom: 20px; left: 40px; max-width: 300px;
+    font-size: 10px; color: var(--text-muted); font-style: italic;
+    opacity: 0.6; pointer-events: none; z-index: 1;
+  }
+
+  #fileInput {
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    border: 1px solid rgba(0,240,255,0.15);
+    padding: 4px;
+    background: rgba(0,0,0,0.3);
+    outline: none;
+    flex: 1;
+  }
+</style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="scanlines"></div>
+  <div class="vignette"></div>
+  
+  <div class="corner tl"></div>
+  <div class="corner tr"></div>
+  <div class="corner bl"></div>
+  <div class="corner br"></div>
+
+  <div class="ticker"><span id="tickerText">SISTEMA INICIALIZADO // AGUARDANDO COMANDOS DA VOZ DO UTILIZADOR...</span></div>
+
+  <div class="topbar">
+    <div class="tab active">Este PC</div>
+    <div class="tab">Terminal</div>
+    <div class="tab">Chrome</div>
+    <div class="tab">Notas</div>
+    <div class="clock-box" id="clock">--:--:--<span class="tz">LISBOA STANDARD TIME</span></div>
+  </div>
+
+  <div class="column-left">
+    <div class="sidebar">
+      <div class="side-item active"><span class="dot"></span>Jarvis Sandbox</div>
+      <div class="side-item"><span class="dot"></span>Claude Code</div>
+      <div class="side-item"><span class="dot"></span>Antigravity</div>
+      <div class="side-item"><span class="dot"></span>Terminal</div>
+      <div class="side-item"><span class="dot"></span>Obsidian</div>
+      <div class="side-item"><span class="dot"></span>Home Assistant</div>
+    </div>
+    
+    <div class="side-footer">
+      Uptime: <span id="uptimeVal" style="color: #fff; font-weight: bold;">0h 00m 00s</span><br>
+      Última Sincronização: agora<br>
+      Subprocesso: Core (Port 5001)
+    </div>
+
+    <div class="panel storage-panel">
+      <div class="panel-title">SISTEMA <span class="badge">DIAGS</span></div>
+      
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div class="bar-row"><span>CPU</span><div class="bar-track"><div class="bar-fill" id="cpuBar" style="width:22%"></div></div></div>
+        <div class="bar-row"><span>VRAM</span><div class="bar-track"><div class="bar-fill" id="vramBar" style="width:68%"></div></div></div>
+        <div class="bar-row"><span>DISCO</span><div class="bar-track"><div class="bar-fill" id="diskBar" style="width:41%"></div></div></div>
+      </div>
+
+      <div class="sys-specs">
+        <div class="spec-item"><span>CPU TEMP</span><span class="val" id="cpuTemp">42°C</span></div>
+        <div class="spec-item"><span>GPU TEMP</span><span class="val" id="gpuTemp">54°C</span></div>
+        <div class="spec-item"><span>FAN SPEED</span><span class="val" id="fanSpeed">1240 RPM</span></div>
+      </div>
+
+      <div class="battery-container">
+        <div class="battery-info">
+          <span class="title">UPS / ENERGIA</span>
+          <div id="upsPower">240 W CONSUMO</div>
+          <div style="font-size: 9px; color: var(--accent-green); font-weight: bold;" id="upsStatus">REDE ELÉTRICA</div>
+        </div>
+        <div class="battery-3d" id="battery3d">
+          <div class="battery-segment"></div>
+          <div class="battery-segment"></div>
+          <div class="battery-segment"></div>
+          <div class="battery-segment"></div>
+          <div class="battery-segment"></div>
+          <div class="battery-segment"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="center-wrap">
+    <canvas id="rings" width="920" height="920"></canvas>
+    <div class="status-tag" id="statusTag">EM ESPERA</div>
+  </div>
+
+  <div class="column-mid-right">
+    <div class="panel markets-panel">
+      <div class="panel-title">MERCADOS FINANCEIROS <span class="badge">REALTIME</span></div>
+      
+      <div class="market-item" id="m-sp500">
+        <div class="market-row">
+          <span class="market-name">S&P 500</span>
+          <span class="market-val" id="sp500-val">5,420.10</span>
+          <span class="market-change up" id="sp500-change">▲ +0.42%</span>
+        </div>
+        <canvas class="sparkline-canvas" id="sp500-canvas" width="280" height="22"></canvas>
+      </div>
+
+      <div class="market-item" id="m-nasdaq">
+        <div class="market-row">
+          <span class="market-name">NASDAQ</span>
+          <span class="market-val" id="nasdaq-val">19,120.50</span>
+          <span class="market-change up" id="nasdaq-change">▲ +0.78%</span>
+        </div>
+        <canvas class="sparkline-canvas" id="nasdaq-canvas" width="280" height="22"></canvas>
+      </div>
+
+      <div class="market-item" id="m-psi">
+        <div class="market-row">
+          <span class="market-name">PSI-20</span>
+          <span class="market-val" id="psi-val">6,240.30</span>
+          <span class="market-change down" id="psi-change">▼ -0.12%</span>
+        </div>
+        <canvas class="sparkline-canvas" id="psi-canvas" width="280" height="22"></canvas>
+      </div>
+
+      <div class="market-item" id="m-btc">
+        <div class="market-row">
+          <span class="market-name">BTC / USD</span>
+          <span class="market-val" id="btc-val">64,820.00</span>
+          <span class="market-change up" id="btc-change">▲ +1.25%</span>
+        </div>
+        <canvas class="sparkline-canvas" id="btc-canvas" width="280" height="22"></canvas>
+      </div>
+    </div>
+
+    <div class="panel news-panel">
+      <div class="panel-title">NOTÍCIAS DE MERCADO <span class="badge" id="newsAlert">LIVE</span></div>
+      <div class="news-container" id="newsContainer">
+      </div>
+    </div>
+  </div>
+
+  <div class="column-extreme-right">
+    <div class="panel network-panel">
+      <div class="panel-title">REDE <span class="badge" id="netPing">12 ms</span></div>
+      <div class="net-row"><span>IP Local:</span><span style="color:#fff;">192.168.1.42</span></div>
+      <div class="net-row"><span>Download:</span><span id="dlRate" style="color:var(--accent-green);">1.4 MB/s</span></div>
+      <div class="net-row"><span>Upload:</span><span id="ulRate" style="color:var(--primary);">284 KB/s</span></div>
+      <div class="net-graph-placeholder" id="netGraphWrap">
+        <canvas id="netGraph" width="280" height="20" style="width:100%; height:20px;"></canvas>
+      </div>
+    </div>
+
+    <div class="panel email-panel">
+      <div class="panel-title">EMAILS RECENTES <span class="badge" id="emailCount">3 novos</span></div>
+      <div id="emailList"></div>
+    </div>
+
+    <div class="panel projects-panel">
+      <div class="panel-title">PROJETOS ATIVOS</div>
+      <div id="projectList"></div>
+    </div>
+
+    <div class="panel weather-panel">
+      <div class="panel-title">METEOROLOGIA LOCAL</div>
+      <div class="weather-grid">
+        <div class="weather-card">
+          <div class="weather-label">Temperatura</div>
+          <div class="weather-val" id="w-temp">21.4°C</div>
+        </div>
+        <div class="weather-card">
+          <div class="weather-label">Humidade</div>
+          <div class="weather-val" id="w-hum">64%</div>
+        </div>
+        <div class="weather-card">
+          <div class="weather-label">Pressão</div>
+          <div class="weather-val">1016 hPa</div>
+        </div>
+        <div class="weather-card">
+          <div class="weather-label">Qualidade Ar</div>
+          <div class="weather-val" style="color: var(--accent-green);">28 BOM</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel log-panel">
+    <div class="panel-title">REGISTO DO SISTEMA (CORE LOG)</div>
+    <div class="log-container">
+      <div id="logList"></div>
+    </div>
+  </div>
+
+  <div class="quote">"A informação mais útil é a que chega antes de precisares de a pedir."</div>
+
+  <audio id="audioEl" style="display:none"></audio>
+
+<script>
+  const emails = [
+    { from: 'Cliente XPTO', subj: 'Revisão do contrato pendente', time: '14:32' },
+    { from: 'Google Cloud', subj: 'Fatura mensal disponível para download', time: '12:05' },
+    { from: 'GitHub', subj: 'Pull request #84 aguarda aprovação', time: '09:15' },
+  ];
+  const projects = [
+    { name: 'Jarvis Assistant', status: 'ativo' },
+    { name: 'Site Portfolio', status: 'pausado' },
+    { name: 'Automação Casa', status: 'ativo' },
+  ];
+  document.getElementById('emailList').innerHTML = emails.map(e =>
+    `<div class="email-item">
+      <div class="email-from"><span>${e.from}</span><span class="email-time">${e.time}</span></div>
+      <div class="email-subj">${e.subj}</div>
+    </div>`
+  ).join('');
+  document.getElementById('projectList').innerHTML = projects.map(p =>
+    `<div class="project-item">
+      <span class="project-name">${p.name}</span>
+      <span class="project-status ${p.status === 'ativo' ? 'active' : 'paused'}">${p.status}</span>
+    </div>`
+  ).join('');
+
+  const tickerMsgs = [
+    'SISTEMA JARVIS ONLINE: Todos os módulos do núcleo estão operacionais.',
+    'MERCADO FINANÇAS: Flutuação das bolsas mundiais sincronizada.',
+    'AVISO ANTIGRAVITY: Nova otimização de ficheiro executada no HUD.',
+    'COMUNICAÇÃO: 3 e-mails por ler na caixa de entrada corporativa.',
+    'CLIMA LISBOA: Temperatura média estabilizada em 21.4°C.',
+    'SEGURANÇA: Ligação SSL estabelecida de forma encriptada.',
+  ];
+  document.getElementById('tickerText').textContent = tickerMsgs.join('     ///     ');
+
+  // Real Jarvis debug_log lines are pushed in via window.addJarvisLogLine()
+  // (called from Python's HudFaceWidget poll loop). No fictional/randomised
+  // content here any more - only genuine HUD-side startup notes below and
+  // real UI event messages logged elsewhere in this script (e.g. from
+  // setupAnalyser()/playJarvisAudio()) share this same rendering primitive.
+  const logList = document.getElementById('logList');
+  function addLogLine(msg) {
+    const now = new Date();
+    const t = now.toTimeString().slice(0,8);
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    // textContent (not innerHTML) since msg may carry real, untrusted
+    // debug_log content once real log lines start flowing through here.
+    const tSpan = document.createElement('span');
+    tSpan.className = 't';
+    tSpan.textContent = `[${t}]`;
+    const msgSpan = document.createElement('span');
+    msgSpan.className = 'msg';
+    msgSpan.textContent = msg;
+    line.appendChild(tSpan);
+    line.appendChild(msgSpan);
+    logList.appendChild(line);
+    while (logList.children.length > 40) logList.removeChild(logList.firstChild);
+  }
+
+  addLogLine('Initializing Jarvis HUD Interface...');
+  addLogLine('Loading visual styles & Google Fonts...');
+  addLogLine('Mapping Web Audio API AnalyserNode...');
+  addLogLine('System diagnostics online.');
+
+  // Called from Python (FaceWindow's poll loop) with real Jarvis debug_log
+  // lines, tailed from the cross-process log file JarvisStateManager writes.
+  window.addJarvisLogLine = function(line) {
+    addLogLine(line);
+  };
+
+  const startTime = Date.now();
+  function pad(n){ return n.toString().padStart(2,'0'); }
+  function tick(){
+    const d = new Date();
+    document.getElementById('clock').innerHTML =
+      pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()) +
+      '<span class="tz">LISBOA STANDARD TIME</span>';
+      
+    const elapsed = Date.now() - startTime;
+    const secs = Math.floor(elapsed / 1000) % 60;
+    const mins = Math.floor(elapsed / 60000) % 60;
+    const hours = Math.floor(elapsed / 3600000);
+    document.getElementById('uptimeVal').textContent = `${hours}h ${pad(mins)}m ${pad(secs)}s`;
+  }
+  setInterval(tick, 1000);
+  tick();
+
+  setInterval(() => {
+    const cpu = Math.floor(15 + Math.random() * 25);
+    document.getElementById('cpuBar').style.width = cpu + '%';
+    document.getElementById('cpuTemp').textContent = Math.floor(40 + (cpu/4)) + '°C';
+    
+    const vram = Math.floor(60 + Math.sin(Date.now() / 10000) * 10);
+    document.getElementById('vramBar').style.width = vram + '%';
+    document.getElementById('gpuTemp').textContent = Math.floor(50 + (vram/6)) + '°C';
+    
+    document.getElementById('fanSpeed').textContent = Math.floor(1100 + (cpu * 12)) + ' RPM';
+
+    const dl = (1.0 + Math.sin(Date.now()/5000) * 0.8).toFixed(1);
+    const ul = Math.floor(100 + Math.random() * 250);
+    document.getElementById('dlRate').textContent = dl + ' MB/s';
+    document.getElementById('ulRate').textContent = ul + ' KB/s';
+
+    const watts = Math.floor(210 + (cpu * 2.2) + Math.random() * 8);
+    document.getElementById('upsPower').textContent = watts + ' W CONSUMO';
+  }, 1500);
+
+  const netCanvas = document.getElementById('netGraph');
+  const netCtx = netCanvas.getContext('2d');
+  let netData = Array(44).fill(5);
+  setInterval(() => {
+    netData.shift();
+    netData.push(Math.floor(2 + Math.random() * 12));
+    netCtx.clearRect(0,0,netCanvas.width, netCanvas.height);
+    netCtx.strokeStyle = 'rgba(0, 240, 255, 0.6)';
+    netCtx.lineWidth = 1;
+    netCtx.beginPath();
+    for(let i=0; i<netData.length; i++) {
+      const x = (i / (netData.length - 1)) * netCanvas.width;
+      const y = netCanvas.height - netData[i];
+      if (i === 0) netCtx.moveTo(x,y); else netCtx.lineTo(x,y);
+    }
+    netCtx.stroke();
+  }, 300);
+
+  const segments = document.querySelectorAll('.battery-segment');
+  function updateBatteryUI() {
+    segments.forEach((seg) => {
+      seg.classList.remove('inactive');
+    });
+  }
+  updateBatteryUI();
+
+  const markets = {
+    sp500: { price: 5420.10, history: Array(30).fill(5420), changeEl: 'sp500-change', valEl: 'sp500-val', canvasId: 'sp500-canvas', base: 5420 },
+    nasdaq: { price: 19120.50, history: Array(30).fill(19120), changeEl: 'nasdaq-change', valEl: 'nasdaq-val', canvasId: 'nasdaq-canvas', base: 19120 },
+    psi: { price: 6240.30, history: Array(30).fill(6240), changeEl: 'psi-change', valEl: 'psi-val', canvasId: 'psi-canvas', base: 6240 },
+    btc: { price: 64820.00, history: Array(30).fill(64820), changeEl: 'btc-change', valEl: 'btc-val', canvasId: 'btc-canvas', base: 64820 }
+  };
+
+  function updateMarketData() {
+    for (let key in markets) {
+      const m = markets[key];
+      const percent = (Math.random() - 0.48) * 0.2;
+      const diff = m.price * (percent / 100);
+      m.price += diff;
+      m.history.shift();
+      m.history.push(m.price);
+
+      const totalDiff = m.price - m.base;
+      const totalPercent = (totalDiff / m.base) * 100;
+      const sign = totalDiff >= 0 ? '+' : '';
+      const arrow = totalDiff >= 0 ? '▲' : '▼';
+      
+      const changeEl = document.getElementById(m.changeEl);
+      const valEl = document.getElementById(m.valEl);
+
+      valEl.textContent = m.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      changeEl.textContent = `${arrow} ${sign}${totalPercent.toFixed(2)}%`;
+      
+      if (totalDiff >= 0) {
+        changeEl.className = 'market-change up';
+      } else {
+        changeEl.className = 'market-change down';
+      }
+
+      drawSparkline(m.canvasId, m.history, totalDiff >= 0);
+    }
+  }
+
+  function drawSparkline(canvasId, data, isPositive) {
+    const c = document.getElementById(canvasId);
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const w = c.width;
+    const h = c.height;
+    ctx.clearRect(0,0,w,h);
+
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min === 0 ? 1 : max - min;
+
+    ctx.strokeStyle = isPositive ? 'rgba(57, 255, 20, 0.85)' : 'rgba(255, 7, 58, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - 2 - ((data[i] - min) / range) * (h - 4);
+      if (i === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = isPositive ? 'rgba(57, 255, 20, 0.08)' : 'rgba(255, 7, 58, 0.08)';
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  for(let key in markets) {
+    drawSparkline(markets[key].canvasId, markets[key].history, true);
+  }
+  setInterval(updateMarketData, 2500);
+
+  const marketNews = [
+    { tag: 'FED', title: 'FED pondera corte imediato da taxa de juro após dados favoráveis do desemprego.', time: 'há 2m' },
+    { tag: 'NVIDIA', title: 'Nvidia ultrapassa expectativas de lucros e impulsiona ações do setor de IA global.', time: 'há 7m' },
+    { tag: 'BTC', title: 'Bitcoin ultrapassa barreira dos $65,000 com forte entrada de fluxos institucionais.', time: 'há 15m' },
+    { tag: 'PSI-20', title: 'Galp Energia valoriza 2.4% e sustenta PSI-20 face às quedas do sector bancário.', time: 'há 23m' },
+    { tag: 'EURO', title: 'Par cambial EUR/USD aproxima-se de 1.09 com enfraquecimento dos yields nos EUA.', time: 'há 34m' },
+    { tag: 'PETRÓLEO', title: 'Preço do barril de Brent atinge os $82 após tensões adicionais no Golfo Pérsico.', time: 'há 45m' },
+    { tag: 'TECH', title: 'Apple anuncia integração profunda de modelos LLM locais nos sistemas do iPhone.', time: 'há 1h' },
+    { tag: 'CHINA', title: 'Banco Popular da China injeta liquidez no mercado para estimular crescimento económico.', time: 'há 2h' },
+  ];
+
+  const newsContainer = document.getElementById('newsContainer');
+  let newsOffset = 0;
+
+  function renderNews() {
+    newsContainer.innerHTML = '';
+    for (let i = 0; i < 3; i++) {
+      const idx = (newsOffset + i) % marketNews.length;
+      const item = marketNews[idx];
+      const newsHtml = `
+        <div class="news-item">
+          <div class="news-header">
+            <span class="news-tag">${item.tag}</span>
+            <span class="news-time">${item.time}</span>
+          </div>
+          <div class="news-title">${item.title}</div>
+        </div>
+      `;
+      newsContainer.insertAdjacentHTML('beforeend', newsHtml);
+    }
+    newsOffset = (newsOffset + 1) % marketNews.length;
+  }
+  
+  renderNews();
+  setInterval(renderNews, 10000);
+
+  const canvas = document.getElementById('rings');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height, CX = W/2, CY = H/2;
+  const statusTag = document.getElementById('statusTag');
+
+  let audioCtx, analyser, dataArray, audioSourceNode;
+  let idleT = 0;
+
+  function setupAnalyser(node) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 128;
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // Deliberately not connected to audioCtx.destination: the audio element
+    // still plays through the OS's native TTS output (piper/chatterbox play
+    // it directly via sounddevice/pygame), so routing it through here too
+    // would double up the sound. The analyser only needs the audio to flow
+    // through it to read frequency data, not to reach the speakers.
+    node.connect(analyser);
+    addLogLine('Web Audio AnalyserNode configured successfully.');
+  }
+
+  // Called from Python (FaceWindow's poll loop) via runJavaScript whenever
+  // Jarvis's state changes, so the HUD reflects the real assistant state
+  // instead of a fixed placeholder.
+  const STATE_LABELS = {
+    asleep: 'A DORMIR',
+    idle: 'EM ESPERA',
+    listening: 'A OUVIR',
+    thinking: 'A PROCESSAR',
+    speaking: 'A FALAR',
+    dictating: 'A DITAR',
+    dictation_processing: 'A TRANSCREVER',
+  };
+  window.setJarvisState = function(state) {
+    statusTag.textContent = STATE_LABELS[state] || String(state).toUpperCase();
+  };
+
+  // Called from Python whenever a new TTS clip is about to play, with the
+  // audio embedded as a data: URL (rather than a file:// path) so the
+  // AnalyserNode isn't cross-origin-tainted by Chromium's per-file-URL
+  // origin handling. createMediaElementSource() may only be called once per
+  // <audio> element, so the source node is created lazily and reused for
+  // every subsequent clip.
+  window.playJarvisAudio = function(dataUrl) {
+    const audioEl = document.getElementById('audioEl');
+    if (!audioSourceNode) {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioSourceNode = audioCtx.createMediaElementSource(audioEl);
+      setupAnalyser(audioSourceNode);
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    audioEl.src = dataUrl;
+    // Explicit load() forces the element to fully pick up the new source
+    // before playing. Without it, some QtWebEngine/Chromium builds keep
+    // decoding against the previous clip's state when src is swapped on an
+    // element that's already wired into a MediaElementAudioSourceNode, so
+    // the analyser stops receiving fresh frequency data on the 2nd+ clip
+    // even though playback itself sounds fine.
+    audioEl.load();
+    audioEl.play().catch(err => addLogLine('Audio playback blocked: ' + err.message));
+  };
+
+  function draw() {
+    requestAnimationFrame(draw);
+    ctx.clearRect(0, 0, W, H);
+
+    let level = 0, bins = null;
+    if (analyser) {
+      analyser.getByteFrequencyData(dataArray);
+      bins = dataArray;
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+      level = sum / dataArray.length / 255;
+    } else {
+      idleT += 0.025;
+      level = 0.12 + 0.04 * Math.sin(idleT * 1.8);
+    }
+
+    // Radii/sizes below are 2x the original design (canvas was doubled from
+    // 460 to 920 to make the core legible in the larger 1400x900 HUD
+    // window) so the mark stays crisp at native resolution instead of
+    // being blurred by a CSS transform: scale().
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(CX, CY, 430, 0, Math.PI * 2); ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.3)';
+    ctx.beginPath(); ctx.arc(CX, CY, 320, 0, Math.PI * 2); ctx.stroke();
+
+    ctx.save();
+    ctx.translate(CX, CY);
+    ctx.rotate(idleT * 0.1);
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 360, 0, Math.PI / 3); ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, 360, Math.PI, Math.PI + Math.PI / 3); ctx.stroke();
+    ctx.restore();
+
+    const bars = 72;
+    for (let i = 0; i < bars; i++) {
+      const angle = (i / bars) * Math.PI * 2;
+      let mag = bins ? bins[Math.floor((i/bars)*bins.length)]/255 : 0.15 + 0.12*Math.sin(idleT*2.5+i*0.25);
+      const rInner = 160, rOuter = rInner + mag * 150;
+
+      const x1 = CX + Math.cos(angle)*rInner, y1 = CY + Math.sin(angle)*rInner;
+      const x2 = CX + Math.cos(angle)*rOuter, y2 = CY + Math.sin(angle)*rOuter;
+
+      ctx.strokeStyle = `rgba(0, 240, 255, ${0.4 + mag * 0.6})`;
+      ctx.lineWidth = 2.5;
+      ctx.shadowBlur = mag > 0.4 ? 8 : 0;
+      ctx.shadowColor = 'var(--primary)';
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+
+    const glowR = 150 + level * 150;
+    const glow = ctx.createRadialGradient(CX, CY, 0, CX, CY, glowR);
+    glow.addColorStop(0, '#fff');
+    glow.addColorStop(0.12, `rgba(0, 240, 255, ${0.9})`);
+    glow.addColorStop(0.35, `rgba(0, 150, 255, ${0.5 + level * 0.4})`);
+    glow.addColorStop(0.7, `rgba(0, 50, 100, ${0.2 + level * 0.2})`);
+    glow.addColorStop(1, 'rgba(0, 10, 20, 0)');
+
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(CX, CY, glowR, 0, Math.PI*2); ctx.fill();
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 4; i++) {
+      const a = (bins ? level : idleT) * (0.4 + i*0.12) + i * 1.5;
+      const rr = 48 + level * 68 + i * 12;
+      ctx.fillStyle = `rgba(0, 240, 255, ${0.07 + level * 0.08})`;
+      ctx.beginPath();
+      ctx.ellipse(CX + Math.cos(a)*12, CY + Math.sin(a)*12, rr, rr*0.55, a, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(CX, CY, 104, 0, Math.PI*2); ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 24px Orbitron';
+    ctx.textAlign = 'center';
+    ctx.fillText('JARVIS', CX, CY + 8);
+  }
+  draw();
+</script>
+</body>
+</html>

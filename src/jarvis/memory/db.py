@@ -41,6 +41,23 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   UNIQUE(date_utc, source_app)
 );
 
+-- Multi-turn project intake sessions (deterministic pre-planner gate).
+-- conversation_id defaults to a constant since the current architecture
+-- runs a single global dialogue session (see project_intake.spec.md).
+CREATE TABLE IF NOT EXISTS project_intake_sessions (
+  id              INTEGER PRIMARY KEY,
+  conversation_id TEXT NOT NULL DEFAULT 'default',
+  project_name    TEXT,
+  project_type    TEXT,
+  status          TEXT NOT NULL DEFAULT 'awaiting_type',
+  questions_json  TEXT,
+  answers_json    TEXT NOT NULL DEFAULT '[]',
+  current_index   INTEGER NOT NULL DEFAULT 0,
+  abandoned       INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
   summary,
   topics,
@@ -334,6 +351,80 @@ class Database:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute("DELETE FROM meals WHERE id = ?", (meal_id,))
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    # --- Project Intake API ---
+    def insert_intake_session(self, conversation_id: str = "default") -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO project_intake_sessions(conversation_id, status, answers_json, current_index, created_at, updated_at)
+                VALUES (?, 'awaiting_type', '[]', 0, ?, ?)
+                """,
+                (conversation_id, now, now),
+            )
+            self.conn.commit()
+            return int(cur.lastrowid)
+
+    def get_active_intake_session(self) -> Optional[sqlite3.Row]:
+        """Return the most recent non-completed intake session, if any.
+
+        At most one active row is expected at a time (enforced at the tool
+        level, not via a DB constraint, per project_intake.spec.md).
+        """
+        with self._lock:
+            cur = self.conn.cursor()
+            row = cur.execute(
+                """
+                SELECT * FROM project_intake_sessions
+                WHERE status != 'completed'
+                ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            return row
+
+    def update_intake_session(
+        self,
+        session_id: int,
+        *,
+        project_name: Optional[str] = None,
+        project_type: Optional[str] = None,
+        status: Optional[str] = None,
+        questions_json: Optional[str] = None,
+        answers_json: Optional[str] = None,
+        current_index: Optional[int] = None,
+        abandoned: Optional[int] = None,
+    ) -> bool:
+        fields = []
+        values: list = []
+        if project_name is not None:
+            fields.append("project_name = ?"); values.append(project_name)
+        if project_type is not None:
+            fields.append("project_type = ?"); values.append(project_type)
+        if status is not None:
+            fields.append("status = ?"); values.append(status)
+        if questions_json is not None:
+            fields.append("questions_json = ?"); values.append(questions_json)
+        if answers_json is not None:
+            fields.append("answers_json = ?"); values.append(answers_json)
+        if current_index is not None:
+            fields.append("current_index = ?"); values.append(current_index)
+        if abandoned is not None:
+            fields.append("abandoned = ?"); values.append(abandoned)
+        if not fields:
+            return False
+        fields.append("updated_at = ?")
+        values.append(datetime.now(timezone.utc).isoformat())
+        values.append(session_id)
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                f"UPDATE project_intake_sessions SET {', '.join(fields)} WHERE id = ?",
+                values,
+            )
             self.conn.commit()
             return cur.rowcount > 0
 
