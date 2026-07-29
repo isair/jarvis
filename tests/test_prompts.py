@@ -23,9 +23,11 @@ class TestModelSizeDetection:
         ("gemma:7b", True),
         ("phi3:3b", True),
         ("qwen2:7b", True),
+        ("qwen3.5:0.8b", True),  # sub-1B, the official low-VRAM path
         # Various separators
         ("model-3b-instruct", True),
         ("model_1b_chat", True),
+        ("model_0.8b_chat", True),
         # Large models (should return LARGE)
         ("gpt-oss:20b", False),
         ("llama3.1:8b", False),
