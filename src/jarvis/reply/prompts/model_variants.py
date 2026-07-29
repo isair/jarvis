@@ -24,6 +24,7 @@ class ModelSize(Enum):
 
 # Model size patterns - models matching these are considered SMALL
 _SMALL_MODEL_PATTERNS = (
+    ":0.8b", "-0.8b", "_0.8b",  # sub-1B tags (e.g. qwen3.5:0.8b, the low-VRAM path)
     ":1b", ":3b", ":7b",
     "-1b", "-3b", "-7b",
     "_1b", "_3b", "_7b",

@@ -2057,7 +2057,10 @@ class ModelsPage(QWizardPage):
             # leaves room for embeddings + whisper alongside the chat model.
             overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
             usable_mb = self._detected_vram_mb - overhead
-            rec = get_recommended_model_id(usable_mb if usable_mb > 0 else None)
+            # usable_mb <= 0 means "no headroom", not "unknown VRAM": pass a
+            # minimal positive budget so the low-VRAM model is recommended
+            # instead of the 8GB default that None (unknown) resolves to.
+            rec = get_recommended_model_id(usable_mb if usable_mb > 0 else 1)
             if rec in self._ALL_MODELS:
                 self._chat_model = rec
                 # Fast model stays gemma4:e2b unless VRAM constrains it
@@ -2139,6 +2142,15 @@ class ModelsPage(QWizardPage):
                         self._fast_model = c
                         self._fast_combo.setCurrentIndex(self._fast_combo.findData(c))
                         break
+                else:
+                    # No candidate fits the budget: the smallest one is still
+                    # strictly better than keeping a fast model larger than
+                    # the chat model.
+                    smallest = min(
+                        self._FAST_MODEL_IDS, key=lambda m: required_vram_mb(m) or 0
+                    )
+                    self._fast_model = smallest
+                    self._fast_combo.setCurrentIndex(self._fast_combo.findData(smallest))
         self._refresh_vram_display()
         self._update_models_display()
 
@@ -2267,6 +2279,13 @@ class ModelsPage(QWizardPage):
                 if rc <= cv and fits_vram:
                     self._fast_model = c
                     break
+            else:
+                # No candidate fits the budget: the smallest one is still
+                # strictly better than keeping a fast model larger than
+                # the chat model.
+                self._fast_model = min(
+                    self._FAST_MODEL_IDS, key=lambda m: required_vram_mb(m) or 0
+                )
         # Default to unlinked — separate fast model is the recommended layout
         # even when both happen to be the same model ID.
         self._linked = False

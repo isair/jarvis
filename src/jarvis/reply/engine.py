@@ -2401,8 +2401,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             malformed_fallback = False
         elif _is_malformed_json_response(content):
             debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
-            model_name = cfg.llm_chat_model.lower()
-            is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+            is_small = detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL
             candidate_reply = (
                 "I had trouble understanding that request. "
                 "This can happen with smaller AI models. "
