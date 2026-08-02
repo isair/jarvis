@@ -1254,7 +1254,11 @@ TOPICS: [topic1, topic2, topic3]"""
             response = _direct_llm(
                 cfg, system_prompt, user_prompt,
                 timeout_sec=timeout_sec, thinking=thinking,
-                max_tokens=300,
+                # Prompt allows a 200-word summary (≈260 tokens) plus the
+                # SUMMARY:/TOPICS: labels and 3-5 topics. 400 gives headroom
+                # so a full-length summary is never truncated — a cut here
+                # would persist a partial summary or skip the day entirely.
+                max_tokens=400,
             )
 
         if not response:

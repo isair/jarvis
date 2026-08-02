@@ -85,7 +85,11 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         user_content=user_prompt,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
-        max_tokens=100,
+        # JSON with ~11 fields (description, macros, micros dict, confidence);
+        # a multi-item meal with a filled micros dict can legitimately reach
+        # ~120 tokens. 200 gives margin so the meal is never dropped by a
+        # truncated JSON parse.
+        max_tokens=200,
     ) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
