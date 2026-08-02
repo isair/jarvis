@@ -62,6 +62,13 @@ The fail-open choice was flipped from the previous contract (which defaulted to 
 
 Shares `llm_digest_timeout_sec` (default 8 s) with memory/tool digests.
 
+### Generation cap
+
+`max_tokens: 200` bounds the classification JSON (`{terminal, nudge, reason}`
+plus optional `tool_call`) so a small reasoning model cannot loop endlessly on
+the judgment call. A truncated response fails the JSON parse and takes the
+fail-open `terminal` path — never a half-validated `continue`.
+
 ### Model resolution
 
 The evaluator is a small classification job: it runs on the fast tier

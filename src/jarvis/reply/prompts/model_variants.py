@@ -1,7 +1,7 @@
 """
 Model-size-specific prompt variations.
 
-Small models (0.5B-7B) need explicit guidance on when NOT to use tools,
+Small models (0.5B-7.5B) need explicit guidance on when NOT to use tools,
 while larger models can infer this from context.
 """
 
@@ -19,7 +19,7 @@ from .system import (
 
 class ModelSize(Enum):
     """Classification of model sizes for prompt selection."""
-    SMALL = "small"  # 0.5B-7B - needs explicit tool constraints
+    SMALL = "small"  # 0.5B-7.5B - needs explicit tool constraints
     LARGE = "large"  # 8B+ - can infer tool usage from context
 
 
@@ -27,9 +27,9 @@ class ModelSize(Enum):
 # Set at 7.5 (midpoint between 7B and 8B) so 7B models are SMALL and 8B+ are LARGE.
 _SMALL_MODEL_THRESHOLD = 7.5
 
-# Model families that should always be treated as SMALL regardless of their
-# size tag (e.g. Gemma 4's architecture is designed for efficiency and even
-# the larger variants behave like smaller models for prompt-following).
+# Model families whose bare names (no size tag) should be treated as SMALL.
+# Sized variants follow the size threshold like any other model — e.g.
+# ``gemma4:12b`` is LARGE, only a bare ``gemma4`` (the 2B default) is SMALL.
 _SMALL_MODEL_FAMILIES = ("gemma4", "gemma-4")
 
 # Regex to extract parameter count from a model name.

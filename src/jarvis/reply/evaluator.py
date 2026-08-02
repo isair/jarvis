@@ -391,6 +391,7 @@ def evaluate_turn(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
+            max_tokens=200,
         )
     except Exception as e:
         debug_log(f"evaluator failed (non-fatal, terminal): {e}", "planning")

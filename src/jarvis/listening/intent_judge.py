@@ -413,7 +413,6 @@ Examples:
                     extra_options={
                         "temperature": 0.0,
                         "max_tokens": 500,
-                        "num_predict": 500,
                         "num_ctx": 8192,
                         "keep_alive": "30m",
                     },

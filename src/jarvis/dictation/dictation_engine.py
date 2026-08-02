@@ -457,12 +457,19 @@ def _llm_clean_dictation(text: str, cfg, *, model: str = "gemma4:e2b", thinking:
         "starts. Keep the meaning and language identical. Return ONLY the "
         "cleaned text, nothing else."
     )
+    # Filler removal is a rewrite task, not a classification: the output
+    # scales with the dictated text, so a fixed token cap would silently
+    # truncate long dictations (the tail would be pasted half-cleaned or
+    # lost). Cap proportionally instead — ~2x the input's token estimate
+    # (≈ len/4) with a floor, so short utterances stay bounded while long
+    # ones are never cut. The 5s timeout is the real anti-runaway backstop.
+    cap = max(64, len(text) // 2)
     try:
         cleaned = get_llm_backend(cfg).direct(
             model, system_prompt, text,
             timeout_sec=5.0,
             thinking=thinking,
-            max_tokens=50,
+            max_tokens=cap,
         )
         if cleaned and cleaned.strip():
             cleaned = cleaned.strip()

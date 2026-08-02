@@ -338,3 +338,27 @@ class TestRewriteSweepBehaviour:
 
         assert events[0]["rewritten"] is False
         assert db.get_all_conversation_summaries()[0]["ts_utc"] == original_ts
+
+    def test_max_tokens_cap_scales_with_summary_length(self, tmp_path, monkeypatch):
+        """The rewrite cap is proportional to the summary length (floor 200)
+        so long summaries are never silently truncated."""
+        caps = []
+
+        def fake_call(cfg, system_prompt, user_content, **kwargs):
+            caps.append(kwargs.get("max_tokens"))
+            return "The user asked X."
+
+        monkeypatch.setattr(cmod, "_direct_llm", fake_call)
+
+        db = Database(tmp_path / "jarvis.db")
+        _seed(db, [
+            ("2026-04-10", "Short summary.", None),
+            ("2026-04-15", "word " * 300, None),  # ~1500 chars — long summary
+        ])
+
+        list(rewrite_all_diary_summaries(db, _cfg()))
+
+        short_cap, long_cap = caps
+        assert short_cap == 200                 # floor
+        assert long_cap > short_cap             # scales with input
+        assert long_cap >= (300 * len("word ")) // 2

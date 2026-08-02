@@ -121,7 +121,11 @@ def _rewrite_diary_summary(
             _REWRITE_DEFLECTION_SYSTEM_PROMPT,
             user_prompt,
             timeout_sec=timeout_sec,
-            max_tokens=200,
+            # Rewrite output scales with the input summary (created at
+            # "max 200 words" ≈ 260 tokens), so a fixed cap could truncate
+            # it. Cap proportionally to the summary length with a floor —
+            # bounded against runaway generation, never silently short.
+            max_tokens=max(200, len(summary) // 2),
         )
     except Exception as e:
         debug_log(

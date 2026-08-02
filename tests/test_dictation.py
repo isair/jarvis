@@ -1044,3 +1044,34 @@ class TestClipboardWindowsCtypes:
             assert result == test_text
         finally:
             user32.CloseClipboard()
+
+
+class TestLlmCleanDictation:
+    """``_llm_clean_dictation`` is a rewrite task (not a classification):
+    its generation cap must scale with the dictated text so long dictations
+    are never silently truncated."""
+
+    def test_cap_scales_with_text_length(self):
+        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
+
+        caps = {}
+
+        def fake_direct(model, system, user, timeout_sec=5.0, thinking=False, **kwargs):
+            caps["max_tokens"] = kwargs.get("max_tokens")
+            return "cleaned text"
+
+        fake_backend = MagicMock()
+        fake_backend.direct.side_effect = fake_direct
+
+        with patch("src.jarvis.llm.get_llm_backend", return_value=fake_backend):
+            _llm_clean_dictation("short", MagicMock())
+            short_cap = caps["max_tokens"]
+
+            long_text = "word " * 1000  # ~5000 chars — long dictation
+            _llm_clean_dictation(long_text, MagicMock())
+            long_cap = caps["max_tokens"]
+
+        # Short utterances hit the floor; long dictations get a proportional cap
+        assert short_cap == 64
+        assert long_cap > short_cap
+        assert long_cap >= len(long_text) // 2
