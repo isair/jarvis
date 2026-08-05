@@ -233,6 +233,23 @@ class TestCrashMarkerFunctions:
 class TestCheckPreviousCrash:
     """Tests for check_previous_crash() function."""
 
+    @pytest.fixture(autouse=True)
+    def _sandbox_crash_paths(self, tmp_path, monkeypatch):
+        """Point crash log/marker paths at a temp dir.
+
+        The real log dir (LOCALAPPDATA\\Jarvis) belongs to a running Jarvis
+        instance; tests must never write to, rename, or delete files there
+        (they are locked while the app runs).
+        """
+        from desktop_app.paths import get_log_dir
+
+        log_dir = tmp_path / "jarvis_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            "desktop_app.paths.get_log_dir",
+            lambda: log_dir,
+        )
+
     def test_returns_none_when_no_marker(self):
         """check_previous_crash() should return None if no crash marker exists."""
         from desktop_app import get_crash_paths, check_previous_crash, mark_session_clean_exit

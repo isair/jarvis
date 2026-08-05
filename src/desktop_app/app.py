@@ -2346,16 +2346,18 @@ def _smoke_test_main() -> int:
     # AttributeError when stdout is None) and the smoke test exits 1 before
     # ever reaching the daemon.  Wrap in UTF-8 when a binary buffer is
     # available and fall back to a sink so prints can never crash the test.
-    # Only wrap bundled (frozen) runs and Windows: a plain dev run already
-    # gets correct locale handling from Python, and pytest swaps in its own
-    # capture objects that must not be re-wrapped.
+    # Only wrap the real console streams: pytest swaps in its own capture
+    # objects that must not be re-wrapped (wrapping them detaches and
+    # closes their buffers, corrupting output capture for the process).
     try:
         import io
         for _stream_name in ("stdout", "stderr"):
             _stream = getattr(sys, _stream_name)
+            _real = getattr(sys, "__" + _stream_name, None)
             if _stream is None:
                 setattr(sys, _stream_name, io.StringIO())
             elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
+                    and _stream is _real \
                     and hasattr(_stream, "buffer") and hasattr(_stream.buffer, "write"):
                 setattr(sys, _stream_name, io.TextIOWrapper(
                     _stream.buffer, encoding="utf-8", errors="replace"))
@@ -2407,13 +2409,17 @@ def main() -> int:
 
     # Fix Windows console encoding for Unicode/emoji characters
     # Only for non-frozen apps - frozen apps redirect stdout to crash log
+    # Only wrap the real console streams (sys.__stdout__/sys.__stderr__):
+    # test harnesses replace sys.stdout with capture objects whose buffers
+    # must not be detached.
     if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         try:
             import io
-            # Only wrap if stdout has a proper binary buffer
-            if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
+            if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
+                    and hasattr(sys.stdout.buffer, 'write')):
                 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
+            if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
+                    and hasattr(sys.stderr.buffer, 'write')):
                 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
         except Exception:
             pass

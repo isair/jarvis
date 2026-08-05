@@ -13,6 +13,7 @@ raises at import time, and assert the modules still load with the
 feature disabled (behaviour: app keeps running without audio).
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,8 +45,15 @@ print("OK")
 
 def _run(module: str, dep: str, error: str, attr: str, extra: str = "") -> subprocess.CompletedProcess:
     code = SCENARIO.format(src=str(ROOT / "src"), module=module, dep=dep, error=error, attr=attr, extra=extra)
+    # The subprocess inherits the Windows console codepage (cp1252) by
+    # default, which cannot encode the emoji in listener.py's graceful
+    # PortAudio-failure message — force UTF-8 so the module actually reaches
+    # the "loads with the feature disabled" assertion instead of dying on print.
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+        [sys.executable, "-c", code], capture_output=True, text=True,
+        encoding="utf-8", timeout=60, env=env,
     )
 
 

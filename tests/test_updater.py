@@ -8,6 +8,19 @@ from unittest.mock import patch, MagicMock
 
 from pathlib import Path
 
+# The macOS update-script tests execute generated POSIX bash. On Windows
+# that requires a real bash (WSL or Git Bash); the wsl.exe shim in PATH is
+# not one and reports "WSL is not supported" on machines without WSL.
+def _bash_available() -> bool:
+    try:
+        result = subprocess.run(
+            ["bash", "-c", "exit 0"], capture_output=True, timeout=15
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 from desktop_app.updater import (
     check_for_updates,
     parse_version,
@@ -1053,6 +1066,11 @@ class TestInstallUpdateMacos:
         This test executes the generated script in a sandbox where `open` is
         stubbed to exit non-zero, and asserts the fallback binary runs.
         """
+        # The script is POSIX bash; on Windows this only works when a real
+        # bash (WSL / Git Bash) is on PATH — the wsl.exe shim prints "WSL is
+        # not supported" and exits non-zero on machines without WSL.
+        if sys.platform == "win32" and not _bash_available():
+            pytest.skip("a POSIX bash (WSL or Git Bash) is required on Windows")
         import plistlib
         import re
         import time

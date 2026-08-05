@@ -21,10 +21,15 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')
 if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
     try:
         import io
-        # Only wrap if stdout has a proper binary buffer (not a custom writer)
-        if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
+        # Only wrap the real console streams. Test harnesses (pytest) and
+        # embedding code replace sys.stdout/sys.stderr with their own capture
+        # objects; wrapping those detaches and closes their buffers, which
+        # corrupts output capture for the rest of the process.
+        if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
+                and hasattr(sys.stdout.buffer, 'write')):
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
+        if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
+                and hasattr(sys.stderr.buffer, 'write')):
             sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     except Exception:
         pass
