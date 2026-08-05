@@ -2357,7 +2357,7 @@ def _smoke_test_main() -> int:
             if _stream is None:
                 setattr(sys, _stream_name, io.StringIO())
             elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
-                    and _stream is _real \
+                    and (getattr(sys, "frozen", False) or _stream is _real) \
                     and hasattr(_stream, "buffer") and hasattr(_stream.buffer, "write"):
                 setattr(sys, _stream_name, io.TextIOWrapper(
                     _stream.buffer, encoding="utf-8", errors="replace"))

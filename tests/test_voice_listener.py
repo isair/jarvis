@@ -940,15 +940,16 @@ class TestCrossPlatformAudioHealthWarning:
                             listener._audio_q.get = fake_get
                             listener._callback_count = 0
 
-                            # time.time() is called first for _audio_start_time (baseline),
-                            # then in the loop for the health check (needs to be 6s later)
+                            # time.time() is called for the LLM-warmup baseline,
+                            # then for _audio_start_time (both baselines), then in
+                            # the loop for the health check (needs to be 6s later)
                             _base = time.time()
                             time_calls = [0]
 
                             def advancing_time():
                                 time_calls[0] += 1
-                                # First call sets _audio_start_time baseline
-                                if time_calls[0] == 1:
+                                # First two calls set baselines (LLM warmup + audio start)
+                                if time_calls[0] <= 2:
                                     return _base
                                 # Subsequent calls return 6s later
                                 return _base + 6
@@ -957,7 +958,14 @@ class TestCrossPlatformAudioHealthWarning:
                                 mock_time.time.side_effect = advancing_time
                                 mock_time.sleep = time.sleep
 
-                                listener.run()
+                                # No LLM warmup threads: keeps time.time() call
+                                # counting deterministic (the warmup join would
+                                # consume mock values racy in a full-suite run).
+                                with patch(
+                                    "jarvis.listening.listener.VoiceListener._start_llm_warmup",
+                                    return_value=[],
+                                ):
+                                    listener.run()
 
                             captured = capsys.readouterr()
                             assert "No audio received after 5 seconds" in captured.out
