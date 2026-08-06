@@ -185,6 +185,32 @@ class TestGetCrashPaths:
             assert "Library" in str(crash_log) or "Logs" in str(crash_log)
 
 
+class TestShouldShowHudOnStartup:
+    """Tests for should_show_hud_on_startup() - the JARVIS_SHOW_HUD gate that
+    lets a launcher shortcut auto-open the face/HUD window on startup."""
+
+    def test_false_when_env_var_unset(self):
+        from desktop_app.app import should_show_hud_on_startup
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JARVIS_SHOW_HUD", None)
+            assert should_show_hud_on_startup() is False
+
+    def test_true_when_env_var_is_1(self):
+        from desktop_app.app import should_show_hud_on_startup
+
+        with patch.dict(os.environ, {"JARVIS_SHOW_HUD": "1"}):
+            assert should_show_hud_on_startup() is True
+
+    def test_false_for_other_values(self):
+        from desktop_app.app import should_show_hud_on_startup
+
+        with patch.dict(os.environ, {"JARVIS_SHOW_HUD": "0"}):
+            assert should_show_hud_on_startup() is False
+        with patch.dict(os.environ, {"JARVIS_SHOW_HUD": "true"}):
+            assert should_show_hud_on_startup() is False
+
+
 class TestCrashMarkerFunctions:
     """Tests for mark_session_started() and mark_session_clean_exit()."""
 

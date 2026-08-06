@@ -62,7 +62,7 @@ from jarvis.debug import debug_log
 from jarvis.config import default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET
-from desktop_app.face_widget import FaceWindow
+from desktop_app.hud_window import HudFaceWindow
 
 
 _LOG_SEPARATOR = "─" * 50
@@ -256,6 +256,16 @@ def get_crash_paths() -> tuple[Path, Path, Path]:
     previous_crash = log_dir / "previous_crash.log"
 
     return crash_log, crash_marker, previous_crash
+
+
+def should_show_hud_on_startup() -> bool:
+    """Whether the face/HUD window should auto-open on startup.
+
+    Controlled by JARVIS_SHOW_HUD, mirroring the JARVIS_VOICE_DEBUG pattern
+    (see src/jarvis/config.py) so shortcuts/launchers can request the HUD
+    without a dedicated CLI flag.
+    """
+    return os.environ.get("JARVIS_SHOW_HUD", "0") == "1"
 
 
 def check_previous_crash() -> Optional[str]:
@@ -1270,7 +1280,8 @@ class JarvisSystemTray:
         # Create face window (hidden by default)
         # Note: Creating the face window also initializes the SpeakingState singleton
         # in the main thread, which is important for cross-thread signal delivery
-        self.face_window = FaceWindow()
+        self.face_window = HudFaceWindow()
+        self.log_signals.new_log.connect(self.face_window.add_log_line)
 
         # Create dictation history window (hidden by default)
         from desktop_app.dictation_history import DictationHistoryWindow
@@ -1295,6 +1306,11 @@ class JarvisSystemTray:
 
         # Show tray icon
         self.tray_icon.show()
+
+        # Auto-open the face/HUD window when requested (e.g. by a launcher shortcut)
+        if should_show_hud_on_startup():
+            debug_log("JARVIS_SHOW_HUD set, auto-opening face window", "desktop")
+            self.show_face_window()
 
         # Register cleanup on app exit
         self.app.aboutToQuit.connect(self.cleanup_on_exit)
