@@ -5,13 +5,11 @@ Coordinates audio capture, speech recognition, echo detection, and state managem
 """
 
 from __future__ import annotations
-import functools
 import os
 import threading
 import time
 import queue
 import sys
-import platform
 from collections import deque
 from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
@@ -25,6 +23,7 @@ from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
+from .sensevoice import SenseVoiceEngine, is_available as is_sensevoice_available
 from ..debug import debug_log
 from ..llm import get_embedding_backend
 from ..utils.location import is_location_available
@@ -32,18 +31,6 @@ from ..utils.location import is_location_available
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
-
-
-def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
-    """Shared Whisper no-speech gate.
-
-    Whisper can report high `avg_logprob` confidence on hallucinated phrases
-    when the audio is silent or noise. `no_speech_prob` is an independent
-    signal and must be checked first. Used by both the faster-whisper path
-    (`_filter_noisy_segments`) and the MLX path (`_finalize_utterance`) so
-    both backends apply identical policy.
-    """
-    return no_speech_prob >= threshold
 
 # Audio processing imports (optional)
 try:
@@ -73,15 +60,6 @@ except OSError as e:
         print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
     del _sys
 
-# Whisper backend imports - try MLX first on Apple Silicon, fall back to faster-whisper
-MLX_WHISPER_AVAILABLE = False
-FASTER_WHISPER_AVAILABLE = False
-
-def _is_apple_silicon() -> bool:
-    """Check if running on Apple Silicon Mac."""
-    return sys.platform == "darwin" and platform.machine() == "arm64"
-
-
 def _get_mic_permission_hint() -> str:
     """Return platform-appropriate microphone permission guidance."""
     if sys.platform == 'win32':
@@ -94,7 +72,7 @@ def _get_mic_permission_hint() -> str:
 def _resample(audio, src_rate: int, dst_rate: int):
     """Resample a 1-D float32 numpy array from *src_rate* to *dst_rate*.
 
-    Uses linear interpolation — fast and good enough for speech going into Whisper.
+    Uses linear interpolation — fast and good enough for speech going into SenseVoice.
     """
     if src_rate == dst_rate or np is None:
         return audio
@@ -102,246 +80,6 @@ def _resample(audio, src_rate: int, dst_rate: int):
     n_out = int(len(audio) * ratio)
     indices = np.arange(n_out) / ratio
     return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-
-
-def _setup_nvidia_dll_path() -> None:
-    """Add NVIDIA CUDA DLL directories to PATH on Windows.
-
-    The pip packages nvidia-cublas-cu12 and nvidia-cudnn-cu12 install DLLs
-    under site-packages/nvidia/*/bin/ which isn't on PATH by default.
-    PyInstaller bundles place them in {app}/cuda/. This function finds
-    both locations and prepends them to PATH so ctypes.CDLL can find them.
-    """
-    import os
-
-    dirs_to_add = []
-
-    # 1. Check for NVIDIA pip packages in site-packages
-    try:
-        import nvidia.cublas  # type: ignore[import-untyped]
-        for pkg_path in nvidia.cublas.__path__:
-            bin_dir = os.path.join(pkg_path, "bin")
-            if os.path.isdir(bin_dir):
-                dirs_to_add.append(bin_dir)
-    except (ImportError, AttributeError):
-        pass
-
-    try:
-        import nvidia.cudnn  # type: ignore[import-untyped]
-        for pkg_path in nvidia.cudnn.__path__:
-            bin_dir = os.path.join(pkg_path, "bin")
-            if os.path.isdir(bin_dir):
-                dirs_to_add.append(bin_dir)
-    except (ImportError, AttributeError):
-        pass
-
-    # 2. Check for CUDA DLLs in app directory (installed by install_cuda.ps1)
-    # For frozen apps: check next to the executable (not _MEIPASS, since
-    # CUDA libs are downloaded post-install, not bundled in the archive)
-    if getattr(sys, "frozen", False):
-        app_dir = os.path.dirname(sys.executable)
-    else:
-        app_dir = None
-
-    if app_dir:
-        cuda_dir = os.path.join(app_dir, "cuda")
-        if os.path.isdir(cuda_dir):
-            dirs_to_add.append(cuda_dir)
-
-    # 3. Register DLL directories (must happen before ctypes.CDLL probes)
-    # Use both os.add_dll_directory (for ctypes.CDLL) and PATH (for
-    # subprocess/child processes). On Windows, PATH changes after process
-    # start don't affect ctypes.CDLL search — add_dll_directory is needed.
-    if dirs_to_add:
-        current_path = os.environ.get("PATH", "")
-        new_entries = os.pathsep.join(dirs_to_add)
-        os.environ["PATH"] = new_entries + os.pathsep + current_path
-        for d in dirs_to_add:
-            try:
-                os.add_dll_directory(d)
-            except (OSError, AttributeError):
-                pass
-            debug_log(f"added NVIDIA DLL path: {d}", "voice")
-
-
-@functools.lru_cache(maxsize=None)
-def _probe_cuda_available() -> tuple[bool, list[str]]:
-    """Probe cuBLAS + cuDNN availability once per process and cache the result.
-
-    The version ranges intentionally span more than the currently pinned
-    versions in `installer/windows/install_cuda.ps1` (`cublas64_12.dll`,
-    `cudnn_ops64_9.dll`) so a future installer bump doesn't silently fall
-    back to CPU until this probe is updated too. A bump outside the
-    existing range still requires widening these ranges — the relationship
-    is by convention, not enforced.
-
-    Cached because DLLs don't appear or disappear while the process is
-    running, and the scan does up to 18 `LoadLibrary` calls on a miss.
-    """
-    _setup_nvidia_dll_path()
-
-    missing_libs: list[str] = []
-    cublas_found = False
-    cudnn_found = False
-    try:
-        import ctypes
-
-        for ver in range(20, 10, -1):
-            try:
-                ctypes.CDLL(f"cublas64_{ver}.dll")
-                cublas_found = True
-                debug_log(f"cuBLAS found (cublas64_{ver}.dll)", "voice")
-                break
-            except OSError:
-                continue
-        if not cublas_found:
-            missing_libs.append("cuBLAS")
-
-        for ver in range(15, 7, -1):
-            try:
-                ctypes.CDLL(f"cudnn_ops64_{ver}.dll")
-                cudnn_found = True
-                debug_log(f"cuDNN found (cudnn_ops64_{ver}.dll)", "voice")
-                break
-            except OSError:
-                continue
-        if not cudnn_found:
-            missing_libs.append("cuDNN")
-    except Exception as e:
-        debug_log(f"CUDA library probe failed: {e}", "voice")
-
-    return cublas_found and cudnn_found, missing_libs
-
-
-def _probe_windows_cuda_libraries(device: str) -> tuple[str, list[str]]:
-    """Return the device to use and any missing CUDA lib names.
-
-    Short-circuits on non-Windows or non-CUDA device strings. Otherwise
-    delegates to the cached `_probe_cuda_available()` so the expensive DLL
-    scan only runs once per process lifetime.
-    """
-    if sys.platform != "win32" or device not in ("auto", "cuda"):
-        return device, []
-
-    available, missing_libs = _probe_cuda_available()
-    if not available:
-        return "cpu", missing_libs
-    return device, []
-
-
-def _print_cuda_unavailable_hint(missing_libs: list[str]) -> None:
-    """Print the user-facing CUDA-missing message and recovery hint.
-
-    The hint deliberately points at the tray action, not at "reinstall the
-    app". The Inno Setup task only fires once and skips on stale marker
-    files, so reinstalling without first deleting `{app}\\cuda` rarely
-    fixes the underlying problem. The tray action re-runs install_cuda.ps1
-    directly with UAC, which is the actual recovery path.
-    """
-    debug_log(f"CUDA libraries missing: {missing_libs}, forcing CPU mode", "voice")
-    print("  ℹ️  CUDA not available, using CPU mode", flush=True)
-    if missing_libs:
-        print(f"     Missing: {', '.join(missing_libs)}", flush=True)
-    print(
-        "  💡 For GPU acceleration, click 'Reinstall GPU libraries' in the Jarvis tray menu",
-        flush=True,
-    )
-
-
-try:
-    if _is_apple_silicon():
-        import mlx_whisper
-        MLX_WHISPER_AVAILABLE = True
-except Exception:
-    mlx_whisper = None
-
-try:
-    from faster_whisper import WhisperModel
-    FASTER_WHISPER_AVAILABLE = True
-except Exception:
-    # Catch broad: the faster-whisper import chain can raise ValueError
-    # (e.g. "psutil.__spec__ is not set") in some environments.
-    WhisperModel = None
-
-
-def _is_faster_whisper_turbo_supported() -> bool:
-    """Check if the installed faster-whisper supports the large-v3-turbo model."""
-    try:
-        import faster_whisper
-        from packaging.version import Version
-        return Version(faster_whisper.__version__) >= Version("1.1.0")
-    except Exception:
-        return False
-
-
-def _get_mlx_model_repo(model_name: str) -> str:
-    """Get the MLX Community HuggingFace repo for a Whisper model."""
-    # Map standard model names to MLX Community repos
-    model_map = {
-        "tiny": "mlx-community/whisper-tiny-mlx",
-        "tiny.en": "mlx-community/whisper-tiny.en-mlx",
-        "base": "mlx-community/whisper-base-mlx",
-        "base.en": "mlx-community/whisper-base.en-mlx",
-        "small": "mlx-community/whisper-small-mlx",
-        "small.en": "mlx-community/whisper-small.en-mlx",
-        "medium": "mlx-community/whisper-medium-mlx",
-        "medium.en": "mlx-community/whisper-medium.en-mlx",
-        "large": "mlx-community/whisper-large-v3-mlx",
-        "large-v2": "mlx-community/whisper-large-v2-mlx",
-        "large-v3": "mlx-community/whisper-large-v3-mlx",
-        "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
-    }
-    return model_map.get(model_name, f"mlx-community/whisper-{model_name}-mlx")
-
-
-def _clear_corrupted_whisper_cache(error_message: str) -> bool:
-    """Clear a corrupted Whisper model cache directory.
-
-    Parses the CTranslate2 error message to find the snapshot directory,
-    then deletes the parent ``models--`` directory so the model can be
-    re-downloaded cleanly (including blobs that may also be corrupt).
-
-    Returns ``True`` if a cache directory was found and deleted.
-    """
-    import re
-    import shutil
-
-    # CTranslate2 error format:
-    #   "Unable to open file 'model.bin' in model '/path/to/snapshots/hash'"
-    match = re.search(
-        r"unable to open file\s+'[^']+'\s+in model\s+'([^']+)'",
-        error_message,
-        re.IGNORECASE,
-    )
-    if not match:
-        debug_log("could not parse cache path from error message", "voice")
-        return False
-
-    snapshot_path = match.group(1)
-
-    # Walk up to the models-- directory
-    # snapshot_path is e.g. .../models--Org--Name/snapshots/<hash>
-    # We want to delete .../models--Org--Name entirely
-    from pathlib import Path
-    path = Path(snapshot_path)
-    model_dir = None
-    for parent in [path] + list(path.parents):
-        if parent.name.startswith("models--"):
-            model_dir = parent
-            break
-
-    if model_dir is None or not model_dir.is_dir():
-        debug_log(f"could not locate models-- cache directory from: {snapshot_path}", "voice")
-        return False
-
-    try:
-        shutil.rmtree(model_dir)
-        debug_log(f"cleared corrupted Whisper cache: {model_dir}", "voice")
-        return True
-    except OSError as e:
-        debug_log(f"failed to clear corrupted cache: {e}", "voice")
-        return False
-
 
 
 @contextmanager
@@ -391,21 +129,18 @@ class VoiceListener(threading.Thread):
         self._should_stop = False
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
-        # ISO-639-1 code Whisper detected for the most recent utterance.
-        # Updated at every successful transcription site (MLX + faster-
-        # whisper) and consumed by `_dispatch_query` so downstream tools
-        # can pick locale-appropriate resources (e.g. tr.wikipedia.org).
+        # Language (zh/yue/en/ja/ko) SenseVoice detected for the most
+        # recent utterance. Updated at every successful transcription and
+        # consumed by `_dispatch_query` so downstream tools can pick
+        # locale-appropriate resources (e.g. tr.wikipedia.org).
         # One-utterance-at-a-time voice flow means the read in
-        # `_dispatch_query` always matches the write from the Whisper
+        # `_dispatch_query` always matches the write from the SenseVoice
         # call that produced the transcript.
         self._last_detected_language: Optional[str] = None
 
         # Audio processing components
-        self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
-        self._whisper_device: Optional[str] = None  # "cpu" or "cuda" (resolved from CTranslate2)
-        self._mlx_model_repo: Optional[str] = None  # For MLX backend
-        self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
-        self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
+        self.engine: Optional[Any] = None  # SenseVoiceEngine (FunASR)
+        self.transcribe_lock = threading.Lock()  # Shared lock for SenseVoice model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._pre_roll: deque = deque()
 
@@ -591,20 +326,20 @@ class VoiceListener(threading.Thread):
                     )
                     if is_pure_echo:
                         # Before rejecting, try to salvage user speech appended
-                        # after the echo prefix. Whisper commonly merges the tail
+                        # after the echo prefix. The recogniser commonly merges the tail
                         # of TTS echo with the user's follow-up into a single
                         # transcript; without salvage, the user's real speech
                         # would be dropped before the intent judge ever sees it.
                         # Try exact-word cleanup first (cheapest, most precise),
                         # then fall back to the rightmost-boundary scan which
-                        # handles Whisper mis-transcriptions at the echo/speech
+                        # handles recogniser mis-transcriptions at the echo/speech
                         # join ("explores" → "laws") that exact matching can't.
                         salvaged = self.echo_detector.cleanup_leading_echo(text_lower)
                         if salvaged == text_lower:
                             salvaged_alt = self.echo_detector.salvage_after_echo_tail(text_lower)
                             if salvaged_alt:
                                 salvaged = salvaged_alt
-                        # Require ≥ min_salvage_words to avoid treating Whisper's
+                        # Require ≥ min_salvage_words to avoid treating the recogniser's
                         # echo-tail hallucinations ("…regions like Steneti") as
                         # genuine user speech. The threshold lives on the echo
                         # detector so every salvage site shares one policy.
@@ -685,7 +420,7 @@ class VoiceListener(threading.Thread):
                     return
 
         # Salvage user speech from merged echo+speech chunks.
-        # When Whisper delivers a single transcript containing TTS echo followed by
+        # When the recogniser delivers a single transcript containing TTS echo followed by
         # user speech (e.g. "I can only provide... Well you can search for it"), the
         # echo portion was captured during TTS but the transcript arrives after TTS
         # finishes. Try to strip the leading echo and use just the user's speech.
@@ -704,7 +439,7 @@ class VoiceListener(threading.Thread):
                 utterance_start_time,
             )
             # If the prefix-based salvage fails or truncates too aggressively
-            # (Whisper-mangled echo boundary → exact cleanup misses; fuzzy
+            # (recogniser-mangled echo boundary → exact cleanup misses; fuzzy
             # prefix iteration prefers shortest suffix), fall through to the
             # rightmost-boundary scan which recovers the full follow-up.
             boundary_salvaged = self.echo_detector.salvage_after_echo_tail(text_lower)
@@ -869,7 +604,7 @@ class VoiceListener(threading.Thread):
                             return
                     else:
                         # Hot window mode - no wake word needed, but check for echo.
-                        # The mic can pick up Jarvis's own TTS output and Whisper
+                        # The mic can pick up Jarvis's own TTS output and the recogniser
                         # transcribes it as user speech. Check fuzzy similarity.
                         # Only reject PURE echo — if the heard text is significantly
                         # longer than TTS, it contains user speech mixed with echo
@@ -1326,47 +1061,9 @@ class VoiceListener(threading.Thread):
         except Exception:
             return False
 
-    def _filter_noisy_segments(self, segments):
-        """Filter out low-confidence Whisper segments."""
-        min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
-        marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
-        # Threshold above which a segment is considered non-speech (hallucination during silence).
-        # Checked independently of avg_logprob because Whisper can be confident about a
-        # hallucinated phrase even when no real speech is present.
-        no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
-        filtered = []
-
-        for seg in segments:
-            # Hard filter: high no_speech_prob means no real speech regardless of logprob.
-            if hasattr(seg, 'no_speech_prob') and is_whisper_hallucination(seg.no_speech_prob, no_speech_threshold):
-                debug_log(
-                    f"segment filtered (no_speech_prob={seg.no_speech_prob:.2f}): '{seg.text[:50]}'",
-                    "voice",
-                )
-                continue
-
-            confidence = None
-            if hasattr(seg, 'avg_logprob'):
-                confidence = min(1.0, max(0.0, (seg.avg_logprob + 1.0)))
-            elif hasattr(seg, 'no_speech_prob'):
-                confidence = 1.0 - seg.no_speech_prob
-
-            if confidence is not None and confidence < min_confidence:
-                if confidence >= marginal_threshold:
-                    # Marginal confidence - show in log viewer (not debug)
-                    print(f"🔇 Low confidence ({confidence:.2f}): \"{seg.text.strip()[:50]}...\"", flush=True)
-                else:
-                    # Very low confidence - debug only
-                    debug_log(f"segment filtered (confidence={confidence:.2f}): '{seg.text}'", "voice")
-                continue
-
-            filtered.append(seg)
-
-        return filtered
-
     def _is_repetitive_hallucination(self, text: str) -> bool:
         """
-        Detect repetitive hallucinations that Whisper produces on quiet/ambiguous audio.
+        Detect repetitive hallucinations produced on quiet/ambiguous audio.
 
         Common patterns include repeated single words like "don't don't don't..."
         or repeated short phrases. Also detects character-level repetition patterns
@@ -1479,56 +1176,6 @@ class VoiceListener(threading.Thread):
         except Exception:
             return
 
-    def _determine_whisper_backend(self) -> str:
-        """Determine which Whisper backend to use based on config and availability."""
-        backend_pref = getattr(self.cfg, "whisper_backend", "auto")
-
-        if backend_pref == "mlx":
-            if MLX_WHISPER_AVAILABLE:
-                return "mlx"
-            debug_log("MLX Whisper requested but not available, falling back to faster-whisper", "voice")
-            return "faster-whisper"
-
-        if backend_pref == "faster-whisper":
-            return "faster-whisper"
-
-        # Auto mode: prefer MLX on Apple Silicon
-        if MLX_WHISPER_AVAILABLE and _is_apple_silicon():
-            return "mlx"
-
-        return "faster-whisper"
-
-    def _apply_whisper_load_success(
-        self, model_name: str, try_device: str, try_compute: str,
-        device: str, compute: str, cpu_threads: int,
-        context: str = "",
-    ) -> str:
-        """Record state and print diagnostics after a successful Whisper model load.
-
-        Returns the resolved device string.
-        """
-        ct2_model = getattr(self.model, "model", None)
-        resolved_device = str(getattr(ct2_model, "device", try_device)).lower()
-        debug_log(
-            f"faster-whisper initialised{context}: name={model_name}, "
-            f"device={resolved_device}, compute={try_compute}, "
-            f"cpu_threads={cpu_threads}",
-            "voice",
-        )
-        self._whisper_device = resolved_device
-
-        if try_device != device and device in ("auto", "cuda"):
-            print("     ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
-            print("     💡 Tip: Install NVIDIA CUDA toolkit for faster speech recognition", flush=True)
-        if try_compute != compute:
-            print(f"     ⚠️  Using '{try_compute}' compute type ('{compute}' not supported)", flush=True)
-        if resolved_device == "cpu":
-            print(f"     ⚡ CPU mode: using {cpu_threads} threads with optimised decoding", flush=True)
-
-        suffix = f" ({context})" if context else ""
-        print(f"     🎤 Whisper '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
-        return resolved_device
-
     def _start_llm_warmup(self) -> list[threading.Thread]:
         """Pre-load chat and intent judge models via the active backend.
 
@@ -1536,7 +1183,7 @@ class VoiceListener(threading.Thread):
         so it pages models into Ollama's resident memory on the Ollama path
         and sends a minimal inference to load the model on an OpenAI-
         compatible server. Starts up to two daemon threads concurrently so
-        warmup overlaps with Whisper initialisation. When both models point
+        so it overlaps with SenseVoice initialisation. When both models point
         at the same model, a single warmup covers both.
 
         Results land in ``self._llm_warmup_results`` keyed by role. The
@@ -1774,263 +1421,48 @@ class VoiceListener(threading.Thread):
                 debug_log(f"microphone permission check error: {e}", "voice")
                 print(f"  ⚠️  Microphone check error: {e}", flush=True)
 
-        # Kick off LLM warmups in parallel with Whisper load so the first
+        # Kick off LLM warmups in parallel with SenseVoice load so the first
         # user engagement doesn't pay cold-load cost on either model. All
-        # warmup output (Whisper + LLMs) is indented under this header to
+        # warmup output (SenseVoice + LLMs) is indented under this header to
         # visually group the phase.
         print("  🔥 Warming up models...", flush=True)
         self._llm_warmup_started_at = time.time()
         self._llm_warmup_threads = self._start_llm_warmup()
 
-        # Determine and initialise Whisper backend
-        self._whisper_backend = self._determine_whisper_backend()
-        model_name = getattr(self.cfg, "whisper_model", "small")
+        # Load the SenseVoice speech-recognition engine (FunASR). A
+        # bundled model (when the build ships weights) is preferred so
+        # installed apps never touch the network; otherwise funasr
+        # downloads the model on first use.
+        model_id = getattr(self.cfg, "sensevoice_model", None)
+        device_pref = getattr(self.cfg, "sensevoice_device", "auto")
+        if not is_sensevoice_available():
+            debug_log("funasr not available", "voice")
+            print(
+                "  ❌ SenseVoice (funasr) not available. Install with: pip install funasr",
+                flush=True,
+            )
+            return
+        print("     🎤 Loading SenseVoice model...", flush=True)
+        try:
+            self.engine = SenseVoiceEngine.load(model=model_id, device=device_pref)
+        except Exception as e:
+            debug_log(f"failed to initialise SenseVoice: {e}", "voice")
+            print(f"  ❌ Failed to load SenseVoice model: {e}", flush=True)
+            print(
+                "  💡 Ensure the model weights are bundled or that the model id is reachable.",
+                flush=True,
+            )
+            return
+        print(f"     🎤 SenseVoice '{self.engine.model}' ready on {self.engine.device}", flush=True)
 
-        # Validate large-v3-turbo support for faster-whisper backend
-        if model_name == "large-v3-turbo" and self._whisper_backend != "mlx":
-            if not _is_faster_whisper_turbo_supported():
-                debug_log(
-                    "faster-whisper does not support large-v3-turbo, "
-                    "falling back to large-v3", "voice",
-                )
-                print(
-                    "  ⚠️  large-v3-turbo is not supported by the installed Whisper engine, "
-                    "using large-v3 instead", flush=True,
-                )
-                model_name = "large-v3"
-
-        if self._whisper_backend == "mlx":
-            if not MLX_WHISPER_AVAILABLE:
-                debug_log("MLX Whisper not available", "voice")
-                print("  ❌ MLX Whisper not available. Install with: pip install mlx-whisper", flush=True)
-                return
-
-            self._mlx_model_repo = _get_mlx_model_repo(model_name)
-            print(f"     🎤 Loading MLX Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
-
-            max_retries = 4
-            for attempt in range(max_retries + 1):
-                try:
-                    # Pre-load the model by doing a warmup transcription.
-                    # Use low-amplitude noise (not silence) so the decoder actually runs —
-                    # silent audio trips the no-speech short-circuit and leaves the decode
-                    # path cold, so the first real utterance still pays the full cost.
-                    if np is not None:
-                        rng = np.random.default_rng(0)
-                        warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
-                        _ = mlx_whisper.transcribe(
-                            warmup_audio,
-                            path_or_hf_repo=self._mlx_model_repo,
-                            language=None,
-                        )
-                        debug_log(f"MLX Whisper model pre-loaded: repo={self._mlx_model_repo}", "voice")
-
-                    print(f"     🎤 MLX Whisper '{model_name}' ready (Apple Silicon GPU)", flush=True)
-                    break
-                except Exception as e:
-                    error_str = str(e).lower()
-                    is_rate_limited = (
-                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
-                        or getattr(getattr(e, "response", None), "status_code", None) == 429
-                    )
-                    if is_rate_limited and attempt < max_retries:
-                        wait = 2 ** (attempt + 1)
-                        debug_log(f"rate limited loading MLX Whisper (attempt {attempt + 1}): {e}", "voice")
-                        print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({attempt + 1}/{max_retries})...", flush=True)
-                        time.sleep(wait)
-                        continue
-                    debug_log(f"failed to initialise MLX Whisper: {e}", "voice")
-                    print(f"  ❌ Failed to initialise MLX Whisper: {e}", flush=True)
-                    if is_rate_limited:
-                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
-                    return
-        else:
-            # faster-whisper backend
-            if not FASTER_WHISPER_AVAILABLE:
-                debug_log("faster-whisper not available", "voice")
-                print("  ❌ faster-whisper not available. Install with: pip install faster-whisper", flush=True)
-                return
-
-            device = getattr(self.cfg, "whisper_device", "auto")
-            compute = getattr(self.cfg, "whisper_compute_type", "int8")
-
-            # On Windows, probe for CUDA runtime libraries before trying to
-            # use them. faster-whisper/CTranslate2 lazily loads cuBLAS and
-            # cuDNN during transcription, so without this check a model
-            # that loaded fine on cuda will crash on the first audio chunk.
-            resolved_device, missing_libs = _probe_windows_cuda_libraries(device)
-            if missing_libs:
-                _print_cuda_unavailable_hint(missing_libs)
-            device = resolved_device
-
-            # Build list of (device, compute_type) combinations to try
-            # This handles both compute type fallbacks and CUDA -> CPU fallbacks
-            configs_to_try = []
-
-            # Start with preferred config
-            compute_types = [compute]
-            if compute == "int8":
-                compute_types.extend(["float16", "float32"])
-            elif compute == "float16":
-                compute_types.append("float32")
-
-            # Add preferred device with all compute types
-            for ct in compute_types:
-                configs_to_try.append((device, ct))
-
-            # If device is "auto" or "cuda", add CPU fallback configs
-            # This handles Windows without CUDA libraries
-            if device in ("auto", "cuda"):
-                for ct in compute_types:
-                    configs_to_try.append(("cpu", ct))
-
-            last_error = None
-            used_device = device
-            used_compute = compute
-            for try_device, try_compute in configs_to_try:
-                try:
-                    cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
-                    print(f"     🎤 Loading Whisper '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
-                    self.model = WhisperModel(
-                        model_name, device=try_device, compute_type=try_compute,
-                        cpu_threads=cpu_threads,
-                    )
-                    self._apply_whisper_load_success(
-                        model_name, try_device, try_compute,
-                        device, compute, cpu_threads,
-                    )
-                    used_device = try_device
-                    used_compute = try_compute
-                    last_error = None
-                    break
-                except Exception as e:
-                    last_error = e
-                    error_str = str(e).lower()
-
-                    # Check if this is a CUDA/GPU-related error that we should fall back from
-                    is_cuda_error = any(x in error_str for x in [
-                        "cuda", "cublas", "cudnn", "gpu", "nvidia",
-                        ".dll is not found", "library", "ctypes"
-                    ])
-                    is_compute_error = any(x in error_str for x in [
-                        "compute type", "int8", "float16"
-                    ])
-
-                    if is_cuda_error or is_compute_error:
-                        debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
-                        continue
-
-                    # Check for corrupted model cache (e.g. interrupted download)
-                    is_corrupted_cache = "unable to open file" in error_str
-
-                    if is_corrupted_cache:
-                        debug_log(f"detected corrupted Whisper model cache: {e}", "voice")
-                        print("  ⚠️  Whisper model cache appears corrupted, attempting recovery...", flush=True)
-
-                        cache_cleared = _clear_corrupted_whisper_cache(str(e))
-                        if cache_cleared:
-                            try:
-                                print(f"     🎤 Re-downloading Whisper '{model_name}'...", flush=True)
-                                self.model = WhisperModel(
-                                    model_name, device=try_device, compute_type=try_compute,
-                                    cpu_threads=cpu_threads,
-                                )
-                                self._apply_whisper_load_success(
-                                    model_name, try_device, try_compute,
-                                    device, compute, cpu_threads,
-                                    context="recovered",
-                                )
-                                used_device = try_device
-                                used_compute = try_compute
-                                last_error = None
-                                break
-                            except Exception as retry_e:
-                                debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
-                                print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
-                                debug_log("trying next device/compute fallback config", "voice")
-                                continue
-                        else:
-                            debug_log("could not clear corrupted cache automatically", "voice")
-                            print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
-                            print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
-                            continue
-                    # Check for rate limiting (HTTP 429) — check string and response status code
-                    # (HfHubHTTPError may carry the status on .response without "429" in str(e))
-                    is_rate_limited = (
-                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
-                        or getattr(getattr(e, "response", None), "status_code", None) == 429
-                    )
-
-                    if is_rate_limited:
-                        _max_retries = 4
-                        _backoff = 2
-                        debug_log(f"rate limited loading Whisper model: {e}", "voice")
-                        retry_succeeded = False
-                        for retry_num in range(1, _max_retries + 1):
-                            wait = _backoff ** retry_num
-                            print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
-                            time.sleep(wait)
-                            try:
-                                self.model = WhisperModel(
-                                    model_name, device=try_device, compute_type=try_compute,
-                                    cpu_threads=cpu_threads,
-                                )
-                                self._apply_whisper_load_success(
-                                    model_name, try_device, try_compute,
-                                    device, compute, cpu_threads,
-                                    context="rate-limit retry",
-                                )
-                                used_device = try_device
-                                used_compute = try_compute
-                                last_error = None
-                                retry_succeeded = True
-                                break
-                            except Exception as retry_e:
-                                debug_log(f"rate-limit retry {retry_num} failed: {retry_e}", "voice")
-                                last_error = retry_e
-                        if retry_succeeded:
-                            break
-                        debug_log(f"gave up after {_max_retries} rate-limit retries", "voice")
-                        print(f"  ❌ Failed to load Whisper model after {_max_retries} retries: {last_error}", flush=True)
-                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
-                        return
-                    else:
-                        # For other errors (model not found, etc.), don't try fallbacks
-                        debug_log(f"failed to initialise faster-whisper: {e}", "voice")
-                        print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
-                        return
-
-            if last_error is not None:
-                debug_log(f"failed to initialise faster-whisper with any config: {last_error}", "voice")
-                print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
-                return
-
-            # Warm up faster-whisper so the first real utterance doesn't pay
-            # the cold-decode cost. Use low-amplitude noise rather than pure
-            # silence — silence trips faster-whisper's no-speech short-circuit
-            # and the decoder never actually runs. Mirror the real transcribe
-            # parameters so beam search, language detection, and the timestamp
-            # path are all exercised here instead of on the user's first word.
-            if np is not None and self.model is not None:
-                try:
-                    cpu_mode = self._whisper_device == "cpu"
-                    rng = np.random.default_rng(0)
-                    warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
-                    try:
-                        segments_iter, _ = self.model.transcribe(
-                            warmup_audio,
-                            language=None,
-                            vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
-                    except TypeError:
-                        segments_iter, _ = self.model.transcribe(warmup_audio, language=None)
-                    for _ in segments_iter:
-                        pass
-                    debug_log("faster-whisper warmup transcription complete", "voice")
-                except Exception as e:
-                    debug_log(f"faster-whisper warmup failed: {e}", "voice")
+        # Pre-load the model with a warmup transcription. Use low-amplitude
+        # noise (not silence) so the decoder actually runs — a silent clip
+        # short-circuits as no-speech and the first real utterance would
+        # still pay the full cold-decode cost.
+        if np is not None:
+            with self.transcribe_lock:
+                self.engine.warmup(self._samplerate)
+        debug_log(f"sensevoice model pre-loaded: {self.engine.model_path}", "voice")
 
         # Wait for LLM warmups before announcing "Listening!" so the first
         # engagement is responsive. A single 60s budget is shared across
@@ -2405,98 +1837,42 @@ class VoiceListener(threading.Thread):
         if audio is None or audio.size == 0:
             return
 
-        # Resample to Whisper's expected rate if the stream ran at a different rate
+        # Resample to SenseVoice's expected rate if the stream ran at a different rate
         stream_rate = getattr(self, "_stream_samplerate", self._samplerate)
         if stream_rate != self._samplerate:
             audio = _resample(audio, stream_rate, self._samplerate)
 
         # Filter short audio
         audio_duration = len(audio) / self._samplerate
-        min_duration = getattr(self.cfg, "whisper_min_audio_duration", 0.3)
+        min_duration = getattr(self.cfg, "sensevoice_min_audio_duration", 0.3)
         if audio_duration < min_duration:
             debug_log(f"audio too short ({audio_duration:.2f}s < {min_duration}s), ignoring", "voice")
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        # Speech recognition with appropriate backend
+        # Speech recognition via the shared SenseVoice engine
         try:
-            if self._whisper_backend == "mlx":
-                # MLX Whisper transcription
-                with self.transcribe_lock:
-                    result = mlx_whisper.transcribe(
-                        audio,
-                        path_or_hf_repo=self._mlx_model_repo,
-                        language=None,
-                    )
+            with self.transcribe_lock:
+                result = self.engine.transcribe(audio)
+            text = result.text
 
-                # Capture Whisper's auto-detected language (ISO-639-1) so
-                # downstream tools can pick locale-appropriate resources.
-                detected = result.get("language")
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
+            # Capture SenseVoice's auto-detected language (zh/yue/en/ja/ko)
+            # so downstream tools can pick locale-appropriate resources.
+            if result.language:
+                self._last_detected_language = result.language
 
-                # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
-                min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
-                marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
-                no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
-                segments = result.get("segments", [])
-
-                if segments:
-                    filtered_texts = []
-                    for seg in segments:
-                        avg_logprob = seg.get("avg_logprob", 0)
-                        no_speech_prob = seg.get("no_speech_prob", 0)
-
-                        # Convert avg_logprob to confidence (typically -1 to 0, so add 1)
-                        confidence = min(1.0, max(0.0, avg_logprob + 1.0))
-                        seg_text = seg.get("text", "").strip()
-
-                        # Hard filter: high no_speech_prob means no real speech regardless of logprob.
-                        if is_whisper_hallucination(no_speech_prob, no_speech_threshold):
-                            debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg_text[:50]}'", "voice")
-                            continue
-
-                        if confidence < min_confidence:
-                            if confidence >= marginal_threshold:
-                                # Marginal confidence - show in log viewer (not debug)
-                                print(f"🔇 Low confidence ({confidence:.2f}): \"{seg_text[:50]}...\"", flush=True)
-                            else:
-                                # Very low confidence - debug only
-                                debug_log(f"MLX segment filtered (confidence={confidence:.2f}): '{seg_text[:50]}'", "voice")
-                            continue
-
-                        filtered_texts.append(seg.get("text", ""))
-
-                    text = " ".join(filtered_texts).strip()
-                else:
-                    # Fallback to full text if no segments
-                    text = result.get("text", "").strip()
-            else:
-                # faster-whisper transcription
-                # CPU mode: skip timestamps and disable context carry-over for speed
-                cpu_mode = self._whisper_device == "cpu"
-                with self.transcribe_lock:
-                    try:
-                        segments, _info = self.model.transcribe(
-                            audio, language=None, vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
-                    except TypeError:
-                        segments, _info = self.model.transcribe(audio, language=None)
-                    segments_list = list(segments)
-                # Capture the detected language (faster-whisper exposes it
-                # on the info object). Guard against older API variants
-                # where the attribute may be absent.
-                detected = getattr(_info, "language", None)
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
-                filtered_segments = self._filter_noisy_segments(segments_list)
-                text = " ".join(seg.text for seg in filtered_segments).strip()
+            # SenseVoice emits <|nospeech|> for non-speech clips — the
+            # no-speech signal that lets us reject the
+            # utterance outright so hallucinations on silence never reach
+            # the intent judge.
+            if result.no_speech:
+                debug_log("sensevoice reported no speech, ignoring utterance", "voice")
+                self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+                return
         except Exception as e:
             debug_log(f"transcription error: {e}", "voice")
             if sys.platform == 'win32':
-                print(f"  ❌ Whisper error: {e}", flush=True)
+                print(f"  ❌ SenseVoice error: {e}", flush=True)
             text = ""
 
         if not text or not text.strip():

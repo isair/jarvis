@@ -560,9 +560,7 @@ class TestEngineHistoryIntegration:
         from src.jarvis.dictation.dictation_engine import DictationEngine
         import threading
         engine = DictationEngine(
-            whisper_model_ref=lambda: MagicMock(),
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
+            sensevoice_engine_ref=lambda: MagicMock(),
             hotkey="ctrl+shift+d",
             transcribe_lock=threading.Lock(),
         )
@@ -576,15 +574,13 @@ class TestEngineHistoryIntegration:
         from src.jarvis.dictation.dictation_engine import DictationEngine
         from src.jarvis.dictation.history import DictationHistory
 
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = "dictated text"
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="dictated text", language=None, no_speech=False
+        )
 
         engine = DictationEngine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
+            sensevoice_engine_ref=lambda: mock_engine,
             hotkey="ctrl+shift+d",
             transcribe_lock=threading.Lock(),
         )
@@ -605,16 +601,14 @@ class TestEngineHistoryIntegration:
         from src.jarvis.dictation.dictation_engine import DictationEngine
         from src.jarvis.dictation.history import DictationHistory
 
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = "hello"
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="hello", language=None, no_speech=False
+        )
 
         results = []
         engine = DictationEngine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
+            sensevoice_engine_ref=lambda: mock_engine,
             hotkey="ctrl+shift+d",
             transcribe_lock=threading.Lock(),
             on_dictation_result=lambda entry: results.append(entry),
@@ -634,13 +628,13 @@ class TestEngineHistoryIntegration:
         from src.jarvis.dictation.dictation_engine import DictationEngine
         from src.jarvis.dictation.history import DictationHistory
 
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = ([], MagicMock())
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="", language=None, no_speech=False
+        )
 
         engine = DictationEngine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
+            sensevoice_engine_ref=lambda: mock_engine,
             hotkey="ctrl+shift+d",
             transcribe_lock=threading.Lock(),
         )

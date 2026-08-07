@@ -28,64 +28,13 @@ from jarvis.utils.vram import (
 )
 
 
-def is_apple_silicon() -> bool:
-    """Check if running on Apple Silicon Mac."""
-    return sys.platform == "darwin" and platform.machine() == "arm64"
-
-
-def check_ffmpeg_installed() -> Tuple[bool, Optional[str]]:
-    """Check if FFmpeg is installed (required for MLX Whisper)."""
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        return True, ffmpeg_path
-
-    # Check common macOS paths
-    macos_paths = [
-        "/usr/local/bin/ffmpeg",
-        "/opt/homebrew/bin/ffmpeg",
-    ]
-    for path in macos_paths:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            return True, path
-
-    return False, None
-
-
-def check_mlx_whisper_installed() -> bool:
-    """Check if mlx-whisper is installed."""
+def check_funasr_installed() -> bool:
+    """Check if the FunASR runtime (needed by SenseVoice) is importable."""
     try:
-        import mlx_whisper
-        return True
-    except ImportError:
+        from jarvis.listening.sensevoice import is_available
+        return is_available()
+    except Exception:
         return False
-
-
-@dataclass
-class MLXWhisperStatus:
-    """Status of MLX Whisper setup."""
-    is_apple_silicon: bool = False
-    is_ffmpeg_installed: bool = False
-    ffmpeg_path: Optional[str] = None
-    is_mlx_whisper_installed: bool = False
-
-    @property
-    def is_fully_setup(self) -> bool:
-        """Check if MLX Whisper is fully set up."""
-        if not self.is_apple_silicon:
-            return True  # Not applicable on non-Apple Silicon
-        return self.is_ffmpeg_installed and self.is_mlx_whisper_installed
-
-
-def check_mlx_whisper_status() -> MLXWhisperStatus:
-    """Check MLX Whisper setup status."""
-    status = MLXWhisperStatus()
-    status.is_apple_silicon = is_apple_silicon()
-
-    if status.is_apple_silicon:
-        status.is_ffmpeg_installed, status.ffmpeg_path = check_ffmpeg_installed()
-        status.is_mlx_whisper_installed = check_mlx_whisper_installed()
-
-    return status
 
 
 # Import config early (no PyQt6 dependency) - needed for detection functions
@@ -532,7 +481,7 @@ class SetupWizard(QWizard):
         self.ollama_install_page = OllamaInstallPage(self)
         self.ollama_server_page = OllamaServerPage(self)
         self.models_page = ModelsPage(self)
-        self.mlx_whisper_page = WhisperSetupPage(self)
+        self.sensevoice_page = SenseVoiceSetupPage(self)
         self.dictation_page = DictationPage(self)
         self.mcp_page = MCPPage(self)
         self.search_providers_page = SearchProvidersPage(self)
@@ -540,7 +489,7 @@ class SetupWizard(QWizard):
         self.complete_page = CompletePage(self)
 
         self.welcome_page_id = self.addPage(self.welcome_page)
-        self.mlx_whisper_page_id = self.addPage(self.mlx_whisper_page)
+        self.sensevoice_page_id = self.addPage(self.sensevoice_page)
         self.provider_choice_page_id = self.addPage(self.provider_choice_page)
         self.openai_compat_page_id = self.addPage(self.openai_compat_page)
         self.ollama_install_page_id = self.addPage(self.ollama_install_page)
@@ -556,7 +505,7 @@ class SetupWizard(QWizard):
         # the wizard must ask which runtime the user wants before running any
         # Ollama-specific checks. The Welcome/status page and the Ollama
         # install/server/models pages are only reached on the Ollama branch.
-        self.setStartId(self.mlx_whisper_page_id)
+        self.setStartId(self.sensevoice_page_id)
 
         # Custom button labels
         self.setButtonText(QWizard.WizardButton.NextButton, "Next →")
@@ -566,7 +515,7 @@ class SetupWizard(QWizard):
 
         # Store status for sharing between pages
         self.ollama_status: Optional[OllamaStatus] = None
-        self.mlx_whisper_status: Optional[MLXWhisperStatus] = None
+        self.sensevoice_status: Optional[bool] = None
         self._location_working: Optional[bool] = None
 
     def ollama_entry_page_id(self) -> int:
@@ -693,18 +642,13 @@ class WelcomePage(QWizardPage):
         self.models_status = self._create_status_row("🧠 AI Models", "Checking...")
         self.location_status = self._create_status_row("📍 Location", "Checking...")
 
-        # MLX Whisper status (only shown on Apple Silicon)
-        self.mlx_whisper_status = self._create_status_row("🎤 MLX Whisper", "Checking...")
-        self._is_apple_silicon = is_apple_silicon()
+        # SenseVoice (FunASR) status — cross-platform
+        self.sensevoice_status = self._create_status_row("🎤 SenseVoice (FunASR)", "Checking...")
 
         status_layout.addWidget(self.cli_status)
         status_layout.addWidget(self.server_status)
         status_layout.addWidget(self.models_status)
-
-        if self._is_apple_silicon:
-            status_layout.addWidget(self.mlx_whisper_status)
-        else:
-            self.mlx_whisper_status.setVisible(False)
+        status_layout.addWidget(self.sensevoice_status)
 
         status_layout.addWidget(self.location_status)
 
@@ -834,20 +778,15 @@ class WelcomePage(QWizardPage):
                 loc_text = location_context.replace("Location: ", "")
                 self._update_status_row(self.location_status, f"✅ {loc_text}", True)
 
-        # Update MLX Whisper status (Apple Silicon only)
-        if self._is_apple_silicon:
-            mlx_status = check_mlx_whisper_status()
-            if isinstance(wizard, SetupWizard):
-                wizard.mlx_whisper_status = mlx_status
+        # Update SenseVoice (FunASR) status
+        sensevoice_ok = check_funasr_installed()
+        if isinstance(wizard, SetupWizard):
+            wizard.sensevoice_status = sensevoice_ok
 
-            if mlx_status.is_fully_setup:
-                self._update_status_row(self.mlx_whisper_status, "✅ Ready (GPU acceleration)", True)
-            elif not mlx_status.is_ffmpeg_installed:
-                self._update_status_row(self.mlx_whisper_status, "⚠️ FFmpeg not installed", False)
-            elif not mlx_status.is_mlx_whisper_installed:
-                self._update_status_row(self.mlx_whisper_status, "⚠️ Not installed", False)
-            else:
-                self._update_status_row(self.mlx_whisper_status, "⚠️ Setup incomplete", False)
+        if sensevoice_ok:
+            self._update_status_row(self.sensevoice_status, "✅ Installed", True)
+        else:
+            self._update_status_row(self.sensevoice_status, "❌ Not installed", False)
 
         # Enable/disable navigation based on status
         self.completeChanged.emit()
@@ -1065,7 +1004,7 @@ class _CapabilityWorker(QThread):
 class OpenAICompatiblePage(QWizardPage):
     """Collect the OpenAI-compatible server's connection details. Shown only
     on the OpenAI-compatible branch; it writes the ``llm_*`` /
-    ``embedding_model`` config keys and then skips straight to Whisper setup.
+    ``embedding_model`` config keys and then skips straight to speech-recognition setup.
 
     Guided rather than freeform: the page auto-discovers running local
     servers, offers a one-click app preset, and (after Connect) fetches the
@@ -1877,25 +1816,12 @@ class ModelsPage(QWizardPage):
 
     # VRAM overhead for always-running companion models (MB).
     # nomic-embed-text: ~1 GB for ~1.5K dim semantic search.
-    # Whisper small: ~2 GB (the wizard balance default).
+    # SenseVoiceSmall: ~1 GB in float32 (the wizard balance default).
     _EMBED_VRAM_MB = 1024
-    _WHISPER_VRAM_MB = 2048
 
-    def _whisper_vram_mb(self) -> int:
-        """VRAM in MB for the currently-configured whisper model.
-
-        Reads the saved whisper model from config (set by WhisperSetupPage
-        which now runs before this page).  Falls back to ``_WHISPER_VRAM_MB``
-        (2048 MB = whisper small) when unavailable.
-        """
-        try:
-            cfg = load_settings()
-            model_id = getattr(cfg, "whisper_model", None)
-            if model_id:
-                return WhisperSetupPage.get_whisper_vram_mb(model_id)
-        except Exception:
-            pass
-        return self._WHISPER_VRAM_MB
+    def _sensevoice_vram_mb(self) -> int:
+        """VRAM in MB used by the SenseVoice speech-recognition model."""
+        return SenseVoiceSetupPage.get_sensevoice_vram_mb()
 
     _WIZARD_HEIGHT_BASE = 875
     _WIZARD_HEIGHT_WITH_BUTTONS = 955
@@ -2054,8 +1980,8 @@ class ModelsPage(QWizardPage):
 
         if self._detected_vram_mb is not None:
             # Account for companion-model overhead so the recommendation
-            # leaves room for embeddings + whisper alongside the chat model.
-            overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
+            # leaves room for embeddings + sensevoice alongside the chat model.
+            overhead = self._EMBED_VRAM_MB + self._sensevoice_vram_mb()
             usable_mb = self._detected_vram_mb - overhead
             rec = get_recommended_model_id(usable_mb if usable_mb > 0 else None)
             if rec in self._ALL_MODELS:
@@ -2119,9 +2045,9 @@ class ModelsPage(QWizardPage):
             self._fast_combo.setCurrentIndex(self._fast_combo.findData(mid))
         else:
             # Auto-downgrade: if fast model needs more VRAM than chat model,
-            # or the total (chat + fast + embed + whisper) exceeds our GPU,
+            # or the total (chat + fast + embed + sensevoice) exceeds our GPU,
             # pick the smallest fast-suitable model that fits.
-            overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
+            overhead = self._EMBED_VRAM_MB + self._sensevoice_vram_mb()
             cv = required_vram_mb(mid) or 0
             fv = required_vram_mb(self._fast_model) or 0
             exceeds_vram = (
@@ -2154,16 +2080,16 @@ class ModelsPage(QWizardPage):
         self._update_models_display()
 
     def _refresh_vram_display(self):
-        overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
+        overhead = self._EMBED_VRAM_MB + self._sensevoice_vram_mb()
         fv = required_vram_mb(self._fast_model) or 0
         cv = required_vram_mb(self._chat_model) or 0
         if self._linked or self._fast_model == self._chat_model:
             total = cv + overhead
-            detail = f"(chat {cv // 1024} GB + embed+whisper {overhead // 1024} GB — shared VRAM)"
+            detail = f"(chat {cv // 1024} GB + embed+sensevoice {overhead // 1024} GB — shared VRAM)"
         else:
             total = fv + cv + overhead
             detail = (f"(fast {fv // 1024} GB + chat {cv // 1024} GB "
-                      f"+ embed+whisper {overhead // 1024} GB)")
+                      f"+ embed+sensevoice {overhead // 1024} GB)")
         tg = total / 1024
         if self._detected_vram_mb is not None:
             dg = self._detected_vram_mb / 1024
@@ -2250,7 +2176,7 @@ class ModelsPage(QWizardPage):
             pass
         self._chat_model = cc if cc in self._ALL_MODELS else DEFAULT_CHAT_MODEL
         self._fast_model = fc if fc in self._ALL_MODELS else "gemma4:e2b"
-        overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
+        overhead = self._EMBED_VRAM_MB + self._sensevoice_vram_mb()
         cv = required_vram_mb(self._chat_model) or 0
         fv = required_vram_mb(self._fast_model) or 0
         exceeds_vram = (
@@ -2361,64 +2287,29 @@ class ModelsPage(QWizardPage):
         if w:
             w.setMinimumHeight(height)
             w.resize(w.width(), height)
-def _is_faster_whisper_turbo_supported() -> bool:
-    """Check if the installed faster-whisper supports the large-v3-turbo model."""
-    try:
-        import faster_whisper
-        from packaging.version import Version
-        return Version(faster_whisper.__version__) >= Version("1.1.0")
-    except Exception:
-        return False
+class SenseVoiceSetupPage(QWizardPage):
+    """Page for setting up SenseVoice speech recognition (FunASR).
 
+    SenseVoiceSmall is the single bundled model — there is no size ladder
+    or language toggle. The page surfaces the FunASR runtime status (with
+    an on-demand install when missing) and lets the user pick the compute
+    device. The model weights ship with the app, so installed users never
+    download anything at runtime.
+    """
 
-class WhisperSetupPage(QWizardPage):
-    """Page for setting up Whisper speech recognition (all platforms)."""
-
-    # Multilingual models - support ~99 languages
-    # File sizes from HuggingFace (Systran/faster-whisper-*), VRAM from OpenAI
-    # (id, name, file_size, vram_required, description)
-    WHISPER_MODEL_OPTIONS = [
-        ("tiny", "Tiny", "~75MB", "~1GB VRAM", "Fastest, lower accuracy"),
-        ("base", "Base", "~140MB", "~1GB VRAM", "Fast, decent accuracy"),
-        ("small", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
-        ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
-        ("large-v3-turbo", "Large V3 Turbo", "~1.5GB", "~6GB VRAM", "Best accuracy, needs more VRAM"),
-    ]
-
-    # English-only models - optimised for English, slightly better accuracy
-    # Note: large/turbo models don't have .en variants
-    WHISPER_MODEL_OPTIONS_EN = [
-        ("tiny.en", "Tiny", "~75MB", "~1GB VRAM", "Fastest, English optimised"),
-        ("base.en", "Base", "~140MB", "~1GB VRAM", "Fast, English optimised"),
-        ("small.en", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
-        ("medium.en", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
-    ]
-
-    # VRAM in MB per whisper model ID (used by ModelsPage for total VRAM budget).
-    _WHISPER_VRAM_MAP: dict[str, int] = {
-        "tiny": 1024,
-        "base": 1024,
-        "small": 2048,
-        "medium": 5120,
-        "large-v3-turbo": 6144,
-    }
+    # SenseVoiceSmall: 234M params, ~940 MB weights, ~1 GB VRAM in float32.
+    _SENSEVOICE_VRAM_MB = 1024
+    DEFAULT_MODEL_ID = "FunAudioLLM/SenseVoiceSmall"
 
     @staticmethod
-    def get_whisper_vram_mb(model_id: str) -> int:
-        """Return VRAM in MB for a given whisper model ID.
-
-        Strips the ``.en`` suffix for lookup so ``small.en`` maps to the same
-        VRAM as ``small``.  Returns 2048 (small default) for unknown IDs.
-        """
-        base = model_id.replace(".en", "")
-        return WhisperSetupPage._WHISPER_VRAM_MAP.get(base, 2048)
+    def get_sensevoice_vram_mb() -> int:
+        """VRAM in MB used by the SenseVoice model (ModelsPage VRAM budget)."""
+        return SenseVoiceSetupPage._SENSEVOICE_VRAM_MB
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
-        self._is_apple_silicon = is_apple_silicon()
         self._is_bundled = getattr(sys, 'frozen', False)
-        self._is_english_only = False  # Default to multilingual for broader language support
 
         # Main layout with scroll area for overflow
         main_layout = QVBoxLayout()
@@ -2435,392 +2326,102 @@ class WhisperSetupPage(QWizardPage):
         layout.setSpacing(10)
         layout.setContentsMargins(30, 20, 30, 20)
 
-        # Header - different text based on platform
-        if self._is_apple_silicon:
-            title = QLabel("🎤 MLX Whisper Setup")
-            subtitle_text = (
-                "GPU-accelerated speech recognition. Choose language and model size."
-            )
-        else:
-            title = QLabel("🎤 Whisper Model Selection")
-            subtitle_text = "Choose language mode and model size for speech recognition."
-
+        title = QLabel("🎤 Speech Recognition (SenseVoice)")
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel(subtitle_text)
+        subtitle = QLabel(
+            "Offline, fast, and multilingual (Mandarin, Cantonese, English, "
+            "Japanese, Korean). The model is bundled with the app — no "
+            "downloads, no accounts."
+        )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
-        # Language selection card
-        lang_card = QFrame()
-        lang_card.setObjectName("card")
-        lang_layout = QVBoxLayout(lang_card)
-        lang_layout.setContentsMargins(16, 12, 16, 12)
-        lang_layout.setSpacing(8)
+        # Runtime status card
+        status_card = QFrame()
+        status_card.setObjectName("card")
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(16, 12, 16, 12)
+        status_layout.setSpacing(6)
 
-        lang_title = QLabel("🌍 Language Support")
-        lang_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
-        lang_layout.addWidget(lang_title)
-
-        # Language toggle buttons
-        lang_btn_layout = QHBoxLayout()
-        lang_btn_layout.setSpacing(8)
-
-        self._english_btn = QPushButton("🇬🇧 English Only")
-        self._english_btn.setCheckable(True)
-        self._english_btn.setChecked(True)
-        self._english_btn.setFixedHeight(36)
-        self._english_btn.clicked.connect(lambda: self._on_language_changed(True))
-
-        self._multilingual_btn = QPushButton("🌐 Multilingual (99 langs)")
-        self._multilingual_btn.setCheckable(True)
-        self._multilingual_btn.setFixedHeight(36)
-        self._multilingual_btn.clicked.connect(lambda: self._on_language_changed(False))
-
-        lang_btn_style = """
-            QPushButton {
-                text-align: center;
-                padding: 6px 12px;
-                border: 2px solid #27272a;
-                border-radius: 6px;
-                background: #1a1d26;
-                color: #e4e4e7;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                border-color: #f59e0b;
-                background: #1e222c;
-            }
-            QPushButton:checked {
-                border-color: #f59e0b;
-                background: rgba(245, 158, 11, 0.15);
-                color: #fbbf24;
-            }
-        """
-        self._english_btn.setStyleSheet(lang_btn_style)
-        self._multilingual_btn.setStyleSheet(lang_btn_style)
-
-        lang_btn_layout.addWidget(self._english_btn)
-        lang_btn_layout.addWidget(self._multilingual_btn)
-        lang_layout.addLayout(lang_btn_layout)
-
-        # Language info label
-        self._lang_info_label = QLabel()
-        self._lang_info_label.setWordWrap(True)
-        self._lang_info_label.setStyleSheet("font-size: 10px; color: #71717a; background: transparent;")
-        lang_layout.addWidget(self._lang_info_label)
-
-        layout.addWidget(lang_card)
-
-        # Model selection card with slider
-        selection_card = QFrame()
-        selection_card.setObjectName("card")
-        selection_layout = QVBoxLayout(selection_card)
-        selection_layout.setContentsMargins(16, 12, 16, 12)
-        selection_layout.setSpacing(4)
-
-        selection_title = QLabel("🎯 Choose Model Size")
-        selection_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
-        selection_layout.addWidget(selection_title)
-
-        # Container for slider labels (will be rebuilt on language change)
-        self._labels_container = QWidget()
-        self._labels_container.setStyleSheet("background: transparent;")
-        self._labels_layout = QHBoxLayout(self._labels_container)
-        self._labels_layout.setContentsMargins(0, 4, 0, 0)
-        self._labels_layout.setSpacing(0)
-        selection_layout.addWidget(self._labels_container)
-
-        # Slider with proper padding for handle visibility
-        slider_container = QWidget()
-        slider_container.setStyleSheet("background: transparent;")
-        slider_container.setFixedHeight(36)
-        slider_inner = QHBoxLayout(slider_container)
-        slider_inner.setContentsMargins(0, 0, 0, 0)
-
-        self._model_slider = QSlider(Qt.Orientation.Horizontal)
-        self._model_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._model_slider.setTickInterval(1)
-        self._model_slider.setStyleSheet("""
-            QSlider {
-                background: transparent;
-                height: 32px;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #27272a;
-                height: 4px;
-                background: #1a1d26;
-                border-radius: 2px;
-                margin: 0;
-            }
-            QSlider::handle:horizontal {
-                background: #f59e0b;
-                border: none;
-                width: 16px;
-                height: 16px;
-                margin: -6px 0;
-                border-radius: 8px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #fbbf24;
-            }
-            QSlider::sub-page:horizontal {
-                background: rgba(245, 158, 11, 0.4);
-                border-radius: 2px;
-            }
-            QSlider::tick-mark {
-                background: #71717a;
-            }
-        """)
-        self._model_slider.valueChanged.connect(self._on_slider_changed)
-        slider_inner.addWidget(self._model_slider)
-        selection_layout.addWidget(slider_container)
-
-        # Container for size labels (will be rebuilt on language change)
-        self._size_container = QWidget()
-        self._size_container.setStyleSheet("background: transparent;")
-        self._size_layout = QHBoxLayout(self._size_container)
-        self._size_layout.setContentsMargins(0, 0, 0, 4)
-        self._size_layout.setSpacing(0)
-        selection_layout.addWidget(self._size_container)
-
-        # Selected model info
-        self._model_info_label = QLabel()
-        self._model_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._model_info_label.setWordWrap(True)
-        self._model_info_label.setFixedHeight(32)
-        self._model_info_label.setStyleSheet("""
-            font-size: 11px;
-            color: #e4e4e7;
-            padding: 6px 10px;
-            background: #1a1d26;
-            border-radius: 6px;
-        """)
-        selection_layout.addWidget(self._model_info_label)
-
-        layout.addWidget(selection_card)
-
-        # Store selected model (default to medium for best balance)
-        self._selected_whisper_model: str = "medium"
-
-        # Build initial slider UI
-        self._rebuild_slider_ui()
-        self._update_language_info()
-
-        # MLX-specific installation section (only for Apple Silicon)
-        self._mlx_section = QFrame()
-        self._mlx_section.setObjectName("card")
-        mlx_layout = QVBoxLayout(self._mlx_section)
-        mlx_layout.setContentsMargins(16, 12, 16, 12)
-        mlx_layout.setSpacing(6)
-
-        status_title = QLabel("📋 Requirements")
+        status_title = QLabel("⚙️ Speech Recognition Engine")
         status_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
-        mlx_layout.addWidget(status_title)
+        status_layout.addWidget(status_title)
 
-        self.ffmpeg_status = self._create_status_row("🎬 FFmpeg", "Checking...")
-        self.mlx_status = self._create_status_row("🧠 MLX Whisper", "Checking...")
+        self.funasr_status = self._create_status_row("🧠 FunASR runtime", "Checking...")
+        status_layout.addWidget(self.funasr_status)
 
-        mlx_layout.addWidget(self.ffmpeg_status)
-        mlx_layout.addWidget(self.mlx_status)
-
-        # Progress bar for installations
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        self.progress.setFixedHeight(16)
-        mlx_layout.addWidget(self.progress)
+        status_layout.addWidget(self.progress)
 
-        # Log output for installations
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
+        self.log_output.setMaximumHeight(100)
         self.log_output.setVisible(False)
-        self.log_output.setMaximumHeight(60)
-        self.log_output.setStyleSheet("font-size: 10px;")
-        mlx_layout.addWidget(self.log_output)
+        status_layout.addWidget(self.log_output)
 
-        # Installation buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        self.install_btn = QPushButton("📦 Install FunASR")
+        self.install_btn.setFixedHeight(32)
+        self.install_btn.clicked.connect(self._install_funasr)
+        status_layout.addWidget(self.install_btn)
 
-        self.install_ffmpeg_btn = QPushButton("🎬 FFmpeg")
-        self.install_ffmpeg_btn.setFixedHeight(32)
-        self.install_ffmpeg_btn.clicked.connect(self._install_ffmpeg)
-        btn_layout.addWidget(self.install_ffmpeg_btn)
+        layout.addWidget(status_card)
 
-        self.install_mlx_btn = QPushButton("🧠 MLX Whisper")
-        self.install_mlx_btn.setFixedHeight(32)
-        self.install_mlx_btn.clicked.connect(self._install_mlx_whisper)
-        btn_layout.addWidget(self.install_mlx_btn)
+        # Device selection card
+        device_card = QFrame()
+        device_card.setObjectName("card")
+        device_layout = QVBoxLayout(device_card)
+        device_layout.setContentsMargins(16, 12, 16, 12)
+        device_layout.setSpacing(8)
 
-        btn_layout.addStretch()
-        mlx_layout.addLayout(btn_layout)
+        device_title = QLabel("⚡ Compute Device")
+        device_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        device_layout.addWidget(device_title)
 
-        layout.addWidget(self._mlx_section)
+        self._device_combo = QComboBox()
+        self._device_combo.addItem("Auto (CUDA → MPS → CPU)", "auto")
+        self._device_combo.addItem("CUDA (NVIDIA GPU)", "cuda")
+        self._device_combo.addItem("MPS (Apple Silicon)", "mps")
+        self._device_combo.addItem("CPU", "cpu")
+        self._device_combo.setFixedHeight(34)
+        device_layout.addWidget(self._device_combo)
 
-        # Hide MLX section on non-Apple Silicon
-        if not self._is_apple_silicon:
-            self._mlx_section.setVisible(False)
+        self._device_info = QLabel(
+            "Auto picks the fastest available device. CPU is plenty for "
+            "SenseVoiceSmall (≈17× realtime)."
+        )
+        self._device_info.setWordWrap(True)
+        self._device_info.setStyleSheet("font-size: 10px; color: #71717a; background: transparent;")
+        device_layout.addWidget(self._device_info)
 
-        # Status label
-        self.status_label = QLabel("")
+        layout.addWidget(device_card)
+
+        self.status_label = QLabel()
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("font-size: 11px; background: transparent;")
+        self.status_label.setStyleSheet("font-size: 12px; color: #a1a1aa; background: transparent;")
         layout.addWidget(self.status_label)
-
-        layout.addStretch()
 
         scroll.setWidget(content)
         main_layout.addWidget(scroll)
         self.setLayout(main_layout)
 
-        self._is_complete = True  # Always complete - model selection can always proceed
+        self._is_complete = False
         self._worker: Optional[CommandWorker] = None
+        self._load_configured_device()
+        QTimer.singleShot(0, self._refresh_status)
 
-    def _get_current_model_options(self) -> list:
-        """Get the model options list based on current language mode.
-
-        Filters out large-v3-turbo on non-Apple-Silicon platforms when the
-        installed faster-whisper version does not support it.
-        """
-        options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
-        # Apple Silicon uses MLX Whisper which always supports turbo
-        if self._is_apple_silicon:
-            return options
-        # For faster-whisper backend, only show turbo if the library supports it
-        if not _is_faster_whisper_turbo_supported():
-            options = [opt for opt in options if opt[0] != "large-v3-turbo"]
-        return options
-
-    def _on_language_changed(self, is_english: bool):
-        """Handle language mode change."""
-        self._is_english_only = is_english
-        self._english_btn.setChecked(is_english)
-        self._multilingual_btn.setChecked(not is_english)
-
-        # Update the language info text
-        self._update_language_info()
-
-        # Rebuild slider with new model options
-        self._rebuild_slider_ui()
-
-    def _update_language_info(self):
-        """Update the language info label based on current selection."""
-        if self._is_english_only:
-            self._lang_info_label.setText(
-                "English-only models are optimized for English and may have slightly better accuracy."
-            )
-        else:
-            self._lang_info_label.setText(
-                "Multilingual models support 99 languages including: Spanish, French, German, Chinese, "
-                "Japanese, Korean, Arabic, Hindi, Portuguese, Russian, and many more."
-            )
-
-    def _rebuild_slider_ui(self):
-        """Rebuild the slider labels based on current language mode."""
-        options = self._get_current_model_options()
-        n = len(options)
-
-        # Clear existing labels.  The labels are already properly parented
-        # to their container widget, and takeAt() removes the layout's
-        # reference — scheduling deleteLater() is enough.  Do NOT call
-        # setParent(None) here: on macOS that promotes each QLabel to a
-        # top-level widget mid-transition, which triggers a native
-        # NSWindow creation and can SIGABRT inside QWizard.exec().  On
-        # Windows the same reparent creates a native HWND and fast-fails
-        # (0xc0000409) inside Qt6Core.dll — see dictation_history.py
-        # where the same mistake crashed the history window.
-        while self._labels_layout.count():
-            item = self._labels_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-            # Spacers are automatically cleaned up when the item goes out of scope.
-
-        while self._size_layout.count():
-            item = self._size_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        # Add labels aligned with slider tick positions
-        # Slider ticks are at 0, 1/(n-1), 2/(n-1), ..., 1 of the groove width
-        # We achieve this by: label[0], stretch, label[1], stretch, ..., label[n-1]
-        # First label left-aligned, last label right-aligned, middle labels centered
-        for i, (model_id, name, file_size, vram, desc) in enumerate(options):
-            # Model name label
-            label = QLabel(name)
-            if i == 0:
-                label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            elif i == n - 1:
-                label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            else:
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet("font-size: 11px; color: #e4e4e7; background: transparent;")
-            label.setFixedHeight(18)
-            self._labels_layout.addWidget(label)
-
-            # Size/VRAM label - single line to save space
-            size_label = QLabel(f"{file_size} / {vram}")
-            if i == 0:
-                size_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            elif i == n - 1:
-                size_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            else:
-                size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            size_label.setStyleSheet("font-size: 9px; color: #71717a; background: transparent;")
-            size_label.setFixedHeight(16)
-            self._size_layout.addWidget(size_label)
-
-            # Add stretch after each label except the last
-            if i < n - 1:
-                self._labels_layout.addStretch(1)
-                self._size_layout.addStretch(1)
-
-        # Update slider range
-        self._model_slider.setMinimum(0)
-        self._model_slider.setMaximum(len(options) - 1)
-
-        # Find best matching position for current selection or default to "tiny"
-        model_ids = [m[0] for m in options]
-        current_base = self._selected_whisper_model.replace(".en", "")
-
-        # Try to find matching model
-        if self._is_english_only:
-            target = f"{current_base}.en" if not current_base.endswith(".en") else current_base
-        else:
-            target = current_base.replace(".en", "")
-
-        if target in model_ids:
-            slider_pos = model_ids.index(target)
-        elif "tiny.en" in model_ids:
-            slider_pos = model_ids.index("tiny.en")
-        elif "tiny" in model_ids:
-            slider_pos = model_ids.index("tiny")
-        else:
-            slider_pos = 0  # Default to first (smallest) model
-
-        self._model_slider.setValue(slider_pos)
-        self._selected_whisper_model = options[slider_pos][0]
-        self._update_model_info()
-
-    def _on_slider_changed(self, value: int):
-        """Handle slider value change."""
-        options = self._get_current_model_options()
-        if 0 <= value < len(options):
-            model_id, name, file_size, ram, desc = options[value]
-            self._selected_whisper_model = model_id
-            self._update_model_info()
-
-    def _update_model_info(self):
-        """Update the model info label based on current selection."""
-        options = self._get_current_model_options()
-        for model_id, name, file_size, ram, desc in options:
-            if model_id == self._selected_whisper_model:
-                lang_note = "English only" if self._is_english_only else "99 languages"
-                self._model_info_label.setText(f"Selected: {name} ({file_size}, {ram}) — {desc} [{lang_note}]")
-                break
+    def _load_configured_device(self) -> None:
+        """Restore the configured device into the combo box."""
+        try:
+            cfg = load_settings()
+            device = str(getattr(cfg, "sensevoice_device", "auto") or "auto").lower()
+        except Exception:
+            device = "auto"
+        index = self._device_combo.findData(device)
+        self._device_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _create_status_row(self, label_text: str, status_text: str) -> QWidget:
         """Create a status row widget."""
@@ -2853,179 +2454,83 @@ class WhisperSetupPage(QWizardPage):
             else:
                 status_label.setStyleSheet("font-size: 12px; color: #fbbf24; background: transparent;")
 
-    def _save_whisper_model_to_config(self):
-        """Save the selected whisper model to config file."""
+    def _refresh_status(self) -> None:
+        from jarvis.listening.sensevoice import is_available, bundled_model_dir
+
+        available = is_available()
+        bundled = bundled_model_dir()
+        if available:
+            self._update_status_row(self.funasr_status, "✅ Installed", True)
+            self.install_btn.setEnabled(False)
+            self.install_btn.setText("✅ FunASR Installed")
+            if bundled:
+                self.status_label.setText(
+                    f"✅ Speech recognition ready — model weights bundled at:\n{bundled}"
+                )
+            else:
+                self.status_label.setText(
+                    "✅ FunASR installed. The model will be downloaded on first use "
+                    "(or bundle it with the app via scripts/fetch_sensevoice_model.py)."
+                )
+        else:
+            self._update_status_row(self.funasr_status, "❌ Not installed", False)
+            self.install_btn.setEnabled(True)
+            self.install_btn.setText("📦 Install FunASR")
+            self.status_label.setText(
+                "💡 FunASR is required for speech recognition. Install it now, "
+                "or continue — you can install it later from the Settings window."
+            )
+        self._is_complete = True
+        self.completeChanged.emit()
+
+    def _install_funasr(self):
+        """Install FunASR via pip (with the torch/torchaudio it requires)."""
+        self.install_btn.setEnabled(False)
+        self.install_btn.setText("⏳ Installing...")
+        self.progress.setVisible(True)
+        self.log_output.setVisible(True)
+        self._worker = CommandWorker(
+            [sys.executable, "-m", "pip", "install", "funasr", "torch", "torchaudio"]
+        )
+        self._worker.output.connect(self.log_output.append)
+        self._worker.completed.connect(self._on_funasr_installed)
+        self._worker.start()
+
+    def _on_funasr_installed(self, success: bool, message: str):
+        """Handle FunASR installation completion."""
+        self.install_btn.setEnabled(True)
+        self.install_btn.setText("📦 Install FunASR")
+        self.progress.setVisible(False)
+        if success:
+            self.status_label.setText("✅ FunASR installed. Speech recognition is ready.")
+        else:
+            self.status_label.setText(f"❌ Failed to install FunASR: {message}")
+        self._refresh_status()
+
+    def isComplete(self) -> bool:
+        """Page is complete once the runtime check has finished."""
+        return self._is_complete
+
+    def validatePage(self) -> bool:
+        """Save the device choice when leaving the page."""
+        self._save_device_to_config()
+        return True
+
+    def _save_device_to_config(self) -> bool:
+        """Save the selected compute device to the config file."""
         try:
             from jarvis.config import _load_json, _save_json
+
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             config = _load_json(config_path) or {}
-            config["whisper_model"] = self._selected_whisper_model
+            config["sensevoice_device"] = self._device_combo.currentData() or "auto"
 
             # _save_json keeps the file at 0o600 (it can hold llm_api_key).
             return _save_json(config_path, config)
         except Exception:
             return False
-
-    def initializePage(self):
-        """Check status when page is shown."""
-        # Load the currently configured whisper model
-        current_whisper_model = "medium"  # Default to medium multilingual
-        try:
-            cfg = load_settings()
-            current_whisper_model = cfg.whisper_model
-        except Exception:
-            pass
-
-        # Detect language mode from the model name
-        self._is_english_only = current_whisper_model.endswith(".en")
-        self._english_btn.setChecked(self._is_english_only)
-        self._multilingual_btn.setChecked(not self._is_english_only)
-        self._update_language_info()
-
-        # Set the selected model and rebuild slider
-        self._selected_whisper_model = current_whisper_model
-        self._rebuild_slider_ui()
-
-        # Refresh MLX status only on Apple Silicon
-        if self._is_apple_silicon:
-            self._refresh_mlx_status()
-
-    def _refresh_mlx_status(self):
-        """Refresh MLX Whisper installation status (Apple Silicon only)."""
-        status = check_mlx_whisper_status()
-
-        # Update wizard status
-        wizard = self.wizard()
-        if isinstance(wizard, SetupWizard):
-            wizard.mlx_whisper_status = status
-
-        # Update FFmpeg status
-        if status.is_ffmpeg_installed:
-            self._update_status_row(self.ffmpeg_status, f"✅ Installed ({status.ffmpeg_path})", True)
-            self.install_ffmpeg_btn.setEnabled(False)
-            self.install_ffmpeg_btn.setText("✅ FFmpeg Installed")
-        else:
-            self._update_status_row(self.ffmpeg_status, "❌ Not installed", False)
-            self.install_ffmpeg_btn.setEnabled(True)
-            self.install_ffmpeg_btn.setText("🎬 Install FFmpeg")
-
-        # Update MLX Whisper status
-        if status.is_mlx_whisper_installed:
-            self._update_status_row(self.mlx_status, "✅ Installed", True)
-            self.install_mlx_btn.setEnabled(False)
-            self.install_mlx_btn.setText("✅ MLX Whisper Installed")
-            self.install_mlx_btn.setVisible(True)
-        elif self._is_bundled:
-            # In bundled mode, can't pip install - hide the button
-            self._update_status_row(self.mlx_status, "⚡ Using faster-whisper", True)
-            self.install_mlx_btn.setVisible(False)
-        else:
-            self._update_status_row(self.mlx_status, "❌ Not installed", False)
-            self.install_mlx_btn.setEnabled(True)
-            self.install_mlx_btn.setText("🧠 Install MLX Whisper")
-            self.install_mlx_btn.setVisible(True)
-
-        # Update status message based on setup state
-        if status.is_fully_setup:
-            self.status_label.setText("✅ MLX Whisper is ready! GPU-accelerated speech recognition enabled.")
-            self.status_label.setStyleSheet("color: #4ade80;")
-        elif self._is_bundled and not status.is_mlx_whisper_installed:
-            # In bundled mode without MLX, faster-whisper is used automatically
-            self.status_label.setText("✅ Speech recognition ready using faster-whisper.")
-            self.status_label.setStyleSheet("color: #4ade80;")
-        else:
-            if not status.is_ffmpeg_installed:
-                self.status_label.setText(
-                    "💡 Install FFmpeg for audio processing, or continue to save your model selection."
-                )
-            elif not status.is_mlx_whisper_installed:
-                self.status_label.setText(
-                    "💡 Install MLX Whisper for GPU acceleration, or continue to save your model selection."
-                )
-            self.status_label.setStyleSheet("color: #a1a1aa;")
-
-        self.completeChanged.emit()
-
-    def _install_ffmpeg(self):
-        """Install FFmpeg via Homebrew."""
-        # Check if Homebrew is installed
-        brew_path = shutil.which("brew")
-        if not brew_path:
-            self.status_label.setText(
-                "❌ Homebrew not found. Please install Homebrew first:\n"
-                "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-            )
-            self.status_label.setStyleSheet("color: #f87171;")
-            return
-
-        self.install_ffmpeg_btn.setEnabled(False)
-        self.install_ffmpeg_btn.setText("⏳ Installing...")
-        self.progress.setVisible(True)
-        self.progress.setRange(0, 0)
-        self.log_output.setVisible(True)
-        self.log_output.clear()
-
-        self._worker = CommandWorker([brew_path, "install", "ffmpeg"])
-        self._worker.output.connect(self._on_output)
-        self._worker.completed.connect(self._on_ffmpeg_installed)
-        self._worker.start()
-
-    def _install_mlx_whisper(self):
-        """Install MLX Whisper via pip."""
-        self.install_mlx_btn.setEnabled(False)
-        self.install_mlx_btn.setText("⏳ Installing...")
-        self.progress.setVisible(True)
-        self.progress.setRange(0, 0)
-        self.log_output.setVisible(True)
-        self.log_output.clear()
-
-        # Use the current Python interpreter
-        python_path = sys.executable
-        self._worker = CommandWorker([python_path, "-m", "pip", "install", "mlx-whisper"])
-        self._worker.output.connect(self._on_output)
-        self._worker.completed.connect(self._on_mlx_installed)
-        self._worker.start()
-
-    def _on_output(self, text: str):
-        """Handle command output."""
-        self.log_output.append(text)
-        scrollbar = self.log_output.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
-    def _on_ffmpeg_installed(self, success: bool, message: str):
-        """Handle FFmpeg installation completion."""
-        self.progress.setVisible(False)
-        self.install_ffmpeg_btn.setEnabled(True)
-        self.install_ffmpeg_btn.setText("🎬 Install FFmpeg")
-
-        if success:
-            self._refresh_mlx_status()
-        else:
-            self.status_label.setText(f"❌ Failed to install FFmpeg: {message}")
-            self.status_label.setStyleSheet("color: #f87171;")
-
-    def _on_mlx_installed(self, success: bool, message: str):
-        """Handle MLX Whisper installation completion."""
-        self.progress.setVisible(False)
-        self.install_mlx_btn.setEnabled(True)
-        self.install_mlx_btn.setText("🧠 Install MLX Whisper")
-
-        if success:
-            self._refresh_mlx_status()
-        else:
-            self.status_label.setText(f"❌ Failed to install MLX Whisper: {message}")
-            self.status_label.setStyleSheet("color: #f87171;")
-
-    def isComplete(self) -> bool:
-        """Page is complete when setup is done or skipped."""
-        return self._is_complete
-
-    def validatePage(self) -> bool:
-        """Save whisper model selection when leaving the page."""
-        self._save_whisper_model_to_config()
-        return True
 
     def nextId(self) -> int:
         """Go to Provider Choice so the user can confirm or change
@@ -3444,7 +2949,7 @@ class DictationPage(QWizardPage):
         tips = QLabel(
             "• <b>Hold</b> the hotkey to record, <b>release</b> to transcribe and paste\n"
             "• <b>Double-tap</b> the hotkey for hands-free mode (tap again or press Esc to stop)\n"
-            "• Uses the same Whisper model as voice input — no extra memory\n"
+            "• Uses the same SenseVoice model as voice input — no extra memory\n"
             "• View past dictations from the system tray → 🎙️ Dictation History\n"
             "• Fine-tune in Settings: filler word removal, custom dictionary, and more"
         )
@@ -3746,7 +3251,7 @@ class SearchProvidersPage(QWizardPage):
 
         wiki_desc = QLabel(
             "Last-resort fallback. No key, no account, privacy-light. Uses "
-            "the Wikipedia host matching the language Whisper detects in "
+            "the Wikipedia host matching the language SenseVoice detects in "
             "your utterance, so a Turkish question gets a Turkish answer."
         )
         wiki_desc.setWordWrap(True)

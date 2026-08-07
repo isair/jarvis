@@ -33,7 +33,7 @@ class EchoDetector:
         # the minimum word count required both for the overlapped prefix and
         # for the non-echo remainder we keep. 3 is low enough to admit short
         # natural follow-ups ("tell me more please") while high enough to
-        # reject Whisper's echo-tail hallucinations ("…regions like Steneti").
+        # reject the recogniser's echo-tail hallucinations ("…regions like Steneti").
         self.min_salvage_words: int = 3
         # Backwards-compat alias — older callers used the overlap name.
         self._min_overlap_accept_words: int = self.min_salvage_words
@@ -80,7 +80,7 @@ class EchoDetector:
         """
         Normalize text for echo comparison.
 
-        Handles differences between TTS text and how Whisper transcribes it:
+        Handles differences between TTS text and how the recogniser transcribes it:
         - Degree symbols: 9°C → 9 degrees celsius
         - Common TTS pronunciation variations
         """
@@ -113,7 +113,7 @@ class EchoDetector:
         if not heard_text or not tts_text:
             return False
 
-        # Normalize both texts to handle TTS/Whisper differences
+        # Normalize both texts to handle TTS/recogniser differences
         heard_lower = self._normalize_for_comparison(heard_text)
         tts_lower = self._normalize_for_comparison(tts_text)
 
@@ -315,7 +315,7 @@ class EchoDetector:
         inside cleanup_leading_echo_during_tts) both have a blind spot for
         the common field pattern where:
 
-          * Whisper mis-transcribes the first echo word (e.g. 'explores' →
+          * The recogniser mis-transcribes the first echo word (e.g. 'explores' →
             'laws'), breaking exact word-match salvage.
           * The real follow-up is short (1–3 words: "Who made it?"), so the
             fuzzy iteration — which prefers the shortest suffix — truncates
@@ -433,7 +433,7 @@ class EchoDetector:
         if not heard_text or not self._last_tts_text:
             return heard_text
 
-        # Normalize to handle TTS/Whisper differences (e.g., "5.7°C" vs "5.7 degrees Celsius")
+        # Normalize to handle TTS/recogniser differences (e.g., "5.7°C" vs "5.7 degrees Celsius")
         heard_normalized = self._normalize_for_comparison(heard_text)
         tts_normalized = self._normalize_for_comparison(self._last_tts_text)
 
@@ -458,7 +458,7 @@ class EchoDetector:
             for wa, wb in zip(a, b):
                 if wa == wb:
                     continue
-                # Allow fuzzy match for words Whisper may transcribe differently
+                # Allow fuzzy match for words the recogniser may transcribe differently
                 # (e.g. "tbilisi" vs "tvalisi")
                 if fuzz.ratio(wa, wb) >= 70:
                     continue

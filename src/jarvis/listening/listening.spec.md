@@ -18,7 +18,7 @@ This document outlines the voice listening architecture. The system uses a **tra
         │
         ▼
 ┌───────────────┐
-│    Whisper    │
+│  SenseVoice  │
 │ (transcribe)  │
 └───────┬───────┘
         │
@@ -90,7 +90,7 @@ Instead of extracting post-wake-word audio, we:
 
 ### 2. Text-Based Wake Detection
 
-Wake word detection operates on the rolling transcript buffer. When Whisper produces text, it is checked for the configured wake word and aliases using fuzzy matching (`rapidfuzz`). This supports arbitrary wake words in any language.
+Wake word detection operates on the rolling transcript buffer. When the recogniser produces text, it is checked for the configured wake word and aliases using fuzzy matching (`rapidfuzz`). This supports arbitrary wake words in any language.
 
 ### 3. Context-Aware Intent Judge
 
@@ -101,7 +101,7 @@ The intent judge receives full context and makes intelligent decisions:
 
 **Gating:** The judge is called only when there is an engagement signal — (a) a wake word was detected in the current utterance, (b) the utterance falls inside (or pending) a hot window, or (c) TTS is currently speaking. Pure ambient speech skips the judge entirely. This keeps the synchronous audio loop from blocking up to `intent_judge_timeout_sec` on every background utterance, which would otherwise freeze the UI when Ollama is slow or contended.
 
-**Alias normalisation:** Before the transcript is sent to the judge, every configured wake-word alias in each segment is replaced with the primary assistant name (case-insensitive, word-boundary-aware). Aliases are Whisper mishearings of the wake word (e.g. "Jervis", "Jaivis" for "Jarvis"); without this step the small judge model sees the alias, doesn't know it refers to the assistant, and can decide the user is addressing a different person. Normalisation happens at prompt-build time only — the raw transcript buffer is untouched.
+**Alias normalisation:** Before the transcript is sent to the judge, every configured wake-word alias in each segment is replaced with the primary assistant name (case-insensitive, word-boundary-aware). Aliases are recogniser mishearings of the wake word (e.g. "Jervis", "Jaivis" for "Jarvis"); without this step the small judge model sees the alias, doesn't know it refers to the assistant, and can decide the user is addressing a different person. Normalisation happens at prompt-build time only — the raw transcript buffer is untouched.
 
 **Wake-word removal in the extracted query:** The wake word is addressed TO the assistant, never part of the query content. The judge prompt explicitly instructs removing every occurrence of the wake word from the extracted `query` — at the start, end, or middle of the sentence, including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → film is "Possessor", not "Possessor Jarvis"). The only exception is when the user is literally talking *about* the assistant as a subject ("tell me about Jarvis"). This is enforced by prompt rule + example rather than post-hoc string stripping, because the LLM already understands the semantic distinction and can handle cases a regex would mishandle (e.g. proper names that contain the wake word, like "Jarvis Cocker").
 
@@ -113,7 +113,7 @@ Before the listener announces "Listening!", it pre-loads every model the first e
 
 ```
   🔥 Warming up models...
-     🎤 Whisper 'small' loaded on cpu
+     🎤 SenseVoice 'FunAudioLLM/SenseVoiceSmall' ready on cpu
      💬 Chat model 'llama3.1' ready
      🧠 Intent judge 'gemma4:e2b' ready
 🎙️  Listening! Try:
@@ -129,11 +129,13 @@ The weather example adapts to location availability: if `location_enabled` is tr
 On small models, a caveat line is appended above a more involved example to set expectations (`⚠️ Small model in use (…). Assume it can't infer — spell out the steps for anything more involved:`). The Chrome MCP tip continues to appear as its own block when the browser tool is detected.
 
 **What gets warmed:**
-- **Whisper** — loading the model; additionally a silent-audio transcribe so the first real utterance doesn't pay the cold-decode cost. Both the MLX and faster-whisper backends do this.
+- **SenseVoice (FunASR)** — loading the model; additionally a low-amplitude noise transcribe so the first real utterance doesn't pay the cold-decode cost. A bundled model (when the build ships weights) is preferred; otherwise FunASR downloads it on first use.
 - **Chat model** (`cfg.llm_chat_model`) — verifies the server is actually Ollama via `GET /api/version`, then issues a minimal `/api/generate` request with `keep_alive=30m` so the weights stay resident.
 - **Intent judge model** (the fast tier: `resolve_model(cfg, Tier.FAST)`) — same pattern. If it points at the same Ollama model as the chat model, a single warmup covers both roles (Ollama loads the weights once).
 
-**Concurrency:** LLM warmups run in daemon threads started before Whisper loads, so they overlap with Whisper initialisation. After Whisper finishes, the listener joins the warmup threads with a **single 60 s budget** shared across them all. If the budget is exhausted, the listener continues (with a `⏳ Some models still warming — continuing anyway` notice) and the first engagement pays the cold-load cost on demand.
+**Concurrency:** LLM warmups run in daemon threads started before SenseVoice loads, so they overlap with SenseVoice initialisation. After SenseVoice finishes, the listener joins the warmup threads with a **single 60 s budget** shared across them all. If the budget is exhausted, the listener continues (with a `⏳ Some models still warming — continuing anyway` notice) and the first engagement pays the cold-load cost on demand.
+
+**Runtime pre-load:** `daemon.main()` imports the SenseVoice runtime (funasr + torch + sklearn + scipy) on the main thread **before** the voice thread and the pynput keyboard-hook thread start. funasr's import chain loads many native DLLs; importing it from the voice thread concurrently with pynput's native message loop deadlocks on the Windows loader lock (the voice thread stalls forever in `importlib.create_module`). The eager import serialises all native loading ahead of thread divergence; the listener's own lazy import remains as a safety net for non-daemon use.
 
 **Best-effort semantics:** Every warmup path swallows its own errors and returns a bool. A failed warmup prints `⚠️ … warmup failed — will load on first use` but never blocks or crashes the listener — voice input is prioritised over startup latency.
 
@@ -163,11 +165,11 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
-**Mixed echo+speech handling:** When Whisper merges TTS echo and user speech into one chunk (e.g. mic picks up TTS then user speaks), the word-count guard detects the extra content and lets it through to the intent judge. The judge extracts the user's actual query from the mixed transcript. Post-judge echo checks also use the word-count guard and verify the judge's extracted query isn't itself echo before rejecting.
+**Mixed echo+speech handling:** When the recogniser merges TTS echo and user speech into one chunk (e.g. mic picks up TTS then user speaks), the word-count guard detects the extra content and lets it through to the intent judge. The judge extracts the user's actual query from the mixed transcript. Post-judge echo checks also use the word-count guard and verify the judge's extracted query isn't itself echo before rejecting.
 
-**Early salvage for echo-prefixed follow-ups:** Before the early fuzzy check rejects a chunk as pure echo, the listener calls `cleanup_leading_echo` to strip any TTS-tail prefix. If exact-word cleanup fails (for example because Whisper mis-transcribed the first echo word — *"explores"* → *"laws"* — breaking the word-level comparison), the listener falls back to `salvage_after_echo_tail`, which scans heard-text word boundaries right-to-left looking for the rightmost 5-word window that fuzzy-matches the TTS tail (`partial_ratio >= 85`) and keeps everything after it. This preserves short follow-ups (*"Who made it?"*) that the existing fuzzy-prefix salvage would otherwise truncate by one word because it prefers the shortest suffix. If the surviving remainder has at least `EchoDetector.min_salvage_words` words (default 3), it replaces the transcript segment text and is treated as the user's follow-up. The same minimum-word threshold is shared by the during-TTS and post-TTS merged-chunk salvage paths so the policy is consistent across all three sites.
+**Early salvage for echo-prefixed follow-ups:** Before the early fuzzy check rejects a chunk as pure echo, the listener calls `cleanup_leading_echo` to strip any TTS-tail prefix. If exact-word cleanup fails (for example because the recogniser mis-transcribed the first echo word — *"explores"* → *"laws"* — breaking the word-level comparison), the listener falls back to `salvage_after_echo_tail`, which scans heard-text word boundaries right-to-left looking for the rightmost 5-word window that fuzzy-matches the TTS tail (`partial_ratio >= 85`) and keeps everything after it. This preserves short follow-ups (*"Who made it?"*) that the existing fuzzy-prefix salvage would otherwise truncate by one word because it prefers the shortest suffix. If the surviving remainder has at least `EchoDetector.min_salvage_words` words (default 3), it replaces the transcript segment text and is treated as the user's follow-up. The same minimum-word threshold is shared by the during-TTS and post-TTS merged-chunk salvage paths so the policy is consistent across all three sites.
 
-**Timestamp-based detection:** `was_speech_during_hot_window(utterance_start_time, utterance_end_time)` compares the utterance's time range against the hot window's time span (from schedule to expiry). This eliminates race conditions between slow Whisper transcription and the expiry timer — if the user started speaking during the window, it counts as hot window input regardless of when the transcript arrives. Also handles **overlapping utterances** where VAD triggered during TTS (mic picking up echo) but the utterance extended into the hot window period.
+**Timestamp-based detection:** `was_speech_during_hot_window(utterance_start_time, utterance_end_time)` compares the utterance's time range against the hot window's time span (from schedule to expiry). This eliminates race conditions between slow transcription and the expiry timer — if the user started speaking during the window, it counts as hot window input regardless of when the transcript arrives. Also handles **overlapping utterances** where VAD triggered during TTS (mic picking up echo) but the utterance extended into the hot window period.
 
 **`could_be_hot_window` (intent judge context):** Derived from timestamp comparison — returns True if the hot window is active, activation is pending, the utterance started within the window span even after expiry, or the utterance overlaps with the span (started before, ended during).
 
@@ -290,7 +292,7 @@ Judge output: {"directed": true, "query": "Ni hao", "reasoning": "New speech dir
 
 ## Early Feedback (Beep & Face State)
 
-To minimise perceived latency, audio and visual feedback starts **immediately after Whisper transcription**, before the intent judge runs:
+To minimise perceived latency, audio and visual feedback starts **immediately after transcription**, before the intent judge runs:
 
 - **Wake word mode:** If the transcribed text contains the wake word (fuzzy-matched), start the thinking beep and set face state to LISTENING.
 - **Hot window:** If voice started during an active (or pending) hot window, start the thinking beep and set face state to LISTENING.
@@ -307,7 +309,7 @@ If the intent judge later rejects the query (and no hot window override applies)
   "transcript_buffer_duration_sec": 120,
 
   "fast_model": "gemma4:e2b",
-  "intent_judge_timeout_sec": 6.0,
+  "intent_judge_timeout_sec": 10.0,
 
   "hot_window_seconds": 3.0,
   "echo_tolerance": 0.3
@@ -317,8 +319,9 @@ If the intent judge later rejects the query (and no hot window override applies)
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
-| `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
-| `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
+| `sensevoice_model` | `FunAudioLLM/SenseVoiceSmall` | FunASR model id or a local model directory. Bundled weights (see `scripts/fetch_sensevoice_model.py`) are preferred over the id so installed apps never download. |
+| `sensevoice_device` | `auto` | Compute device for SenseVoice inference: `auto` (CUDA → MPS → CPU), `cuda`, `mps`, or `cpu`. |
+| `sensevoice_min_audio_duration` | 0.3 | Shortest utterance (seconds) that is transcribed. Shorter audio is ignored. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
@@ -353,7 +356,7 @@ Main Loop: Get Frames → VAD Check
     ↓
 Speech Detected → Accumulate Frames
     ↓
-Silence Timeout → Whisper Transcription
+Silence Timeout → SenseVoice Transcription
     ↓
 Add to Transcript Buffer (with timestamps)
     ↓
@@ -378,20 +381,12 @@ When components are unavailable, the system degrades gracefully:
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
 | Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
-| 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
+| 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for SenseVoice |
 | Transcript Buffer | Process each utterance independently |
 
-## Download Recovery
+## Model Bundling & Downloads
 
-Whisper model loading handles transient download failures automatically:
-
-### Corrupted Cache Recovery
-
-If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. If the retry also fails, a message guides the user to manually delete the cache.
-
-### Rate Limit Retry (HTTP 429)
-
-When HuggingFace returns HTTP 429 (Too Many Requests), both faster-whisper and MLX Whisper backends retry up to 4 times with exponential backoff (2s, 4s, 8s, 16s). Progress messages inform the user of each retry attempt. If all retries are exhausted, the user is advised to wait and restart.
+Installed builds ship the SenseVoiceSmall weights inside the app directory (`models/SenseVoiceSmall`), so speech recognition works offline with no downloads — the build coordinator fetches the weights once via `scripts/fetch_sensevoice_model.py`, and `jarvis_desktop.spec` bundles them. The engine prefers the bundled directory (`bundled_model_dir()`), then the configured `sensevoice_model` id, downloading via HuggingFace (`FunAudioLLM/SenseVoiceSmall`) or ModelScope (`iic/SenseVoiceSmall`) on first use when nothing is bundled (e.g. a dev checkout without the weights).
 
 ## Future: Acoustic Echo Cancellation
 

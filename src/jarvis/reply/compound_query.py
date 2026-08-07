@@ -152,7 +152,7 @@ def split_compound_query(text: str, language: Optional[str] = None) -> list[str]
 
     # Default to English when language is not provided (non-voice entrypoints
     # like evals and text chat carry no ISO code). Voice flows always pass a
-    # Whisper-detected language; if that language isn't in our table, we
+    # Recogniser-detected language; if that language isn't in our table, we
     # return no decomposition rather than fall back to English and mis-split.
     code = _normalise_language(language) or "en"
     rule = _RULES.get(code)

@@ -11,7 +11,7 @@ import os
 import time
 
 # Fix OpenBLAS threading crash in bundled apps
-# Must be set before numpy is imported (via faster-whisper, etc.)
+# Must be set before numpy is imported (via funasr/torch, etc.)
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
@@ -2387,7 +2387,7 @@ def _smoke_test_main() -> int:
 
     try:
         # Import inside the try so a missing/broken bundled dependency
-        # (e.g. a faster_whisper / ctranslate2 native lib) surfaces as a
+        # (e.g. a funasr / torch native lib) surfaces as a
         # clean "Daemon initialisation failed" instead of an uncaught
         # traceback with a mysterious exit code 1.
         from jarvis.daemon import main as daemon_main

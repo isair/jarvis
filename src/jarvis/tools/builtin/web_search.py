@@ -334,7 +334,7 @@ def _brave_search(query: str, api_key: str, count: int = 5
         return []
 
 
-# Language codes whose primary script is NOT Latin. When Whisper returns
+# Language codes whose primary script is NOT Latin. When the recogniser returns
 # one of these for a query whose letters are overwhelmingly ASCII/Latin,
 # we treat it as a misdetection and fall back to English rather than
 # hitting a locale-specific service that will come back empty.
@@ -351,7 +351,7 @@ _NON_LATIN_SCRIPT_LANGS: frozenset[str] = frozenset({
 
 def _language_script_mismatches_query(lang: str, query: str) -> bool:
     """Return True when `lang` expects a non-Latin script but `query` is
-    overwhelmingly Latin letters. Used to catch Whisper language
+    overwhelmingly Latin letters. Used to catch recogniser language
     misdetection before it poisons locale-scoped lookups."""
     if lang not in _NON_LATIN_SCRIPT_LANGS:
         return False
@@ -490,7 +490,7 @@ def _wikipedia_summary(
     Resolves a title via `_resolve_wikipedia_title` (opensearch with a
     full-text fallback) and then fetches the REST summary endpoint for
     that title. Uses `lang.wikipedia.org` so the reply is in the user's
-    spoken language when Whisper gave us a non-English code.
+    spoken language when the recogniser gave us a non-English code.
 
     We deliberately do NOT reuse the generic cascade fetcher: the REST
     summary API returns a curated `extract` field — short, clean, no
@@ -503,7 +503,7 @@ def _wikipedia_summary(
     """
     lang = (lang or "en").strip().lower() or "en"
     # Sanitise: Wikipedia's language subdomains are 2–3 letter codes. If
-    # Whisper returned something odd, fall back to English rather than
+    # The recogniser returned something odd, fall back to English rather than
     # hitting a non-existent subdomain.
     if not lang.isalpha() or not (2 <= len(lang) <= 3):
         lang = "en"
@@ -788,7 +788,7 @@ class WebSearchTool(Tool):
 
             # Wikipedia: last-resort, runs if we still have no content. The
             # REST summary endpoint is key-free and gives us a curated
-            # extract in the user's spoken language (via Whisper-detected
+            # extract in the user's spoken language (via recogniser-detected
             # ISO code on the tool context). Narrower than a full web
             # search by nature but perfect for the entity/definition
             # queries that dominate voice use.
@@ -799,7 +799,7 @@ class WebSearchTool(Tool):
                 and _budget_left() > 0
             ):
                 lang = (context.language or "en").strip().lower() or "en"
-                # Script-vs-language sanity check. Whisper sometimes
+                # Script-vs-language sanity check. The recogniser sometimes
                 # misdetects the language of short or noisy utterances,
                 # returning e.g. "ko"/"ja"/"zh"/"ru" for clearly Latin-
                 # script speech. Searching the wrong-language Wikipedia

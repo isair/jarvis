@@ -18,9 +18,7 @@ def _make_engine(**overrides):
     from src.jarvis.dictation.dictation_engine import DictationEngine
 
     defaults = dict(
-        whisper_model_ref=lambda: MagicMock(),
-        whisper_backend_ref=lambda: "faster-whisper",
-        mlx_repo_ref=lambda: None,
+        sensevoice_engine_ref=lambda: MagicMock(),
         hotkey="ctrl+shift+d",
         sample_rate=16000,
         on_dictation_start=None,
@@ -265,19 +263,15 @@ class TestRecordingStateMachine:
         except ImportError:
             pytest.skip("required dependencies not installed")
 
-    def test_start_recording_checks_whisper_model(self):
-        """Should not start recording if Whisper model is None (non-mlx)."""
-        engine = _make_engine(whisper_model_ref=lambda: None)
+    def test_start_recording_checks_engine(self):
+        """Should not start recording if the SenseVoice engine is not loaded."""
+        engine = _make_engine(sensevoice_engine_ref=lambda: None)
         engine._start_recording()
         assert engine._recording is False
 
-    def test_start_recording_allows_mlx_without_model(self):
-        """MLX backend uses repo reference, not model object."""
-        engine = _make_engine(
-            whisper_model_ref=lambda: None,
-            whisper_backend_ref=lambda: "mlx",
-            mlx_repo_ref=lambda: "mlx-community/whisper-small-mlx",
-        )
+    def test_start_recording_with_engine_ready(self):
+        """An available engine allows recording to start."""
+        engine = _make_engine(sensevoice_engine_ref=lambda: MagicMock())
         with patch("src.jarvis.dictation.dictation_engine.sd") as mock_sd, \
              patch("src.jarvis.dictation.dictation_engine._play_beep"):
             mock_stream = MagicMock()
@@ -380,8 +374,7 @@ class TestRecordingStateMachine:
         end_called = threading.Event()
         engine = _make_engine(
             on_dictation_end=end_called.set,
-            whisper_model_ref=lambda: None,
-            whisper_backend_ref=lambda: "faster-whisper",
+            sensevoice_engine_ref=lambda: None,
         )
         stream_mock = MagicMock()
         engine._recording = True
@@ -463,64 +456,54 @@ class TestTranscription:
         except ImportError:
             pytest.skip("numpy not installed")
 
-    def test_transcribe_faster_whisper(self):
+    def test_transcribe_via_engine(self):
         import numpy as np
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = " hello world "
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
-
-        engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="hello world", language=None, no_speech=False
         )
+
+        engine = _make_engine(sensevoice_engine_ref=lambda: mock_engine)
 
         audio = np.zeros(16000, dtype=np.float32)
         result = engine._transcribe(audio)
         assert result == "hello world"
+        mock_engine.transcribe.assert_called_once_with(audio)
 
     def test_transcribe_empty_returns_empty(self):
         import numpy as np
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = ([], MagicMock())
-
-        engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="", language=None, no_speech=False
         )
+
+        engine = _make_engine(sensevoice_engine_ref=lambda: mock_engine)
 
         audio = np.zeros(16000, dtype=np.float32)
         result = engine._transcribe(audio)
         assert result == ""
 
-    def test_transcribe_no_model_returns_empty(self):
+    def test_transcribe_no_engine_returns_empty(self):
         import numpy as np
-        engine = _make_engine(
-            whisper_model_ref=lambda: None,
-            whisper_backend_ref=lambda: "faster-whisper",
-        )
+        engine = _make_engine(sensevoice_engine_ref=lambda: None)
 
         audio = np.zeros(16000, dtype=np.float32)
         result = engine._transcribe(audio)
         assert result == ""
 
-    def test_transcribe_mlx(self):
-        import sys
+    def test_transcribe_nospeech_returns_empty(self):
+        """A <|nospeech|> result must not be pasted as text."""
         import numpy as np
-        mock_mlx = MagicMock()
-        mock_mlx.transcribe.return_value = {"text": "hello from mlx"}
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="ignored", language=None, no_speech=True
+        )
 
-        # Patch sys.modules so `import mlx_whisper` inside the method resolves
-        with patch.dict(sys.modules, {"mlx_whisper": mock_mlx}):
-            engine = _make_engine(
-                whisper_model_ref=lambda: None,
-                whisper_backend_ref=lambda: "mlx",
-                mlx_repo_ref=lambda: "mlx-community/whisper-small-mlx",
-            )
+        engine = _make_engine(sensevoice_engine_ref=lambda: mock_engine)
 
-            audio = np.zeros(16000, dtype=np.float32)
-            result = engine._transcribe(audio)
-            assert result == "hello from mlx"
+        audio = np.zeros(16000, dtype=np.float32)
+        result = engine._transcribe(audio)
+        assert result == ""
 
 
 # ---------------------------------------------------------------------------
@@ -659,15 +642,12 @@ class TestTranscribeAndPaste:
     @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
     def test_successful_transcription_pastes(self, mock_paste):
         import numpy as np
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = "hello world"
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
-
-        engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="hello world", language=None, no_speech=False
         )
+
+        engine = _make_engine(sensevoice_engine_ref=lambda: mock_engine)
 
         frames = [np.zeros(8000, dtype=np.float32)]  # 0.5s
         engine._transcribe_and_paste(frames)
@@ -676,13 +656,12 @@ class TestTranscribeAndPaste:
     @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
     def test_empty_transcription_does_not_paste(self, mock_paste):
         import numpy as np
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = ([], MagicMock())
-
-        engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="", language=None, no_speech=False
         )
+
+        engine = _make_engine(sensevoice_engine_ref=lambda: mock_engine)
 
         frames = [np.zeros(8000, dtype=np.float32)]
         engine._transcribe_and_paste(frames)
@@ -887,12 +866,13 @@ class TestThreadSafety:
         """Transcription should acquire the shared lock."""
         import numpy as np
         lock = threading.Lock()
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = ([], MagicMock())
+        mock_engine = MagicMock()
+        mock_engine.transcribe.return_value = MagicMock(
+            text="", language=None, no_speech=False
+        )
 
         engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
+            sensevoice_engine_ref=lambda: mock_engine,
             transcribe_lock=lock,
         )
 

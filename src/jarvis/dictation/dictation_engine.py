@@ -2,7 +2,7 @@
 Dictation Engine — hold a hotkey to record speech, release to paste transcription.
 
 Completely independent from the assistant pipeline (no wake words, intent judge,
-profiles, or TTS). Uses a shared Whisper model reference to avoid double memory.
+profiles, or TTS). Uses a shared SenseVoice engine reference to avoid double memory.
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ def _resample(audio, from_rate: int, to_rate: int):
         return audio
     duration = len(audio) / from_rate
     target_len = int(duration * to_rate)
-    # Linear interpolation — good enough for speech fed to Whisper
+    # Linear interpolation — good enough for speech fed to SenseVoice
     indices = np.linspace(0, len(audio) - 1, target_len)
     return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
 
@@ -424,7 +424,7 @@ def _apply_custom_dictionary(text: str, dictionary: list) -> str:
     Each entry in *dictionary* is a string. The dictionary is used to fix
     common mis-transcriptions (e.g. "Jarvice" → "Jarvis") by doing
     case-insensitive replacement.  Entries can be ``"wrong -> right"`` pairs
-    or single terms that Whisper should have produced verbatim.
+    or single terms the recogniser should have produced verbatim.
     """
     for entry in dictionary:
         if not isinstance(entry, str):
@@ -588,16 +588,12 @@ class DictationEngine:
 
     Parameters
     ----------
-    whisper_model_ref : callable
-        ``lambda`` returning the shared Whisper model (or *None* if not ready).
-    whisper_backend_ref : callable
-        ``lambda`` returning ``"mlx"`` or ``"faster-whisper"``.
-    mlx_repo_ref : callable
-        ``lambda`` returning the MLX HuggingFace repo string (or *None*).
+    sensevoice_engine_ref : callable
+        ``lambda`` returning the shared SenseVoice engine (or *None* if not ready).
     hotkey : str
         Hotkey combination, e.g. ``"ctrl+shift+d"``.
     sample_rate : int
-        Audio sample rate (should match Whisper expectations, default 16000).
+        Audio sample rate (should match SenseVoice expectations, default 16000).
     on_dictation_start : callable | None
         Called when recording starts (for face state, listener pause, etc.).
     on_dictation_processing_start : callable | None
@@ -609,7 +605,7 @@ class DictationEngine:
         Called when the full dictation cycle (recording + transcription +
         paste) has finished.
     transcribe_lock : threading.Lock | None
-        Lock shared with the voice listener to serialise Whisper calls.
+        Lock shared with the voice listener to serialise SenseVoice calls.
     on_dictation_result : callable | None
         Called with ``(entry_dict)`` after a successful dictation is saved
         to history. Used by the UI to update the history window.
@@ -617,9 +613,7 @@ class DictationEngine:
 
     def __init__(
         self,
-        whisper_model_ref: Callable[[], Any],
-        whisper_backend_ref: Callable[[], Optional[str]],
-        mlx_repo_ref: Callable[[], Optional[str]],
+        sensevoice_engine_ref: Callable[[], Any],
         hotkey: str = "ctrl+shift+d",
         sample_rate: int = 16000,
         on_dictation_start: Optional[Callable[[], None]] = None,
@@ -635,10 +629,8 @@ class DictationEngine:
         chat_model: str = "gemma4:e2b",
         thinking: bool = False,
     ) -> None:
-        self._whisper_model_ref = whisper_model_ref
-        self._whisper_backend_ref = whisper_backend_ref
-        self._mlx_repo_ref = mlx_repo_ref
-        self._target_sample_rate = sample_rate  # Whisper expects this rate
+        self._sensevoice_engine_ref = sensevoice_engine_ref
+        self._target_sample_rate = sample_rate  # SenseVoice expects 16 kHz
         self._stream_sample_rate = sample_rate  # Actual device rate (may differ)
         self._on_dictation_start = on_dictation_start
         self._on_dictation_processing_start = on_dictation_processing_start
@@ -893,11 +885,9 @@ class DictationEngine:
 
     def _begin_recording(self, token: int) -> None:
         """Worker: open the audio stream and start capturing."""
-        # Check Whisper readiness
-        model = self._whisper_model_ref()
-        backend = self._whisper_backend_ref()
-        if model is None and backend != "mlx":
-            debug_log("whisper model not loaded — dictation skipped", "dictation")
+        # Check SenseVoice readiness
+        if self._sensevoice_engine_ref() is None:
+            debug_log("sensevoice engine not loaded — dictation skipped", "dictation")
             self._abandon_session(token)
             return
 
@@ -924,7 +914,7 @@ class DictationEngine:
         # Open dedicated audio stream.
         # Always use the device's native sample rate to avoid PortAudio errors
         # (e.g. -50 on macOS when requesting 16 kHz on a 48 kHz device).
-        # Audio is resampled to the Whisper target rate after recording.
+        # Audio is resampled to the SenseVoice target rate after recording.
         stream_kwargs: dict[str, Any] = {}
         if self._voice_device:
             try:
@@ -1135,39 +1125,19 @@ class DictationEngine:
                     pass
 
     def _transcribe(self, audio) -> str:
-        """Transcribe audio using the shared Whisper model."""
-        backend = self._whisper_backend_ref()
-        model = self._whisper_model_ref()
+        """Transcribe audio using the shared SenseVoice engine."""
+        engine = self._sensevoice_engine_ref()
+        if engine is None:
+            debug_log("sensevoice engine not available", "dictation")
+            return ""
 
         with self._transcribe_lock:
-            if backend == "mlx":
-                return self._transcribe_mlx(audio)
-            elif model is not None:
-                return self._transcribe_faster_whisper(model, audio)
-            else:
-                debug_log("no whisper model available", "dictation")
-                return ""
-
-    def _transcribe_mlx(self, audio) -> str:
-        repo = self._mlx_repo_ref()
-        if not repo:
-            return ""
-        try:
-            import mlx_whisper
-            result = mlx_whisper.transcribe(audio, path_or_hf_repo=repo, language=None)
-            text = result.get("text", "").strip() if isinstance(result, dict) else ""
-            return text
-        except Exception as exc:
-            debug_log(f"MLX transcription error: {exc}", "dictation")
-            return ""
-
-    def _transcribe_faster_whisper(self, model, audio) -> str:
-        try:
             try:
-                segments, _info = model.transcribe(audio, language=None, vad_filter=False)
-            except TypeError:
-                segments, _info = model.transcribe(audio, language=None)
-            return " ".join(seg.text for seg in segments).strip()
-        except Exception as exc:
-            debug_log(f"faster-whisper transcription error: {exc}", "dictation")
+                result = engine.transcribe(audio)
+            except Exception as exc:
+                debug_log(f"sensevoice transcription error: {exc}", "dictation")
+                return ""
+        if result.no_speech:
+            debug_log("sensevoice reported no speech — dictation skipped", "dictation")
             return ""
+        return result.text

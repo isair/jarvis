@@ -56,7 +56,7 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 5. Chatterbox TTS
 6. Voice Input (includes microphone device selection)
 7. Wake Word
-8. Speech Recognition (Whisper)
+8. Speech Recognition (SenseVoice)
 9. Voice Activity Detection
 10. Timing & Windows
 11. Memory & Dialogue
@@ -153,5 +153,5 @@ These fields are managed elsewhere or are too complex for a simple form:
 - `stop_commands` / `stop_command_fuzzy_ratio` — list of strings
 - `use_stdin` — developer/CLI flag
 - `voice_debug` — environment variable only
-- `whisper_min_audio_duration` / `whisper_min_word_length` — rarely changed advanced params
+- `sensevoice_min_audio_duration` — rarely changed advanced param
 - `vad_frame_ms` / `vad_pre_roll_ms` — low-level VAD timing

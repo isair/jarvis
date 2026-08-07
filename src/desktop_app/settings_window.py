@@ -61,7 +61,7 @@ CATEGORIES = [
     ("chatterbox", "🎭 Chatterbox TTS"),
     ("voice_input", "🎤 Voice Input"),
     ("wake", "👂 Wake Word"),
-    ("whisper", "🗣️ Speech Recognition"),
+    ("sensevoice", "🗣️ Speech Recognition"),
     ("vad", "📊 Voice Activity Detection"),
     ("timing", "⏱️ Timing & Windows"),
     ("memory", "🧠 Memory & Dialogue"),
@@ -241,34 +241,18 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("wake_fuzzy_ratio", "Fuzzy Match Ratio",
       "How loosely to match the wake word (0.0–1.0)",
       "wake", "float", min_val=0.5, max_val=1.0, step=0.01)
-    # --- Whisper ---
-    f("whisper_model", "Model Size",
-      "Whisper model size (tiny/base/small/medium/large)",
-      "whisper", "choice",
-      choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3")])
-    f("whisper_backend", "Backend",
-      "Speech recognition backend",
-      "whisper", "choice",
-      choices=[("auto", "Auto"), ("mlx", "MLX (Apple Silicon)"),
-               ("faster-whisper", "Faster Whisper")])
-    f("whisper_device", "Compute Device",
-      "Device for Whisper inference",
-      "whisper", "choice",
-      choices=[("auto", "Auto"), ("cuda", "CUDA (GPU)"), ("cpu", "CPU")])
-    f("whisper_compute_type", "Compute Type",
-      "Quantisation level for inference",
-      "whisper", "choice",
-      choices=[("int8", "INT8 (Fast)"), ("float16", "Float16"), ("float32", "Float32")])
-    f("whisper_vad", "Use VAD Filter",
-      "Filter audio with VAD before transcription",
-      "whisper", "bool")
-    f("whisper_min_confidence", "Min Confidence",
-      "Filter low-confidence segments (hallucination guard)",
-      "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
-    f("whisper_no_speech_threshold", "No-Speech Threshold",
-      "Reject segments where no_speech_prob is at or above this value (filters hallucinations during silence)",
-      "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
+    # --- SenseVoice ---
+    f("sensevoice_model", "Model",
+      "FunASR model id or local model directory (bundled weights are used automatically)",
+      "sensevoice", "str")
+    f("sensevoice_device", "Compute Device",
+      "Device for SenseVoice inference",
+      "sensevoice", "choice",
+      choices=[("auto", "Auto"), ("cuda", "CUDA (GPU)"),
+               ("mps", "MPS (Apple Silicon)"), ("cpu", "CPU")])
+    f("sensevoice_min_audio_duration", "Min Audio Duration",
+      "Ignore audio shorter than this many seconds",
+      "sensevoice", "float", min_val=0.0, max_val=2.0, step=0.05, suffix="s")
 
     # --- VAD ---
     f("vad_enabled", "Enable VAD",

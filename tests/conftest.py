@@ -53,7 +53,9 @@ class MockConfig:
     # branch get the legacy alias promoted into ``llm_chat_model`` by
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
-    whisper_model: str = "small"
+    sensevoice_model: str = "FunAudioLLM/SenseVoiceSmall"
+    sensevoice_device: str = "auto"
+    sensevoice_min_audio_duration: float = 0.3
     embedding_provider: str = ""
     embedding_base_url: str = ""
     embedding_api_key: str = ""

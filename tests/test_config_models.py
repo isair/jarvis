@@ -94,40 +94,115 @@ class TestDefaultConfigUsesModelConstant:
         assert model in SUPPORTED_CHAT_MODELS
 
 
-class TestWhisperHallucinationFilterDefaults:
-    """Pin defaults for the Whisper hallucination-filter thresholds.
+class TestSenseVoiceConfigDefaults:
+    """Pin defaults for the SenseVoice (FunASR) speech-recognition keys.
 
-    Both the faster-whisper `_filter_noisy_segments` path and the MLX
-    `_finalize_utterance` path read these via `getattr(cfg, ..., fallback)`;
-    the defaults must stay in sync with the `Settings` dataclass field and
-    the values documented in README and `listening.spec.md`.
+    SenseVoice has no per-segment confidence or no-speech probability
+    signals (those were Whisper-specific), so the retired ``whisper_*``
+    keys must not reappear in the defaults.
     """
 
-    def test_no_speech_threshold_default(self):
+    def test_model_default(self):
         config = get_default_config()
-        assert "whisper_no_speech_threshold" in config
-        assert config["whisper_no_speech_threshold"] == 0.5
-        assert 0.0 <= config["whisper_no_speech_threshold"] <= 1.0
+        assert "sensevoice_model" in config
+        assert config["sensevoice_model"] == "FunAudioLLM/SenseVoiceSmall"
 
-    def test_min_confidence_default(self):
+    def test_device_default(self):
         config = get_default_config()
-        assert "whisper_min_confidence" in config
-        assert config["whisper_min_confidence"] == 0.3
-        assert 0.0 <= config["whisper_min_confidence"] <= 1.0
+        assert "sensevoice_device" in config
+        assert config["sensevoice_device"] == "auto"
 
-    def test_settings_dataclass_round_trips_no_speech_threshold(self, tmp_path, monkeypatch):
-        """A config file with an overridden threshold must parse through
-        `load_settings` into the `Settings.whisper_no_speech_threshold` field.
+    def test_min_audio_duration_default(self):
+        config = get_default_config()
+        assert "sensevoice_min_audio_duration" in config
+        assert config["sensevoice_min_audio_duration"] == 0.3
+
+    def test_whisper_keys_absent_from_defaults(self):
+        config = get_default_config()
+        assert not any(k.startswith("whisper_") for k in config), (
+            f"retired whisper_* keys still in defaults: "
+            f"{[k for k in config if k.startswith('whisper_')]}"
+        )
+
+    def test_settings_dataclass_round_trips_device(self, tmp_path, monkeypatch):
+        """An overridden device must parse through `load_settings` into the
+        `Settings.sensevoice_device` field.
         """
         import json as _json
         from jarvis.config import load_settings
 
         cfg_path = tmp_path / "config.json"
-        cfg_path.write_text(_json.dumps({"whisper_no_speech_threshold": 0.72}))
+        cfg_path.write_text(_json.dumps({"sensevoice_device": "cpu"}))
         monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
 
         settings = load_settings()
-        assert settings.whisper_no_speech_threshold == pytest.approx(0.72)
+        assert settings.sensevoice_device == "cpu"
+
+    def test_invalid_device_falls_back_to_auto(self, tmp_path, monkeypatch):
+        """An unknown device value must fall back to 'auto'."""
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"sensevoice_device": "quantum"}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.sensevoice_device == "auto"
+
+
+class TestSenseVoiceMigration:
+    """Whisper -> SenseVoice config migration (v4)."""
+
+    def test_whisper_keys_removed_and_defaults_applied(self, tmp_path, monkeypatch):
+        """A v3 config with whisper_* keys migrates to sensevoice_* defaults
+        and the retired keys are dropped from disk."""
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({
+            "_config_version": 3,
+            "whisper_model": "medium",
+            "whisper_backend": "faster-whisper",
+            "whisper_compute_type": "int8",
+            "whisper_device": "cuda",
+            "whisper_vad": True,
+            "whisper_min_confidence": 0.3,
+            "whisper_no_speech_threshold": 0.5,
+            "whisper_min_audio_duration": 0.15,
+            "whisper_min_word_length": 1,
+        }))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+
+        assert not hasattr(settings, "whisper_model")
+        assert settings.sensevoice_model == "FunAudioLLM/SenseVoiceSmall"
+        assert settings.sensevoice_device == "auto"
+        assert settings.sensevoice_min_audio_duration == pytest.approx(0.3)
+
+        on_disk = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert on_disk["_config_version"] == 4
+        assert not any(k.startswith("whisper_") for k in on_disk)
+
+    def test_explicit_sensevoice_values_survive_migration(self, tmp_path, monkeypatch):
+        """A config that already uses sensevoice_* keeps those values."""
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({
+            "_config_version": 3,
+            "whisper_model": "small",
+            "sensevoice_device": "cuda",
+        }))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+
+        assert settings.sensevoice_device == "cuda"
+        assert settings.sensevoice_model == "FunAudioLLM/SenseVoiceSmall"
 
 
 class TestModelConsistency:

@@ -23,3 +23,7 @@ qt.conf
 # Auto-generated version file (created at build time)
 src/jarvis/_version.py
 .reasonix/
+
+# SenseVoice model weights (fetched by scripts/fetch_sensevoice_model.py,
+# cached by CI, or downloaded to a local dir at runtime)
+models/

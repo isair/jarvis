@@ -149,7 +149,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 <p align="center">
   <img src="docs/img/setup-wizard-initial-check.png" alt="Setup - Initial Check" width="200">
   <img src="docs/img/setup-wizard-model.png" alt="Setup - Model Selection" width="200">
-  <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Whisper" width="200">
+  <img src="docs/img/setup-wizard-whisper.png" alt="Setup - Speech Recognition" width="200">
   <img src="docs/img/setup-wizard-dictation.png" alt="Setup - Dictation" width="200">
   <img src="docs/img/setup-wizard-mcp.png" alt="Setup - MCP Servers" width="200">
   <img src="docs/img/setup-wizard-complete.png" alt="Setup - Complete" width="200">
@@ -181,6 +181,8 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 | High-end | 24GB+ | `gpt-oss:20b` |
 
 > **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
+
+> **Platform support:** Intel Macs (x86_64) are no longer supported. Speech recognition runs on SenseVoice (PyTorch), and PyTorch no longer ships Intel-Mac wheels. Apple Silicon, Windows, and Linux builds remain available.
 
 The setup wizard will guide you through model selection and installation on first launch.
 
@@ -242,37 +244,23 @@ Leave `embedding_provider` empty to use the same provider as chat. With no worki
 </details>
 
 <details>
-<summary><strong>Speech Recognition (Whisper)</strong></summary>
+<summary><strong>Speech Recognition (SenseVoice)</strong></summary>
 
-#### Language Modes
-- **Multilingual** (default, 99 languages): `"whisper_model": "medium"`
-- **English Only** (slightly better English accuracy): `"whisper_model": "medium.en"`
+#### Engine
+Jarvis uses **SenseVoiceSmall** (via FunASR) for offline speech recognition — a non-autoregressive model that runs ~17× realtime on CPU and supports **Mandarin, Cantonese, English, Japanese, and Korean** with automatic language detection.
 
-#### Model Sizes
-| Model | English | Multilingual | Download | VRAM | Speed |
-|-------|---------|--------------|----------|------|-------|
-| Tiny | `tiny.en` | `tiny` | ~75 MB | ~1 GB | ~10x |
-| Base | `base.en` | `base` | ~140 MB | ~1 GB | ~7x |
-| Small | `small.en` | `small` | ~465 MB | ~2 GB | ~4x |
-| **Medium** | `medium.en` | `medium` | ~1.5 GB | ~5 GB | ~2x |
-| Large V3 Turbo | - | `large-v3-turbo` | ~1.5 GB | ~6 GB | ~8x |
+The model weights ship **bundled with the app** (`models/SenseVoiceSmall`), so installed users never download speech-recognition weights at runtime. For development, `scripts/fetch_sensevoice_model.py` fetches them into the repo so your build bundles them; without it, FunASR downloads the model on first use.
 
-Speed is relative to the original large model. [Source](https://github.com/openai/whisper)
+#### Compute Device
+- `"sensevoice_device": "auto"` (default) — picks CUDA, then Apple Silicon MPS, then CPU.
+- `"sensevoice_device": "cpu"` — force CPU (plenty for SenseVoiceSmall).
+- `"sensevoice_device": "cuda"` / `"mps"` — force a specific accelerator.
 
-#### GPU Acceleration (Windows)
-If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:
-```bash
-pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
-```
-CUDA is detected automatically — no configuration needed.
+#### Model
+- `"sensevoice_model": "FunAudioLLM/SenseVoiceSmall"` (default, HuggingFace id) — or `"iic/SenseVoiceSmall"` (ModelScope) or a local model directory.
 
-#### Hallucination Filters
-Whisper sometimes produces confident but false transcriptions during silence or background noise (e.g. news-show intros, music). Two thresholds filter these out before they reach the intent judge:
-
-- `"whisper_min_confidence": 0.3` — drops segments whose `avg_logprob`-derived confidence falls below this value. Raise if you see low-confidence noise leaking through; lower if real speech is being dropped.
-- `"whisper_no_speech_threshold": 0.5` — drops any segment whose `no_speech_prob` is at or above this value, regardless of `avg_logprob`. Catches the case where Whisper is confident about a hallucinated phrase but its own no-speech signal says the audio was silent. Applies to both the faster-whisper and MLX backends.
-
-Both thresholds are exposed in the Settings window under *Whisper*.
+#### No-Speech Gating
+SenseVoice marks non-speech clips with a `<|nospeech|>` tag; Jarvis drops those utterances before they reach the intent judge, so hallucinations on silence don't leak through. (Whisper's `avg_logprob`/`no_speech_prob` confidence filters have no equivalent — SenseVoice exposes no per-segment confidence, and the VAD gate plus the no-speech tag cover the same failure mode.)
 
 </details>
 
@@ -332,7 +320,7 @@ Hold a hotkey to record speech, release to paste the transcription into any app.
 | **Linux** | Ctrl + Alt |
 
 - 🔒 **100% offline** — your speech never leaves your machine (unlike cloud dictation services)
-- 🧠 **Shared Whisper model** — uses the same speech recognition as voice input, no extra memory
+- 🧠 **Shared SenseVoice model** — uses the same speech recognition as voice input, no extra memory
 - ⚡ **Zero latency startup** — no server round-trip, transcription starts the moment you release
 - 📋 **Universal paste** — works in any app that accepts `Ctrl+V` / `Cmd+V`
 - 🔇 **Non-intrusive** — main voice listener pauses automatically during dictation
@@ -550,7 +538,7 @@ Get API key at [composio.dev](https://composio.dev)
 <details>
 <summary><strong>Common issues</strong></summary>
 
-**First startup takes a bit** - Jarvis pre-warms the Whisper, chat, and intent-judge models before announcing "Listening!" so the first engagement feels instant. This adds a few seconds on cold start and is bounded at 60 s — if Ollama is slow, Jarvis will start listening anyway and load the models on demand.
+**First startup takes a bit** - Jarvis pre-warms the SenseVoice, chat, and intent-judge models before announcing "Listening!" so the first engagement feels instant. This adds a few seconds on cold start and is bounded at 60 s — if Ollama is slow, Jarvis will start listening anyway and load the models on demand.
 
 **Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
 
@@ -618,7 +606,7 @@ a small fallback chain before giving up rather than confabulating:
    2,000 queries/month. Get a key at
    [api.search.brave.com](https://api.search.brave.com/app/keys).
 2. **Wikipedia** — zero-config, on by default, uses the Wikipedia host
-   matching the language Whisper auto-detected on the utterance (so a
+   matching the language SenseVoice auto-detected on the utterance (so a
    Turkish question gets a Turkish answer). Disable with
    `wikipedia_fallback_enabled: false`.
 3. **Honest failure** — if every provider fails, the reply tells you the

@@ -498,7 +498,7 @@ class TestLogViewerReportIssue:
             "\n"
             "✓ Daemon started\n"
             "🧠 Using chat model: llama3.2\n"
-            "🎤 Using whisper model: large-v3-turbo\n"
+            "🎤 Using sensevoice model: FunAudioLLM/SenseVoiceSmall\n"
             "📡 No MCP servers configured\n"
             "💾 Initializing dialogue memory...\n"
             "✓ Dialogue memory initialized\n"

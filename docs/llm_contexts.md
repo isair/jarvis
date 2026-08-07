@@ -35,7 +35,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine. When `content` is empty **or truncated mid-JSON** (reasoning models count thinking tokens against the generation cap), the judge also recovers the JSON answer from `reasoning_content` — reasoning models typically end their thinking with the full structured answer.
-- **Limits**: `intent_judge_timeout_sec` (6s). `num_ctx: 8192` (explicit). `max_tokens: 1500` (canonical cap — covers reasoning + answer on reasoning models; OpenAI-compatible backends get it at the payload root; Ollama maps it to `num_predict`).
+- **Limits**: `intent_judge_timeout_sec` (10s). `num_ctx: 8192` (explicit). `max_tokens: 1500` (canonical cap — covers reasoning + answer on reasoning models; OpenAI-compatible backends get it at the payload root; Ollama maps it to `num_predict`).
 
 ## 3. Memory Enrichment Extractor
 
@@ -220,7 +220,7 @@ Driven by `detect_model_size(model_name) → SMALL (≤7.5B) | LARGE (>7.5B)` �
 
 - Models: `llm_chat_model` (CHAT tier), `fast_model` (FAST tier). Every context resolves via `resolve_model(cfg, tier)`. Legacy on-disk keys (`ollama_chat_model` as a v1 → v2 alias; `intent_judge_model` / `tool_router_model` / `evaluator_model` / `planner_model` folded into `fast_model` by the v2 → v3 migration) are readable but no longer part of `Settings`.
 - Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`
-- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
+- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (10s), `planner_timeout_sec` (3s)
 - Caps: `agentic_max_turns` (8), `tool_search_max_calls` (3), `_LLM_MAX_SELECTED` (5), `_DIGEST_MAX_CHARS` (400), `_TOOL_DIGEST_MAX_CHARS` (600). Per-context `max_tokens` caps listed above (50–1500 depending on task — the intent judge's 1500 covers reasoning + answer on reasoning models; rewrite tasks scale with input length).
 
 ## KV-cache discipline (prompt construction rules)
@@ -266,7 +266,7 @@ user input
 5. Give each digest its own timeout budget rather than sharing `llm_digest_timeout_sec` (today a slow memory digest can starve the max-turn digest).
 6. Consider single-model deployments: the FAST tier prefers a small dedicated model while the planner tracks `llm_chat_model`; loading a second model hurts cold-start latency on small hardware. (On an OpenAI-compatible chat provider an unset `fast_model` already resolves to the chat model, so every context rides the one served model.)
 7. Narrow `llm_thinking_enabled` to router/planner only, not every context.
-8. `intent_judge_timeout_sec` was already reduced from 15s → 6s. Consider racing it against text-based wake detection to avoid blocking the audio loop entirely.
+8. `intent_judge_timeout_sec` (10s default) bounds the synchronous judge call. Consider racing it against text-based wake detection to avoid blocking the audio loop entirely.
 
 ## 21. Model warm-up probe (OpenAI-compatible path)
 

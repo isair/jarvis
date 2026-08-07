@@ -148,8 +148,7 @@ jobs:
             | Platform | File | Notes |
             |----------|------|-------|
             | **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
-            | **macOS (Apple Silicon)** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
-            | **macOS (Intel)** | `Jarvis-macOS-x64.zip` | Extract → Move to Applications → Right-click → Open |
+            | **macOS** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
             | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -294,8 +293,7 @@ jobs:
             | Platform | File | Notes |
             |----------|------|-------|
             | **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
-            | **macOS (Apple Silicon)** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
-            | **macOS (Intel)** | `Jarvis-macOS-x64.zip` | Extract → Move to Applications → Right-click → Open |
+            | **macOS** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
             | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
 
             **Branch**: develop

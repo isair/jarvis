@@ -57,6 +57,26 @@ if sys.platform == 'win32':
     except Exception as e:
         print(f"Warning: could not collect tzdata: {e}")
 
+# Bundle the SenseVoiceSmall model weights when present. Builds fetch them
+# into models/SenseVoiceSmall via scripts/fetch_sensevoice_model.py; the app
+# resolves this path through jarvis.listening.sensevoice.bundled_model_dir()
+# so installed apps never download speech-recognition weights at runtime.
+_sv_model_dir = project_root / 'models' / 'SenseVoiceSmall'
+if _sv_model_dir.is_dir():
+    datas.append((str(_sv_model_dir), 'models/SenseVoiceSmall'))
+    print(f"Bundling SenseVoiceSmall model weights from {_sv_model_dir}")
+else:
+    print("Warning: models/SenseVoiceSmall not found — speech recognition "
+          "will download the model on first use (run scripts/fetch_sensevoice_model.py "
+          "to bundle it)")
+
+# FunASR ships model configs/data files that PyInstaller's module graph misses.
+try:
+    datas += collect_data_files('funasr')
+    print("Bundling FunASR data files")
+except Exception as e:
+    print(f"Warning: could not collect funasr data files: {e}")
+
 # Add qt.conf for macOS
 if sys.platform == 'darwin':
     datas.append((str(project_root / 'qt.conf'), '.'))
@@ -179,9 +199,16 @@ hiddenimports = [
     '_sounddevice_data',
     '_sounddevice_data.portaudio-binaries',
     'webrtcvad',
-    # Speech recognition (faster-whisper backend)
-    'faster_whisper',
-    'ctranslate2',
+    # Speech recognition (FunASR / SenseVoice)
+    'funasr',
+    'funasr.auto',
+    'funasr.download',
+    'funasr.download.download_model_from_hub',
+    'funasr.models',
+    'funasr.models.sense_voice',
+    'funasr.utils',
+    'modelscope',
+    'modelscope.snapshot_download',
     'huggingface_hub',
     'huggingface_hub.file_download',
     'huggingface_hub.hf_api',
@@ -240,12 +267,8 @@ a = Analysis(
     excludes=[
         # Exclude heavy packages to keep bundle size reasonable
         'psycopg2',  # Not used and causes OpenSSL conflicts
-        'torch',  # PyTorch is 1.5-2GB - chatterbox TTS is optional
-        'torchaudio',
-        'torchvision',
+        'torchvision',  # Not needed by FunASR/SenseVoice
         'chatterbox',  # Optional TTS engine (uses PyTorch)
-        'transformers',  # Heavy ML library (not needed, faster_whisper uses ctranslate2)
-        'safetensors',
         'accelerate',
         'cv2',  # OpenCV - not needed for core functionality
         'opencv-python',
@@ -253,10 +276,10 @@ a = Analysis(
         'notebook',
         'jupyter',
         'IPython',
-        'scipy',  # Large, only used by optional features
-        'sklearn',
-        'scikit-learn',
-        # Note: Keep huggingface_hub - needed by faster_whisper for model downloads
+        # Note: Keep torch, torchaudio, transformers, safetensors, scipy,
+        # sklearn — FunASR (SenseVoice) imports them (torchaudio is a hard
+        # top-level import in funasr.utils.load_utils). Keep huggingface_hub
+        # + modelscope for model downloads when the weights are not bundled.
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -265,16 +288,14 @@ a = Analysis(
 )
 
 # Filter out heavy binaries on all platforms to reduce bundle size
-# Note: Be careful not to exclude libs needed by numpy/faster-whisper
+# Note: Be careful not to exclude libs needed by numpy/funasr
+# Note: torch + torchaudio stay BUNDLED — FunASR/SenseVoice hard-imports both.
 excluded_binary_patterns = [
-    'torch', 'libtorch', 'libcaffe2',  # PyTorch (~1.5GB)
-    'torchaudio', 'torchvision',
+    'torchvision',
     'cv2', 'opencv', 'libopencv',  # OpenCV (~500MB)
-    'sklearn', 'scikit',  # scikit-learn
-    'transformers',  # Heavy ML library
     'chatterbox',
     'matplotlib',
-    # Note: Keep huggingface_hub (needed by faster_whisper for model downloads)
+    # Note: Keep huggingface_hub + modelscope (funasr model downloads)
     # Note: Keep libopenblas (needed by numpy) and libfreetype (needed by av/ffmpeg)
 ]
 

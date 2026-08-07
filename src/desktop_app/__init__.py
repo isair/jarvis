@@ -10,7 +10,7 @@ import sys
 import os
 
 # Fix OpenBLAS threading crash in bundled apps
-# Must be set before numpy is imported (via faster-whisper, etc.)
+# Must be set before numpy is imported (via funasr/torch, etc.)
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')

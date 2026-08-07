@@ -26,14 +26,13 @@ def _create_listener(**kwargs):
     """Create a VoiceListener with mocked heavy subsystems.
 
     Returns (listener, mock_tts) so tests can control TTS state.
-    Uses real StateManager and EchoDetector — only Whisper, audio, and
+    Uses real StateManager and EchoDetector — only the recogniser, audio, and
     the intent judge are mocked.
     """
     mock_cfg = MagicMock()
-    mock_cfg.whisper_model = "small"
-    mock_cfg.whisper_device = "auto"
-    mock_cfg.whisper_compute_type = "int8"
-    mock_cfg.whisper_backend = "faster-whisper"
+    mock_cfg.sensevoice_model = "FunAudioLLM/SenseVoiceSmall"
+    mock_cfg.sensevoice_device = "auto"
+    mock_cfg.sensevoice_min_audio_duration = 0.3
     mock_cfg.sample_rate = 16000
     mock_cfg.vad_enabled = False
     mock_cfg.vad_aggressiveness = 2

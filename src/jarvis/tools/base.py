@@ -30,7 +30,7 @@ class ToolContext:
         self.redacted_text = redacted_text
         self.max_retries = max_retries
         self.user_print = user_print
-        # ISO-639-1 code of the language Whisper auto-detected for the current
+        # ISO-639-1 code of the language the recogniser auto-detected for the current
         # utterance (e.g. "en", "tr", "de"). None when the tool is invoked
         # outside the voice path (evals, unit tests, text entry) — tools must
         # treat absence as "no signal" and fall back to their own default

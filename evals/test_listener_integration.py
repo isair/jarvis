@@ -57,10 +57,9 @@ def _create_listener(**kwargs):
     a real intent judge that calls Ollama. Only audio I/O is mocked.
     """
     mock_cfg = MagicMock()
-    mock_cfg.whisper_model = "small"
-    mock_cfg.whisper_device = "auto"
-    mock_cfg.whisper_compute_type = "int8"
-    mock_cfg.whisper_backend = "faster-whisper"
+    mock_cfg.sensevoice_model = "FunAudioLLM/SenseVoiceSmall"
+    mock_cfg.sensevoice_device = "auto"
+    mock_cfg.sensevoice_min_audio_duration = 0.3
     mock_cfg.sample_rate = 16000
     mock_cfg.vad_enabled = False
     mock_cfg.vad_aggressiveness = 2

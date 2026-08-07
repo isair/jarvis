@@ -25,7 +25,7 @@ jobs:
   # ── Windows: build + optional smoke test ────────────────────────────────
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: 📥 Checkout code
@@ -51,9 +51,21 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
-          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper|nvidia-)' } | Set-Content requirements-desktop.txt
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^chatterbox-tts' } | Set-Content requirements-desktop.txt
           pip install -r requirements-desktop.txt
           pip install pyinstaller
+
+      - name: 🎤 Fetch SenseVoice model (cached)
+        uses: actions/cache@v4
+        with:
+          path: models/SenseVoiceSmall
+          key: sensevoice-small-${{ hashFiles('scripts/fetch_sensevoice_model.py') }}
+          restore-keys: |
+            sensevoice-small-
+
+      - name: 🎤 Ensure SenseVoice weights present
+        run: |
+          python scripts/fetch_sensevoice_model.py
 
       - name: 🎨 Generate icons
         run: |
@@ -119,15 +131,13 @@ jobs:
   # ── macOS: build + optional smoke test (arm64 + x64) ────────────────────
   build-macos:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             arch: arm64
-          - os: macos-15-intel
-            arch: x64
 
     steps:
       - name: 📥 Checkout code
@@ -152,13 +162,21 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
-          else
-            grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
-          fi
+          grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
           pip install -r requirements-desktop.txt
           pip install pyinstaller
+
+      - name: 🎤 Fetch SenseVoice model (cached)
+        uses: actions/cache@v4
+        with:
+          path: models/SenseVoiceSmall
+          key: sensevoice-small-${{ hashFiles('scripts/fetch_sensevoice_model.py') }}
+          restore-keys: |
+            sensevoice-small-
+
+      - name: 🎤 Ensure SenseVoice weights present
+        run: |
+          python scripts/fetch_sensevoice_model.py
 
       - name: 🎨 Generate icons
         run: |
@@ -200,7 +218,7 @@ jobs:
   # ── Linux: build + optional smoke test ──────────────────────────────────
   build-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: 🧹 Free up disk space
@@ -246,9 +264,21 @@ jobs:
       - name: 📦 Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
           pip install -r requirements-desktop.txt
           pip install pyinstaller
+
+      - name: 🎤 Fetch SenseVoice model (cached)
+        uses: actions/cache@v4
+        with:
+          path: models/SenseVoiceSmall
+          key: sensevoice-small-${{ hashFiles('scripts/fetch_sensevoice_model.py') }}
+          restore-keys: |
+            sensevoice-small-
+
+      - name: 🎤 Ensure SenseVoice weights present
+        run: |
+          python scripts/fetch_sensevoice_model.py
 
       - name: 🎨 Generate icons
         run: |

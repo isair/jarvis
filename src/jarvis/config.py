@@ -154,16 +154,10 @@ class Settings:
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
 
-    # Whisper Speech Recognition
-    whisper_model: str
-    whisper_backend: str  # "auto", "mlx", or "faster-whisper"
-    whisper_device: str  # "cuda", "auto", or "cpu" (only for faster-whisper)
-    whisper_compute_type: str
-    whisper_vad: bool
-    whisper_min_confidence: float
-    whisper_no_speech_threshold: float
-    whisper_min_audio_duration: float
-    whisper_min_word_length: int
+    # SenseVoice Speech Recognition (FunASR)
+    sensevoice_model: str
+    sensevoice_device: str  # "auto" (CUDA > MPS > CPU), "cuda", "mps", or "cpu"
+    sensevoice_min_audio_duration: float
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
@@ -262,7 +256,7 @@ class Settings:
     # Zero-config Wikipedia fallback toggle. When True (default), the tool
     # queries Wikipedia's REST summary API as a last resort before giving up
     # with the honest "blocked" envelope. Privacy-light (public API, no key,
-    # no account) and language-aware via the Whisper-detected utterance
+    # no account) and language-aware via the recogniser-detected utterance
     # language.
     wikipedia_fallback_enabled: bool
 
@@ -392,6 +386,17 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
                          "evaluator_model", "planner_model"):
             cfg_json.pop(dead_key, None)
         cfg_json["_config_version"] = 3
+        modified = True
+
+    # Migration v4: Whisper -> SenseVoice. Every ``whisper_*`` key is
+    # retired. SenseVoice has no per-segment confidence or no-speech
+    # probability signals, so whisper_min_confidence / whisper_no_speech_threshold
+    # have no equivalent; the sensevoice_* defaults apply.
+    if migration_version < 4:
+        for key in list(cfg_json.keys()):
+            if key.startswith("whisper_"):
+                cfg_json.pop(key)
+        cfg_json["_config_version"] = 4
         modified = True
 
     # Save migrated config
@@ -545,16 +550,12 @@ def get_default_config() -> Dict[str, Any]:
         "wake_aliases": ["joris", "charis", "chavis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
         "wake_fuzzy_ratio": 0.78,
 
-        # Whisper Speech Recognition
-        "whisper_model": "medium",
-        "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
-        "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
-        "whisper_compute_type": "int8",
-        "whisper_vad": True,
-        "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
-        "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
-        "whisper_min_audio_duration": 0.15,
-        "whisper_min_word_length": 1,
+        # SenseVoice Speech Recognition (FunASR)
+        # Model id: "FunAudioLLM/SenseVoiceSmall" (HuggingFace) or "iic/SenseVoiceSmall" (ModelScope),
+        # or a local model directory (preferred in bundled builds — see scripts/fetch_sensevoice_model.py).
+        "sensevoice_model": "FunAudioLLM/SenseVoiceSmall",
+        "sensevoice_device": "auto",  # "auto" (CUDA > MPS > CPU), "cuda", "mps", or "cpu"
+        "sensevoice_min_audio_duration": 0.3,
 
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
@@ -581,7 +582,7 @@ def get_default_config() -> Dict[str, Any]:
         # DEFAULT_FAST_MODEL on the Ollama chat path, the chat model on an
         # OpenAI-compatible provider.
         "fast_model": "",
-        "intent_judge_timeout_sec": 6.0,
+        "intent_judge_timeout_sec": 10.0,
         "intent_judge_thinking_enabled": False,  # Enable thinking for intent judge (adds latency to wake detection)
 
         # Transcript Buffer - used for both retention and context passed to intent judge
@@ -685,7 +686,7 @@ def load_settings() -> Settings:
     merged: Dict[str, Any] = {**defaults, **cfg_json}
 
     # Build Settings. Some fields support env var overrides.
-    # Env overrides: JARVIS_VOICE_DEBUG, JARVIS_WHISPER_BACKEND
+    # Env overrides: JARVIS_VOICE_DEBUG
     voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
 
     # Normalize/convert fields
@@ -766,17 +767,22 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    # whisper_model accepts a size name ("medium") or a local model
-    # directory; _expand_path is a no-op for plain names.
-    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
-    whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
-    if whisper_backend not in ("auto", "mlx", "faster-whisper"):
-        whisper_backend = "auto"
-    whisper_device = str(merged.get("whisper_device", "auto")).lower()
-    if whisper_device not in ("cuda", "auto", "cpu"):
-        whisper_device = "auto"
-    whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
-    whisper_vad = bool(merged.get("whisper_vad", True))
+    # sensevoice_model accepts a FunASR model id ("FunAudioLLM/SenseVoiceSmall",
+    # "iic/SenseVoiceSmall") or a local model directory. Hub ids contain "/"
+    # and must pass through untouched — only tilde-prefixed local paths expand
+    # (a bare Path() on Windows would normalise the id into a path).
+    _sv_model_raw = merged.get("sensevoice_model")
+    if _sv_model_raw in (None, "", "null"):
+        sensevoice_model = "FunAudioLLM/SenseVoiceSmall"
+    else:
+        _sv_model_str = str(_sv_model_raw).strip()
+        if _sv_model_str.startswith("~"):
+            sensevoice_model = str(Path(_sv_model_str).expanduser())
+        else:
+            sensevoice_model = _sv_model_str
+    sensevoice_device = str(merged.get("sensevoice_device", "auto")).lower()
+    if sensevoice_device not in ("auto", "cuda", "mps", "cpu"):
+        sensevoice_device = "auto"
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
     vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
@@ -804,7 +810,7 @@ def load_settings() -> Settings:
         fast_model = (
             llm_chat_model if llm_provider == "openai_compatible" else DEFAULT_FAST_MODEL
         )
-    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 6.0))
+    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 10.0))
 
     # Transcript Buffer - ambient speech context for intent judge (separate from dialogue)
     transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 120.0))
@@ -871,10 +877,7 @@ def load_settings() -> Settings:
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
-    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
-    whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
-    whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
-    whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
+    sensevoice_min_audio_duration = float(merged.get("sensevoice_min_audio_duration", 0.3))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
@@ -945,16 +948,10 @@ def load_settings() -> Settings:
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
 
-        # Whisper Speech Recognition
-        whisper_model=whisper_model,
-        whisper_backend=whisper_backend,
-        whisper_device=whisper_device,
-        whisper_compute_type=whisper_compute_type,
-        whisper_vad=whisper_vad,
-        whisper_min_confidence=whisper_min_confidence,
-        whisper_no_speech_threshold=whisper_no_speech_threshold,
-        whisper_min_audio_duration=whisper_min_audio_duration,
-        whisper_min_word_length=whisper_min_word_length,
+        # SenseVoice Speech Recognition
+        sensevoice_model=sensevoice_model,
+        sensevoice_device=sensevoice_device,
+        sensevoice_min_audio_duration=sensevoice_min_audio_duration,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,

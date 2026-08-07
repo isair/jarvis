@@ -154,7 +154,7 @@ WAKE WORD MODE:
 - Example: "the AirPods sound great" + "Jarvis how much do they cost" -> "how much do the AirPods cost". NOT "how much do they cost" — pronoun MUST be replaced with the named topic in the output query even if you resolved it correctly in your reasoning.
 - Example: "did you catch the ball game" + "the new iPhone is out" + "I want the pro model" + "Jarvis what's the price" -> "what's the price of the iPhone pro model". NOT "what's the price of the pro model" (which pro model? ambiguous) — always prepend the brand/parent from earlier segments.
 - If standalone imperative command ("answer that", "respond to that", "reply to that", "address that", "answer my question", "go ahead and answer") NOT a question -> re-issue prior question
-  Variants: "answered that", "answers that", "answering that" = same imperative (Whisper tense errors)
+  Variants: "answered that", "answers that", "answering that" = same imperative (ASR tense errors)
   Exception: If segment has BOTH imperative + new question -> new question wins
   This rule ONLY applies to imperatives that explicitly reference a prior thing ("that", "my question", "answer"). Self-contained imperatives with open subjects ("say something", "tell me a joke", "tell me anything", "give me advice", "surprise me") are valid queries — pass them through literally, do NOT treat them as vague or as needing a prior question.
 - Query must be answerable alone (without the transcript). When resolving to a sub-item ("pro model", "the red one"), also include the parent noun/brand from earlier segments — "pro model" alone is not self-contained; "iPhone pro model" is.
@@ -170,7 +170,7 @@ ECHO / MARKER RULES:
 - Use earlier segments to resolve references only, not as query source
 
 TRANSCRIPT NOISE:
-- Segments come from Whisper ASR and may contain mishearings: wrong homophones (to/too/two), tense slips (answered/answer), substituted similar-sounding words, fused word boundaries ("ever ist" for "Everest"), or short nonsense fillers. None of this changes the rules above — it is a reminder that a segment looking malformed or off-topic is often noise to skip past, not a topic to anchor on.
+- Segments come from the speech recogniser and may contain mishearings: wrong homophones (to/too/two), tense slips (answered/answer), substituted similar-sounding words, fused word boundaries ("ever ist" for "Everest"), or short nonsense fillers. None of this changes the rules above — it is a reminder that a segment looking malformed or off-topic is often noise to skip past, not a topic to anchor on.
 - When such a segment sits between a real question and an imperative wake-word call, treat it as noise and still re-issue the original question (see the Mount Everest + chatter + "answer that" example below).
 - Within the extracted query string, fix obvious ASR slips quietly (tense, fused words, homophones) so the query is answerable; do NOT rewrite content or change the user's intent.
 
@@ -232,7 +232,7 @@ Examples:
     def _normalize_aliases(self, text: str) -> str:
         """Replace wake-word aliases with the primary assistant name.
 
-        Aliases are Whisper mishearings of the wake word (e.g. "Jervis",
+        Aliases are recogniser mishearings of the wake word (e.g. "Jervis",
         "Jaivis"). Without normalisation the small judge model sees "Jervis"
         in the transcript, doesn't know it refers to {name}, and may decide
         the user is addressing a different person.
@@ -439,7 +439,7 @@ Examples:
                         # judgment is lost (500 cut this exact case off at
                         # "I said tomorro"). 1500 gives ~4.5x headroom over
                         # the measured 326-token reasoning+answer baseline
-                        # while ``intent_judge_timeout_sec`` (6s default)
+                        # while ``intent_judge_timeout_sec`` (10s default)
                         # still bounds slow or runaway generations; the
                         # model normally stops long before the cap.
                         "max_tokens": 1500,
@@ -533,7 +533,7 @@ def create_intent_judge(cfg) -> IntentJudge:
         aliases=list(getattr(cfg, "wake_aliases", [])),
         model=resolve_model(cfg, Tier.FAST),
         cfg=cfg,
-        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 6.0)),
+        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
         thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
     return IntentJudge(config)

@@ -95,9 +95,7 @@ def _make_engine(monkeypatch, probe, open_gate=None):
     fake_sd = _FakeSounddevice(probe, open_gate=open_gate)
     monkeypatch.setattr(de, "sd", fake_sd)
     engine = de.DictationEngine(
-        whisper_model_ref=lambda: object(),
-        whisper_backend_ref=lambda: "faster-whisper",
-        mlx_repo_ref=lambda: None,
+        sensevoice_engine_ref=lambda: object(),
     )
     return engine
 

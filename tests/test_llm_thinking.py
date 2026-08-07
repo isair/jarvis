@@ -227,9 +227,7 @@ class TestDictationThinking:
         from src.jarvis.dictation.dictation_engine import DictationEngine
 
         engine = DictationEngine(
-            whisper_model_ref=lambda: MagicMock(),
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
+            sensevoice_engine_ref=lambda: MagicMock(),
             hotkey="ctrl+shift+d",
             sample_rate=16000,
             transcribe_lock=threading.Lock(),

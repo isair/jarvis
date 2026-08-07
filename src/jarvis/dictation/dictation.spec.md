@@ -32,7 +32,7 @@ window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift+d`,
 2. **Hold hotkey** → audio frames accumulate in a dedicated
    `sounddevice.InputStream`.
 3. **Release hotkey** → stop recording, play stop beep, set face to
-   `DICTATION_PROCESSING`, transcribe via shared Whisper model, apply
+   `DICTATION_PROCESSING`, transcribe via the shared SenseVoice engine, apply
    post-processing pipeline, paste result into focused app via clipboard,
    restore face to `IDLE`, resume main voice listener.
 
@@ -67,7 +67,7 @@ After transcription, text passes through these stages in order:
 - **`pynput`** for global hotkey detection (cross-platform).
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
-- **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
+- **Shared SenseVoice engine** via lazy reference (`lambda: voice_thread.engine`)
   and backend info — no double memory usage.
 - **Separate `sounddevice.InputStream`** for dictation audio — avoids
   modifying the complex listener code.
@@ -98,30 +98,30 @@ After transcription, text passes through these stages in order:
 
 - The engine accepts an optional `voice_device` parameter, passed through from
   the daemon's configured device.
-- The stream first attempts the target Whisper sample rate (16 kHz).
+- The stream first attempts the target SenseVoice sample rate (16 kHz).
 - On failure (e.g. PortAudio error -50 on macOS), it falls back to the
   device's native sample rate and stores it in `_stream_sample_rate`.
-- If the stream rate differs from the Whisper target rate, audio is resampled
+- If the stream rate differs from the SenseVoice target rate, audio is resampled
   via linear interpolation before transcription.
 
 ## Edge Cases
 
 | Case                      | Behaviour                                         |
 |---------------------------|----------------------------------------------------|
-| Whisper not yet loaded    | Play "not ready" beep, skip                        |
+| SenseVoice engine not loaded | Play "not ready" beep, skip                        |
 | Max recording duration    | No cap — the user controls when to stop by releasing the hotkey. A cap would paste prematurely mid-dictation and restart recording |
 | Empty transcription       | No paste occurs                                    |
 | Concurrent with assistant | Dictation works independently; pauses listener     |
 | macOS permissions         | `pynput` requires Accessibility permissions        |
 | macOS 26+ (Tahoe)         | `pynput` disabled — TSM main-thread assertion crash |
 | Linux / Wayland           | `pynput` requires X11 (limited Wayland support)    |
-| Audio rate mismatch       | Resample via linear interpolation to Whisper rate  |
+| Audio rate mismatch       | Resample via linear interpolation to SenseVoice rate  |
 | LLM filler removal fails  | Falls back to raw transcription (5 s timeout)     |
 | Custom dictionary empty   | No-op, text passes through unchanged               |
 
 ## Thread Safety
 
-- `threading.Lock` around shared Whisper model transcription calls.
+- `threading.Lock` around shared SenseVoice engine transcription calls.
 - Dedicated audio stream; never touches the listener's stream.
 - The `pynput` key handlers (`_on_key_press` / `_on_key_release`) must return
   quickly — Windows silently removes low-level keyboard hooks that take more
@@ -140,7 +140,7 @@ Two short beeps generated the same way as the existing `TunePlayer` sonar ping:
 
 ## Setup Wizard
 
-The setup wizard includes a dedicated Dictation page (between Whisper and
+The setup wizard includes a dedicated Dictation page (between speech recognition and
 Location steps) that allows users to:
 - Enable/disable dictation
 - Choose the hotkey from a dropdown of presets

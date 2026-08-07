@@ -1,8 +1,8 @@
 """Listening module - Voice capture and processing.
 
 Imports are lazy so that importing a lightweight submodule (e.g.
-echo_detection) does not drag in heavy dependencies like faster-whisper
-or ctranslate2 via listener.py.
+echo_detection) does not drag in heavy dependencies like funasr or torch
+via listener.py.
 """
 
 from __future__ import annotations

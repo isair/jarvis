@@ -178,7 +178,7 @@ class StateManager:
         """Check if speech overlapped with the hot window time span.
 
         Uses timestamps instead of a mutable boolean flag. This eliminates
-        race conditions between the hot window expiry timer and slow Whisper
+        race conditions between the hot window expiry timer and slow
         transcription — the check works regardless of when the transcript arrives.
 
         Args:
@@ -221,7 +221,7 @@ class StateManager:
         # 1. Speech started within the span (normal hot window follow-up)
         # 2. Speech started before the span but ended during it (mic picked up
         #    TTS echo during playback, then user spoke during hot window —
-        #    Whisper merges both into one chunk)
+        #    the recogniser merges both into one chunk)
         if span_start > 0 and span_end > 0:
             if span_start <= utterance_start_time <= span_end:
                 return True
@@ -264,7 +264,7 @@ class StateManager:
 
         If the hot window already expired while the echo was being transcribed,
         this reactivates it — the user shouldn't lose their follow-up window
-        just because Whisper was slow to produce the echo transcript.
+        just because the recogniser was slow to produce the echo transcript.
         """
         with self._state_lock:
             if self._state == ListeningState.HOT_WINDOW:

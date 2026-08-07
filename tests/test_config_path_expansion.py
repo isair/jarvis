@@ -60,13 +60,13 @@ def test_null_db_path_falls_back_to_default(tmp_path, monkeypatch):
     assert cfg.db_path.endswith("jarvis.db")
 
 
-def test_tilde_whisper_model_path_is_expanded(tmp_path, monkeypatch):
-    """whisper_model accepts a local model directory; tilde must expand, names pass through."""
-    _write_config(tmp_path, monkeypatch, {"whisper_model": "~/models/faster-whisper-medium"})
-    assert load_settings().whisper_model == str(Path("~/models/faster-whisper-medium").expanduser())
+def test_tilde_sensevoice_model_path_is_expanded(tmp_path, monkeypatch):
+    """sensevoice_model accepts a local model directory; tilde must expand, ids pass through."""
+    _write_config(tmp_path, monkeypatch, {"sensevoice_model": "~/models/SenseVoiceSmall"})
+    assert load_settings().sensevoice_model == str(Path("~/models/SenseVoiceSmall").expanduser())
 
-    _write_config(tmp_path, monkeypatch, {"whisper_model": "medium"})
-    assert load_settings().whisper_model == "medium"
+    _write_config(tmp_path, monkeypatch, {"sensevoice_model": "FunAudioLLM/SenseVoiceSmall"})
+    assert load_settings().sensevoice_model == "FunAudioLLM/SenseVoiceSmall"
 
 
 def test_absolute_and_unset_paths_are_untouched(tmp_path, monkeypatch):

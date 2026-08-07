@@ -631,9 +631,9 @@ class TestProviderChoicePage:
         with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
             assert page.nextId() == 5
 
-    def test_wizard_starts_on_whisper(self, qapp):
-        """Whisper setup is the first step — it has no LLM dependencies
-        and informs VRAM calculations on the Models page."""
+    def test_wizard_starts_on_speech_recognition(self, qapp):
+        """Speech-recognition setup is the first step — it has no LLM
+        dependencies and informs VRAM calculations on the Models page."""
         import tempfile
         from pathlib import Path
         from desktop_app.setup_wizard import SetupWizard
@@ -643,7 +643,7 @@ class TestProviderChoicePage:
         try:
             with patch("jarvis.config.default_config_path", return_value=cfg_path):
                 wiz = SetupWizard()
-            assert wiz.startId() == wiz.mlx_whisper_page_id
+            assert wiz.startId() == wiz.sensevoice_page_id
         finally:
             cfg_path.unlink(missing_ok=True)
 
@@ -1320,184 +1320,82 @@ class TestDefaultModelDetection:
                         assert status.is_fully_setup is True
 
 
-class TestWhisperModelOptions:
-    """Tests for whisper model selection options in setup wizard."""
+class TestSenseVoiceSetupPage:
+    """Tests for the SenseVoice speech-recognition setup page."""
 
-    def test_whisper_multilingual_model_options_available(self):
-        """Multilingual whisper model options include recommended and lightweight options."""
-        from desktop_app.setup_wizard import WhisperSetupPage
+    def test_default_model_id(self):
+        """The page pins the SenseVoiceSmall HuggingFace id."""
+        from desktop_app.setup_wizard import SenseVoiceSetupPage
 
-        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS]
-        assert "small" in model_ids
-        assert "tiny" in model_ids
-        assert "large-v3-turbo" in model_ids
+        assert SenseVoiceSetupPage.DEFAULT_MODEL_ID == "FunAudioLLM/SenseVoiceSmall"
 
-    def test_whisper_english_model_options_available(self):
-        """English-only whisper model options include recommended and lightweight options."""
-        from desktop_app.setup_wizard import WhisperSetupPage
+    def test_vram_budget(self):
+        """SenseVoiceSmall fits in ~1 GB VRAM (ModelsPage budget)."""
+        from desktop_app.setup_wizard import SenseVoiceSetupPage
 
-        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN]
-        assert "small.en" in model_ids
-        assert "tiny.en" in model_ids
-        assert "medium.en" in model_ids
-        # Note: large models don't have .en variants
-        assert not any("large" in m for m in model_ids)
+        assert SenseVoiceSetupPage.get_sensevoice_vram_mb() == 1024
 
-    def test_whisper_multilingual_model_options_have_required_fields(self):
-        """Each multilingual whisper model option has required info fields."""
-        from desktop_app.setup_wizard import WhisperSetupPage
+    def test_device_combo_offers_expected_devices(self, qapp):
+        """The device combo exposes auto/cuda/mps/cpu."""
+        from desktop_app.setup_wizard import SenseVoiceSetupPage
 
-        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS:
-            assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
-            model_id, name, file_size, ram, desc = model_tuple
-            assert model_id, "Model ID should not be empty"
-            assert name, "Model name should not be empty"
-            assert file_size, "Model file size should not be empty"
-            assert ram, "Model RAM requirement should not be empty"
-            assert desc, "Model description should not be empty"
-            # Multilingual models should NOT have .en suffix
-            assert not model_id.endswith(".en"), f"Multilingual model should not end with .en: {model_id}"
+        page = SenseVoiceSetupPage()
+        data = [page._device_combo.itemData(i) for i in range(page._device_combo.count())]
+        assert data == ["auto", "cuda", "mps", "cpu"]
 
-    def test_turbo_hidden_when_faster_whisper_unsupported(self):
-        """large-v3-turbo is filtered from options when faster-whisper is too old."""
-        from desktop_app.setup_wizard import WhisperSetupPage
+    def test_validate_page_saves_device(self, qapp, tmp_path, monkeypatch):
+        """Leaving the page persists the chosen device into config."""
+        import json as _json
+        from desktop_app.setup_wizard import SenseVoiceSetupPage, default_config_path
 
-        page = MagicMock(spec=WhisperSetupPage)
-        page._is_english_only = False
-        page._is_apple_silicon = False
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+        # Route the page's own default_config_path reference to a sandbox
+        # (the module holds its own reference, so patching jarvis.config is
+        # not enough — this also prevents touching the real user config).
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({}))
+        monkeypatch.setattr("desktop_app.setup_wizard.default_config_path", lambda: cfg_path)
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
-            options = WhisperSetupPage._get_current_model_options(page)
-        model_ids = [m[0] for m in options]
-        assert "large-v3-turbo" not in model_ids
-        assert "small" in model_ids
+        page = SenseVoiceSetupPage()
+        idx = page._device_combo.findData("cpu")
+        page._device_combo.setCurrentIndex(idx)
+        assert page.validatePage() is True
 
-    def test_turbo_shown_when_faster_whisper_supported(self):
-        """large-v3-turbo is available when faster-whisper supports it."""
-        from desktop_app.setup_wizard import WhisperSetupPage
+        config = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert config["sensevoice_device"] == "cpu"
 
-        page = MagicMock(spec=WhisperSetupPage)
-        page._is_english_only = False
-        page._is_apple_silicon = False
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+    def test_status_refresh_detects_funasr(self, qapp):
+        """The page completes once the FunASR runtime check has run."""
+        from desktop_app.setup_wizard import SenseVoiceSetupPage
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
-            options = WhisperSetupPage._get_current_model_options(page)
-        model_ids = [m[0] for m in options]
-        assert "large-v3-turbo" in model_ids
+        with patch("desktop_app.setup_wizard.check_funasr_installed", return_value=True):
+            page = SenseVoiceSetupPage()
+            page._refresh_status()
 
-    def test_turbo_always_shown_on_apple_silicon(self):
-        """large-v3-turbo is always available on Apple Silicon (MLX backend)."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        page = MagicMock(spec=WhisperSetupPage)
-        page._is_english_only = False
-        page._is_apple_silicon = True
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
-
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
-            options = WhisperSetupPage._get_current_model_options(page)
-        model_ids = [m[0] for m in options]
-        assert "large-v3-turbo" in model_ids
-
-    def test_whisper_english_model_options_have_required_fields(self):
-        """Each English-only whisper model option has required info fields."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN:
-            assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
-            model_id, name, file_size, ram, desc = model_tuple
-            assert model_id, "Model ID should not be empty"
-            assert name, "Model name should not be empty"
-            assert file_size, "Model file size should not be empty"
-            assert ram, "Model RAM requirement should not be empty"
-            assert desc, "Model description should not be empty"
-            # English-only models should have .en suffix
-            assert model_id.endswith(".en"), f"English model should end with .en: {model_id}"
+        assert page.isComplete()
+        assert page.install_btn.isEnabled() is False
 
 
-class TestWhisperSetupPageSliderRebuild:
-    """Regression tests for WhisperSetupPage slider rebuild lifecycle.
+class TestSenseVoiceSetupPageInstall:
+    """Tests for the on-demand FunASR install flow."""
 
-    On macOS, promoting a child QLabel to a top-level widget (via
-    setParent(None)) during a QWizard page transition could trigger
-    a SIGABRT ('Fatal Python error: Aborted') while the next page
-    was being shown.  These tests guarantee that the slider labels
-    stay parented to their containers throughout rebuilds — the
-    safe pattern for clearing items out of a layout.
-    """
+    def test_install_button_kicks_off_pip(self, qapp):
+        from desktop_app.setup_wizard import SenseVoiceSetupPage, CommandWorker
 
-    def test_slider_labels_keep_container_parent_after_rebuild(self, qapp):
-        """Newly-built slider labels must remain children of their containers.
+        with patch("desktop_app.setup_wizard.check_funasr_installed", return_value=False):
+            page = SenseVoiceSetupPage()
 
-        If any label ends up reparented to None it becomes a top-level
-        widget, which on macOS triggers a native window creation that
-        can abort during wizard page transitions.
-        """
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        page = WhisperSetupPage()
-
-        # Toggle language mode — this fires _rebuild_slider_ui which
-        # clears the old labels and inserts a new set.
-        page._on_language_changed(True)
-        page._on_language_changed(False)
-
-        labels_container = page._labels_container
-        size_container = page._size_container
-
-        for i in range(page._labels_layout.count()):
-            item = page._labels_layout.itemAt(i)
-            w = item.widget()
-            if w is not None:
-                assert w.parent() is labels_container, (
-                    "Slider name labels must stay parented to their "
-                    "container — a None parent promotes them to top-level "
-                    "widgets, which crashes QWizard transitions on macOS."
-                )
-
-        for i in range(page._size_layout.count()):
-            item = page._size_layout.itemAt(i)
-            w = item.widget()
-            if w is not None:
-                assert w.parent() is size_container, (
-                    "Slider size labels must stay parented to their "
-                    "container — a None parent promotes them to top-level "
-                    "widgets, which crashes QWizard transitions on macOS."
-                )
-
-    def test_initialize_page_can_be_called_multiple_times(self, qapp):
-        """initializePage must be safely re-callable.
-
-        QWizard calls initializePage each time a page is shown.  The
-        first call (right after construction) has to clear the initial
-        labels that __init__ built, and subsequent calls must not
-        crash or leak top-level widgets.
-        """
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        page = WhisperSetupPage()
-
-        # Re-initialise a few times — this mirrors back/forward
-        # navigation between wizard pages.
-        for _ in range(3):
-            page.initializePage()
-
-        # All remaining labels in the layouts are still properly
-        # parented (not promoted to top-level).
-        for layout, container in [
-            (page._labels_layout, page._labels_container),
-            (page._size_layout, page._size_container),
-        ]:
-            for i in range(layout.count()):
-                item = layout.itemAt(i)
-                w = item.widget()
-                if w is not None:
-                    assert w.parent() is container
+        assert page.install_btn.isEnabled() is True
+        mock_worker = MagicMock()
+        with patch.object(page, "_worker", mock_worker), \
+             patch("desktop_app.setup_wizard.CommandWorker", return_value=mock_worker) as mock_ctor:
+            page._install_funasr()
+        # The install command targets funasr plus the torch stack it needs
+        cmd = mock_ctor.call_args[0][0]
+        assert "funasr" in cmd
+        assert "torch" in cmd and "torchaudio" in cmd
+        assert "-m" in cmd and "pip" in cmd
+        mock_worker.start.assert_called_once()
+        assert page.install_btn.isEnabled() is False
 
 
 class TestMCPPage:

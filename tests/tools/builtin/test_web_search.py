@@ -1155,8 +1155,8 @@ class TestLanguagePlumbingEndToEnd:
         from src.jarvis.listening import listener as listener_module
         import inspect
         src = inspect.getsource(listener_module)
-        # One init, at least two assignment sites (MLX + faster-whisper),
-        # and the dispatch call must read it.
+        # One init, at least one assignment site (SenseVoice LID), and the
+        # dispatch call must read it.
         assert "self._last_detected_language: Optional[str] = None" in src
-        assert src.count("self._last_detected_language = detected") >= 2
+        assert src.count("self._last_detected_language = ") >= 1
         assert "language=self._last_detected_language" in src
