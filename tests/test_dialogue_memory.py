@@ -645,3 +645,57 @@ class TestDialogueMemoryUnifiedDurations:
         assert dm.MAX_UNSAVED_AGE_SEC == 120.0
 
 
+
+
+@pytest.mark.unit
+class TestStartNewConversation:
+    """A conversation boundary drawn on demand, without losing memory."""
+
+    def test_next_turn_carries_no_dialogue_context(self):
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        dm.add_message("user", "let's talk about boats")
+        dm.add_message("assistant", "boats it is")
+
+        dm.start_new_conversation()
+
+        assert dm.get_recent_messages() == []
+        assert dm.has_recent_messages() is False
+
+    def test_earlier_exchange_still_reaches_the_diary(self):
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        dm.add_message("user", "my cat is called Biscuit")
+        dm.add_message("assistant", "noted")
+
+        dm.start_new_conversation()
+
+        pending = "\n".join(dm.get_pending_chunks())
+        assert "my cat is called Biscuit" in pending
+
+    def test_messages_after_the_boundary_are_context_again(self):
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        dm.add_message("user", "old topic")
+        dm.start_new_conversation()
+        dm.add_message("user", "new topic")
+
+        assert [m["content"] for m in dm.get_recent_messages()] == ["new topic"]
+        assert dm.has_recent_messages() is True
+
+    def test_carried_over_tool_results_are_dropped(self):
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        dm.add_message("user", "search the web")
+        dm.record_tool_turn([
+            {"role": "tool", "content": "stale search result"},
+        ])
+
+        dm.start_new_conversation()
+
+        carried = dm.get_recent_turns_with_tools()
+        assert all("stale search result" not in (m.get("content") or "") for m in carried)
+
+    def test_scratch_cache_is_cold_again(self):
+        dm = DialogueMemory(inactivity_timeout=300.0)
+        dm.hot_cache_put("router:something", ["webSearch"])
+
+        dm.start_new_conversation()
+
+        assert dm.hot_cache_get("router:something") is None

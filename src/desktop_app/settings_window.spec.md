@@ -151,7 +151,7 @@ These fields are managed elsewhere or are too complex for a simple form:
 - `allowlist_bundles` — list of bundle IDs
 - `wake_aliases` — list of strings (complex editing)
 - `stop_commands` / `stop_command_fuzzy_ratio` — list of strings
-- `use_stdin` — developer/CLI flag
+- `use_stdin` — set by the text chat front end itself, not a user setting
 - `voice_debug` — environment variable only
 - `whisper_min_audio_duration` / `whisper_min_word_length` — rarely changed advanced params
 - `vad_frame_ms` / `vad_pre_roll_ms` — low-level VAD timing

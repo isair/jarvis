@@ -35,8 +35,13 @@ from faster_whisper import WhisperModel
 from .config import load_settings
 from .memory.db import Database
 from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memory
+from .memory.graph_ops import (
+    install_warm_profile_invalidation,
+    migrate_legacy_graph_shape,
+    uninstall_warm_profile_invalidation,
+)
 from .output.tts import create_tts_engine
-from .tools.registry import initialize_mcp_tools
+from .tools.registry import discover_and_report_mcp_tools
 from .debug import debug_log
 from .listening.listener import VoiceListener
 from .utils.location import get_location_context, is_location_available
@@ -324,36 +329,7 @@ def main(smoke_test: bool = False) -> None:
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
     # MCP preflight: discover and cache external MCP tools
-    mcps = getattr(cfg, "mcps", {}) or {}
-    if mcps:
-        print(f"📡 Discovering MCP tools from {len(mcps)} server(s)...", flush=True)
-        try:
-            mcp_tools, mcp_errors = initialize_mcp_tools(mcps, verbose=False)
-
-            # Group tools by server for display
-            tools_by_server: dict = {}
-            for tool_name in mcp_tools.keys():
-                if "__" in tool_name:
-                    server_name = tool_name.split("__")[0]
-                    if server_name not in tools_by_server:
-                        tools_by_server[server_name] = []
-                    tools_by_server[server_name].append(tool_name)
-
-            for server_name in mcps.keys():
-                count = len(tools_by_server.get(server_name, []))
-                if count > 0:
-                    print(f"  ✅ {server_name}: {count} tools available", flush=True)
-                elif server_name in mcp_errors:
-                    print(f"  ❌ {server_name}: {mcp_errors[server_name]}", flush=True)
-                else:
-                    print(f"  ⚠️ {server_name}: no tools discovered", flush=True)
-
-            debug_log(f"MCP tools cached: {len(mcp_tools)} total", "mcp")
-        except Exception as e:
-            debug_log(f"MCP discovery failed: {e}", "mcp")
-            print(f"  ⚠️ MCP discovery failed: {e}", flush=True)
-    else:
-        print("📡 No MCP servers configured", flush=True)
+    discover_and_report_mcp_tools(getattr(cfg, "mcps", {}) or {})
 
     # Initialize dialogue memory with timeout
     print("💾 Initializing dialogue memory...", flush=True)
@@ -364,71 +340,15 @@ def main(smoke_test: bool = False) -> None:
     print("✓ Dialogue memory initialized", flush=True)
 
     # Wire the conversation-scoped warm-profile cache to graph mutations.
-    # When the User or Directives branch is mutated mid-conversation, the
-    # cached warm profile is dropped so the next reply rebuilds it from
-    # the current graph state. World-branch writes (typical webSearch
-    # extractions) do not touch warm profile, so they are ignored.
-    try:
-        from .memory.graph import (
-            BRANCH_DIRECTIVES,
-            BRANCH_USER,
-            register_graph_mutation_listener,
-        )
+    # If a previous run left a listener registered (re-entry without a
+    # full process restart), drop it first so the registry never
+    # accumulates stale closures.
+    uninstall_warm_profile_invalidation(_warm_profile_graph_listener)
+    _warm_profile_graph_listener = install_warm_profile_invalidation(
+        lambda: _global_dialogue_memory
+    )
 
-        _wp_relevant_branches = {BRANCH_USER, BRANCH_DIRECTIVES}
-
-        # Read the DialogueMemory ref through the module global at fire
-        # time, not via closure capture, so a future singleton swap (tests
-        # or hot-reload) routes invalidation to the live instance instead
-        # of the freed one.
-        def _invalidate_wp_on_graph_mutation(*, action, node_id, branch):
-            del action, node_id  # Only the branch matters for warm-profile filtering.
-            if branch not in _wp_relevant_branches:
-                return
-            dm = _global_dialogue_memory
-            if dm is None:
-                return
-            try:
-                dm.invalidate_warm_profile()
-                debug_log(
-                    f"warm profile invalidated by {branch} graph mutation",
-                    "memory",
-                )
-            except Exception as exc:
-                debug_log(
-                    f"warm profile invalidation failed (non-fatal): {exc}",
-                    "memory",
-                )
-
-        # If a previous run left a listener registered (re-entry without
-        # full process restart), drop it before installing the new one so
-        # the registry never accumulates stale closures.
-        if _warm_profile_graph_listener is not None:
-            try:
-                from .memory.graph import unregister_graph_mutation_listener
-                unregister_graph_mutation_listener(_warm_profile_graph_listener)
-            except Exception:
-                pass
-        register_graph_mutation_listener(_invalidate_wp_on_graph_mutation)
-        _warm_profile_graph_listener = _invalidate_wp_on_graph_mutation
-    except Exception as exc:
-        debug_log(
-            f"warm profile mutation listener wiring failed (non-fatal): {exc}",
-            "memory",
-        )
-
-    # Knowledge graph: wipe + re-seed if the on-disk shape predates the
-    # User/Directives/World taxonomy. Non-destructive to the diary —
-    # users can re-import via the memory viewer.
-    try:
-        from .memory.graph import GraphMemoryStore
-        _graph_store_boot = GraphMemoryStore(cfg.db_path)
-        if _graph_store_boot.migrate_legacy_shape():
-            print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
-            print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
-        _graph_store_boot.close()
-    except Exception as e:
-        debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
+    migrate_legacy_graph_shape(cfg.db_path)
 
     # Check location detection status
     if cfg.location_enabled:
@@ -580,13 +500,8 @@ def main(smoke_test: bool = False) -> None:
 
         db.close()
 
-        if _warm_profile_graph_listener is not None:
-            try:
-                from .memory.graph import unregister_graph_mutation_listener
-                unregister_graph_mutation_listener(_warm_profile_graph_listener)
-            except Exception:
-                pass
-            _warm_profile_graph_listener = None
+        uninstall_warm_profile_invalidation(_warm_profile_graph_listener)
+        _warm_profile_graph_listener = None
 
         # Reset module-level globals so in-process re-entry is clean.
         _global_dialogue_memory = None
@@ -699,13 +614,8 @@ def main(smoke_test: bool = False) -> None:
         # not retain a closure pointing at this run's DialogueMemory after
         # shutdown — relevant for tests and any embedder that re-runs the
         # daemon in-process.
-        if _warm_profile_graph_listener is not None:
-            try:
-                from .memory.graph import unregister_graph_mutation_listener
-                unregister_graph_mutation_listener(_warm_profile_graph_listener)
-            except Exception:
-                pass
-            _warm_profile_graph_listener = None
+        uninstall_warm_profile_invalidation(_warm_profile_graph_listener)
+        _warm_profile_graph_listener = None
 
         debug_log("daemon stopped", "jarvis")
         print("👋 Daemon stopped", flush=True)

@@ -70,6 +70,45 @@ def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> T
         return _mcp_tools_cache.copy(), errors
 
 
+def discover_and_report_mcp_tools(mcps_config: Dict[str, Any]) -> Dict[str, "ToolSpec"]:
+    """Discover MCP tools at startup and print a per-server summary.
+
+    The shared startup path for every front end (voice daemon, text
+    chat): one line per configured server saying how many tools it
+    offered or why it offered none. Never raises — a broken MCP server
+    must not stop the assistant from starting.
+    """
+    if not mcps_config:
+        print("📡 No MCP servers configured", flush=True)
+        return {}
+
+    print(f"📡 Discovering MCP tools from {len(mcps_config)} server(s)...", flush=True)
+    try:
+        mcp_tools, mcp_errors = initialize_mcp_tools(mcps_config, verbose=False)
+    except Exception as e:
+        debug_log(f"MCP discovery failed: {e}", "mcp")
+        print(f"  ⚠️ MCP discovery failed: {e}", flush=True)
+        return {}
+
+    counts: Dict[str, int] = {}
+    for tool_name in mcp_tools.keys():
+        if "__" in tool_name:
+            server_name = tool_name.split("__")[0]
+            counts[server_name] = counts.get(server_name, 0) + 1
+
+    for server_name in mcps_config.keys():
+        count = counts.get(server_name, 0)
+        if count > 0:
+            print(f"  ✅ {server_name}: {count} tools available", flush=True)
+        elif server_name in mcp_errors:
+            print(f"  ❌ {server_name}: {mcp_errors[server_name]}", flush=True)
+        else:
+            print(f"  ⚠️ {server_name}: no tools discovered", flush=True)
+
+    debug_log(f"MCP tools cached: {len(mcp_tools)} total", "mcp")
+    return mcp_tools
+
+
 def get_cached_mcp_tools() -> Dict[str, "ToolSpec"]:
     """Get cached MCP tools without rediscovering."""
     with _mcp_tools_cache_lock:

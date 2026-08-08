@@ -96,7 +96,7 @@ The central controller that manages:
 |--------|---------|
 | **LogViewerWindow** | Real-time log output from the daemon, with "Report Issue" button |
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
-| **FaceWindow** | Animated face that reacts to speaking state |
+| **FaceWindow** | Particle-sphere orb that reacts to assistant state |
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
@@ -127,6 +127,33 @@ The Inno Setup script also runs a `VerifyCudaInstall` hook after the CUDA downlo
   - Logs in collapsible `<details>` section
   - Version and platform info
   - Log truncation preserves the init section (everything up to the last `─`×50 separator) + recent tail (most useful for debugging); middle lines are truncated
+
+### Face Window
+
+`FaceWindow` hosts `ParticleOrbWidget` (`orb_widget.py`): a cloud of points
+spread over a sphere by a Fibonacci spiral, spun in 3D and projected flat.
+Depth drives both point size and opacity, which is what makes a flat point
+cloud read as a surface rather than a disc.
+
+State is the only input, read from the same `JarvisStateManager` the daemon
+writes to, so the orb reflects voice and text turns alike. Each state's
+character lives in one `OrbMotion` record rather than scattered branches:
+
+| State | Reads as |
+|-------|----------|
+| `ASLEEP` | barely lit, drifting |
+| `IDLE` | slow turn, gentle swell |
+| `LISTENING` | brighter, leaning in |
+| `THINKING` | fast spin with per-point turbulence |
+| `SPEAKING` | a wave travelling pole-to-pole, deforming the surface |
+
+The travelling wave is reserved for `SPEAKING` — it is the cue that the
+assistant is talking, and sharing it with another state would blunt that.
+Note the distinction the tests enforce: swelling is not speaking. Uniform
+breathing changes the orb's size but leaves it a smooth sphere; only the
+ripple deforms the surface. `tests/test_orb_widget.py` asserts that
+contrast numerically (speaking deforms by an order of magnitude more than
+idle), so the geometry is verifiable without a display.
 
 ### Splash Screen
 
@@ -201,6 +228,18 @@ COLORS = {
 ```
 
 Components use `JARVIS_THEME_STYLESHEET` for consistent styling across all dialogs and windows.
+
+### No remote assets
+
+Every surface renders from local resources only — no CDN webfonts, scripts,
+styles, or `preconnect` hints. This binds hardest on the Memory Viewer, which
+is HTML and could trivially pull a webfont: that page shows the user's diary
+and personal facts, so a font request would disclose their IP, User-Agent and
+the time they opened it, and would degrade the design on an offline machine.
+Typography goes through the `--font-ui` / `--font-mono` custom properties,
+which prefer the design's faces when installed locally and fall back to
+system faces ending in a generic family. Guarded by
+`tests/test_memory_viewer_offline.py`.
 
 ## Update System
 

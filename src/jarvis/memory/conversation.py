@@ -762,6 +762,32 @@ class DialogueMemory:
         self._lock = threading.RLock()  # Reentrant lock for thread safety
         # Track the last profile used for follow-up detection
         self._last_profile: Optional[str] = None
+        # Floor on the recent-context window, raised by
+        # ``start_new_conversation()``. Messages older than this stay in
+        # ``_messages`` for the diary but drop out of the assistant's
+        # context, so a reset never costs the user memory.
+        self._conversation_start_ts: float = 0.0
+
+    def _recent_cutoff(self) -> float:
+        """Oldest timestamp still inside the active conversation.
+
+        Caller MUST hold ``_lock``.
+        """
+        return max(time.time() - self.RECENT_WINDOW_SEC, self._conversation_start_ts)
+
+    def start_new_conversation(self) -> None:
+        """Draw a line under the current conversation. Thread-safe.
+
+        The next turn starts with no dialogue context, no carried-over
+        tool results, and a cold scratch cache — the same state the
+        engine sees after an inactivity lapse, but on demand. Messages
+        already recorded stay pending for the diary.
+        """
+        with self._lock:
+            self._conversation_start_ts = self._next_ts()
+            self._tool_turns.clear()
+            self._hot_cache.clear()
+            debug_log("dialogue memory: new conversation started", "memory")
 
     def _next_ts(self) -> float:
         """Return a strictly-monotonic timestamp.
@@ -804,8 +830,8 @@ class DialogueMemory:
             if not self._messages:
                 return []
 
-            # Filter to last 5 minutes
-            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            # Filter to the active conversation window
+            cutoff = self._recent_cutoff()
             recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
 
             return [{"role": role, "content": content} for _, role, content in recent_messages]
@@ -944,7 +970,7 @@ class DialogueMemory:
         with self._lock:
             if not self._messages and not self._tool_turns:
                 return []
-            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            cutoff = self._recent_cutoff()
             # Build timeline of (ts, payload) where payload is either a single
             # text message dict or a list of tool messages.
             timeline: list = []
@@ -983,9 +1009,9 @@ class DialogueMemory:
             return flat
 
     def has_recent_messages(self) -> bool:
-        """Check if there are any messages in the last 5 minutes."""
+        """Check if the active conversation has any messages."""
         with self._lock:
-            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            cutoff = self._recent_cutoff()
             return any(ts >= cutoff for ts, _, _ in self._messages)
 
     def set_last_profile(self, profile: str) -> None:
@@ -997,7 +1023,7 @@ class DialogueMemory:
         """Get the last profile used, if within the recent window."""
         with self._lock:
             # Only return profile if we have recent messages
-            cutoff = time.time() - self.RECENT_WINDOW_SEC
+            cutoff = self._recent_cutoff()
             if any(ts >= cutoff for ts, _, _ in self._messages):
                 return self._last_profile
             return None

@@ -35,7 +35,7 @@
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
 
 **🚧 Known limitations:** Jarvis is under active development. Primary development happens on macOS. Windows/Linux support may lag behind. We're building in the open, [issues](https://github.com/isair/jarvis/issues) and [contributions](https://github.com/isair/jarvis/pulls) welcome!
-- Voice-only for now—no text chat interface yet ([#35](https://github.com/isair/jarvis/issues/35))
+- The desktop app is voice-only; typed chat runs from source in a terminal ([see below](#text-chat--talk-to-jarvis-without-a-microphone), [#35](https://github.com/isair/jarvis/issues/35))
 - No mobile apps ([#17](https://github.com/isair/jarvis/issues/17))
 - "Stop" commands during speech sometimes get filtered as echo ([#24](https://github.com/isair/jarvis/issues/24))
 - Dictation is not available on macOS 26+ (Tahoe) due to a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172))
@@ -170,6 +170,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
 - **MCP Integration** - Connect to thousands of external tools (Home Assistant, GitHub, Slack, etc.)
+- **Text Chat** - Type instead of talk, from any terminal — including headless servers and containers with no microphone
 
 ## System Requirements
 
@@ -355,6 +356,51 @@ Customise the hotkey in Settings or `config.json`:
 ```
 
 > **Note:** macOS requires Accessibility permissions for the global hotkey. Linux requires X11 (limited Wayland support).
+
+## Text Chat — Talk to Jarvis Without a Microphone
+
+Type at Jarvis instead of speaking to it. Same assistant: same memory, same
+tools, same diary — it just reads lines instead of listening. Useful on a
+headless server, in a container, over SSH, or when you simply don't want to
+talk out loud.
+
+```bash
+git clone https://github.com/isair/jarvis.git
+cd jarvis
+pip install -r requirements-chat.txt
+PYTHONPATH=src python -m jarvis.chat
+```
+
+```
+💬 Jarvis text chat
+  🔌 Provider: ollama (http://localhost:11434)
+  🧠 Chat model: gemma4:e2b
+  💾 Memory: ~/.local/share/jarvis/jarvis.db
+  ℹ️  Type /help for commands, /exit to leave.
+
+🧑 You › what did I say about the picnic yesterday?
+```
+
+Ask a single question and exit (handy for scripts):
+
+```bash
+PYTHONPATH=src python -m jarvis.chat "what's the weather like?"
+```
+
+| Command | What it does |
+|---------|--------------|
+| `/help` | List the commands |
+| `/reset` | Save the conversation and start a fresh one |
+| `/exit` | Save the conversation and quit (also `/quit`, or Ctrl+D) |
+
+`requirements-chat.txt` is the audio-free subset of `requirements.txt` — no
+Whisper, no PortAudio, no Qt — so it installs on a machine with no sound card
+and no desktop. Install the full `requirements.txt` instead if you want voice
+and text from the same checkout.
+
+> **Note:** the screenshot tool needs a display, so it won't work over a plain
+> SSH session. Everything else — memory, web search, weather, nutrition, MCP
+> servers — works the same as it does by voice.
 
 <details>
 <summary><strong>Text-to-Speech</strong></summary>
@@ -605,6 +651,10 @@ Running from source enables Chatterbox TTS (AI voice with emotion/cloning). Pipe
 ```
 
 Verify: `sudo lsof -i -n -P | grep jarvis` (should only show 127.0.0.1 to Ollama)
+
+The Memory Viewer is served from `127.0.0.1` and loads no webfonts, scripts or
+styles from any CDN, so opening your diary and knowledge graph makes no outbound
+request at all. It renders identically with the machine offline.
 
 </details>
 

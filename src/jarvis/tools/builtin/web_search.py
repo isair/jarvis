@@ -859,25 +859,16 @@ class WebSearchTool(Tool):
                         "web",
                     )
 
-            # If DDG served its bot-challenge page we have neither links nor
-            # content. Skip the generic "Search Information" fallback — it
-            # reads like a search-result payload and lets the model
-            # confabulate — and let the envelope selection below emit a
-            # dedicated rate-limit message instead.
-            if not search_results and not ddg_rate_limited:
-                search_results.extend([
-                    "🔍 **Search Information**",
-                    f"   I wasn't able to find current results for '{search_query}'.",
-                    "   This could be due to:",
-                    "   • Search engines blocking automated requests",
-                    "   • Network limitations",
-                    "   • The topic requiring very recent information",
-                    "",
-                    "   For current information, you might try:",
-                    "   • Searching manually on DuckDuckGo, Google, or Bing",
-                    "   • Visiting specific websites related to your query",
-                    ""
-                ])
+            # Every provider came back with nothing: no links, no instant
+            # answer, no page content. Whatever the cause — bot challenge,
+            # dead network, DNS failure, a firewall in the way — there is
+            # nothing to answer from, so no filler is appended here. A
+            # generic "Search Information" block reads like a search-result
+            # payload and invites the model to confabulate around it; the
+            # envelope selection below emits an honest failure instead.
+            search_produced_nothing = (
+                not search_results and not instant_results and not fetched_content
+            )
 
             all_results: list[str] = []
             if instant_results:
@@ -918,26 +909,41 @@ class WebSearchTool(Tool):
             # answer. This is the field failure mode observed 2026-04-20 on
             # 'Possessor movie': no instant answer + fetch-all-failed →
             # reply collapsed to 'Links to sources like Wikipedia'.
-            # Rate-limit path takes precedence over everything except an
-            # instant answer (instant answers hit a different DDG endpoint
-            # — api.duckduckgo.com — and can succeed even when /lite/ is
-            # challenged). If we were blocked AND have no instant answer
-            # AND no fetched content, emit an honest envelope that tells
-            # the model to admit the block rather than paper over it.
-            if ddg_rate_limited and not instant_results and not fetched_content:
+            # Nothing was retrieved at all. The cause only changes the first
+            # clause — a bot challenge is worth naming because retrying
+            # shortly often works, whereas an unreachable service usually
+            # means the network or a firewall. The anti-confabulation
+            # constraint is identical either way: with an empty payload the
+            # model's only other option is to answer from prior knowledge
+            # and present it as a fresh lookup.
+            if search_produced_nothing:
+                cause = (
+                    "was blocked by DuckDuckGo's bot-protection challenge"
+                    if ddg_rate_limited
+                    else "could not be completed — the search service was "
+                         "unreachable or returned nothing"
+                )
+                retry_hint = (
+                    "try again shortly or search manually"
+                    if ddg_rate_limited
+                    else "check the network connection, or search manually"
+                )
                 reply_text = (
-                    f"Web search for '{search_query}' was blocked by DuckDuckGo's "
-                    f"bot-protection challenge, so no results could be retrieved "
-                    f"this time. Your reply must: (1) tell the user the search "
-                    f"engine temporarily blocked the request; (2) suggest they "
-                    f"try again shortly or search manually. Your reply must NOT "
+                    f"Web search for '{search_query}' {cause}, so no results "
+                    f"could be retrieved this time. Your reply must: (1) tell "
+                    f"the user plainly that the search did not go through; "
+                    f"(2) suggest they {retry_hint}. Your reply must NOT "
                     f"contain any specific facts about the topic (dates, names, "
                     f"numbers, events, etc.) — even if you recall them — because "
-                    f"nothing was actually retrieved. If you state any such fact, "
-                    f"you have failed. Keep the reply to two short sentences at "
-                    f"most."
+                    f"nothing was actually retrieved. Do NOT invent a reason for "
+                    f"the failure or dress it up as a joke; say it failed. If you "
+                    f"state any such fact, you have failed. Keep the reply to two "
+                    f"short sentences at most."
                 )
-            elif all_results:
+            else:
+                # ``all_results`` is non-empty exactly when
+                # ``search_produced_nothing`` is False — they are negations of
+                # the same condition — so there is no third case to handle.
                 content_missing = (
                     fetch_attempted_any and not fetched_content and not instant_results
                 )
@@ -993,12 +999,6 @@ class WebSearchTool(Tool):
                         f"Use this information to reply to the user's query:\n\n"
                     )
                 reply_text = envelope + "\n".join(all_results)
-            else:
-                reply_text = (
-                    f"The web search for '{search_query}' returned no results. "
-                    f"This could be due to network issues or search service limitations. "
-                    f"Let the user know you couldn't find results and suggest they try different search terms or check manually."
-                )
 
             if getattr(cfg, "voice_debug", False):
                 try:

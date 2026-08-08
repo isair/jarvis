@@ -23,6 +23,10 @@ from src.jarvis.memory.graph import (
     register_graph_mutation_listener,
     unregister_graph_mutation_listener,
 )
+from src.jarvis.memory.graph_ops import (
+    install_warm_profile_invalidation,
+    uninstall_warm_profile_invalidation,
+)
 
 
 @pytest.fixture
@@ -195,15 +199,7 @@ class TestWarmProfileInvalidationHook:
     """
 
     def _wire(self, dm: DialogueMemory):
-        relevant = {BRANCH_USER, BRANCH_DIRECTIVES}
-
-        def cb(*, action, node_id, branch):
-            del action, node_id
-            if branch in relevant:
-                dm.invalidate_warm_profile()
-
-        register_graph_mutation_listener(cb)
-        return cb
+        return install_warm_profile_invalidation(lambda: dm)
 
     def test_user_write_invalidates_warm_profile(self, graph_store):
         dm = DialogueMemory()
@@ -213,7 +209,7 @@ class TestWarmProfileInvalidationHook:
         try:
             graph_store.create_node("Eve", "user fact", parent_id=BRANCH_USER)
         finally:
-            unregister_graph_mutation_listener(cb)
+            uninstall_warm_profile_invalidation(cb)
 
         assert dm.hot_cache_get(dm.WARM_PROFILE_CACHE_KEY) is None
         # Other cache entries are untouched.
@@ -228,7 +224,7 @@ class TestWarmProfileInvalidationHook:
                 "be concise", "rule", parent_id=BRANCH_DIRECTIVES,
             )
         finally:
-            unregister_graph_mutation_listener(cb)
+            uninstall_warm_profile_invalidation(cb)
 
         assert dm.hot_cache_get(dm.WARM_PROFILE_CACHE_KEY) is None
 
@@ -241,7 +237,7 @@ class TestWarmProfileInvalidationHook:
                 "Paris", "world fact", parent_id=BRANCH_WORLD,
             )
         finally:
-            unregister_graph_mutation_listener(cb)
+            uninstall_warm_profile_invalidation(cb)
 
         # World-branch writes are noise for the warm profile.
         assert dm.hot_cache_get(dm.WARM_PROFILE_CACHE_KEY) == "fresh-block"

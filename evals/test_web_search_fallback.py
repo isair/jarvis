@@ -97,3 +97,47 @@ class TestFallbackChainRescuesBotChallenge:
         assert "two short sentences" in lowered
         # Must not pretend there were results.
         assert "<<<BEGIN UNTRUSTED WEB EXTRACT>>>" not in result.reply_text
+
+
+@pytest.mark.eval
+class TestNetworkFailureIsReportedHonestly:
+    """The envelope for a search that never reached a provider.
+
+    Field failure this covers: with the network unreachable, the tool
+    wrapped an empty payload in the success envelope ("Here are the web
+    search results … Use this information to reply"). Given that
+    contradiction the model invented a reason — "the news cycle seems
+    particularly elusive today … the world has decided to keep its
+    latest trends to itself" — instead of saying the search failed.
+
+    The honest envelope previously fired only for DuckDuckGo's
+    bot-challenge page, so every other cause (network down, DNS failure,
+    firewall) fell through to the success envelope.
+    """
+
+    @patch("jarvis.tools.builtin.web_search._wikipedia_summary")
+    @patch("jarvis.tools.builtin.web_search.requests.get")
+    def test_unreachable_network_gets_the_honest_envelope(self, mock_get, mock_wiki):
+        import requests as _requests
+
+        mock_get.side_effect = _requests.exceptions.ConnectionError("unreachable")
+        mock_wiki.return_value = None
+
+        result = WebSearchTool().run({"search_query": "latest ai news"}, _make_ctx())
+
+        assert result.success is True
+        lowered = result.reply_text.lower()
+
+        # Reports the failure, and constrains the model the same way the
+        # bot-challenge envelope does.
+        assert "could not be completed" in lowered
+        assert "you have failed" in lowered
+        assert "two short sentences" in lowered
+
+        # Bans the specific shape the confabulation took.
+        assert "do not invent a reason" in lowered
+        assert "joke" in lowered
+
+        # Must not announce results, nor misreport the cause.
+        assert "here are the web search results" not in lowered
+        assert "bot-protection challenge" not in lowered

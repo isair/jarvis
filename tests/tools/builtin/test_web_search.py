@@ -674,14 +674,61 @@ class TestWebSearchTool:
 
     @patch('requests.get')
     def test_run_network_failure_graceful(self, mock_get):
-        """Test web search with network failure - graceful fallback returns success with guidance."""
+        """A dead network still returns a usable payload rather than raising."""
         # First request (instant) fails, second (lite) fails
         mock_get.side_effect = [requests.exceptions.ConnectionError("down"), requests.exceptions.ConnectionError("down")]  # both phases fail
         args = {"search_query": "test query"}
         result = self.tool.run(args, self.context)
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True  # still returns guidance
-        assert "wasn't able to find" in result.reply_text.lower()
+        assert "test query" in result.reply_text
+
+    @patch('requests.get')
+    def test_network_failure_does_not_claim_results_were_found(self, mock_get):
+        """The envelope must not announce results the search never retrieved.
+
+        Field failure: with the network down, the payload opened with
+        "Here are the web search results ... Use this information to reply",
+        followed by text saying nothing was found. Handed that contradiction,
+        the model invented an excuse ("the internet is feeling coy today")
+        instead of reporting the failure.
+        """
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("down"),
+            requests.exceptions.ConnectionError("down"),
+        ]
+        result = self.tool.run({"search_query": "test query"}, self.context)
+
+        assert "Here are the web search results" not in result.reply_text
+
+    @patch('requests.get')
+    def test_network_failure_instructs_an_honest_reply(self, mock_get):
+        """A total failure must tell the model to admit it, and to invent nothing.
+
+        Same contract the bot-challenge path already honours: say the search
+        failed, and state no topic facts from prior knowledge.
+        """
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("down"),
+            requests.exceptions.ConnectionError("down"),
+        ]
+        result = self.tool.run({"search_query": "test query"}, self.context)
+
+        lowered = result.reply_text.lower()
+        assert "must not" in lowered, "reply must carry the no-confabulation constraint"
+        assert "could not" in lowered or "no results" in lowered
+
+    @patch('requests.get')
+    def test_network_failure_is_distinguishable_from_a_bot_challenge(self, mock_get):
+        """The two failure causes read differently, so field triage can tell them apart."""
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("down"),
+            requests.exceptions.ConnectionError("down"),
+        ]
+        result = self.tool.run({"search_query": "test query"}, self.context)
+
+        # A network outage is not a bot challenge; saying so would misinform.
+        assert "bot-protection challenge" not in result.reply_text
 
 
 class TestBraveSearchHelper:

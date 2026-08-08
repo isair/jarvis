@@ -92,11 +92,26 @@ The tool emits one of two envelopes depending on what the pipeline produced:
   > state any such fact, you have failed. Keep the reply to two short
   > sentences at most.
 
-- **Rate-limited envelope** (DDG served its bot-protection challenge
-  page AND no instant answer was available): same anti-confabulation
-  framing as the links-only envelope, but names the block explicitly so
-  the reply is "the search engine temporarily blocked the request, try
-  again shortly" instead of a confabulated answer.
+- **Empty-result envelope** (no links, no instant answer, and no fetched
+  content — the cascade produced nothing at all): the payload carries no
+  filler, only an instruction to report the failure plainly. Same
+  anti-confabulation framing as the links-only envelope, plus an explicit
+  ban on inventing a reason for the failure or playing it for laughs.
+  The cause selects the opening clause and the retry hint only:
+
+  | Cause | Opening clause | Hint |
+  |-------|----------------|------|
+  | DDG bot-protection challenge | "was blocked by DuckDuckGo's bot-protection challenge" | try again shortly, or search manually |
+  | Anything else (network down, DNS failure, firewall, provider returned nothing) | "could not be completed — the search service was unreachable or returned nothing" | check the network connection, or search manually |
+
+  Honesty is not conditional on the cause. Any total failure gets this
+  envelope, because an empty payload leaves the model only two options:
+  admit the failure, or answer from prior knowledge and present it as a
+  fresh lookup. A generic "Search Information" block is never appended in
+  this state — it reads like a search-result payload and invites the model
+  to narrate around it (field failure: with the network unreachable, the
+  reply became "the internet is feeling coy about my profession today"
+  rather than "the search did not go through").
 
   Detection looks at both the HTTP status (202 / 400 / 429) and
   structural markers in the response body (`anomaly-modal` CSS class,

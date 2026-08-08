@@ -1,0 +1,23 @@
+# Text chat only — the audio-free subset of requirements.txt.
+#
+# Enough to run `python -m jarvis.chat` on a machine with no microphone,
+# no speakers and no desktop session (server, container, SSH). Leaves out
+# Whisper, PortAudio, the hotkey listener, TTS and Qt.
+#
+# Install requirements.txt instead if you want voice as well.
+
+python-dotenv==1.0.1
+requests==2.32.3
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+html2text>=2020.1.16
+numpy<2.0.0
+rapidfuzz==3.6.1
+geoip2==4.8.0
+mcp==1.13.1
+faiss-cpu>=1.7.4
+
+# Windows has no system IANA timezone database; without this, zoneinfo
+# cannot resolve the GeoIP-derived zone and the time/location block
+# injected into every reply falls back to the OS local zone.
+tzdata==2026.1; sys_platform == "win32"
