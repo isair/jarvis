@@ -161,6 +161,26 @@ The desktop app runs the Jarvis daemon in a **QThread** (bundled mode) or **subp
 └─────────────────────────────────────────┘
 ```
 
+### Threading: worker QThreads never die while running
+
+All long-lived worker QThreads in the desktop app inherit `KeepAliveWorker`
+(`src/desktop_app/qt_worker.py`): `DaemonThread`, `SetupCheckWorker`,
+`_LLMReachWorker`, `ServerCheckWorker` (app.py) and every setup-wizard
+worker. The class keeps each started worker referenced in a class-level
+registry until its OS thread has fully finished (released via the built-in
+`finished` signal). Dropping the last Python reference to a winding-down
+QThread — for example from a completion slot that clears the attribute
+holding it — destroys a running QThread and Qt aborts the whole app with
+"Fatal Python error: Aborted" on the main thread (#584/#575/#576; the
+setup-wizard crash class #509/#407/#239). Because of this, worker
+subclasses must never shadow the built-in `finished` signal — custom
+completion signals use other names (`check_done`, `completed`, `done`).
+
+`DaemonThread`'s `finished` slot (`_on_daemon_finished`) is connected with
+`Qt.QueuedConnection`: the signal is emitted from the worker's OS thread,
+and the slot mutates Qt UI state (menu actions, tray icon, face state), so
+it must run on the main thread.
+
 ### Daemon Callbacks
 
 The desktop app registers callbacks with the daemon for:
@@ -269,6 +289,18 @@ A Flask-based web interface for browsing conversation history:
 2. On clean exit, removes the marker
 3. On next startup, if marker exists → previous session crashed
 4. Offers to submit crash report to GitHub Issues
+
+### Crash Reports Carry the Native Stack (macOS)
+
+"Fatal Python error: Aborted" crashes are C-level aborts whose native
+stack faulthandler cannot capture — it only dumps Python frames, which for
+the abort family (#584/#575/#576) shows nothing but the main thread parked
+in `app.exec()`. On macOS the OS still writes a full report with native
+frames to `~/Library/Logs/DiagnosticReports/Jarvis-*.ips`. On the next
+launch, `collect_macos_crash_report()` finds the newest report newer than
+the previous crash log and appends its exception type, termination
+indicator and the crashed thread's top native frames to the crash-dialog
+content and the report-issue body, so these aborts become diagnosable.
 
 ### Fallbacks
 

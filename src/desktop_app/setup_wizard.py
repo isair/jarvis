@@ -14,7 +14,7 @@ import platform
 import webbrowser
 import json
 from pathlib import Path
-from typing import ClassVar, Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -379,6 +379,7 @@ try:
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
+    from desktop_app.qt_worker import KeepAliveWorker
     from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, _ensure_icons, _ICON_STYLESHEET_TEMPLATE
     from desktop_app.mcp_catalogue import get_wizard_entries, MCPEntry
 
@@ -418,6 +419,7 @@ except ImportError:
     Qt = None
     QTimer = None
     QObject = None
+    KeepAliveWorker = object
 
     def pyqtSignal(*args, **kwargs):
         """Stub for pyqtSignal when PyQt6 is not available."""
@@ -435,33 +437,7 @@ except ImportError:
     GEOIP2_AVAILABLE = False
 
 
-class _KeepAliveWorker(QThread):
-    """QThread that keeps itself referenced until its OS thread has fully
-    finished.
-
-    Wizard pages rebind their worker attribute inside completion slots
-    (model install chains, refresh buttons, test-connection buttons). The
-    completion signal is emitted at the end of run(), so the slot can run
-    while the OS thread is still winding down; dropping the last Python
-    reference at that point destroys a running QThread and Qt aborts the
-    whole app ("Fatal Python error: Aborted" — #509, #407, #239).
-
-    Subclasses must NOT shadow the built-in ``finished`` signal — the
-    keep-alive registry relies on it to know when release is safe.
-    """
-
-    _active: ClassVar[set] = set()
-
-    def start(self, *args, **kwargs):
-        _KeepAliveWorker._active.add(self)
-        self.finished.connect(self._retire)
-        super().start(*args, **kwargs)
-
-    def _retire(self) -> None:
-        _KeepAliveWorker._active.discard(self)
-
-
-class StatusCheckWorker(_KeepAliveWorker):
+class StatusCheckWorker(KeepAliveWorker):
     """Worker thread for checking Ollama status."""
     status_ready = pyqtSignal(OllamaStatus)
 
@@ -470,7 +446,7 @@ class StatusCheckWorker(_KeepAliveWorker):
         self.status_ready.emit(status)
 
 
-class CommandWorker(_KeepAliveWorker):
+class CommandWorker(KeepAliveWorker):
     """Worker thread for running commands."""
     output = pyqtSignal(str)
     completed = pyqtSignal(bool, str)
@@ -1007,7 +983,7 @@ class ProviderChoicePage(QWizardPage):
         return wizard.welcome_page_id
 
 
-class _ModelFetchWorker(_KeepAliveWorker):
+class _ModelFetchWorker(KeepAliveWorker):
     """Fetches the model list from an OpenAI-compatible server off the UI
     thread so the wizard never freezes while connecting."""
 
@@ -1023,7 +999,7 @@ class _ModelFetchWorker(_KeepAliveWorker):
         self.done.emit(bool(models), models)
 
 
-class _DiscoveryWorker(QThread):
+class _DiscoveryWorker(KeepAliveWorker):
     """Probes well-known local ports for a running OpenAI-compatible server so
     the wizard can offer a one-click pick instead of asking for a URL."""
 
@@ -1037,7 +1013,7 @@ class _DiscoveryWorker(QThread):
         self.done.emit(OpenAICompatiblePage._discover_servers(self._candidates))
 
 
-class _CapabilityWorker(QThread):
+class _CapabilityWorker(KeepAliveWorker):
     """Probes what the chosen server+model can actually do (chat, tools,
     embeddings) off the UI thread, so the wizard catches a dud model or a
     missing embeddings endpoint before setup finishes rather than at runtime."""

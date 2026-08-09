@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
+from desktop_app.qt_worker import KeepAliveWorker
 
 # Global lock file handle (must remain open for the lock to persist)
 _lock_file_handle = None
@@ -258,6 +259,102 @@ def get_crash_paths() -> tuple[Path, Path, Path]:
     return crash_log, crash_marker, previous_crash
 
 
+def collect_macos_crash_report(
+    crash_log_path: Path,
+    diagnostics_dir: Optional[Path] = None,
+    max_frames: int = 20,
+) -> Optional[str]:
+    """Collect the macOS native crash report (``.ips``) for a crashed
+    session, if one exists.
+
+    "Fatal Python error: Aborted" crashes are C-level aborts whose native
+    stack faulthandler cannot capture (it only dumps Python frames). The
+    OS still writes a full report to ``~/Library/Logs/DiagnosticReports/``;
+    surfacing its exception type and top native frames alongside the Python
+    dump makes these crashes diagnosable (#584/#575/#576).
+
+    Returns a short human-readable excerpt (exception type, termination
+    indicator, process name and the top native frames of the crashed
+    thread), or ``None`` when no report applies: non-macOS platform,
+    missing/empty diagnostics directory, no report newer than the crash
+    log, or unparseable content.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        if diagnostics_dir is None:
+            diagnostics_dir = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+        if not diagnostics_dir.is_dir():
+            return None
+
+        app_name = "Jarvis"
+        since = crash_log_path.stat().st_mtime if crash_log_path.exists() else 0.0
+
+        candidates = []
+        for report in diagnostics_dir.glob(f"{app_name}-*.ips"):
+            try:
+                if report.stat().st_mtime >= since:
+                    candidates.append(report)
+            except OSError:
+                continue
+        if not candidates:
+            return None
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
+
+        raw_text = newest.read_text(encoding="utf-8", errors="replace")
+        # .ips files are usually two lines (metadata dict, then the JSON
+        # payload), but the payload can also span multiple lines when the
+        # system pretty-prints it. Try the whole file, then everything after
+        # the first (metadata) line, then the last line alone.
+        import json as _json
+        lines = raw_text.splitlines()
+        candidates = [raw_text]
+        if lines:
+            candidates.append("\n".join(lines[1:]))
+            candidates.append(lines[-1])
+        data = None
+        for candidate in candidates:
+            stripped = candidate.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                data = _json.loads(stripped)
+                break
+            except Exception:
+                continue
+        if not isinstance(data, dict):
+            return None
+
+        parts = [f"🧵 Native crash report: {newest.name}"]
+        exc = data.get("exception") or {}
+        if exc.get("type"):
+            parts.append(f"  Exception: {exc['type']}")
+        term = data.get("termination") or {}
+        if term.get("indicator"):
+            parts.append(f"  Termination: {term['indicator']}")
+
+        crashed = None
+        for thread in data.get("threads") or []:
+            if thread.get("triggered"):
+                crashed = thread
+                break
+        if crashed is None and data.get("threads"):
+            crashed = data["threads"][0]
+        frames = (crashed or {}).get("frames") or []
+        if frames:
+            parts.append("  Native frames (crashed thread):")
+            for frame in frames[:max_frames]:
+                # ``symbol`` is the demangled name; ``symbolLocation`` is a
+                # byte offset — never fall back to it for display.
+                symbol = frame.get("symbol")
+                if not isinstance(symbol, str) or not symbol:
+                    symbol = "?"
+                parts.append(f"    {symbol}")
+        return "\n".join(parts)
+    except Exception:
+        return None
+
+
 def check_previous_crash() -> Optional[str]:
     """
     Check if previous session crashed and return crash details if so.
@@ -279,8 +376,14 @@ def check_previous_crash() -> Optional[str]:
                 # Only report if there's actual crash info (faulthandler output or errors)
                 if 'Fatal' in content or 'Error' in content or 'Traceback' in content:
                     crash_content = content
+                    # On macOS, append the native .ips stack so the crash
+                    # dialog and report-issue body carry the C-level abort
+                    # source faulthandler cannot show.
+                    native = collect_macos_crash_report(crash_log)
+                    if native:
+                        crash_content += f"\n{native}\n"
                     # Save to previous_crash for reference
-                    previous_crash.write_text(content, encoding='utf-8')
+                    previous_crash.write_text(crash_content, encoding='utf-8')
 
             return crash_content
 
@@ -1240,6 +1343,93 @@ class MemoryViewerWindow(QMainWindow):
         event.accept()
 
 
+class DaemonThread(KeepAliveWorker):
+    """QThread that runs the Jarvis daemon inside the bundled app.
+
+    Inherits ``KeepAliveWorker`` so the object stays referenced in the
+    registry until its OS thread has fully finished: ``_on_daemon_finished``
+    clears ``tray.daemon_thread`` from a ``finished``-connected slot, and
+    dropping that last reference while the thread is still winding down
+    would destroy a running QThread and abort the whole app ("Fatal Python
+    error: Aborted" — #584/#575/#576, same class as #509/#407/#239).
+    """
+
+    def __init__(self, log_signals):
+        super().__init__()
+        self.log_signals = log_signals
+
+    def run(self):
+        """Run the daemon in this QThread."""
+        import sys as sys_module
+        old_stdout = sys_module.stdout
+        old_stderr = sys_module.stderr
+
+        try:
+            # Redirect stdout/stderr to capture logs
+            class LogWriter:
+                def __init__(self, emit_func):
+                    self.emit_func = emit_func
+                    self.buffer = ""
+
+                def write(self, text):
+                    if text:
+                        # Handle both bytes and str (Flask can send bytes)
+                        if isinstance(text, bytes):
+                            text = text.decode('utf-8', errors='replace')
+                        self.buffer += text
+                        if '\n' in self.buffer:
+                            lines = self.buffer.split('\n')
+                            self.buffer = lines[-1]
+                            for line in lines[:-1]:
+                                if line.strip():
+                                    self.emit_func(line + '\n')
+
+                def flush(self):
+                    if self.buffer.strip():
+                        self.emit_func(self.buffer)
+                        self.buffer = ""
+
+            log_writer = LogWriter(self.log_signals.new_log.emit)
+            sys_module.stdout = log_writer
+            sys_module.stderr = log_writer
+
+            try:
+                # Import and run the daemon
+                from jarvis.daemon import main as daemon_main
+                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
+                self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
+
+                # Run daemon - this should run the main loop
+                daemon_main()
+
+                from jarvis.daemon import is_stop_requested
+                if is_stop_requested():
+                    self.log_signals.new_log.emit("✅ Daemon stopped gracefully\n")
+                else:
+                    self.log_signals.new_log.emit("⚠️ Daemon exited unexpectedly\n")
+            except KeyboardInterrupt:
+                self.log_signals.new_log.emit("⏸️ Daemon interrupted\n")
+            except Exception as e:
+                error_msg = f"❌ Daemon runtime error: {str(e)}\n{traceback.format_exc()}\n"
+                self.log_signals.new_log.emit(error_msg)
+                # Also try to log via debug_log (though it might not work)
+                try:
+                    debug_log(f"daemon thread error: {e}", "desktop")
+                except Exception:
+                    pass
+            finally:
+                sys_module.stdout = old_stdout
+                sys_module.stderr = old_stderr
+        except Exception as e:
+            # Outer exception handler for setup errors
+            error_msg = f"❌ Daemon setup error: {str(e)}\n{traceback.format_exc()}\n"
+            try:
+                self.log_signals.new_log.emit(error_msg)
+            except Exception:
+                # If we can't emit, at least try stdout
+                print(error_msg, file=old_stderr)
+
+
 class JarvisSystemTray:
     """System tray application for Jarvis voice assistant."""
 
@@ -1757,87 +1947,15 @@ class JarvisSystemTray:
         try:
             if self.is_bundled:
                 # When bundled, run daemon in a QThread since Qt components may be used
-
-                class DaemonThread(QThread):
-                    """QThread to run the daemon."""
-                    def __init__(self, log_signals):
-                        super().__init__()
-                        self.log_signals = log_signals
-
-                    def run(self):
-                        """Run the daemon in this QThread."""
-                        import sys as sys_module
-                        old_stdout = sys_module.stdout
-                        old_stderr = sys_module.stderr
-
-                        try:
-                            # Redirect stdout/stderr to capture logs
-                            class LogWriter:
-                                def __init__(self, emit_func):
-                                    self.emit_func = emit_func
-                                    self.buffer = ""
-
-                                def write(self, text):
-                                    if text:
-                                        # Handle both bytes and str (Flask can send bytes)
-                                        if isinstance(text, bytes):
-                                            text = text.decode('utf-8', errors='replace')
-                                        self.buffer += text
-                                        if '\n' in self.buffer:
-                                            lines = self.buffer.split('\n')
-                                            self.buffer = lines[-1]
-                                            for line in lines[:-1]:
-                                                if line.strip():
-                                                    self.emit_func(line + '\n')
-
-                                def flush(self):
-                                    if self.buffer.strip():
-                                        self.emit_func(self.buffer)
-                                        self.buffer = ""
-
-                            log_writer = LogWriter(self.log_signals.new_log.emit)
-                            sys_module.stdout = log_writer
-                            sys_module.stderr = log_writer
-
-                            try:
-                                # Import and run the daemon
-                                from jarvis.daemon import main as daemon_main
-                                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
-                                self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
-
-                                # Run daemon - this should run the main loop
-                                daemon_main()
-
-                                from jarvis.daemon import is_stop_requested
-                                if is_stop_requested():
-                                    self.log_signals.new_log.emit("✅ Daemon stopped gracefully\n")
-                                else:
-                                    self.log_signals.new_log.emit("⚠️ Daemon exited unexpectedly\n")
-                            except KeyboardInterrupt:
-                                self.log_signals.new_log.emit("⏸️ Daemon interrupted\n")
-                            except Exception as e:
-                                error_msg = f"❌ Daemon runtime error: {str(e)}\n{traceback.format_exc()}\n"
-                                self.log_signals.new_log.emit(error_msg)
-                                # Also try to log via debug_log (though it might not work)
-                                try:
-                                    debug_log(f"daemon thread error: {e}", "desktop")
-                                except Exception:
-                                    pass
-                            finally:
-                                sys_module.stdout = old_stdout
-                                sys_module.stderr = old_stderr
-                        except Exception as e:
-                            # Outer exception handler for setup errors
-                            error_msg = f"❌ Daemon setup error: {str(e)}\n{traceback.format_exc()}\n"
-                            try:
-                                self.log_signals.new_log.emit(error_msg)
-                            except Exception:
-                                # If we can't emit, at least try stdout
-                                print(error_msg, file=old_stderr)
-
                 self.daemon_thread = DaemonThread(self.log_signals)
-                # Connect finished signal to reset UI state
-                self.daemon_thread.finished.connect(lambda: self._on_daemon_finished())
+                # Reset UI state on completion. QueuedConnection guarantees the
+                # slot runs on the main thread (the finished signal is emitted
+                # from the worker's OS thread) and the KeepAliveWorker registry
+                # keeps the object alive until that thread has fully exited.
+                self.daemon_thread.finished.connect(
+                    self._on_daemon_finished,
+                    Qt.ConnectionType.QueuedConnection,
+                )
                 self.daemon_thread.start()
 
                 # Connect dictation engine to history window once daemon is ready
@@ -2401,6 +2519,65 @@ def _smoke_test_main() -> int:
     return 0
 
 
+class SetupCheckWorker(KeepAliveWorker):
+    """Worker thread to check setup status without blocking the UI.
+
+    Inherits ``KeepAliveWorker`` so dropping the local reference after the
+    check completes can never destroy a running QThread ("Fatal Python
+    error: Aborted" — #584/#575/#576). The completion signal is named
+    ``check_done`` so it does not shadow QThread's built-in ``finished``.
+    """
+
+    check_done = pyqtSignal(bool)  # Emits True if setup wizard needed
+
+    def run(self):
+        try:
+            # Lazy import: app.py keeps setup_wizard loading deferred past
+            # crash-logging setup, so resolve it from the worker thread.
+            from desktop_app.setup_wizard import should_show_setup_wizard
+            result = should_show_setup_wizard()
+            self.check_done.emit(result)
+        except Exception as e:
+            print(f"  ❌ Setup check failed: {e}", flush=True)
+            # On error, show wizard to let user fix issues
+            self.check_done.emit(True)
+
+
+class _LLMReachWorker(KeepAliveWorker):
+    """Worker thread that probes the configured OpenAI-compatible server.
+
+    Emits via ``check_done`` — never by shadowing QThread's built-in
+    ``finished`` (the keep-alive registry relies on ``finished`` to know
+    when releasing the worker is safe).
+    """
+
+    check_done = pyqtSignal(bool)
+
+    def __init__(self, provider_cfg):
+        super().__init__()
+        self.provider_cfg = provider_cfg
+
+    def run(self):
+        self.check_done.emit(_check_openai_compat_reachable(self.provider_cfg))
+
+
+class ServerCheckWorker(KeepAliveWorker):
+    """Worker thread to check Ollama server status without blocking the UI."""
+
+    # Named check_done so it does not shadow QThread's built-in finished.
+    check_done = pyqtSignal(bool, object)  # Emits (is_running, version)
+
+    def run(self):
+        try:
+            # Lazy import: resolves the Ollama helpers from the worker thread.
+            from desktop_app.setup_wizard import check_ollama_server
+            running, ver = check_ollama_server()
+            self.check_done.emit(running, ver)
+        except Exception as e:
+            print(f"  ❌ Server check failed: {e}", flush=True)
+            self.check_done.emit(False, None)
+
+
 def main() -> int:
     """Main entry point for the desktop app."""
     # Smoke-test fast path: runs before any UI, crash logging, or setup checks.
@@ -2531,7 +2708,6 @@ def main() -> int:
         print("  Loading setup wizard module...", flush=True)
         try:
             from desktop_app.setup_wizard import (
-                should_show_setup_wizard,
                 check_ollama_server, check_ollama_cli,
                 get_required_models, check_installed_models,
                 resolve_ollama_path,
@@ -2543,22 +2719,7 @@ def main() -> int:
             raise
 
         # Run setup check in background thread to keep splash animation alive
-        from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
-
-        class SetupCheckWorker(QThread):
-            """Worker thread to check setup status without blocking UI."""
-            # Named check_done so it does not shadow QThread's built-in
-            # finished signal (see _KeepAliveWorker in setup_wizard.py).
-            check_done = pyqtSignal(bool)  # Emits True if setup wizard needed
-
-            def run(self):
-                try:
-                    result = should_show_setup_wizard()
-                    self.check_done.emit(result)
-                except Exception as e:
-                    print(f"  ❌ Setup check failed: {e}", flush=True)
-                    # On error, show wizard to let user fix issues
-                    self.check_done.emit(True)
+        from PyQt6.QtCore import QEventLoop
 
         setup_check_result = [None]  # Use list to allow modification in closure
 
@@ -2610,17 +2771,11 @@ def main() -> int:
             splash.set_status("Checking your LLM server...")
             app.processEvents()
 
-            class _LLMReachWorker(QThread):
-                finished = pyqtSignal(bool)
-
-                def run(self):
-                    self.finished.emit(_check_openai_compat_reachable(_provider_cfg))
-
             _reach = [True]
-            _reach_worker = _LLMReachWorker()
-            _reach_worker.finished.connect(lambda ok: _reach.__setitem__(0, ok))
+            _reach_worker = _LLMReachWorker(_provider_cfg)
+            _reach_worker.check_done.connect(lambda ok: _reach.__setitem__(0, ok))
             _reach_loop = QEventLoop()
-            _reach_worker.finished.connect(_reach_loop.quit)
+            _reach_worker.check_done.connect(_reach_loop.quit)
             _reach_worker.start()
             _reach_loop.exec()
 
@@ -2635,20 +2790,6 @@ def main() -> int:
             app.processEvents()
 
             # Run server check in background thread to keep splash animation alive
-            class ServerCheckWorker(QThread):
-                """Worker thread to check Ollama server status without blocking UI."""
-                # Named check_done so it does not shadow QThread's built-in
-                # finished signal (see _KeepAliveWorker in setup_wizard.py).
-                check_done = pyqtSignal(bool, object)  # Emits (is_running, version)
-
-                def run(self):
-                    try:
-                        running, ver = check_ollama_server()
-                        self.check_done.emit(running, ver)
-                    except Exception as e:
-                        print(f"  ❌ Server check failed: {e}", flush=True)
-                        self.check_done.emit(False, None)
-
             server_check_result = [None, None]  # [is_running, version]
 
             def on_server_check_done(running: bool, ver):
