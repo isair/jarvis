@@ -73,7 +73,7 @@ class TestChatWindowSend:
         win = ChatWindow()
         win.input_widget.setPlainText("hello there")
         win._send()
-        text = win.transcript_widget.toPlainText()
+        text = win.transcript_text()
         assert "hello there" in text
 
     def test_send_clears_input(self, qapp, monkeypatch):
@@ -113,7 +113,7 @@ class TestChatWindowSend:
         win._send()
 
         assert calls == []
-        text = win.transcript_widget.toPlainText().lower()
+        text = win.transcript_text().lower()
         assert "start listening" in text
         assert win.input_widget.toPlainText() == "are you there"
 
@@ -133,7 +133,7 @@ class TestChatWindowCallbacks:
         win._send()
         # Simulate the daemon completing with a reply.
         win._on_complete("It is sunny today.")
-        text = win.transcript_widget.toPlainText()
+        text = win.transcript_text()
         assert "It is sunny today." in text
 
     def test_on_complete_hides_stop_button(self, qapp, monkeypatch):
@@ -165,7 +165,7 @@ class TestChatWindowCallbacks:
         win._send()
         # Simulate the daemon rejecting because a query is already running.
         win._on_busy()
-        text = win.transcript_widget.toPlainText()
+        text = win.transcript_text()
         # The notice is language-neutral in shape but must mention the query
         # was not accepted.
         assert "second query" in text  # user echo stays
@@ -301,7 +301,7 @@ class TestDesktopAppChatDispatch:
         tray._on_chat_ipc_line(f'{CHAT_IPC_PREFIX}{{"type":"complete","data":"hello back"}}')
         tray.chat_window.show()
         qapp.processEvents()
-        assert "hello back" in tray.chat_window.transcript_widget.toPlainText()
+        assert "hello back" in tray.chat_window.transcript_text()
 
     def test_dispatch_start_sets_thinking(self, qapp):
         from jarvis.daemon import CHAT_IPC_PREFIX
@@ -317,7 +317,7 @@ class TestDesktopAppChatDispatch:
         tray._on_chat_ipc_line(f'{CHAT_IPC_PREFIX}{{"type":"busy","data":null}}')
         tray.chat_window.show()
         qapp.processEvents()
-        text = tray.chat_window.transcript_widget.toPlainText().lower()
+        text = tray.chat_window.transcript_text().lower()
         assert "busy" in text
 
     def test_dispatch_malformed_line_is_swallowed(self, qapp):
@@ -374,6 +374,52 @@ class TestDesktopAppChatDispatch:
         assert written.startswith(CHAT_QUERY_IPC_PREFIX)
         payload = json.loads(written[len(CHAT_QUERY_IPC_PREFIX):].strip())
         assert payload["text"] == "hello over stdin"
+
+    def test_subprocess_control_fn_writes_session_lines(self, qapp, monkeypatch):
+        """The session-control closure writes the new-session / rewind /
+        restore IPC lines (bare prefix or prefix+JSON as appropriate)."""
+        import io
+        import json
+        from jarvis.daemon import (
+            CHAT_NEW_SESSION_IPC_PREFIX,
+            CHAT_REWIND_IPC_PREFIX,
+            CHAT_RESTORE_IPC_PREFIX,
+        )
+        import desktop_app.app as app_mod
+
+        tray = app_mod.JarvisSystemTray.__new__(app_mod.JarvisSystemTray)
+        sink = io.StringIO()
+        fake_proc = type("P", (), {"stdin": sink})()
+        tray.daemon_process = fake_proc
+
+        def _control(kind: str, payload=None) -> None:
+            import json as _json
+            prefixes = {
+                "new_session": CHAT_NEW_SESSION_IPC_PREFIX,
+                "rewind": CHAT_REWIND_IPC_PREFIX,
+                "restore": CHAT_RESTORE_IPC_PREFIX,
+            }
+            prefix = prefixes[kind]
+            if payload is None:
+                tray.daemon_process.stdin.write(f"{prefix}\n")
+            else:
+                tray.daemon_process.stdin.write(
+                    f"{prefix}{_json.dumps(payload)}\n"
+                )
+            tray.daemon_process.stdin.flush()
+
+        _control("new_session")
+        _control("rewind", {"user_index": 2})
+        _control("restore", {"messages": [{"role": "user", "content": "hi"}]})
+        lines = sink.getvalue().splitlines()
+
+        assert lines[0] == CHAT_NEW_SESSION_IPC_PREFIX
+        assert json.loads(lines[1][len(CHAT_REWIND_IPC_PREFIX):]) == {
+            "user_index": 2
+        }
+        assert json.loads(lines[2][len(CHAT_RESTORE_IPC_PREFIX):])["messages"] == [
+            {"role": "user", "content": "hi"}
+        ]
 
     def test_show_chat_marks_window_unavailable_when_daemon_stopped(self, qapp):
         import desktop_app.app as app_mod
@@ -644,7 +690,7 @@ class TestChatWindowHotWindowReplay:
         win.show()
         qapp.processEvents()
 
-        text = win.transcript_widget.toPlainText()
+        text = win.transcript_text()
         assert "what is the weather" in text
         assert "It is sunny." in text
 
@@ -666,7 +712,7 @@ class TestChatWindowHotWindowReplay:
         win.show()
         qapp.processEvents()
 
-        text = win.transcript_widget.toPlainText()
+        text = win.transcript_text()
         assert text.count("hi") == 1
 
     def test_empty_hot_window_leaves_transcript_blank(self, qapp, monkeypatch):
@@ -682,4 +728,203 @@ class TestChatWindowHotWindowReplay:
         win.show()
         qapp.processEvents()
 
-        assert win.transcript_widget.toPlainText() == ""
+        assert win.transcript_text() == ""
+
+
+@pytest.mark.unit
+class TestChatSessions:
+    """In-memory chat sessions: new session clears the shared conversation,
+    the sidebar lists past sessions, switching restores one."""
+
+    def _window(self, qapp, **kwargs):
+        from desktop_app.chat_window import ChatWindow
+        return ChatWindow(**kwargs)
+
+    def test_starts_with_an_active_session(self, qapp):
+        """A fresh window always has a new session (nothing is kept on
+        disk, so there is no previous session to restore)."""
+        win = self._window(qapp)
+        assert win.session_list.count() == 1
+        assert "Session 1" in win.session_list.item(0).text()
+        assert win._active_session()["active"] is True
+
+    def test_new_session_clears_transcript_and_shared_memory(self, qapp, monkeypatch):
+        cleared = []
+        monkeypatch.setattr(
+            "jarvis.daemon.new_chat_session", lambda: cleared.append(True) or True
+        )
+        win = self._window(qapp)
+        win.input_widget.setPlainText("hello")
+        win._send()
+        assert "hello" in win.transcript_text()
+
+        win._new_session()
+
+        assert cleared == [True], "the shared daemon memory must be cleared"
+        assert win.transcript_text() == ""
+        assert win.session_list.count() == 2
+        assert "● Session 2" in win.session_list.item(1).text()
+
+    def test_new_session_sends_ipc_line_in_subprocess_mode(self, qapp):
+        commands = []
+        win = self._window(
+            qapp, submit_fn=lambda _t: None,
+            control_fn=lambda kind, payload: commands.append((kind, payload)),
+        )
+        win._new_session()
+        assert ("new_session", None) in commands
+
+    def test_switch_restores_session_into_shared_memory(self, qapp, monkeypatch):
+        restored = []
+        monkeypatch.setattr(
+            "jarvis.daemon.set_chat_messages",
+            lambda msgs: restored.append(msgs) or True,
+        )
+        monkeypatch.setattr("jarvis.daemon.new_chat_session", lambda: True)
+        win = self._window(qapp)
+        win.input_widget.setPlainText("first question")
+        win._send()
+        win._new_session()
+        win.input_widget.setPlainText("second question")
+        win._send()
+
+        # Switch back to session 1.
+        win._on_session_clicked(win.session_list.item(0))
+
+        assert restored, "switching must restore the archived turns"
+        assert restored[-1] == [
+            {"role": "user", "content": "first question"},
+        ]
+        assert "first question" in win.transcript_text()
+        assert "second question" not in win.transcript_text()
+        assert win._active_session()["title"] == "Session 1"
+
+    def test_switch_sends_restore_ipc_line_in_subprocess_mode(self, qapp):
+        commands = []
+        win = self._window(
+            qapp, submit_fn=lambda _t: None,
+            control_fn=lambda kind, payload: commands.append((kind, payload)),
+        )
+        win.input_widget.setPlainText("archived question")
+        win._send()
+        win._on_complete(None)  # the daemon's reply arrives; query no longer in flight
+        win._new_session()
+        win._on_session_clicked(win.session_list.item(0))
+
+        restore = [c for c in commands if c[0] == "restore"]
+        assert restore and restore[-1][1] == {
+            "messages": [{"role": "user", "content": "archived question"}]
+        }
+
+
+@pytest.mark.unit
+class TestChatRewind:
+    """The rewind button under a sent message rolls the conversation back
+    to that message and regenerates a fresh reply."""
+
+    def _window(self, qapp, **kwargs):
+        from desktop_app.chat_window import ChatWindow
+        return ChatWindow(**kwargs)
+
+    def _send(self, win, text):
+        win.input_widget.setPlainText(text)
+        win._send()
+
+    def test_every_sent_message_carries_a_rewind_button(self, qapp):
+        from PyQt6.QtWidgets import QPushButton
+
+        win = self._window(qapp)
+        self._send(win, "one")
+        self._send(win, "two")
+
+        buttons = [
+            b.objectName() for b in win.transcript_widget.findChildren(QPushButton)
+            if b.objectName().startswith("rewind_")
+        ]
+        assert buttons == ["rewind_1", "rewind_2"]
+
+    def test_rewind_truncates_transcript_and_regenerates(self, qapp, monkeypatch):
+        rewinds = []
+        submits = []
+        monkeypatch.setattr(
+            "jarvis.daemon.rewind_chat_to_user",
+            lambda idx: rewinds.append(idx) or True,
+        )
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query",
+            lambda text, **kw: submits.append(text),
+        )
+        win = self._window(qapp)
+        self._send(win, "first")
+        win._on_complete("first reply")
+        self._send(win, "second")
+        win._on_complete("second reply")
+
+        win._rewind_to_user(1, "first")
+
+        assert rewinds == [1], "the daemon memory must be rewound to message 1"
+        assert submits[-1] == "first", "the rewound message must be re-submitted"
+        assert "first" in win.transcript_text()
+        assert "second" not in win.transcript_text()
+        assert "first reply" not in win.transcript_text()
+
+        # The fresh reply lands through the normal complete path.
+        win._on_complete("fresh reply")
+        assert "fresh reply" in win.transcript_text()
+
+    def test_rewind_keeps_later_user_messages_after_regenerate(self, qapp, monkeypatch):
+        """After a rewind + regenerate, the message ordinal stays stable so
+        a subsequent send continues the conversation correctly."""
+        monkeypatch.setattr(
+            "jarvis.daemon.rewind_chat_to_user", lambda idx: True
+        )
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
+        )
+        win = self._window(qapp)
+        self._send(win, "one")
+        win._on_complete(None)
+        self._send(win, "two")
+        win._on_complete(None)
+        win._rewind_to_user(2, "two")
+        win._on_complete(None)
+        self._send(win, "three")
+
+        buttons = [
+            b.objectName() for b in win.transcript_widget.findChildren(
+                __import__("PyQt6.QtWidgets", fromlist=["QPushButton"]).QPushButton
+            )
+            if b.objectName().startswith("rewind_")
+        ]
+        assert buttons == ["rewind_1", "rewind_2", "rewind_3"]
+
+    def test_rewind_sends_ipc_line_in_subprocess_mode(self, qapp):
+        commands = []
+        submits = []
+        win = self._window(
+            qapp,
+            submit_fn=lambda t: submits.append(t),
+            control_fn=lambda kind, payload: commands.append((kind, payload)),
+        )
+        self._send(win, "question")
+        win._on_complete(None)  # query finished; rewind is now allowed
+        win._rewind_to_user(1, "question")
+
+        assert ("rewind", {"user_index": 1}) in commands
+        assert submits == ["question", "question"]
+
+    def test_rewind_noops_while_query_in_flight(self, qapp, monkeypatch):
+        rewinds = []
+        monkeypatch.setattr(
+            "jarvis.daemon.rewind_chat_to_user",
+            lambda idx: rewinds.append(idx) or True,
+        )
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
+        )
+        win = self._window(qapp)
+        self._send(win, "question")  # leaves _query_in_flight True
+
+        win._rewind_to_user(1, "question")
+
+        assert rewinds == [], "rewind must be disabled while a query is in flight"

@@ -132,6 +132,21 @@ for the same reason: the query runs in this process, so the flag has to be set
 in it. Lines that don't match any prefix are ignored (the monitor still treats
 bare ``SHUTDOWN`` and EOF as shutdown signals, unchanged).
 
+Session control travels the same pipe (the conversation lives in the daemon's
+memory, which the desktop process cannot touch in subprocess mode):
+
+```json
+__CHAT_NEW_SESSION__                     // clear the shared dialogue memory
+__CHAT_REWIND__:{"user_index": 2}        // roll memory back to before user turn #2
+__CHAT_RESTORE__:{"messages": [{"role": "user", "content": "..."}, ...]}
+```
+
+`user_index` is 1-based (the first user message is 1); the rewound message
+itself is dropped so a re-submission does not duplicate it. Malformed
+session-control lines are swallowed (consumed, ignored), mirroring
+`__CHAT_QUERY__:` handling. Restores are re-redacted daemon-side so the diary
+never sees raw user text, even though the window's in-memory archive holds it.
+
 Chat IPC lines are routed to the chat window and then **not** emitted to the
 general log viewer. The ``complete`` event carries the whole assistant reply,
 which can echo back whatever the user typed, and the log window is outside the
@@ -144,8 +159,12 @@ viewer, which is what it is for.
 
 A `QMainWindow` with:
 
-- A read-only transcript area (chat bubbles or monospaced log style; theme
-  colours from `themes.py`).
+- A sessions sidebar (in-memory list, see **Sessions** below) and a
+  `＋ New session` button.
+- A read-only transcript area: a scrollable stack of message rows (theme
+  colours from `themes.py`). Sent messages additionally carry a `⟲` rewind
+  button (see **Rewind** below). The transcript mirrors the active session's
+  message list and is rebuilt atomically on new-session / switch / rewind.
 - A multi-line input box with send button. Enter sends; Shift+Enter inserts a
   newline (multi-line input).
 - A "Stop" button. It marks the exchange abandoned locally, routes the
@@ -157,6 +176,45 @@ A `QMainWindow` with:
   running. When the daemon is starting, stopping, stopped, or has exited
   unexpectedly, the same area stays visible as a local lifecycle banner and
   explains whether the user should wait or start listening again.
+
+### Sessions (in-memory only)
+
+A session is the shared voice+text conversation: the daemon's single dialogue
+memory. The window keeps a list of past sessions **in memory only** — nothing
+is written to disk, so a fresh app run starts with a new session (there is no
+"last chat session" to restore).
+
+- **New session** archives the current transcript into the sidebar and clears
+  the shared dialogue memory (`daemon.new_chat_session()`, or the
+  `__CHAT_NEW_SESSION__` line in subprocess mode). The voice path also starts
+  fresh: voice and text share one conversation, so a new session resets both.
+- **Switching** to an archived session restores its turns into the shared
+  memory (`daemon.set_chat_messages`, or `__CHAT_RESTORE__:`) and re-renders
+  its transcript. Restores are re-redacted daemon-side.
+- **Automatic new session**: the window always starts with an active
+  "Session 1". When the daemon memory holds a voice conversation (bundled
+  mode), the first session is seeded from the hot window on first show and
+  the voice context carries into chat, unchanged from the base contract.
+
+### Rewind
+
+Every sent message carries a `⟲` button. Clicking it:
+
+1. Truncates the window's transcript to keep the message itself (its old
+   reply and everything after it are dropped).
+2. Rolls the shared daemon memory back to before that user turn
+   (`daemon.rewind_chat_to_user(user_index)`, or `__CHAT_REWIND__:`
+   subprocess line). The rewound message itself is dropped so the
+   regeneration does not duplicate it. Hot-window caches and tool carryover
+   are cleared with it.
+3. Re-submits the same message text, so the agent generates a fresh reply
+   that lands through the normal `complete` path.
+
+Rewind is disabled while a query is in flight and when the daemon is not
+running. Rewinding rolls back the voice context too (same shared memory), and
+the message-ordinal anchor assumes the transcript and the memory hold the
+same user turns — which holds in bundled mode and in subprocess mode when the
+window's transcript was not seeded from invisible voice turns.
 
 ### Tray integration
 

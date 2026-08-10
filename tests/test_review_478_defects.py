@@ -79,7 +79,7 @@ class TestStopDropsTheLateReply:
 
         window._on_complete("une réponse tardive")
 
-        assert "une réponse tardive" not in window.transcript_widget.toPlainText()
+        assert "une réponse tardive" not in window.transcript_text()
 
     def test_a_complete_for_a_later_query_still_lands(self, qapp):
         """Cancelling one query must not deafen the window: the guard is
@@ -93,7 +93,7 @@ class TestStopDropsTheLateReply:
         window._send()
         window._on_complete("la bonne réponse")
 
-        assert "la bonne réponse" in window.transcript_widget.toPlainText()
+        assert "la bonne réponse" in window.transcript_text()
 
 
 # ── 2. Shutdown must not close the database under a worker ────────────
