@@ -1605,3 +1605,81 @@ class TestDesktopSmokeTest:
 
             mock_smoke.assert_called_once()
             assert result == 42  # return value propagated from _smoke_test_main
+
+
+@pytest.mark.unit
+class TestRuntimeStatusDialog:
+    """The runtime-status dialog renders the snapshot as a structured,
+    themed dialog rather than a plain text blob."""
+
+    def _snapshot(self):
+        from desktop_app.app import RuntimeStatusSnapshot
+
+        return RuntimeStatusSnapshot(
+            daemon_state="Listening",
+            daemon_mode="subprocess",
+            daemon_pid=12345,
+            ollama_needed=True,
+            ollama_running=True,
+            ollama_version="0.9.1",
+            ollama_owner="Jarvis",
+            ollama_launch_method="serve",
+            low_power_mode=True,
+            llm_provider="ollama",
+            chat_model="gemma4:e2b",
+            embedding_provider="ollama",
+            embedding_model="nomic-embed-text",
+            mcp_count=2,
+        )
+
+    def test_rows_cover_every_snapshot_field(self):
+        from desktop_app.app import _runtime_status_rows
+
+        snapshot = self._snapshot()
+        rows = _runtime_status_rows(snapshot)
+
+        by_key = {key: value for _section, key, value in rows}
+        assert by_key["State"] == "Listening"
+        assert by_key["Mode"] == "subprocess"
+        assert by_key["PID"] == "12345"
+        assert by_key["Low Power Mode"] == "On"
+        assert by_key["Running"] == "Yes (0.9.1)"
+        assert by_key["Owner"] == "Jarvis"
+        assert by_key["Chat"] == "gemma4:e2b"
+        assert by_key["Embeddings"] == "ollama / nomic-embed-text"
+        assert by_key["Configured servers"] == "2"
+        sections = [section for section, _key, _value in rows]
+        assert sections == ["🎙️ Assistant"] * 4 + ["🦙 Ollama"] * 4 + ["🧠 Models"] * 3 + ["🔌 MCP"] * 1
+
+    def test_format_still_matches_legacy_text_layout(self):
+        """The text formatter (used by tests and any terminal path) must
+        keep producing the exact scannable layout it always did."""
+        from desktop_app.app import _format_runtime_status
+
+        text = _format_runtime_status(self._snapshot())
+        assert text.startswith("🩺 Runtime Status")
+        assert "\n🎙️ Assistant\n  State: Listening" in text
+        assert "  Low Power Mode: On" in text
+        assert "\n🦙 Ollama\n  Needed: Yes\n  Running: Yes (0.9.1)" in text
+        assert "\n🔌 MCP\n  Configured servers: 2" in text
+
+    def test_dialog_renders_sections_and_values(self, qapp):
+        from desktop_app.app import RuntimeStatusDialog
+        from PyQt6.QtWidgets import QLabel, QPushButton
+
+        dialog = RuntimeStatusDialog(self._snapshot())
+
+        texts = [lbl.text() for lbl in dialog.findChildren(QLabel)]
+        assert "🩺 Runtime Status" in texts
+        assert "🎙️ Assistant" in texts
+        assert "🦙 Ollama" in texts
+        assert "🧠 Models" in texts
+        assert "🔌 MCP" in texts
+        assert "gemma4:e2b" in texts
+        assert "Yes (0.9.1)" in texts
+
+        # The dialog must be closable via its Close button.
+        close_btn = [
+            b for b in dialog.findChildren(QPushButton) if b.text() == "Close"
+        ]
+        assert close_btn, "dialog must expose a Close button"

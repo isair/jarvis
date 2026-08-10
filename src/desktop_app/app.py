@@ -200,8 +200,13 @@ def _collect_runtime_status_snapshot(
     )
 
 
-def _format_runtime_status(snapshot: RuntimeStatusSnapshot) -> str:
-    """Format a runtime status snapshot for the tray diagnostics dialog."""
+def _runtime_status_rows(snapshot: RuntimeStatusSnapshot) -> list[tuple[str, str, str]]:
+    """Return ``(section, key, value)`` rows for the runtime status dialog.
+
+    Sections keep the emoji headers of the original text format so the
+    dialog and the (test-pinned) ``_format_runtime_status`` text stay in
+    sync from one source of truth.
+    """
     pid = str(snapshot.daemon_pid) if snapshot.daemon_pid is not None else "n/a"
     ollama_running = (
         f"Yes ({snapshot.ollama_version})"
@@ -210,31 +215,97 @@ def _format_runtime_status(snapshot: RuntimeStatusSnapshot) -> str:
         if snapshot.ollama_running
         else "No"
     )
-    return "\n".join(
-        [
-            "🩺 Runtime Status",
-            "",
-            "🎙️ Assistant",
-            f"  State: {snapshot.daemon_state}",
-            f"  Mode: {snapshot.daemon_mode}",
-            f"  PID: {pid}",
-            f"  Low Power Mode: {'On' if snapshot.low_power_mode else 'Off'}",
-            "",
-            "🦙 Ollama",
-            f"  Needed: {'Yes' if snapshot.ollama_needed else 'No'}",
-            f"  Running: {ollama_running}",
-            f"  Owner: {snapshot.ollama_owner}",
-            f"  Launch method: {snapshot.ollama_launch_method}",
-            "",
+    return [
+        ("🎙️ Assistant", "State", snapshot.daemon_state),
+        ("🎙️ Assistant", "Mode", snapshot.daemon_mode),
+        ("🎙️ Assistant", "PID", pid),
+        ("🎙️ Assistant", "Low Power Mode", "On" if snapshot.low_power_mode else "Off"),
+        ("🦙 Ollama", "Needed", "Yes" if snapshot.ollama_needed else "No"),
+        ("🦙 Ollama", "Running", ollama_running),
+        ("🦙 Ollama", "Owner", snapshot.ollama_owner),
+        ("🦙 Ollama", "Launch method", snapshot.ollama_launch_method),
+        ("🧠 Models", "Provider", snapshot.llm_provider),
+        ("🧠 Models", "Chat", snapshot.chat_model),
+        (
             "🧠 Models",
-            f"  Provider: {snapshot.llm_provider}",
-            f"  Chat: {snapshot.chat_model}",
-            f"  Embeddings: {snapshot.embedding_provider} / {snapshot.embedding_model}",
-            "",
-            "🔌 MCP",
-            f"  Configured servers: {snapshot.mcp_count}",
-        ]
-    )
+            "Embeddings",
+            f"{snapshot.embedding_provider} / {snapshot.embedding_model}",
+        ),
+        ("🔌 MCP", "Configured servers", str(snapshot.mcp_count)),
+    ]
+
+
+def _format_runtime_status(snapshot: RuntimeStatusSnapshot) -> str:
+    """Format a runtime status snapshot for the tray diagnostics dialog."""
+    lines: list[str] = ["🩺 Runtime Status", ""]
+    current_section = None
+    for section, key, value in _runtime_status_rows(snapshot):
+        if section != current_section:
+            if current_section is not None:
+                lines.append("")
+            lines.append(section)
+            current_section = section
+        lines.append(f"  {key}: {value}")
+    return "\n".join(lines)
+
+
+class RuntimeStatusDialog(QDialog):
+    """Themed diagnostic summary of Jarvis' active runtime.
+
+    Renders the collected snapshot as a structured dialog: emoji section
+    headers, aligned key/value rows (secondary-colour keys, monospace
+    values), and a Close button. Snapshot collection stays on the worker
+    thread; this dialog only renders the data it is handed.
+    """
+
+    def __init__(self, snapshot: RuntimeStatusSnapshot, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Runtime Status")
+        self.setStyleSheet(JARVIS_THEME_STYLESHEET)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(4)
+
+        title = QLabel("🩺 Runtime Status")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        layout.addSpacing(6)
+
+        current_section = None
+        for section, key, value in _runtime_status_rows(snapshot):
+            if section != current_section:
+                if current_section is not None:
+                    layout.addSpacing(8)
+                header = QLabel(section)
+                header.setStyleSheet(
+                    "color: #fbbf24; font-weight: bold; font-size: 13px;"
+                )
+                layout.addWidget(header)
+                current_section = section
+            row = QHBoxLayout()
+            key_label = QLabel(key)
+            key_label.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+            value_label = QLabel(value)
+            value_label.setStyleSheet(
+                "color: #f4f4f5; font-size: 13px;"
+                " font-family: 'SF Mono', 'Menlo', monospace;"
+            )
+            value_label.setWordWrap(True)
+            row.addWidget(key_label)
+            row.addStretch(1)
+            row.addWidget(value_label)
+            layout.addLayout(row)
+
+        layout.addSpacing(12)
+        close_btn = QPushButton("Close")
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(self.accept)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
 
 
 def _stop_owned_ollama_runtime(
@@ -2054,15 +2125,7 @@ class JarvisSystemTray:
 
     def _show_runtime_status_dialog(self, snapshot) -> None:
         """Render the collected snapshot. Runs on the Qt main thread."""
-        from PyQt6.QtWidgets import QMessageBox
-
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.setWindowTitle("Runtime Status")
-        msg.setText("🩺 Runtime Status")
-        msg.setInformativeText(_format_runtime_status(snapshot))
-        msg.setStyleSheet(JARVIS_THEME_STYLESHEET)
-        msg.exec()
+        RuntimeStatusDialog(snapshot).exec()
 
     def check_for_updates(self, show_no_update_dialog: bool = False) -> None:
         """Check for available updates.
