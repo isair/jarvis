@@ -385,7 +385,7 @@ class ChatWindow(QMainWindow):
         if index is None or not isinstance(index, int):
             return
         target = self._sessions[index]
-        if target["active"] or self._query_in_flight:
+        if target["active"] or self._query_in_flight or not self._daemon_available:
             return
         # Restore the daemon memory first: if a query is in flight the
         # daemon refuses, and the UI must not switch to a conversation the
@@ -429,7 +429,7 @@ class ChatWindow(QMainWindow):
         in-memory list; nothing is written to disk. The daemon is asked
         first: if a query is in flight it refuses, and the UI stays put.
         """
-        if self._query_in_flight:
+        if self._query_in_flight or not self._daemon_available:
             return
         if self._control_fn is not None:
             self._control_fn("new_session", None)

@@ -1794,6 +1794,7 @@ class JarvisSystemTray:
         # starts so the window can route queries in subprocess mode.
         self.chat_window = None
         self._chat_submit_fn = None
+        self._chat_control_fn = None
         self._daemon_stop_expected = False
 
         # Main-thread signal bridge for chat IPC. The log reader thread emits
@@ -2219,10 +2220,12 @@ class JarvisSystemTray:
                 submit_fn=self._chat_submit_fn,
                 daemon_available=self.is_listening,
                 cancel_fn=getattr(self, "_chat_cancel_fn", None),
+                control_fn=getattr(self, "_chat_control_fn", None),
             )
         else:
             self.chat_window._submit_fn = self._chat_submit_fn
             self.chat_window._cancel_fn = getattr(self, "_chat_cancel_fn", None)
+            self.chat_window._control_fn = getattr(self, "_chat_control_fn", None)
             self.chat_window.set_daemon_status(
                 "running" if self.is_listening else "stopped"
             )
@@ -2239,6 +2242,7 @@ class JarvisSystemTray:
         if self.chat_window is None:
             return
         self.chat_window._submit_fn = self._chat_submit_fn
+        self.chat_window._control_fn = getattr(self, "_chat_control_fn", None)
         self.chat_window.set_daemon_status(status)
 
     def _connect_dictation_history(self, retries_left: int = 3) -> None:
@@ -2469,8 +2473,45 @@ class JarvisSystemTray:
                     except Exception as exc:
                         debug_log(f"chat stdin cancel failed: {exc}", "desktop")
 
+                def _control_chat_subprocess(kind: str, payload: Optional[dict] = None) -> None:
+                    """Route a session-control command to the daemon's stdin.
+
+                    ``kind`` is one of ``new_session`` / ``rewind`` /
+                    ``restore``; the matching IPC line carries the payload
+                    (bare prefix for new session, prefix+JSON otherwise).
+                    A broken pipe is not worth surfacing: the window has
+                    already updated its own transcript, and a dead daemon
+                    has no memory to rewind or restore.
+                    """
+                    import json as _json
+                    from jarvis.daemon import (
+                        CHAT_NEW_SESSION_IPC_PREFIX,
+                        CHAT_REWIND_IPC_PREFIX,
+                        CHAT_RESTORE_IPC_PREFIX,
+                    )
+                    prefixes = {
+                        "new_session": CHAT_NEW_SESSION_IPC_PREFIX,
+                        "rewind": CHAT_REWIND_IPC_PREFIX,
+                        "restore": CHAT_RESTORE_IPC_PREFIX,
+                    }
+                    prefix = prefixes.get(kind)
+                    if prefix is None:
+                        debug_log(f"unknown chat control command: {kind}", "desktop")
+                        return
+                    try:
+                        if payload is None:
+                            _proc.stdin.write(f"{prefix}\n")
+                        else:
+                            _proc.stdin.write(
+                                f"{prefix}{_json.dumps(payload)}\n"
+                            )
+                        _proc.stdin.flush()
+                    except Exception as exc:
+                        debug_log(f"chat stdin control failed: {exc}", "desktop")
+
                 self._chat_submit_fn = _submit_chat_subprocess
                 self._chat_cancel_fn = _cancel_chat_subprocess
+                self._chat_control_fn = _control_chat_subprocess
                 # If the chat window already exists (daemon restarted while
                 # the window was open), refresh its submit fn so it doesn't
                 # keep writing to the old (dead) subprocess stdin.
