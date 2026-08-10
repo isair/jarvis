@@ -623,3 +623,148 @@ class TestGetHotWindowMessages:
         _time.sleep(1.2)
 
         assert daemon.get_hot_window_messages() == []
+
+
+@pytest.mark.unit
+class TestChatSessionControls:
+    """Session lifecycle on the daemon side: new session, rewind, restore.
+    The chat window drives these in bundled mode (direct calls) and
+    subprocess mode (stdin lines)."""
+
+    def setup_method(self, _method):
+        _reset_daemon_globals()
+
+    def teardown_method(self, _method):
+        _reset_daemon_globals()
+
+    def _seeded_memory(self):
+        dm = _install_dialogue_memory(cfg=object(), db=object())
+        dm.add_message("user", "remind me to buy oat milk")
+        dm.add_message("assistant", "Noted.")
+        dm.add_message("user", "what about eggs?")
+        dm.add_message("assistant", "Eggs too.")
+        return dm
+
+    # ── bundled-mode functions ─────────────────────────────────────────
+
+    def test_new_chat_session_clears_shared_memory(self):
+        dm = self._seeded_memory()
+        daemon.new_chat_session()
+        assert dm.all_messages() == []
+        assert daemon.get_hot_window_messages() == []
+
+    def test_new_chat_session_noops_when_daemon_not_booted(self):
+        # Globals are None; must not raise.
+        daemon.new_chat_session()
+
+    def test_rewind_chat_to_user_truncates_shared_memory(self):
+        dm = self._seeded_memory()
+        assert daemon.rewind_chat_to_user(2) is True
+        assert dm.all_messages() == [
+            {"role": "user", "content": "remind me to buy oat milk"},
+            {"role": "assistant", "content": "Noted."},
+        ]
+
+    def test_rewind_chat_to_unknown_user_returns_false(self):
+        dm = self._seeded_memory()
+        assert daemon.rewind_chat_to_user(9) is False
+        assert len(dm.all_messages()) == 4
+
+    def test_set_chat_messages_restores_and_redacts(self):
+        _install_dialogue_memory(cfg=object(), db=object())
+        daemon.set_chat_messages([
+            {"role": "user", "content": "my email is test@example.com"},
+            {"role": "assistant", "content": "Got it."},
+        ])
+        restored = daemon.get_hot_window_messages()
+        # Redaction runs on the daemon side so the diary never sees raw text.
+        assert "test@example.com" not in restored[0]["content"]
+        assert restored[1]["content"] == "Got it."
+
+    # ── subprocess stdin handlers ──────────────────────────────────────
+
+    def test_new_session_stdin_line(self):
+        dm = self._seeded_memory()
+        assert daemon.handle_chat_new_session_stdin_line(
+            daemon.CHAT_NEW_SESSION_IPC_PREFIX
+        ) is True
+        assert dm.all_messages() == []
+        assert daemon.handle_chat_new_session_stdin_line("SHUTDOWN") is False
+        assert daemon.handle_chat_new_session_stdin_line("") is False
+
+    def test_rewind_stdin_line_valid(self):
+        dm = self._seeded_memory()
+        line = f'{daemon.CHAT_REWIND_IPC_PREFIX}{{"user_index": 2}}'
+        assert daemon.handle_chat_rewind_stdin_line(line) is True
+        assert len(dm.all_messages()) == 2
+
+    def test_rewind_stdin_line_malformed_is_swallowed(self):
+        dm = self._seeded_memory()
+        assert daemon.handle_chat_rewind_stdin_line(
+            f"{daemon.CHAT_REWIND_IPC_PREFIX}not json"
+        ) is True
+        assert len(dm.all_messages()) == 4
+        assert daemon.handle_chat_rewind_stdin_line(
+            f'{daemon.CHAT_REWIND_IPC_PREFIX}{{"user_index": 0}}'
+        ) is True
+        assert len(dm.all_messages()) == 4
+        assert daemon.handle_chat_rewind_stdin_line("SHUTDOWN") is False
+
+    def test_restore_stdin_line_valid(self):
+        _install_dialogue_memory(cfg=object(), db=object())
+        line = (
+            f'{daemon.CHAT_RESTORE_IPC_PREFIX}{{"messages": ['
+            '{"role": "user", "content": "hi"}, '
+            '{"role": "assistant", "content": "hello"}]}'
+        )
+        assert daemon.handle_chat_restore_stdin_line(line) is True
+        assert daemon.get_hot_window_messages() == [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+
+    def test_restore_stdin_line_malformed_is_swallowed(self):
+        _install_dialogue_memory(cfg=object(), db=object())
+        assert daemon.handle_chat_restore_stdin_line(
+            f"{daemon.CHAT_RESTORE_IPC_PREFIX}not json"
+        ) is True
+        assert daemon.handle_chat_restore_stdin_line(
+            f'{daemon.CHAT_RESTORE_IPC_PREFIX}{{"messages": "nope"}}'
+        ) is True
+        assert daemon.get_hot_window_messages() == []
+        assert daemon.handle_chat_restore_stdin_line("SHUTDOWN") is False
+
+
+@pytest.mark.unit
+class TestChatSessionControlsLockGuard:
+    """Session controls must not run while a query is in flight: the engine
+    appends its turns after the truncation, which would resurrect the
+    conversation the rewind/new-session/restore just dropped."""
+
+    def setup_method(self, _method):
+        _reset_daemon_globals()
+
+    def teardown_method(self, _method):
+        _reset_daemon_globals()
+
+    def test_controls_are_rejected_while_the_query_lock_is_held(self):
+        dm = _install_dialogue_memory(cfg=object(), db=object())
+        dm.add_message("user", "q1")
+        dm.add_message("assistant", "a1")
+        dm.add_message("user", "q2")
+        dm.add_message("assistant", "a2")
+
+        # Simulate an in-flight query (voice or text) holding the lock.
+        assert daemon._chat_query_lock.acquire(blocking=False)
+
+        try:
+            assert daemon.rewind_chat_to_user(2) is False
+            assert daemon.new_chat_session() is False
+            assert daemon.set_chat_messages([{"role": "user", "content": "x"}]) is False
+            assert len(dm.all_messages()) == 4, "memory must be untouched"
+        finally:
+            daemon._chat_query_lock.release()
+
+        # Once the lock is free the same calls apply.
+        assert daemon.rewind_chat_to_user(2) is True
+        assert len(dm.all_messages()) == 2
