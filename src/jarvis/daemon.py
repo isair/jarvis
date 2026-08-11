@@ -99,6 +99,8 @@ CHAT_CANCEL_IPC_PREFIX = "__CHAT_CANCEL__"
 CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
+
+
 def request_stop() -> None:
     """Request the daemon to stop gracefully."""
     global _global_stop_requested
