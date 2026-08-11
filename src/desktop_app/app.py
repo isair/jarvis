@@ -1885,13 +1885,6 @@ class JarvisSystemTray:
         """Create the system tray context menu."""
         self.menu = QMenu()
 
-        # Toggle listening action
-        self.toggle_action = QAction("▶️ Start Listening")
-        self.toggle_action.triggered.connect(self.toggle_listening)
-        self.menu.addAction(self.toggle_action)
-
-        self.menu.addSeparator()
-
         # View logs action
         self.logs_action = QAction("📝 View Logs")
         self.logs_action.triggered.connect(self.show_log_viewer)
@@ -1954,6 +1947,11 @@ class JarvisSystemTray:
         self.menu.addAction(self.open_data_action)
 
         self.menu.addSeparator()
+
+        # Toggle listening action
+        self.toggle_action = QAction("▶️ Start Listening")
+        self.toggle_action.triggered.connect(self.toggle_listening)
+        self.menu.addAction(self.toggle_action)
 
         # Status action (non-clickable)
         self.status_action = QAction("⚪ Status: Stopped")

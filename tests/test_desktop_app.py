@@ -1654,3 +1654,35 @@ class TestRuntimeStatusDialog:
             b for b in dialog.findChildren(QPushButton) if b.text() == "Close"
         ]
         assert close_btn, "dialog must expose a Close button"
+
+
+class TestTrayMenuLayout:
+    """The tray menu groups the listening controls together: the
+    Start/Stop Listening toggle sits directly above the listening Status
+    line in the same section of the menu."""
+
+    def _tray_menu(self, qapp):
+        from desktop_app.app import JarvisSystemTray
+        from PyQt6.QtWidgets import QSystemTrayIcon
+
+        tray = JarvisSystemTray.__new__(JarvisSystemTray)
+        tray.tray_icon = QSystemTrayIcon()
+        tray.create_menu()
+        return tray.menu
+
+    def test_listening_toggle_is_above_status_in_same_section(self, qapp):
+        menu = self._tray_menu(qapp)
+        actions = list(menu.actions())
+
+        toggle_idx = next(
+            i for i, a in enumerate(actions) if "Listening" in a.text()
+        )
+        status_idx = next(
+            i for i, a in enumerate(actions) if "Status:" in a.text()
+        )
+
+        assert toggle_idx < status_idx
+        between = actions[toggle_idx + 1 : status_idx]
+        assert not any(a.isSeparator() for a in between), (
+            "Start/Stop Listening and the Status line must share one menu section"
+        )
