@@ -534,6 +534,7 @@ _HINT_MESSAGE_CHAR_LIMIT = 200
 # than a fact note.
 _DIGEST_SKIP_TOOLS = frozenset({
     "getWeather",
+    "getTime",
 })
 
 
