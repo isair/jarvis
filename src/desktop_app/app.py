@@ -1890,12 +1890,6 @@ class JarvisSystemTray:
         self.toggle_action.triggered.connect(self.toggle_listening)
         self.menu.addAction(self.toggle_action)
 
-        # Fast stop action
-        self.quick_stop_action = QAction("⚡ Stop Now (Skip Diary)")
-        self.quick_stop_action.setEnabled(False)
-        self.quick_stop_action.triggered.connect(self.quick_stop_daemon)
-        self.menu.addAction(self.quick_stop_action)
-
         self.menu.addSeparator()
 
         # View logs action
@@ -1914,7 +1908,7 @@ class JarvisSystemTray:
         self.menu.addAction(self.dictation_history_action)
 
         # Chat window action
-        self.chat_action = QAction("💬 Chat…")
+        self.chat_action = QAction("💬 Chat")
         self.chat_action.triggered.connect(self.show_chat)
         self.menu.addAction(self.chat_action)
 
@@ -2373,13 +2367,6 @@ class JarvisSystemTray:
         else:
             self.start_daemon()
 
-    def quick_stop_daemon(self) -> None:
-        """Stop the daemon quickly without the final shutdown diary pass."""
-        if not self.is_listening:
-            return
-        debug_log("fast stop requested from tray", "desktop")
-        self.stop_daemon(show_diary_dialog=False, skip_diary_update=True)
-
     def start_daemon(self) -> None:
         """Start the Jarvis daemon."""
         self._daemon_stop_expected = False
@@ -2474,37 +2461,22 @@ class JarvisSystemTray:
                         debug_log(f"chat stdin cancel failed: {exc}", "desktop")
 
                 def _control_chat_subprocess(kind: str, payload: Optional[dict] = None) -> None:
-                    """Route a session-control command to the daemon's stdin.
+                    """Route a rewind command to the daemon's stdin.
 
-                    ``kind`` is one of ``new_session`` / ``rewind`` /
-                    ``restore``; the matching IPC line carries the payload
-                    (bare prefix for new session, prefix+JSON otherwise).
-                    A broken pipe is not worth surfacing: the window has
-                    already updated its own transcript, and a dead daemon
-                    has no memory to rewind or restore.
+                    ``kind`` is ``rewind``; the matching IPC line carries the
+                    payload as prefix+JSON. A broken pipe is not worth
+                    surfacing: the window has already updated its own
+                    transcript, and a dead daemon has no memory to rewind.
                     """
                     import json as _json
-                    from jarvis.daemon import (
-                        CHAT_NEW_SESSION_IPC_PREFIX,
-                        CHAT_REWIND_IPC_PREFIX,
-                        CHAT_RESTORE_IPC_PREFIX,
-                    )
-                    prefixes = {
-                        "new_session": CHAT_NEW_SESSION_IPC_PREFIX,
-                        "rewind": CHAT_REWIND_IPC_PREFIX,
-                        "restore": CHAT_RESTORE_IPC_PREFIX,
-                    }
-                    prefix = prefixes.get(kind)
-                    if prefix is None:
+                    from jarvis.daemon import CHAT_REWIND_IPC_PREFIX
+                    if kind != "rewind":
                         debug_log(f"unknown chat control command: {kind}", "desktop")
                         return
                     try:
-                        if payload is None:
-                            _proc.stdin.write(f"{prefix}\n")
-                        else:
-                            _proc.stdin.write(
-                                f"{prefix}{_json.dumps(payload)}\n"
-                            )
+                        _proc.stdin.write(
+                            f"{CHAT_REWIND_IPC_PREFIX}{_json.dumps(payload)}\n"
+                        )
                         _proc.stdin.flush()
                     except Exception as exc:
                         debug_log(f"chat stdin control failed: {exc}", "desktop")
@@ -2531,8 +2503,6 @@ class JarvisSystemTray:
 
             self.is_listening = True
             self.toggle_action.setText("⏸️ Stop Listening")
-            if hasattr(self, "quick_stop_action"):
-                self.quick_stop_action.setEnabled(True)
             self.status_action.setText("🟢 Status: Listening")
             self.update_icon()
             self._set_chat_daemon_status("running")
@@ -2574,8 +2544,6 @@ class JarvisSystemTray:
             self.is_listening = False
             self._chat_submit_fn = None
             self.toggle_action.setText("▶️ Start Listening")
-            if hasattr(self, "quick_stop_action"):
-                self.quick_stop_action.setEnabled(False)
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self.daemon_thread = None
@@ -2635,13 +2603,11 @@ class JarvisSystemTray:
     def stop_daemon(
         self,
         show_diary_dialog: bool = True,
-        skip_diary_update: bool = False,
     ) -> None:
         """Stop the Jarvis daemon.
 
         Args:
             show_diary_dialog: If True (and bundled), shows a dialog with live diary update progress.
-            skip_diary_update: If True, skips the final shutdown diary LLM pass.
         """
         # Timeout must be longer than SHUTDOWN_DIARY_TIMEOUT_SEC (45s) in daemon.py
         # to allow the diary update LLM call to complete before force-killing
@@ -2651,8 +2617,7 @@ class JarvisSystemTray:
         debug_log(
             f"stop_daemon called: is_bundled={self.is_bundled}, "
             f"daemon_thread={self.daemon_thread}, "
-            f"show_diary_dialog={show_diary_dialog}, "
-            f"skip_diary_update={skip_diary_update}",
+            f"show_diary_dialog={show_diary_dialog}",
             "desktop",
         )
 
@@ -2705,7 +2670,7 @@ class JarvisSystemTray:
                     self.app.processEvents()
 
                     # Request graceful stop
-                    request_stop(skip_diary_update=skip_diary_update)
+                    request_stop()
 
                     # Process events while waiting for thread to finish
                     # Note: We avoid QThread.terminate() as it can corrupt state
@@ -2738,7 +2703,7 @@ class JarvisSystemTray:
                     # No dialog - simple wait
                     # Note: We avoid QThread.terminate() as it can corrupt state
                     from jarvis.daemon import request_stop
-                    request_stop(skip_diary_update=skip_diary_update)
+                    request_stop()
 
                     if not self.daemon_thread.wait(shutdown_wait_timeout_sec * 1000):
                         self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
@@ -2777,21 +2742,9 @@ class JarvisSystemTray:
                     if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
                         self.log_viewer.hide()
 
-                # Send signal for graceful shutdown. Fast stop goes through
-                # stdin so the subprocess receives the skip-diary flag before
-                # entering its shutdown block.
-                if skip_diary_update:
-                    try:
-                        from jarvis.daemon import SHUTDOWN_SKIP_DIARY_COMMAND
-                        if self.daemon_process.stdin:
-                            self.daemon_process.stdin.write(
-                                f"{SHUTDOWN_SKIP_DIARY_COMMAND}\n"
-                            )
-                            self.daemon_process.stdin.flush()
-                    except Exception as exc:
-                        debug_log(f"fast stop stdin command failed: {exc}", "desktop")
-                        self.daemon_process.send_signal(signal.SIGINT)
-                elif sys.platform == "win32":
+                # Send signal for graceful shutdown. The daemon runs its
+                # final diary update in its shutdown block regardless.
+                if sys.platform == "win32":
                     # On Windows, signals don't work reliably with CREATE_NO_WINDOW
                     # Close stdin to trigger graceful shutdown in daemon
                     try:
@@ -2886,8 +2839,6 @@ class JarvisSystemTray:
             self._daemon_stop_expected = False
             self.is_listening = False
             self.toggle_action.setText("▶️ Start Listening")
-            if hasattr(self, "quick_stop_action"):
-                self.quick_stop_action.setEnabled(False)
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self._set_chat_daemon_status("stopped")
@@ -2935,8 +2886,6 @@ class JarvisSystemTray:
                 if self.is_listening:
                     self.is_listening = False
                     self.toggle_action.setText("▶️ Start Listening")
-                    if hasattr(self, "quick_stop_action"):
-                        self.quick_stop_action.setEnabled(False)
                     self.status_action.setText("⚪ Status: Stopped")
                     self.update_icon()
                     self._set_chat_daemon_status("crashed")

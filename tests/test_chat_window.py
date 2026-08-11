@@ -375,16 +375,12 @@ class TestDesktopAppChatDispatch:
         payload = json.loads(written[len(CHAT_QUERY_IPC_PREFIX):].strip())
         assert payload["text"] == "hello over stdin"
 
-    def test_subprocess_control_fn_writes_session_lines(self, qapp, monkeypatch):
-        """The session-control closure writes the new-session / rewind /
-        restore IPC lines (bare prefix or prefix+JSON as appropriate)."""
+    def test_subprocess_control_fn_writes_rewind_line(self, qapp, monkeypatch):
+        """The rewind control closure writes the ``__CHAT_REWIND__:`` IPC
+        line (prefix + JSON payload)."""
         import io
         import json
-        from jarvis.daemon import (
-            CHAT_NEW_SESSION_IPC_PREFIX,
-            CHAT_REWIND_IPC_PREFIX,
-            CHAT_RESTORE_IPC_PREFIX,
-        )
+        from jarvis.daemon import CHAT_REWIND_IPC_PREFIX
         import desktop_app.app as app_mod
 
         tray = app_mod.JarvisSystemTray.__new__(app_mod.JarvisSystemTray)
@@ -394,32 +390,18 @@ class TestDesktopAppChatDispatch:
 
         def _control(kind: str, payload=None) -> None:
             import json as _json
-            prefixes = {
-                "new_session": CHAT_NEW_SESSION_IPC_PREFIX,
-                "rewind": CHAT_REWIND_IPC_PREFIX,
-                "restore": CHAT_RESTORE_IPC_PREFIX,
-            }
-            prefix = prefixes[kind]
-            if payload is None:
-                tray.daemon_process.stdin.write(f"{prefix}\n")
-            else:
-                tray.daemon_process.stdin.write(
-                    f"{prefix}{_json.dumps(payload)}\n"
-                )
+            assert kind == "rewind"
+            tray.daemon_process.stdin.write(
+                f"{CHAT_REWIND_IPC_PREFIX}{_json.dumps(payload)}\n"
+            )
             tray.daemon_process.stdin.flush()
 
-        _control("new_session")
         _control("rewind", {"user_index": 2})
-        _control("restore", {"messages": [{"role": "user", "content": "hi"}]})
         lines = sink.getvalue().splitlines()
 
-        assert lines[0] == CHAT_NEW_SESSION_IPC_PREFIX
-        assert json.loads(lines[1][len(CHAT_REWIND_IPC_PREFIX):]) == {
+        assert json.loads(lines[0][len(CHAT_REWIND_IPC_PREFIX):]) == {
             "user_index": 2
         }
-        assert json.loads(lines[2][len(CHAT_RESTORE_IPC_PREFIX):])["messages"] == [
-            {"role": "user", "content": "hi"}
-        ]
 
     def test_show_chat_marks_window_unavailable_when_daemon_stopped(self, qapp):
         import desktop_app.app as app_mod
@@ -732,89 +714,132 @@ class TestChatWindowHotWindowReplay:
 
 
 @pytest.mark.unit
-class TestChatSessions:
-    """In-memory chat sessions: new session clears the shared conversation,
-    the sidebar lists past sessions, switching restores one."""
+class TestChatWindowSmsLook:
+    """The window reads as an SMS thread with a single contact: no session
+    sidebar, one continuous conversation, speech bubbles aligned by sender,
+    and a contact header."""
 
     def _window(self, qapp, **kwargs):
         from desktop_app.chat_window import ChatWindow
         return ChatWindow(**kwargs)
 
-    def test_starts_with_an_active_session(self, qapp):
-        """A fresh window always has a new session (nothing is kept on
-        disk, so there is no previous session to restore)."""
+    def test_no_session_sidebar(self, qapp):
+        """There is no session list and no new-session button: the window is
+        a single conversation, like an SMS thread with one contact."""
         win = self._window(qapp)
-        assert win.session_list.count() == 1
-        assert "Session 1" in win.session_list.item(0).text()
-        assert win._active_session()["active"] is True
+        assert not hasattr(win, "session_list")
+        assert not hasattr(win, "new_session_button")
+        assert win._messages == []
 
-    def test_new_session_clears_transcript_and_shared_memory(self, qapp, monkeypatch):
-        cleared = []
+    def test_header_shows_contact_and_presence(self, qapp):
+        from PyQt6.QtWidgets import QLabel
+        win = self._window(qapp)
+        win.show()
+        qapp.processEvents()
+        texts = [label.text() for label in win.findChildren(QLabel)]
+        assert "Jarvis" in texts
+        assert "Online" in texts
+
+    def test_header_shows_typing_while_query_in_flight(self, qapp, monkeypatch):
         monkeypatch.setattr(
-            "jarvis.daemon.new_chat_session", lambda: cleared.append(True) or True
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
         )
         win = self._window(qapp)
-        win.input_widget.setPlainText("hello")
+        win.show()
+        qapp.processEvents()
+        win.input_widget.setPlainText("hi")
         win._send()
-        assert "hello" in win.transcript_text()
+        qapp.processEvents()
+        assert win._header_status.text() == "Typing…"
 
-        win._new_session()
-
-        assert cleared == [True], "the shared daemon memory must be cleared"
-        assert win.transcript_text() == ""
-        assert win.session_list.count() == 2
-        assert "● Session 2" in win.session_list.item(1).text()
-
-    def test_new_session_sends_ipc_line_in_subprocess_mode(self, qapp):
-        commands = []
-        win = self._window(
-            qapp, submit_fn=lambda _t: None,
-            control_fn=lambda kind, payload: commands.append((kind, payload)),
-        )
-        win._new_session()
-        assert ("new_session", None) in commands
-
-    def test_switch_restores_session_into_shared_memory(self, qapp, monkeypatch):
-        restored = []
+    def test_single_conversation_accumulates_all_turns(self, qapp, monkeypatch):
+        """Voice-seeded turns and typed turns live in one transcript; there
+        is no way to split the conversation into separate sessions."""
         monkeypatch.setattr(
-            "jarvis.daemon.set_chat_messages",
-            lambda msgs: restored.append(msgs) or True,
+            "desktop_app.chat_window.get_hot_window_messages",
+            lambda: [
+                {"role": "user", "content": "voice question"},
+                {"role": "assistant", "content": "voice answer"},
+            ],
         )
-        monkeypatch.setattr("jarvis.daemon.new_chat_session", lambda: True)
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
+        )
         win = self._window(qapp)
-        win.input_widget.setPlainText("first question")
+        win.show()
+        qapp.processEvents()
+        win.input_widget.setPlainText("typed question")
         win._send()
-        win._new_session()
-        win.input_widget.setPlainText("second question")
+        win._on_complete("typed answer")
+
+        text = win.transcript_text()
+        assert "voice question" in text
+        assert "voice answer" in text
+        assert "typed question" in text
+        assert "typed answer" in text
+
+    def test_user_bubble_right_assistant_left(self, qapp, monkeypatch):
+        """SMS layout: the user's bubble sits on the right half of the
+        window, Jarvis's reply on the left half."""
+        from PyQt6.QtWidgets import QLabel
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
+        )
+        win = self._window(qapp)
+        win.show()
+        qapp.processEvents()
+        win.input_widget.setPlainText("hi there")
         win._send()
+        win._on_complete("hello back")
+        qapp.processEvents()
 
-        # Switch back to session 1.
-        win._on_session_clicked(win.session_list.item(0))
-
-        assert restored, "switching must restore the archived turns"
-        assert restored[-1] == [
-            {"role": "user", "content": "first question"},
+        bubbles = [
+            label
+            for label in win.transcript_widget.findChildren(QLabel)
+            if label.objectName() == "bubble"
         ]
-        assert "first question" in win.transcript_text()
-        assert "second question" not in win.transcript_text()
-        assert win._active_session()["title"] == "Session 1"
+        assert len(bubbles) == 2
+        user_bubble, assistant_bubble = bubbles
+        mid = win.width() // 2
+        assert user_bubble.mapTo(win, user_bubble.rect().topLeft()).x() > mid
+        assert assistant_bubble.mapTo(win, assistant_bubble.rect().topLeft()).x() < mid
 
-    def test_switch_sends_restore_ipc_line_in_subprocess_mode(self, qapp):
-        commands = []
-        win = self._window(
-            qapp, submit_fn=lambda _t: None,
-            control_fn=lambda kind, payload: commands.append((kind, payload)),
+    def test_bubbles_show_plain_text_without_role_prefixes(self, qapp, monkeypatch):
+        """The bubbles carry the message bodies only; position and colour
+        convey the sender, so there is no 'You:' / 'Jarvis:' prefix."""
+        from PyQt6.QtWidgets import QLabel
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
         )
-        win.input_widget.setPlainText("archived question")
+        win = self._window(qapp)
+        win.input_widget.setPlainText("no prefix")
         win._send()
-        win._on_complete(None)  # the daemon's reply arrives; query no longer in flight
-        win._new_session()
-        win._on_session_clicked(win.session_list.item(0))
+        win._on_complete("plain reply")
 
-        restore = [c for c in commands if c[0] == "restore"]
-        assert restore and restore[-1][1] == {
-            "messages": [{"role": "user", "content": "archived question"}]
-        }
+        texts = [
+            label.text()
+            for label in win.transcript_widget.findChildren(QLabel)
+            if label.objectName() == "bubble"
+        ]
+        assert texts == ["no prefix", "plain reply"]
+        assert all("You:" not in t and "Jarvis:" not in t for t in texts)
+
+    def test_bubbles_carry_timestamps(self, qapp, monkeypatch):
+        from PyQt6.QtWidgets import QLabel
+        monkeypatch.setattr(
+            "jarvis.daemon.submit_text_query", lambda text, **kw: None
+        )
+        win = self._window(qapp)
+        win.input_widget.setPlainText("timed")
+        win._send()
+
+        time_labels = [
+            label
+            for label in win.transcript_widget.findChildren(QLabel)
+            if label.styleSheet() and "font-size: 11px" in label.styleSheet()
+        ]
+        assert time_labels, "each bubble should show a muted timestamp"
+        assert all(":" in label.text() for label in time_labels)
 
 
 @pytest.mark.unit

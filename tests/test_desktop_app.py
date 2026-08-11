@@ -366,35 +366,6 @@ class TestRuntimeStatusSnapshot:
         assert "\n🔌 MCP\n  Configured servers: 2" in text
 
 
-class TestQuickStopAction:
-    """The tray exposes a fast stop path that skips the final diary LLM pass."""
-
-    def test_quick_stop_noops_when_already_stopped(self):
-        from desktop_app.app import JarvisSystemTray
-
-        tray = JarvisSystemTray.__new__(JarvisSystemTray)
-        tray.is_listening = False
-        tray.stop_daemon = MagicMock()
-
-        tray.quick_stop_daemon()
-
-        tray.stop_daemon.assert_not_called()
-
-    def test_quick_stop_skips_diary_update_when_listening(self):
-        from desktop_app.app import JarvisSystemTray
-
-        tray = JarvisSystemTray.__new__(JarvisSystemTray)
-        tray.is_listening = True
-        tray.stop_daemon = MagicMock()
-
-        tray.quick_stop_daemon()
-
-        tray.stop_daemon.assert_called_once_with(
-            show_diary_dialog=False,
-            skip_diary_update=True,
-        )
-
-
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 

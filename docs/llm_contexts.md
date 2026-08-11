@@ -112,7 +112,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 9. Conversation Summariser
 
 - **File**: [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py) — `generate_conversation_summary()` (~lines 350/355).
-- **Trigger**: background, periodic when unsaved dialogue reaches `dialogue_memory_timeout`, plus the normal daemon shutdown path with `force=True`. `⚡ Stop Now (Skip Diary)` sets the daemon's shutdown skip flag, so this final forced pass is skipped while normal periodic saves remain unchanged. One summary is stored per day per `source_app`.
+- **Trigger**: background, periodic when unsaved dialogue reaches `dialogue_memory_timeout`, plus the normal daemon shutdown path with `force=True`. One summary is stored per day per `source_app`.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Respects `llm_thinking_enabled`. Uses streaming when a token callback is provided, else direct.
 - **Inputs**: recent conversation chunks + prior same-day summary (for incremental update).
 - **System prompt**: inline (~lines 310-320). Hygiene rules per [src/jarvis/memory/summariser.spec.md](src/jarvis/memory/summariser.spec.md): no deflection narration, attribution preservation, topic separation. The deflection rule (rule 6) is enumerated with concrete BAD/GOOD pairs in English plus parallel pairs in Turkish and Spanish so small models don't assume the rule is keyed to English phrasing. ≤200 words + 3-5 topic keywords.
