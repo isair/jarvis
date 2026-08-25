@@ -50,7 +50,7 @@ Model-size-specific components:
 - `tool_guidance`: How to handle tool results (both sizes get the anti-confabulation fidelity rule and the "quote Content from top result, don't deflect to links" rule)
 - `tool_constraints`: Explicit behaviour rules. Present on BOTH sizes — the
   large variant is a shorter restatement of the named-entity and tool-
-  auto-derive rules because gpt-oss:20b and similar also confabulate
+  auto-derive rules because qwen3.8:27b and similar also confabulate
   specifics for unfamiliar entities and occasionally ask for arguments
   (e.g. `location` for `getWeather`) the tool already auto-derives.
 

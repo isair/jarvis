@@ -178,7 +178,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 | Low-VRAM / CPU | 2GB+ | `qwen3.5:0.8b` |
 | Most users | 8GB+ | `gemma4:e2b` (default) |
 | Better quality | 16GB+ | `gemma4:e4b` |
-| High-end | 24GB+ | `gpt-oss:20b` |
+| High-end | 24GB+ | `qwen3.8:27b` |
 
 > **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
 

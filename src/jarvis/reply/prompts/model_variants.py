@@ -59,7 +59,7 @@ def detect_model_size(model_name: Optional[str]) -> ModelSize:
     only bare Gemma 4 names with no size indicator default to SMALL.
 
     Args:
-        model_name: Model name (e.g., "qwen3.5:0.8b", "gpt-oss:20b",
+        model_name: Model name (e.g., "qwen3.5:0.8b", "qwen3.8:27b",
                     "mixtral:8x7b")
 
     Returns:
@@ -125,7 +125,7 @@ TOOL_GUIDANCE_LARGE = (
     "The links are provenance, not a substitute for an answer."
 )
 
-# Large models also confabulate on named entities — e.g. gpt-oss:20b produces a
+# Large models also confabulate on named entities — e.g. qwen3.8:27b produces a
 # confident but wrong cast list for the film "Possessor" without calling
 # webSearch. The anti-confabulation rule is therefore not a small-model-only
 # concern. We keep a shorter version here (large models follow concise
