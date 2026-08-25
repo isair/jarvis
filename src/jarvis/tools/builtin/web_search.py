@@ -10,7 +10,7 @@ import requests
 from typing import Dict, Any, Optional, List, Tuple
 from ...debug import debug_log
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 
 # Per-fetch deadline — tight enough that a worst-case 3-way cascade fits the
@@ -574,6 +574,13 @@ class WebSearchTool(Tool):
             },
             "required": ["search_query"]
         }
+
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        return ToolClass.READ_ONLY_OPERATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute web search using DuckDuckGo."""

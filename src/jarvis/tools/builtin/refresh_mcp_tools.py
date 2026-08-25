@@ -6,7 +6,7 @@ when new tools are added or servers are restarted.
 
 from typing import Dict, Any, Optional
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 from ...debug import debug_log
 
 
@@ -32,6 +32,13 @@ class RefreshMCPToolsTool(Tool):
             "properties": {},
             "required": []
         }
+
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        return ToolClass.READ_ONLY_OPERATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute MCP tools refresh."""

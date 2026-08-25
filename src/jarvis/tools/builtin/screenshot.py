@@ -7,7 +7,7 @@ import subprocess
 import shutil
 from ...debug import debug_log
 from ..base import Tool, ToolContext
-from ..types import ToolExecutionResult
+from ..types import RiskLevel, ToolExecutionResult
 
 class ScreenshotTool(Tool):
     """Tool for capturing screenshots and performing OCR."""
@@ -27,6 +27,13 @@ class ScreenshotTool(Tool):
             "properties": {},
             "required": []
         }
+
+    def classify(self, args=None):
+        from ...policy.models import ToolClass
+        return ToolClass.INFORMATIONAL
+
+    def assess_risk(self, args: Optional[Dict[str, Any]] = None) -> RiskLevel:
+        return RiskLevel.SAFE
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the screenshot tool."""

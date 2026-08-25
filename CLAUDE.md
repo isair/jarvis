@@ -31,6 +31,11 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract, hygiene rules (deflection, attribution, topic separation), post-process scrub, and bulk-sweep clean button | Two-layer defence: prompt + deterministic scrub; corrupted summaries poison every downstream consumer |
 | `src/jarvis/memory/recall_gate.spec.md` | Deterministic skip-enrichment heuristic when the hot window covers a follow-up | Fail-open; language-agnostic via `\w{3,}` + `re.UNICODE`; planner intent always wins |
 | `src/jarvis/llm/llm.spec.md` | Pluggable LLM backend abstraction: `LLMBackend` ABC, `OllamaBackend`, `OpenAICompatibleBackend`, factory dispatch on `llm_provider`, `get_embedding_backend` override, config migrations, the two-tier model system (`Tier.FAST` / `Tier.CHAT` via `resolve_model`), function-style helpers | Provider-agnostic interface so Jarvis can run on Ollama, OpenAI-compatible (LM Studio / oMLX / llama.cpp / vLLM / LocalAI), or Anthropic-compatible servers; every context states its tier instead of defining a model fallback chain |
+| `src/jarvis/task_state.spec.md` | Task/step tracking, undo registry, approval flow | Session-scoped; reversible actions |
+| `src/jarvis/policy/policy.spec.md` | Workspace confinement, kill-switch, tool classification | Voice-first: act-then-undo, not approval gates |
+| `src/jarvis/audit/audit.spec.md` | SQLite audit trail, task/step/policy logging, PII redaction | Durable, privacy-preserving; opt-in |
+| `src/jarvis/execution/execution.spec.md` | Process isolation for high-risk tool execution | Containment without full sandboxing |
+| `src/jarvis/runtime/runtime.spec.md` | Health tracking, graceful shutdown, service lifecycle | Critical + optional services |
 
 The LLM contexts graph at `docs/llm_contexts.md` maps every LLM call in the app (model, gating, inputs, outputs, limits, flow). Keep it up-to-date at all times: any change that adds, removes, or alters an LLM context (model resolution, timeout, cap, prompt source, gating flag, data-flow edge) must update `docs/llm_contexts.md` in the same PR.
 
