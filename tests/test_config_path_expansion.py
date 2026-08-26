@@ -69,6 +69,28 @@ def test_tilde_whisper_model_path_is_expanded(tmp_path, monkeypatch):
     assert load_settings().whisper_model == "medium"
 
 
+def test_hugging_face_model_id_survives_config_loading(tmp_path, monkeypatch):
+    """A repo ID is an identifier, not a path: its separator must stay a slash.
+
+    Path normalisation turns "owner/model" into "owner\\model" on Windows and
+    the download then fails with an invalid model size.
+    """
+    _write_config(tmp_path, monkeypatch, {
+        "whisper_model": "deepdml/faster-whisper-large-v3-turbo-ct2",
+    })
+
+    assert load_settings().whisper_model == "deepdml/faster-whisper-large-v3-turbo-ct2"
+
+
+def test_a_local_whisper_model_directory_is_still_a_path(tmp_path, monkeypatch):
+    """Directories that exist keep being normalised for the loader."""
+    model_dir = tmp_path / "models" / "faster-whisper-medium"
+    model_dir.mkdir(parents=True)
+    _write_config(tmp_path, monkeypatch, {"whisper_model": str(model_dir)})
+
+    assert load_settings().whisper_model == str(model_dir)
+
+
 def test_absolute_and_unset_paths_are_untouched(tmp_path, monkeypatch):
     """Absolute paths pass through unchanged; unset optional paths stay None."""
     db = tmp_path / "jarvis.db"
