@@ -387,6 +387,22 @@ When components are unavailable, the system degrades gracefully:
 
 Whisper model loading handles transient download failures automatically:
 
+### SIGABRT Protection (Subprocess Isolation)
+
+The Whisper model download runs inside HuggingFace Hub's ``snapshot_download``,
+which uses C-level file operations (``_download_to_tmp_and_move``) that can
+raise SIGABRT — a signal that bypasses Python's `try`/`except` and kills the
+entire process. This has been observed on macOS during model downloads
+(issue #544), likely from filesystem or memory pressure during the file-move
+phase.
+
+Before initialising ``WhisperModel``, a subprocess-isolated pre-download step
+calls ``faster_whisper.utils.download_model`` in a child process. If a SIGABRT
+occurs, only the child is killed — the main Jarvis process continues, prints
+a diagnostic message, and the existing corrupted-cache handler cleans up on
+the next ``WhisperModel`` init attempt (same session or on restart). Once the model is successfully cached, ``WhisperModel`` is called with
+``local_files_only=True`` so it never enters the download path internally.
+
 ### Corrupted Cache Recovery
 
 If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. If the retry also fails, a message guides the user to manually delete the cache.

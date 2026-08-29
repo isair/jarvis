@@ -9,6 +9,16 @@ import time
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _mock_whisper_pre_download():
+    """Prevent ``_pre_download_whisper_model_safely`` from running a real
+    subprocess during tests. Return ``True`` so the WhisperModel init loop
+    uses ``local_files_only=True``, keeping tests focused on the
+    device/compute fallback logic."""
+    with patch("jarvis.listening.listener._pre_download_whisper_model_safely", return_value=True):
+        yield
+
+
 def _create_mock_config(**kwargs):
     """Create a mock config object with default values for voice listener tests."""
     mock_cfg = MagicMock()
