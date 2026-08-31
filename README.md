@@ -259,6 +259,8 @@ Leave `embedding_provider` empty to use the same provider as chat. With no worki
 
 Speed is relative to the original large model. [Source](https://github.com/openai/whisper)
 
+`large-v3-turbo` requires usable MLX Whisper when the Apple Silicon backend is selected, or faster-whisper 1.1.0+. The bundled faster-whisper requirement is older, so the setup wizard hides turbo when MLX is unavailable or disabled. A stale turbo setting falls back to the faster `medium` model at startup; choose a supported model in Voice settings or rerun the setup wizard.
+
 #### GPU Acceleration (Windows)
 If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:
 ```bash

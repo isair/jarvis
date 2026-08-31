@@ -380,8 +380,8 @@ class TestWindowsCudaDetection:
 class TestLargeV3TurboFallback:
     """Tests for large-v3-turbo runtime fallback when faster-whisper is too old."""
 
-    def test_turbo_falls_back_to_large_v3_when_unsupported(self, capsys):
-        """large-v3-turbo config falls back to large-v3 when faster-whisper < 1.1.0."""
+    def test_turbo_falls_back_to_medium_when_unsupported(self, capsys):
+        """large-v3-turbo config falls back to medium when faster-whisper < 1.1.0."""
         mock_whisper_model = MagicMock()
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
@@ -400,12 +400,14 @@ class TestLargeV3TurboFallback:
                                 listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                                 listener.run()
 
-                                # Should load large-v3 instead of large-v3-turbo
+                                # Should load medium instead of large-v3-turbo
                                 mock_class.assert_called_once()
-                                assert mock_class.call_args[0][0] == "large-v3"
+                                assert mock_class.call_args[0][0] == "medium"
 
         captured = capsys.readouterr()
         assert "large-v3-turbo is not supported" in captured.out
+        assert "using medium instead" in captured.out
+        assert "Voice settings" in captured.out
 
     def test_turbo_kept_when_faster_whisper_supports_it(self):
         """large-v3-turbo config is kept when faster-whisper >= 1.1.0."""

@@ -56,7 +56,7 @@ def check_mlx_whisper_installed() -> bool:
     try:
         import mlx_whisper
         return True
-    except ImportError:
+    except Exception:
         return False
 
 
@@ -2371,6 +2371,38 @@ def _is_faster_whisper_turbo_supported() -> bool:
         return False
 
 
+def _get_effective_whisper_backend(
+    apple_silicon: bool,
+    backend_preference: Optional[str] = None,
+) -> str:
+    """Resolve the Whisper backend the listener will use.
+
+    MLX is only usable on Apple Silicon when its import succeeds.  An
+    explicit faster-whisper preference disables MLX, while an explicit MLX
+    preference falls back to faster-whisper when MLX is unavailable.  Keep
+    this resolution in sync with ``VoiceListener._determine_whisper_backend``
+    so the wizard never offers a model the listener cannot load.
+    """
+    if backend_preference is None:
+        try:
+            cfg = load_settings()
+            backend_preference = getattr(cfg, "whisper_backend", "auto")
+        except Exception:
+            backend_preference = "auto"
+
+    backend_preference = str(backend_preference or "auto").lower()
+    if backend_preference not in ("auto", "mlx", "faster-whisper"):
+        backend_preference = "auto"
+
+    if backend_preference == "faster-whisper":
+        return "faster-whisper"
+
+    mlx_available = apple_silicon and check_mlx_whisper_installed()
+    if backend_preference == "mlx":
+        return "mlx" if mlx_available else "faster-whisper"
+    return "mlx" if mlx_available else "faster-whisper"
+
+
 class WhisperSetupPage(QWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
@@ -2681,15 +2713,13 @@ class WhisperSetupPage(QWizardPage):
     def _get_current_model_options(self) -> list:
         """Get the model options list based on current language mode.
 
-        Filters out large-v3-turbo on non-Apple-Silicon platforms when the
-        installed faster-whisper version does not support it.
+        Filters out large-v3-turbo unless the effective Whisper backend can
+        load it.  MLX supports turbo on Apple Silicon; faster-whisper needs a
+        version that includes the model.
         """
         options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
-        # Apple Silicon uses MLX Whisper which always supports turbo
-        if self._is_apple_silicon:
-            return options
-        # For faster-whisper backend, only show turbo if the library supports it
-        if not _is_faster_whisper_turbo_supported():
+        backend = _get_effective_whisper_backend(self._is_apple_silicon)
+        if backend != "mlx" and not _is_faster_whisper_turbo_supported():
             options = [opt for opt in options if opt[0] != "large-v3-turbo"]
         return options
 
@@ -2782,7 +2812,8 @@ class WhisperSetupPage(QWizardPage):
         self._model_slider.setMinimum(0)
         self._model_slider.setMaximum(len(options) - 1)
 
-        # Find best matching position for current selection or default to "tiny"
+        # Find best matching position for current selection. If a stale turbo
+        # selection was filtered out, use the same medium fallback as startup.
         model_ids = [m[0] for m in options]
         current_base = self._selected_whisper_model.replace(".en", "")
 
@@ -2794,6 +2825,10 @@ class WhisperSetupPage(QWizardPage):
 
         if target in model_ids:
             slider_pos = model_ids.index(target)
+        elif current_base == "large-v3-turbo" and "medium.en" in model_ids:
+            slider_pos = model_ids.index("medium.en")
+        elif current_base == "large-v3-turbo" and "medium" in model_ids:
+            slider_pos = model_ids.index("medium")
         elif "tiny.en" in model_ids:
             slider_pos = model_ids.index("tiny.en")
         elif "tiny" in model_ids:
@@ -3014,6 +3049,9 @@ class WhisperSetupPage(QWizardPage):
 
         if success:
             self._refresh_mlx_status()
+            # MLX may have been installed while this page was open. Rebuild
+            # the choices so large-v3-turbo becomes selectable immediately.
+            self._rebuild_slider_ui()
         else:
             self.status_label.setText(f"❌ Failed to install MLX Whisper: {message}")
             self.status_label.setStyleSheet("color: #f87171;")
@@ -3952,4 +3990,3 @@ if __name__ == "__main__":
     result = wizard.exec()
     print(f"Wizard result: {result}")
     sys.exit(0)
-
