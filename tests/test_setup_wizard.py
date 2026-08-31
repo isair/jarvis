@@ -1389,8 +1389,8 @@ class TestWhisperModelOptions:
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
 
-    def test_turbo_always_shown_on_apple_silicon(self):
-        """large-v3-turbo is always available on Apple Silicon (MLX backend)."""
+    def test_turbo_hidden_on_apple_without_usable_mlx(self):
+        """Turbo is hidden when Apple Silicon falls back to old faster-whisper."""
         from desktop_app.setup_wizard import WhisperSetupPage
 
         page = MagicMock(spec=WhisperSetupPage)
@@ -1399,10 +1399,78 @@ class TestWhisperModelOptions:
         page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
         page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+
+    def test_turbo_shown_on_apple_with_usable_mlx(self):
+        """Apple Silicon auto mode exposes turbo when MLX imports successfully."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
+
+    def test_turbo_shown_on_apple_without_mlx_when_faster_whisper_supports_it(self):
+        """Apple Silicon can still expose turbo through a newer faster-whisper."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" in model_ids
+
+    def test_turbo_hidden_when_mlx_is_explicitly_disabled(self):
+        """An explicit faster-whisper backend must not inherit Apple MLX support."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="faster-whisper")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+
+    def test_mlx_install_refreshes_model_options(self):
+        """Installing MLX rebuilds the slider so its turbo option is current."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page.progress = MagicMock()
+        page.install_mlx_btn = MagicMock()
+        page._refresh_mlx_status = MagicMock()
+        page._rebuild_slider_ui = MagicMock()
+
+        WhisperSetupPage._on_mlx_installed(page, True, "installed")
+
+        page._refresh_mlx_status.assert_called_once_with()
+        page._rebuild_slider_ui.assert_called_once_with()
 
     def test_whisper_english_model_options_have_required_fields(self):
         """Each English-only whisper model option has required info fields."""
@@ -1720,4 +1788,3 @@ class TestSearchProvidersPage:
             assert saved["mcps"] == {"x": {}}
         finally:
             cfg_path.unlink(missing_ok=True)
-

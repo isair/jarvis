@@ -1791,13 +1791,14 @@ class VoiceListener(threading.Thread):
             if not _is_faster_whisper_turbo_supported():
                 debug_log(
                     "faster-whisper does not support large-v3-turbo, "
-                    "falling back to large-v3", "voice",
+                    "falling back to medium", "voice",
                 )
                 print(
                     "  ⚠️  large-v3-turbo is not supported by the installed Whisper engine, "
-                    "using large-v3 instead", flush=True,
+                    "using medium instead. Change the Whisper model in Voice settings "
+                    "or rerun the Setup Wizard.", flush=True,
                 )
-                model_name = "large-v3"
+                model_name = "medium"
 
         if self._whisper_backend == "mlx":
             if not MLX_WHISPER_AVAILABLE:
