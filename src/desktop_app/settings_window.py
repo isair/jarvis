@@ -64,12 +64,26 @@ CATEGORIES = [
     ("whisper", "🗣️ Speech Recognition"),
     ("vad", "📊 Voice Activity Detection"),
     ("timing", "⏱️ Timing & Windows"),
+    ("voice_pe", "🎙️ Voice PE"),
     ("memory", "🧠 Memory & Dialogue"),
     ("location", "📍 Location"),
     ("features", "✨ Features"),
     ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
+
+
+def _select_choice_index(combo: QComboBox, value: Any) -> int:
+    """Index of ``value`` in a combo, tolerant of str-versus-int item data.
+
+    Choice item data is written as strings by some entries and as ints by
+    others, so both spellings are tried before giving up.
+    """
+    for candidate in (value, str(value)):
+        index = combo.findData(candidate)
+        if index >= 0:
+            return index
+    return -1
 
 
 def _is_default_value(val: Any, default_val: Any) -> bool:
@@ -246,7 +260,10 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Whisper model size (tiny/base/small/medium/large)",
       "whisper", "choice",
       choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3")])
+               ("medium", "Medium"), ("large-v3", "Large v3"),
+               ("large-v3-turbo", "Large v3 Turbo"),
+               ("distil-large-v3", "Distil Large v3"),
+               ("distil-medium.en", "Distil Medium English")])
     f("whisper_backend", "Backend",
       "Speech recognition backend",
       "whisper", "choice",
@@ -269,6 +286,24 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("whisper_no_speech_threshold", "No-Speech Threshold",
       "Reject segments where no_speech_prob is at or above this value (filters hallucinations during silence)",
       "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
+    f("whisper_language", "Transcript Language",
+      "Forced language for speech recognition. A fixed code is sent to Whisper "
+      "and raises transcript precision for that language; Auto detects per utterance.",
+      "whisper", "choice",
+      choices=[("auto", "Auto (detect per utterance)"),
+               ("en", "English (en)"),
+               ("cs", "Čeština (cs)"),
+               ("vi", "Tiếng Việt (vi)"),
+               ("sk", "Slovenčina (sk)")])
+    f("speech_spellcheck_enabled", "Spell-check Transcript",
+      "Offline Hunspell repair of the final transcript for the selected language",
+      "whisper", "bool")
+    f("speech_spellcheck_languages", "Spell-check Languages",
+      "Language codes that have a bundled dictionary",
+      "whisper", "list")
+    f("speech_spellcheck_protected_terms", "Protected Terms",
+      "Names and terms kept verbatim by the spell-checker",
+      "whisper", "list")
 
     # --- VAD ---
     f("vad_enabled", "Enable VAD",
@@ -377,6 +412,70 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
       "features", "list")
+
+    # --- Voice PE ---
+    # Stock firmware mode: "push-to-talk + continued conversation". The first
+    # session is opened by the centre button; follow-ups continue through the
+    # INTENT_END flag. The stock states are not always-listening.
+    f("voice_pe_enabled", "Enable Voice PE",
+      "Attach the Home Assistant Voice: Preview Edition as an extra microphone "
+      "over the Native API (TCP 6053). The local microphone stays active too.",
+      "voice_pe", "bool")
+    f("voice_pe_discovery_enabled", "mDNS Discovery",
+      "Browse _esphomelib._tcp.local. for the node, then fall back to the last "
+      "known IP and to the manual host.",
+      "voice_pe", "bool")
+    f("voice_pe_host", "Host / IP",
+      "Manual address of the device. Used after mDNS and the stored address list.",
+      "voice_pe", "str", nullable=True)
+    f("voice_pe_port", "API Port",
+      "Native API port, 6053 by default",
+      "voice_pe", "int", min_val=1, max_val=65535)
+    f("voice_pe_device_name", "Node Name",
+      "ESPHome node name (e.g. home-assistant-voice-aabbcc). Identity itself "
+      "comes from the MAC address.",
+      "voice_pe", "str", nullable=True)
+    f("voice_pe_mac_address", "MAC Address",
+      "Stable identity of the device, e.g. aa:bb:cc:dd:ee:ff",
+      "voice_pe", "str", nullable=True)
+    f("voice_pe_room", "Room",
+      "Label used in diagnostics and in debug lines",
+      "voice_pe", "str", nullable=True)
+    f("voice_pe_disable_wake_words", "Deactivate Wake Words",
+      "Sends active_wake_words=[] so every session starts in the STT stage. "
+      "The centre button opens the first session.",
+      "voice_pe", "bool")
+    f("voice_pe_prefer_api_audio", "Prefer API Audio",
+      "Use microphone and TTS over the Native API instead of the UDP fallback",
+      "voice_pe", "bool")
+    f("voice_pe_preferred_input_channel", "Microphone Channel",
+      "Channel 0 is the enhanced XMOS speech audio, channel 1 the less "
+      "processed one (needs multi-channel support)",
+      "voice_pe", "choice",
+      choices=[(0, "Channel 0 (enhanced)"), (1, "Channel 1 (less processed)")])
+    f("voice_pe_continued_conversation", "Continued Conversation",
+      "Keep the dialog open after a Jarvis question, without a wake word",
+      "voice_pe", "bool")
+    f("voice_pe_conversation_timeout_s", "Conversation Window",
+      "How long one conversation id stays valid for follow-up turns",
+      "voice_pe", "float", min_val=1.0, max_val=3600.0, step=1.0, suffix="s")
+    f("voice_pe_reconnect_min_s", "Reconnect Backoff Minimum",
+      "First retry delay of the exponential backoff",
+      "voice_pe", "float", min_val=0.1, max_val=30.0, step=0.1, suffix="s")
+    f("voice_pe_reconnect_max_s", "Reconnect Backoff Maximum",
+      "Ceiling of the exponential backoff between retries",
+      "voice_pe", "float", min_val=0.5, max_val=300.0, step=0.5, suffix="s")
+    f("voice_pe_audio_queue_ms", "Microphone Queue",
+      "Backlog ceiling of the audio queue; the oldest blocks are dropped past it",
+      "voice_pe", "int", min_val=20, max_val=5000, step=20, suffix="ms")
+    f("voice_pe_led_brightness", "LED Ring Brightness",
+      "Brightness of the public led_ring light (the voice animations come from "
+      "the standard assistant events)",
+      "voice_pe", "float", min_val=0.0, max_val=1.0, step=0.01)
+    f("voice_pe_led_rgb", "LED Ring Colour",
+      "Accent colour of the led_ring light: '8c00ff' or '0.55,0,1'. The stock "
+      "firmware drives the internal pixel effects itself",
+      "voice_pe", "str", nullable=True)
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",
@@ -589,8 +688,7 @@ class SettingsWindow(QDialog):
             for val, display in (fm.choices or []):
                 w.addItem(display, val)
             # Set current value
-            cur_str = str(current) if current is not None else ""
-            idx = w.findData(cur_str)
+            idx = _select_choice_index(w, current)
             if idx >= 0:
                 w.setCurrentIndex(idx)
             w.setToolTip(fm.description)
@@ -601,8 +699,9 @@ class SettingsWindow(QDialog):
             devices = get_input_devices()
             for val, display in devices:
                 w.addItem(display, val)
-            cur_str = str(current) if current not in (None, "") else ""
-            idx = w.findData(cur_str)
+            idx = _select_choice_index(
+                w, "" if current in (None, "") else current
+            )
             if idx >= 0:
                 w.setCurrentIndex(idx)
             w.setToolTip(fm.description)
@@ -906,13 +1005,16 @@ class SettingsWindow(QDialog):
 
         if fm.field_type in ("choice", "device"):
             val = w.currentData()
-            # For sample_rate, convert back to int
-            if fm.key == "sample_rate":
+            if val == "":
+                return None
+            # Choice item data is a string on some entries and an int on others;
+            # the declared default decides the stored type.
+            if isinstance(self._defaults.get(fm.key), int):
                 try:
                     return int(val)
                 except (TypeError, ValueError):
-                    return 16000
-            return val if val != "" else None
+                    return self._defaults.get(fm.key)
+            return val
 
         if fm.field_type == "list":
             list_w = w._list_widget
@@ -1016,8 +1118,9 @@ class SettingsWindow(QDialog):
                 w.setValue(0.0)
 
         elif fm.field_type in ("choice", "device"):
-            cur_str = str(value) if value not in (None, "") else ""
-            idx = w.findData(cur_str)
+            idx = _select_choice_index(
+                w, "" if value in (None, "") else value
+            )
             if idx >= 0:
                 w.setCurrentIndex(idx)
 

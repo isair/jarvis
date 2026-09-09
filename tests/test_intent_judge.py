@@ -557,6 +557,61 @@ class TestCreateIntentJudge:
         assert judge is not None
 
 
+class TestJudgeBudgetScaling:
+    """The generation cap and the wall-clock budget are one contract."""
+
+    @staticmethod
+    def _run(thinking: bool, base_timeout: float = 15.0):
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(low_power_mode=False)
+        judge = IntentJudge(IntentJudgeConfig(
+            cfg=cfg, timeout_sec=base_timeout, thinking=thinking,
+        ))
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "message": {
+                "content": '{"directed": true, "query": "time", "stop": false, '
+                           '"confidence": "high", "reasoning": "ok"}'
+            }
+        }
+        with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
+            judge.judge([TranscriptSegment("jarvis time", 1000.0, 1001.0)])
+
+        _args, kwargs = backend.chat.call_args
+        return kwargs["timeout_sec"], kwargs["extra_options"]["max_tokens"]
+
+    def test_plain_mode_caps_generation_and_uses_the_plain_budget(self):
+        """Without thinking the answer is bare JSON: 400 tokens, base budget."""
+        timeout, max_tokens = self._run(thinking=False)
+
+        assert max_tokens == 400
+        assert timeout == 15.0
+        # Arithmetic floor on a 45 tok/s host must sit inside the budget.
+        assert timeout >= max_tokens / 45.0
+
+    def test_thinking_mode_widens_cap_and_budget_together(self):
+        """Thinking mode pays for thinking tokens: wider cap, wider budget."""
+        timeout, max_tokens = self._run(thinking=True)
+
+        assert max_tokens > 400
+        assert timeout > 15.0
+        assert timeout >= max_tokens / 45.0
+
+    def test_factory_reads_the_configured_budget(self):
+        """create_intent_judge forwards the configured budget to the config."""
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(
+            wake_word="jarvis", wake_aliases=[], fast_model="gemma4:e2b",
+            intent_judge_timeout_sec=22.0, intent_judge_thinking_enabled=False,
+        )
+        judge = create_intent_judge(cfg)
+
+        assert judge.config.timeout_sec == 22.0
+
+
+
 class TestWarmUp:
     """Tests for IntentJudge.warm_up() — delegates to the active backend."""
 
@@ -1093,7 +1148,8 @@ class TestReasoningModelHandling:
 
     def test_max_tokens_passed_via_extra_options(self):
         """The generation cap goes out as the canonical ``max_tokens`` key
-        (no redundant ``num_predict`` — Ollama translates it server-side)."""
+        (no redundant ``num_predict`` — Ollama translates it server-side), and
+        it tracks whether thinking mode is on."""
         judge = IntentJudge()
         backend = MagicMock()
         backend.chat.return_value = {
@@ -1108,5 +1164,14 @@ class TestReasoningModelHandling:
         with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
             judge.judge(segments)
         extra = backend.chat.call_args.kwargs["extra_options"]
-        assert extra["max_tokens"] == 1500
+        assert extra["max_tokens"] == 400
         assert "num_predict" not in extra
+        # The plain budget carries over to the request unchanged.
+        assert backend.chat.call_args.kwargs["timeout_sec"] == 15.0
+
+        thinking_judge = IntentJudge(IntentJudgeConfig(thinking=True))
+        with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
+            thinking_judge.judge(segments)
+        thinking_extra = backend.chat.call_args.kwargs["extra_options"]
+        assert thinking_extra["max_tokens"] == 1500
+        assert backend.chat.call_args.kwargs["timeout_sec"] == 45.0

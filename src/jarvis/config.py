@@ -94,6 +94,15 @@ _HW_NVIDIA_CUDA = ("cublas64_12.dll", "cudnn_ops64_9.dll")
 
 
 def _hardware_compute_kind() -> str:
+    """Order-preferred compute kind, memoized for the life of the process."""
+    global _HW_KIND_CACHE
+    if _HW_KIND_CACHE is not None:
+        return _HW_KIND_CACHE
+    _HW_KIND_CACHE = _detect_hardware_compute_kind()
+    return _HW_KIND_CACHE
+
+
+def _detect_hardware_compute_kind() -> str:
     """Order-preferred compute kind: 'nvidia', 'intel' or 'cpu'.
 
     - NVIDIA: CUDA is visible through ctranslate2 (or a DLL probe fallback)
@@ -154,13 +163,28 @@ def _hardware_compute_kind() -> str:
     return "cpu"
 
 
+# Module-level probe caches. ``get_default_config()`` calls the probes several
+# times per pass and ``load_settings()`` rebuilds the defaults on every call,
+# so without these caches one slow/absent service multiplies its socket timeout
+# across every config pass and stalls the frozen (windowed) boot before Qt's
+# event loop starts. The values are fixed for the life of the process.
+_NPU_PROBE_CACHE: Optional[Dict[str, Any]] = None
+_HW_KIND_CACHE: Optional[str] = None
+
+
 def _probe_npu_retrieval(retries: int = 3) -> Dict[str, Any]:
     """Probe the native OpenVINO NPU retrieval service (port 8010).
 
     Returns {"model", "dimensions"} when reachable, else {}. Model names on
     the preflight host: Qwen3-Embedding-0.6B-int4-cw-ov (1024-dim),
     Qwen3-Reranker-0.6B-int8-ov — both already local (no downloads).
+
+    The first result (including the empty ``{}`` failure result) is memoized.
     """
+    global _NPU_PROBE_CACHE
+    if _NPU_PROBE_CACHE is not None:
+        return _NPU_PROBE_CACHE
+
     import urllib.request
     for _ in range(max(1, retries)):
         try:
@@ -168,23 +192,26 @@ def _probe_npu_retrieval(retries: int = 3) -> Dict[str, Any]:
                 "http://127.0.0.1:8010/v1/capabilities", timeout=3
             ) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            return {
+            _NPU_PROBE_CACHE = {
                 "model": str(data.get("embedding_model", "Qwen3-Embedding-0.6B-int4-cw-ov")),
                 "dimensions": data.get("embedding_dimensions", 1024),
             }
+            return _NPU_PROBE_CACHE
         except Exception:
             try:
                 with urllib.request.urlopen(
                     "http://127.0.0.1:8010/health", timeout=3
                 ) as resp:
                     json.loads(resp.read().decode("utf-8"))
-                return {
+                _NPU_PROBE_CACHE = {
                     "model": "Qwen3-Embedding-0.6B-int4-cw-ov",
                     "dimensions": 1024,
                 }
+                return _NPU_PROBE_CACHE
             except Exception:
                 pass
-    return {}
+    _NPU_PROBE_CACHE = {}
+    return _NPU_PROBE_CACHE
 
 
 def _detect_whisper_cache_dir() -> str:
@@ -223,8 +250,16 @@ def _detect_whisper_cache_dir() -> str:
     return ""
 
 
-def _hardware_details() -> Dict[str, Any]:
-    """Structured hardware report for the startup summary."""
+def _hardware_details(cfg: Any = None) -> Dict[str, Any]:
+    """Structured hardware report for the startup summary.
+
+    When ``cfg`` (a :class:`Settings`) is supplied, ``models`` mirrors the
+    *active* configuration — ``llm_chat_model`` / ``whisper_model`` /
+    ``whisper_device`` — so the ``🖥  Compute:`` line can never contradict the
+    ``🧠``/``🎤`` lines printed around it. Missing values fall back to the
+    per-kind hardware ladder (``_default_chat_model`` and friends). Without
+    ``cfg`` the per-kind ladder is used as before.
+    """
     kind = _hardware_compute_kind()
     details: Dict[str, Any] = {
         "kind": kind,
@@ -232,12 +267,32 @@ def _hardware_details() -> Dict[str, Any]:
         "npu": _detect_npu(),
         "npu_retrieval": _probe_npu_retrieval(),
     }
+
+    ladder_chat = _default_chat_model()
+    ladder_whisper = _default_whisper_model()
+    ladder_device = _default_whisper_device()
+
+    if cfg is not None:
+        chat = str(getattr(cfg, "llm_chat_model", "") or "").strip() or ladder_chat
+        whisper = str(getattr(cfg, "whisper_model", "") or "").strip() or ladder_whisper
+        # Prefer the device the Whisper loader itself resolved (``whisper_device``
+        # is the loader's own knob); fall back to the compute-kind ladder.
+        device = str(getattr(cfg, "whisper_device", "") or "").strip() or ladder_device
+        details["models"] = {"chat": chat, "whisper": whisper, "device": device}
+        return details
+
     if kind == "nvidia":
-        details["models"] = {"chat": "qwen3.8:27b", "whisper": "large-v3-turbo", "device": "cuda"}
-    elif kind == "intel":
-        details["models"] = {"chat": "gemma4:e2b", "whisper": "medium", "device": "cpu"}
+        details["models"] = {
+            "chat": ladder_chat,
+            "whisper": ladder_whisper,
+            "device": ladder_device,
+        }
     else:
-        details["models"] = {"chat": "gemma4:e2b", "whisper": "medium", "device": "cpu"}
+        details["models"] = {
+            "chat": ladder_chat,
+            "whisper": ladder_whisper,
+            "device": ladder_device,
+        }
     return details
 
 
@@ -297,9 +352,13 @@ def _default_whisper_device() -> str:
     return "cpu"
 
 
-def hardware_report() -> Dict[str, Any]:
-    """Public structured hardware report: {kind, models, npu}."""
-    return _hardware_details()
+def hardware_report(cfg: Any = None) -> Dict[str, Any]:
+    """Public structured hardware report: ``{kind, models, npu, npu_retrieval}``.
+
+    Pass the loaded :class:`Settings` to have ``models`` describe the active
+    model selection instead of the per-kind ladder defaults.
+    """
+    return _hardware_details(cfg)
 
 
 def get_supported_model_ids() -> set[str]:
@@ -416,6 +475,16 @@ class Settings:
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
     whisper_min_word_length: int
+    # Language selector for the ASR stage. A three-letter code is handed to
+    # Whisper as the forced language; "auto" keeps auto-detection.
+    whisper_language: str
+    # Offline Hunspell post-processing of the FINAL Whisper transcript only
+    # (see src/jarvis/listening/listening.spec.md).
+    speech_spellcheck_enabled: bool
+    # Codes the post-processor has a vendored dictionary for.
+    speech_spellcheck_languages: list[str]
+    # Extra terms kept verbatim on top of wake aliases and persona names.
+    speech_spellcheck_protected_terms: list[str]
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
@@ -527,6 +596,41 @@ class Settings:
 
     # MCP Integration
     mcps: Dict[str, Any]
+
+    # Voice PE (Home Assistant Voice: Preview Edition, stock firmware).
+    # See src/jarvis/integrations/voice_pe/voice_pe.spec.md. Mode is
+    # "Stock Voice PE / push-to-talk + continued conversation": the centre
+    # button opens the first session, ``continued_conversation`` carries the
+    # follow-ups, and the stock states are not always-listening.
+    voice_pe_enabled: bool
+    voice_pe_discovery_enabled: bool
+    voice_pe_host: str | None
+    voice_pe_port: int
+    voice_pe_device_name: str | None
+    voice_pe_mac_address: str | None
+    # Name of the stored secret holding the Noise PSK (first paired MAC).
+    voice_pe_noise_psk_secret_id: str | None
+    voice_pe_room: str | None
+    # True sets ``active_wake_words=[]`` so every session starts in STT.
+    voice_pe_disable_wake_words: bool
+    voice_pe_prefer_api_audio: bool
+    # 0 = enhanced XMOS speech audio, 1 = less processed (needs the
+    # multi-channel feature flag, otherwise it falls back to 0).
+    voice_pe_preferred_input_channel: int
+    voice_pe_continued_conversation: bool
+    voice_pe_conversation_timeout_s: float
+    voice_pe_reconnect_min_s: float
+    voice_pe_reconnect_max_s: float
+    # Microphone backlog ceiling in milliseconds.
+    voice_pe_audio_queue_ms: int
+    voice_pe_led_brightness: float
+    voice_pe_led_rgb: list
+    # Persisted per-device identity metadata keyed by MAC: node name, project
+    # name/version, API version, feature flags, known addresses, last contact.
+    voice_pe_devices: Dict[str, Any]
+    # ``button_press_event`` value -> Jarvis action name (single click stays
+    # on the device and is not mapped).
+    voice_pe_button_actions: Dict[str, Any]
 
     # Centralized identity / recording profile (Talkie Toaster)
     assistant_display_name: str = BRANDING["display_name"]
@@ -760,6 +864,53 @@ def _ensure_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _optional_text(value: Any) -> Optional[str]:
+    """Trimmed string or ``None`` (empty/``null`` placeholders collapse)."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "null":
+        return None
+    return text
+
+
+def _voice_pe_float(value: Any, default: float) -> float:
+    """Float with a fallback, used by the Voice PE numeric knobs."""
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _voice_pe_rgb(value: Any) -> list:
+    """Accent colour as three 0..1 floats; anything else falls back."""
+    fallback = [0.55, 0.0, 1.0]
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        try:
+            channels = [min(1.0, max(0.0, float(part))) for part in value]
+        except (TypeError, ValueError):
+            return fallback
+        return channels
+    text = _optional_text(value)
+    if text:
+        # Accept "5500ff" and "0.55,0,1" both.
+        compact = text.lstrip("#")
+        if len(compact) == 6:
+            try:
+                return [
+                    round(int(compact[0:2], 16) / 255.0, 4),
+                    round(int(compact[2:4], 16) / 255.0, 4),
+                    round(int(compact[4:6], 16) / 255.0, 4),
+                ]
+            except ValueError:
+                return fallback
+        if "," in compact:
+            return _voice_pe_rgb([part for part in compact.split(",")])
+    return fallback
+
+
 def get_default_config() -> Dict[str, Any]:
     """Returns the default configuration values."""
     return {
@@ -794,7 +945,10 @@ def get_default_config() -> Dict[str, Any]:
         "llm_tools_timeout_sec": 300.0,
         # Cheap distil passes should fail fast — a hung digest call would
         # block the reply loop per tool call, amplified by agentic turns.
-        "llm_digest_timeout_sec": 8.0,
+        # Budgets are sized from the slowest expected decode: prefill seconds
+        # plus `max_tokens / tokens_per_sec`, so a 45 tok/s host still lands
+        # inside the window (300 tokens ≈ 6.7s decode plus prefill).
+        "llm_digest_timeout_sec": 12.0,
         "llm_embedding_timeout_sec": 60.0,
         "llm_profile_select_timeout_sec": 30.0,
 
@@ -885,6 +1039,11 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
+        # Selector values: "auto" plus the four supported ISO-639-1 codes.
+        "whisper_language": "auto",
+        "speech_spellcheck_enabled": True,
+        "speech_spellcheck_languages": ["en", "cs", "vi", "sk"],
+        "speech_spellcheck_protected_terms": [],
 
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
@@ -896,7 +1055,7 @@ def get_default_config() -> Dict[str, Any]:
         "tts_max_utterance_ms": 3000,  # Shorter timeout during TTS for quick stop detection
 
         # UI/UX Features
-        "tune_enabled": True,
+        "tune_enabled": False,  # Idle/thinking pad tone is off by default (silent when idle)
         "hot_window_enabled": True,
         "hot_window_seconds": 3.0,
         "low_power_mode": False,
@@ -912,7 +1071,11 @@ def get_default_config() -> Dict[str, Any]:
         # DEFAULT_FAST_MODEL on the Ollama chat path, the chat model on an
         # OpenAI-compatible provider.
         "fast_model": "",
-        "intent_judge_timeout_sec": 6.0,
+        # Preload of ~3.5k prompt tokens plus a ~330-token reasoning+answer
+        # baseline; at 45 tok/s that is roughly 4s + 7.3s, so 15s leaves about
+        # 1.5x headroom. Thinking mode raises the 1500-token cap's worst case
+        # and scales the budget in `create_intent_judge`.
+        "intent_judge_timeout_sec": 15.0,
         "intent_judge_thinking_enabled": False,  # Enable thinking for intent judge (adds latency to wake detection)
 
         # Transcript Buffer - used for both retention and context passed to intent judge
@@ -950,7 +1113,10 @@ def get_default_config() -> Dict[str, Any]:
         # Task-list planner (see src/jarvis/reply/planner.spec.md). Runs on
         # the chat model; the fast tier resolves its steps for small models.
         "planner_enabled": True,
-        "planner_timeout_sec": 3.0,
+        # On the critical path, so it stays short, but it must still cover the
+        # 150-token cap: ~1.2k prompt tokens of prefill plus 150 tokens of
+        # decode is ~5s at 45 tok/s, so 3s truncated every plan on a slow host.
+        "planner_timeout_sec": 10.0,
 
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
@@ -979,6 +1145,36 @@ def get_default_config() -> Dict[str, Any]:
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
+
+        # Voice PE (Home Assistant Voice: Preview Edition, stock firmware).
+        # The Noise PSK lives inside ``voice_pe_devices`` in the same 0o600
+        # JSON file; it is never echoed to the logs.
+        "voice_pe_enabled": False,
+        "voice_pe_discovery_enabled": True,
+        "voice_pe_host": None,
+        "voice_pe_port": 6053,
+        "voice_pe_device_name": None,
+        "voice_pe_mac_address": None,
+        "voice_pe_noise_psk_secret_id": None,
+        "voice_pe_room": None,
+        "voice_pe_disable_wake_words": True,
+        "voice_pe_prefer_api_audio": True,
+        "voice_pe_preferred_input_channel": 0,
+        "voice_pe_continued_conversation": True,
+        "voice_pe_conversation_timeout_s": 300.0,
+        "voice_pe_reconnect_min_s": 1.0,
+        "voice_pe_reconnect_max_s": 30.0,
+        "voice_pe_audio_queue_ms": 300,
+        "voice_pe_led_brightness": 0.66,
+        # Default accent of the Toustovač overlay (violet).
+        "voice_pe_led_rgb": [0.55, 0.0, 1.0],
+        "voice_pe_devices": {},
+        "voice_pe_button_actions": {
+            "double_press": "toggle_overlay",
+            "triple_press": "open_command_palette",
+            "long_press": "cancel_current_agent_run",
+            "easter_egg_press": "toaster_easter_egg",
+        },
     }
 
 
@@ -1137,7 +1333,7 @@ def load_settings() -> Settings:
         fast_model = (
             llm_chat_model if llm_provider == "openai_compatible" else DEFAULT_FAST_MODEL
         )
-    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 6.0))
+    intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 15.0))
 
     # Transcript Buffer - ambient speech context for intent judge (separate from dialogue)
     transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 120.0))
@@ -1174,9 +1370,9 @@ def load_settings() -> Settings:
         evaluator_enabled = bool(_eval_raw)
     planner_enabled = bool(merged.get("planner_enabled", True))
     try:
-        planner_timeout_sec = float(merged.get("planner_timeout_sec", 3.0))
+        planner_timeout_sec = float(merged.get("planner_timeout_sec", 10.0))
     except (TypeError, ValueError):
-        planner_timeout_sec = 3.0
+        planner_timeout_sec = 10.0
     try:
         tool_search_max_calls = int(merged.get("tool_search_max_calls", 3))
     except (TypeError, ValueError):
@@ -1204,6 +1400,64 @@ def load_settings() -> Settings:
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
+
+    # Voice PE (see src/jarvis/integrations/voice_pe/voice_pe.spec.md). The
+    # numeric ceilings keep the transport inside the stock ring-buffer and
+    # reconnect-backoff windows even when a hand-edited config drifts.
+    voice_pe_enabled = bool(merged.get("voice_pe_enabled", False))
+    voice_pe_discovery_enabled = bool(merged.get("voice_pe_discovery_enabled", True))
+    voice_pe_host = _optional_text(merged.get("voice_pe_host"))
+    voice_pe_device_name = _optional_text(merged.get("voice_pe_device_name"))
+    voice_pe_mac_address = _optional_text(merged.get("voice_pe_mac_address"))
+    voice_pe_noise_psk_secret_id = _optional_text(
+        merged.get("voice_pe_noise_psk_secret_id")
+    )
+    voice_pe_room = _optional_text(merged.get("voice_pe_room"))
+    try:
+        voice_pe_port = int(merged.get("voice_pe_port", 6053) or 6053)
+    except (TypeError, ValueError):
+        voice_pe_port = 6053
+    if voice_pe_port <= 0:
+        voice_pe_port = 6053
+    voice_pe_disable_wake_words = bool(
+        merged.get("voice_pe_disable_wake_words", True)
+    )
+    voice_pe_prefer_api_audio = bool(merged.get("voice_pe_prefer_api_audio", True))
+    try:
+        voice_pe_preferred_input_channel = max(
+            0, min(1, int(merged.get("voice_pe_preferred_input_channel", 0) or 0))
+        )
+    except (TypeError, ValueError):
+        voice_pe_preferred_input_channel = 0
+    voice_pe_continued_conversation = bool(
+        merged.get("voice_pe_continued_conversation", True)
+    )
+    voice_pe_conversation_timeout_s = max(
+        1.0, _voice_pe_float(merged.get("voice_pe_conversation_timeout_s"), 300.0)
+    )
+    voice_pe_reconnect_min_s = max(
+        0.1, _voice_pe_float(merged.get("voice_pe_reconnect_min_s"), 1.0)
+    )
+    voice_pe_reconnect_max_s = max(
+        voice_pe_reconnect_min_s,
+        _voice_pe_float(merged.get("voice_pe_reconnect_max_s"), 30.0),
+    )
+    try:
+        voice_pe_audio_queue_ms = max(
+            20, int(merged.get("voice_pe_audio_queue_ms", 300) or 300)
+        )
+    except (TypeError, ValueError):
+        voice_pe_audio_queue_ms = 300
+    voice_pe_led_brightness = min(
+        1.0, max(0.0, _voice_pe_float(merged.get("voice_pe_led_brightness"), 0.66))
+    )
+    raw_led_rgb = merged.get("voice_pe_led_rgb")
+    voice_pe_led_rgb = _voice_pe_rgb(raw_led_rgb)
+    voice_pe_devices = _ensure_dict(merged.get("voice_pe_devices"))
+    # Button mapping accepts the dict form and the "event=action" list form
+    # the settings UI writes.
+    from .integrations.voice_pe.config import fold_button_actions
+    voice_pe_button_actions = fold_button_actions(merged.get("voice_pe_button_actions"))
 
     # Centralized identity / recording profile
     assistant_display_name = str(
@@ -1246,13 +1500,31 @@ def load_settings() -> Settings:
         except (TypeError, ValueError):
             proactive_hour_limit = None
 
-    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
+    # Parse fallbacks mirror `get_default_config()` exactly, so a config.json
+    # missing a key resolves to the same value as a fresh install.
+    whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.3))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
-    whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
-    whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
+    whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.15))
+    whisper_min_word_length = int(merged.get("whisper_min_word_length", 1))
+    # Language selector. A supported code is handed to Whisper as the forced
+    # language; every other value (including "auto") keeps auto-detection.
+    whisper_language = str(merged.get("whisper_language", "auto") or "auto").strip().lower()
+    if whisper_language not in ("en", "cs", "vi", "sk"):
+        whisper_language = "auto"
+    speech_spellcheck_enabled = bool(merged.get("speech_spellcheck_enabled", True))
+    speech_spellcheck_languages = [
+        code.casefold()
+        for code in _ensure_list(merged.get("speech_spellcheck_languages") or ["en", "cs", "vi", "sk"])
+        if code.strip()
+    ]
+    speech_spellcheck_protected_terms = [
+        term.strip()
+        for term in _ensure_list(merged.get("speech_spellcheck_protected_terms"))
+        if term.strip()
+    ]
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
-    llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
+    llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 12.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
@@ -1331,6 +1603,10 @@ def load_settings() -> Settings:
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
+        whisper_language=whisper_language,
+        speech_spellcheck_enabled=speech_spellcheck_enabled,
+        speech_spellcheck_languages=speech_spellcheck_languages,
+        speech_spellcheck_protected_terms=speech_spellcheck_protected_terms,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,
@@ -1391,6 +1667,28 @@ def load_settings() -> Settings:
 
         # MCP Integration
         mcps=mcps,
+
+        # Voice PE (Home Assistant Voice: Preview Edition)
+        voice_pe_enabled=voice_pe_enabled,
+        voice_pe_discovery_enabled=voice_pe_discovery_enabled,
+        voice_pe_host=voice_pe_host,
+        voice_pe_port=voice_pe_port,
+        voice_pe_device_name=voice_pe_device_name,
+        voice_pe_mac_address=voice_pe_mac_address,
+        voice_pe_noise_psk_secret_id=voice_pe_noise_psk_secret_id,
+        voice_pe_room=voice_pe_room,
+        voice_pe_disable_wake_words=voice_pe_disable_wake_words,
+        voice_pe_prefer_api_audio=voice_pe_prefer_api_audio,
+        voice_pe_preferred_input_channel=voice_pe_preferred_input_channel,
+        voice_pe_continued_conversation=voice_pe_continued_conversation,
+        voice_pe_conversation_timeout_s=voice_pe_conversation_timeout_s,
+        voice_pe_reconnect_min_s=voice_pe_reconnect_min_s,
+        voice_pe_reconnect_max_s=voice_pe_reconnect_max_s,
+        voice_pe_audio_queue_ms=voice_pe_audio_queue_ms,
+        voice_pe_led_brightness=voice_pe_led_brightness,
+        voice_pe_led_rgb=voice_pe_led_rgb,
+        voice_pe_devices=voice_pe_devices,
+        voice_pe_button_actions=voice_pe_button_actions,
 
         # Centralized identity / recording profile (Talkie Toaster)
         assistant_display_name=assistant_display_name,

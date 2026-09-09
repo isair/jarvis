@@ -68,6 +68,15 @@
   "whisper_min_confidence": 0.3,
   "whisper_min_audio_duration": 0.15,
   "whisper_min_word_length": 1,
+  "whisper_language": "auto",
+  "speech_spellcheck_enabled": true,
+  "speech_spellcheck_languages": [
+    "en",
+    "cs",
+    "vi",
+    "sk"
+  ],
+  "speech_spellcheck_protected_terms": [],
   "vad_enabled": true,
   "vad_aggressiveness": 2,
   "vad_frame_ms": 20,
@@ -99,5 +108,30 @@
   "web_search_enabled": true,
   "brave_search_api_key": "",
   "wikipedia_fallback_enabled": true,
-  "mcps": {}
+  "mcps": {},
+  "voice_pe_enabled": false,
+  "voice_pe_discovery_enabled": true,
+  "voice_pe_host": null,
+  "voice_pe_port": 6053,
+  "voice_pe_device_name": null,
+  "voice_pe_mac_address": null,
+  "voice_pe_noise_psk_secret_id": null,
+  "voice_pe_room": null,
+  "voice_pe_disable_wake_words": true,
+  "voice_pe_prefer_api_audio": true,
+  "voice_pe_preferred_input_channel": 0,
+  "voice_pe_continued_conversation": true,
+  "voice_pe_conversation_timeout_s": 300.0,
+  "voice_pe_reconnect_min_s": 1.0,
+  "voice_pe_reconnect_max_s": 30.0,
+  "voice_pe_audio_queue_ms": 300,
+  "voice_pe_led_brightness": 0.66,
+  "voice_pe_led_rgb": [0.55, 0.0, 1.0],
+  "voice_pe_devices": {},
+  "voice_pe_button_actions": {
+    "double_press": "toggle_overlay",
+    "triple_press": "open_command_palette",
+    "long_press": "cancel_current_agent_run",
+    "easter_egg_press": "toaster_easter_egg"
+  }
 }

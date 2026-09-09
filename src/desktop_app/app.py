@@ -44,6 +44,20 @@ from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 from desktop_app.qt_worker import KeepAliveWorker
 
+# Boot-stopwatch origin: the module is imported immediately after the
+# PyInstaller bootloader starts, so this is effectively the process start.
+_BOOT_T0 = time.perf_counter()
+
+
+def _stage(label: str) -> None:
+    """Print a boot stage with elapsed seconds since ``_BOOT_T0``.
+
+    The windowed (``console=False``) build has no console, so the crash log is
+    the only reader: stamping every stage there makes a slow boot locatable
+    without a second instrumented run.
+    """
+    print(f"{label} [{time.perf_counter() - _BOOT_T0:.2f} s]", flush=True)
+
 # Global lock file handle (must remain open for the lock to persist)
 _lock_file_handle = None
 # Byte offset used for the lock region — deliberately beyond where PID content
@@ -99,6 +113,9 @@ class RuntimeStatusSnapshot:
     embedding_provider: str
     embedding_model: str
     mcp_count: int
+    # One-line Voice PE summary (node name when paired, else the reason it is
+    # idle). See src/jarvis/integrations/voice_pe/voice_pe.spec.md.
+    voice_pe: str = "disabled"
 
 
 class RuntimeStatusSignals(QObject):
@@ -172,6 +189,7 @@ def _collect_runtime_status_snapshot(
     embedding_model = "unknown"
     low_power_mode = False
     mcp_count = 0
+    voice_pe_summary = "disabled"
     if cfg is not None:
         llm_provider = str(getattr(cfg, "llm_provider", "") or "unknown")
         chat_model = str(getattr(cfg, "llm_chat_model", "") or "unknown")
@@ -182,6 +200,29 @@ def _collect_runtime_status_snapshot(
         low_power_mode = getattr(cfg, "low_power_mode", False) is True
         mcps = getattr(cfg, "mcps", {}) or {}
         mcp_count = len(mcps) if isinstance(mcps, dict) else 0
+        try:
+            from jarvis.integrations.voice_pe.config import wizard_status
+
+            _vp_ok, _vp_text = wizard_status(cfg)
+            voice_pe_summary = _vp_text or ("ready" if _vp_ok else "disabled")
+        except Exception as exc:
+            debug_log(f"runtime status Voice PE check failed: {exc}", "desktop")
+            voice_pe_summary = "not available"
+        # Live per-satellite state when the daemon bundled the manager.
+        try:
+            from jarvis.daemon import get_voice_pe_manager
+
+            _vp_manager = get_voice_pe_manager()
+            if _vp_manager is not None:
+                _vp_devices = (_vp_manager.health() or {}).get("devices") or []
+                if _vp_devices:
+                    voice_pe_summary = "; ".join(
+                        f"{_d.get('device')} {_d.get('device_state')} "
+                        f"queue={_d.get('audio_queue_ms')}ms"
+                        for _d in _vp_devices
+                    )
+        except Exception as exc:
+            debug_log(f"runtime status Voice PE health failed: {exc}", "desktop")
 
     return RuntimeStatusSnapshot(
         daemon_state="Listening" if is_listening else "Stopped",
@@ -198,6 +239,7 @@ def _collect_runtime_status_snapshot(
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
         mcp_count=mcp_count,
+        voice_pe=voice_pe_summary,
     )
 
 
@@ -233,6 +275,7 @@ def _runtime_status_rows(snapshot: RuntimeStatusSnapshot) -> list[tuple[str, str
             f"{snapshot.embedding_provider} / {snapshot.embedding_model}",
         ),
         ("🔌 MCP", "Configured servers", str(snapshot.mcp_count)),
+        ("🛰️ Voice PE", "Status", snapshot.voice_pe),
     ]
 
 
@@ -1751,6 +1794,7 @@ class JarvisSystemTray:
         self,
         *,
         ollama_runtime_ownership: Optional[OllamaRuntimeOwnership] = None,
+        tray_icon: Optional[QSystemTrayIcon] = None,
     ):
         # Use existing QApplication if available, otherwise create one
         self.app = QApplication.instance()
@@ -1766,6 +1810,30 @@ class JarvisSystemTray:
         self._ollama_runtime_ownership = (
             ollama_runtime_ownership or OllamaRuntimeOwnership()
         )
+
+        # --- Tray icon first -------------------------------------------------
+        # The tray icon is the only always-visible proof of life, so it is
+        # created before the (comparatively slow) windows, dictionaries and
+        # hardware probes below. ``main()`` may hand over an icon it created
+        # right after QApplication so the icon shows up even earlier; reusing
+        # it keeps exactly one icon in the taskbar.
+        self.tray_icon = tray_icon if tray_icon is not None else QSystemTrayIcon()
+        try:
+            from jarvis.config import get_branding
+            tray_tooltip = get_branding()["display_name"]
+        except Exception:
+            tray_tooltip = "Toustovač"
+        self.tray_icon.setToolTip(tray_tooltip)
+        self._recording_mode = False
+        try:
+            from jarvis.config import load_config as _lc
+            self._recording_mode = bool(_lc().get("recording_mode", False))
+        except Exception:
+            pass
+        self.update_icon()
+        self.tray_icon.show()
+        self.app.processEvents()
+        # --------------------------------------------------------------------
 
         # Kill any orphaned Jarvis processes from previous sessions
         self.cleanup_orphaned_processes()
@@ -1815,32 +1883,14 @@ class JarvisSystemTray:
         # Log reader threads
         self.log_reader_threads = []
 
-        # Create system tray icon
-        self.tray_icon = QSystemTrayIcon()
-        try:
-            from jarvis.config import get_branding
-            tray_tooltip = get_branding()["display_name"]
-        except Exception:
-            tray_tooltip = "Toustovač"
-        self.tray_icon.setToolTip(tray_tooltip)
-        self._recording_mode = False
-        try:
-            from jarvis.config import load_config as _lc
-            self._recording_mode = bool(_lc().get("recording_mode", False))
-        except Exception:
-            pass
-        self.update_icon()
-
-        # Create context menu
+        # Attach the context menu to the icon created above (the icon is
+        # already visible, the menu simply appears on the next interaction).
         self.create_menu()
 
         # Set up status checking timer
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.check_daemon_status)
         self.status_timer.start(2000)  # Check every 2 seconds
-
-        # Show tray icon
-        self.tray_icon.show()
 
         # Register cleanup on app exit
         self.app.aboutToQuit.connect(self.cleanup_on_exit)
@@ -3034,7 +3084,10 @@ def _check_openai_compat_reachable(cfg, timeout_sec: float = 4.0) -> bool:
     isn't running, since (unlike Ollama) Toustovač cannot start it for them."""
     try:
         from jarvis.llm import get_llm_backend
-        return bool(get_llm_backend(cfg).list_models(timeout_sec=timeout_sec))
+        # ``is not None`` and not truthiness: a server that answers
+        # ``/v1/models`` with an empty list (LM Studio right after load) IS
+        # reachable, and must not be reported as unreachable.
+        return get_llm_backend(cfg).list_models(timeout_sec=timeout_sec) is not None
     except Exception:
         return False
 
@@ -3314,21 +3367,16 @@ def main() -> int:
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        print("Creating QApplication...", flush=True)
+        _stage("Creating QApplication...")
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import QTimer
-        print("QApplication imported successfully", flush=True)
+        _stage("PyQt6 modules imported")
 
         # Create QApplication first (needed for wizard and splash)
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
-
-        # Show crash report dialog if previous session crashed
-        if previous_crash:
-            print("⚠️ Previous session crashed, showing crash report dialog...", flush=True)
-            show_crash_report_dialog(previous_crash)
 
         # Show splash screen during startup
         from desktop_app.splash_screen import SplashScreen
@@ -3337,9 +3385,36 @@ def main() -> int:
         splash.set_status("Initializing...")
         app.processEvents()
 
+        # Taskbar/tray icon immediately, before any probe or wizard check: the
+        # icon is then already visible in the taskbar while the setup, server
+        # and model checks below run on their worker threads. The very same
+        # instance is handed to JarvisSystemTray, so only one icon ever exists.
+        early_tray_icon = QSystemTrayIcon()
+        for _icon_candidate in (
+            Path(str(getattr(sys, "_MEIPASS", ".")))
+            / "desktop_app"
+            / "desktop_assets"
+            / "icon_idle.png",
+            Path(__file__).resolve().parent / "desktop_assets" / "icon_idle.png",
+        ):
+            if _icon_candidate.exists():
+                early_tray_icon.setIcon(QIcon(str(_icon_candidate)))
+                break
+        early_tray_icon.setToolTip("Toustovač")
+        early_tray_icon.show()
+        app.processEvents()
+        _stage("🛰️ Tray icon shown")
+
+        # Crash report of the previous session — shown after the tray icon and
+        # the splash so both are already on screen while this modal is up.
+        if previous_crash:
+            print("⚠️ Previous session crashed, showing crash report dialog...", flush=True)
+            show_crash_report_dialog(previous_crash)
+            app.processEvents()
+
         # Check if setup wizard is needed
         splash.set_status("Checking setup status...")
-        print("Checking Ollama setup status...", flush=True)
+        _stage("Checking Ollama setup status...")
         print("  Loading setup wizard module...", flush=True)
         try:
             from desktop_app.setup_wizard import (
@@ -3347,7 +3422,7 @@ def main() -> int:
                 get_required_models, check_installed_models,
                 resolve_ollama_path,
             )
-            print("  Setup wizard module loaded successfully", flush=True)
+            _stage("  Setup wizard module loaded")
         except Exception as e:
             print(f"  ❌ Failed to load setup wizard: {e}", flush=True)
             traceback.print_exc()
@@ -3383,7 +3458,7 @@ def main() -> int:
             splash.set_status("Setup complete!")
             app.processEvents()
         else:
-            print("✅ Ollama setup looks good", flush=True)
+            _stage("✅ Ollama setup looks good")
 
         # Local-runtime readiness. A pure OpenAI-compatible setup needs no
         # local Ollama server to start or models to pull, so skip the whole
@@ -3398,7 +3473,7 @@ def main() -> int:
             _ollama_needed, _chat_on_ollama = True, True
 
         if not _ollama_needed:
-            print("🔌 OpenAI-compatible provider configured: skipping Ollama startup checks", flush=True)
+            _stage("🔌 OpenAI-compatible provider configured: skipping Ollama startup checks")
 
             # We can't start a third-party server the way we start Ollama, so
             # check it is reachable and warn early if it isn't — otherwise the
@@ -3630,17 +3705,33 @@ def main() -> int:
         # Runs on Windows (DXGI) and any platform with nvidia-smi.
         if _chat_on_ollama:
             try:
-                from jarvis.utils.vram import detect_total_vram_mb, format_vram_warning
+                from jarvis.utils.vram import (
+                    detect_total_vram_mb,
+                    format_vram_warning,
+                    estimate_cuda_vram_plan,
+                    format_cuda_vram_budget,
+                )
                 _vram_mb = detect_total_vram_mb()
+                _chat_model = getattr(_provider_cfg, "llm_chat_model", "") if _provider_cfg else ""
+                if not _chat_model:
+                    _chat_model = getattr(cfg, "ollama_chat_model", "gemma4:e2b")
                 if _vram_mb is not None:
-                    _chat_model = getattr(_provider_cfg, "llm_chat_model", "") if _provider_cfg else ""
-                    if not _chat_model:
-                        _chat_model = getattr(cfg, "ollama_chat_model", "gemma4:e2b")
                     _warn = format_vram_warning(_vram_mb, _chat_model)
                     if _warn:
                         print(f"  {_warn}", flush=True)
                         splash.set_status("⚠️ Low VRAM detected — consider a smaller model")
                         app.processEvents()
+                # Summed CUDA demand of the chat model *and* Whisper, which are
+                # resident at the same time, plus the free headroom to keep.
+                _plan = estimate_cuda_vram_plan(
+                    str(_chat_model or ""),
+                    str(getattr(cfg, "whisper_model", "") or ""),
+                    str(getattr(cfg, "whisper_compute_type", "int8") or "int8"),
+                )
+                _budget_text = format_cuda_vram_budget(_plan)
+                if _budget_text:
+                    print(_budget_text, flush=True)
+                    app.processEvents()
             except Exception as exc:
                 debug_log(f"Startup VRAM check failed: {exc}", "vram")
 
@@ -3663,15 +3754,16 @@ def main() -> int:
                 app.processEvents()
 
         splash.set_status("Loading Toustovač...")
-        print("Initializing JarvisSystemTray...", flush=True)
+        _stage("Initializing JarvisSystemTray...")
         tray_instance = JarvisSystemTray(
             ollama_runtime_ownership=ollama_runtime_ownership,
+            tray_icon=early_tray_icon,
         )
-        print("JarvisSystemTray initialized successfully", flush=True)
+        _stage("JarvisSystemTray initialized")
 
         # Always auto-start listening
         splash.set_status("Starting voice assistant...")
-        print("🚀 Auto-starting Toustovač listener...", flush=True)
+        _stage("🚀 Auto-starting Toustovač listener...")
         tray_instance.start_daemon()
 
         # Close splash screen
@@ -3682,10 +3774,12 @@ def main() -> int:
         # View Logs / Show Face actions are the only controls after this),
         # so the launch windows are opened here explicitly.
         tray_instance.show_launch_windows()
+        app.processEvents()
 
         if crash_log_file:
-            # Show notification with log file location
-            from PyQt6.QtWidgets import QSystemTrayIcon
+            # Show notification with log file location (QSystemTrayIcon comes
+            # from the module-level import so the early icon above can use the
+            # same name without shadowing it here).
             tray_instance.tray_icon.showMessage(
                 "Toustovač Started",
                 f"Crash logs available at:\n{crash_log_file}",
@@ -3693,7 +3787,7 @@ def main() -> int:
                 3000
             )
 
-        print("Starting event loop...", flush=True)
+        _stage("Starting event loop...")
         return tray_instance.run()
     except Exception as e:
         error_msg = f"desktop app fatal error: {e}\n{traceback.format_exc()}"

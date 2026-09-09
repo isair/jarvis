@@ -228,7 +228,7 @@ The engine consumes the plan in two phases.
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `planner_enabled` | `True` | Feature gate. |
-| `planner_timeout_sec` | `3.0` | Timeout for plan and step-resolver LLM calls. Planner fails open on timeout — an empty list is returned and the engine behaves as if the planner never ran. |
+| `planner_timeout_sec` | `10.0` | Timeout for plan and step-resolver LLM calls. Sized from the 150-token plan cap plus prompt prefill (150 tokens is already 3.3 s of decode at 45 tok/s). Planner fails open on timeout — an empty list is returned and the engine behaves as if the planner never ran. |
 
 ## Non-goals
 

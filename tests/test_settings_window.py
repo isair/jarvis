@@ -390,12 +390,17 @@ class TestDefaultValueTypes:
                 )
 
     def test_choice_defaults_are_in_choices(self):
-        """Default values for choice fields must be one of the valid choices."""
+        """Default values for choice fields must be one of the valid choices.
+
+        Item data is written as a string on some entries and an int on others,
+        so the comparison follows the same selection normalisation the combo
+        box uses.
+        """
         defaults = get_default_config()
         for fm in FIELD_METADATA:
             if fm.field_type == "choice" and fm.choices:
                 val = str(defaults.get(fm.key))
-                valid_values = [c[0] for c in fm.choices]
+                valid_values = [str(choice[0]) for choice in fm.choices]
                 assert val in valid_values, (
                     f"Field '{fm.key}' default '{val}' not in choices {valid_values}"
                 )
@@ -516,3 +521,130 @@ class TestMCPConfigSaveLogic:
             assert "mcps" not in saved
         finally:
             cfg_path.unlink(missing_ok=True)
+
+
+# Keys introduced alongside the ASR language selector and the offline
+# spell-check settings; every one lives in the "whisper" category.
+_WHISPER_SPEECH_KEYS = (
+    "whisper_language",
+    "speech_spellcheck_enabled",
+    "speech_spellcheck_languages",
+    "speech_spellcheck_protected_terms",
+)
+
+
+def _field_for(key):
+    """Return the FieldMeta registered for ``key`` (or None)."""
+    return next((fm for fm in FIELD_METADATA if fm.key == key), None)
+
+
+@pytest.mark.unit
+class TestSpeechSettingsMetadata:
+    """The language selector and spell-check toggles must be surfaced in the
+    settings UI with the correct category and field type so they can be tuned
+    without hand-editing config.json."""
+
+    def test_every_speech_key_has_metadata(self):
+        """Each new whisper key is present in FIELD_METADATA."""
+        present = {fm.key for fm in FIELD_METADATA}
+        missing = set(_WHISPER_SPEECH_KEYS) - present
+        assert not missing, f"Speech keys missing from settings UI: {missing}"
+
+    def test_speech_keys_group_under_whisper_category(self):
+        """All four new keys live in the 'whisper' category."""
+        for key in _WHISPER_SPEECH_KEYS:
+            fm = _field_for(key)
+            assert fm is not None and fm.category == "whisper", (
+                f"'{key}' should be in the 'whisper' category"
+            )
+
+    def test_speech_key_field_types(self):
+        """Each new key declares the expected field type."""
+        expected_types = {
+            "whisper_language": "choice",
+            "speech_spellcheck_enabled": "bool",
+            "speech_spellcheck_languages": "list",
+            "speech_spellcheck_protected_terms": "list",
+        }
+        for key, want in expected_types.items():
+            fm = _field_for(key)
+            assert fm is not None and fm.field_type == want, (
+                f"'{key}' should be a '{want}' field, got "
+                f"{fm.field_type if fm else None!r}"
+            )
+
+    def test_whisper_language_choices_are_complete(self):
+        """The selector offers exactly the five supported language values, so
+        it cannot lose a supported language. Order is not significant."""
+        fm = _field_for("whisper_language")
+        assert fm is not None and fm.field_type == "choice"
+        values = {v for v, _ in (fm.choices or [])}
+        assert values == {"auto", "en", "cs", "vi", "sk"}
+
+
+@pytest.mark.unit
+class TestSpeechSettingsDefaults:
+    """Default config values for the new speech settings."""
+
+    def test_defaults_are_as_documented(self):
+        """get_default_config() carries the expected speech defaults."""
+        defaults = get_default_config()
+        assert defaults["whisper_language"] == "auto"
+        assert defaults["speech_spellcheck_enabled"] is True
+        assert defaults["speech_spellcheck_languages"] == ["en", "cs", "vi", "sk"]
+        assert defaults["speech_spellcheck_protected_terms"] == []
+
+    def test_metadata_defaults_cover_new_keys(self):
+        """For every new key the default exists and load_settings() exposes it
+        as a Settings attribute."""
+        defaults = get_default_config()
+        for key in _WHISPER_SPEECH_KEYS:
+            assert key in defaults, f"'{key}' absent from default config"
+        with patch("jarvis.config._load_json", return_value={}):
+            from jarvis.config import load_settings
+
+            settings = load_settings()
+        for key in _WHISPER_SPEECH_KEYS:
+            assert hasattr(settings, key), f"Settings missing attribute '{key}'"
+
+
+@pytest.mark.unit
+class TestSpeechSettingsResolution:
+    """Resolution behaviour exercised through a patched config loader."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("cs", "cs"),
+            ("VI", "vi"),
+            ("de", "auto"),
+            ("", "auto"),
+        ],
+    )
+    def test_whisper_language_resolution(self, raw, expected):
+        """A supported code is kept (case-folded); anything else, including an
+        empty value, falls back to auto-detection."""
+        with patch("jarvis.config._load_json", return_value={"whisper_language": raw}):
+            from jarvis.config import load_settings
+
+            settings = load_settings()
+        assert settings.whisper_language == expected
+
+    def test_protected_terms_list_round_trip(self):
+        """A protected-terms list is preserved verbatim and in order."""
+        payload = {"speech_spellcheck_protected_terms": ["Toustovač", "Jarvis"]}
+        with patch("jarvis.config._load_json", return_value=payload):
+            from jarvis.config import load_settings
+
+            settings = load_settings()
+        assert settings.speech_spellcheck_protected_terms == ["Toustovač", "Jarvis"]
+
+    def test_comma_separated_string_becomes_list(self):
+        """A comma-separated string for a list field is split into items, which
+        is what _ensure_list does."""
+        payload = {"speech_spellcheck_languages": "en,cs"}
+        with patch("jarvis.config._load_json", return_value=payload):
+            from jarvis.config import load_settings
+
+            settings = load_settings()
+        assert settings.speech_spellcheck_languages == ["en", "cs"]

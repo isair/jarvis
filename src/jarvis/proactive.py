@@ -787,7 +787,7 @@ def make_chat_callable(cfg) -> Callable[..., Any]:
         return backend.chat(
             resolve_model(cfg, Tier.CHAT),
             messages,
-            timeout_sec=float(getattr(cfg, "llm_digest_timeout_sec", 8.0) or 8.0),
+            timeout_sec=float(getattr(cfg, "llm_digest_timeout_sec", 12.0) or 12.0),
             extra_options={"num_ctx": 2048},
         )
     return _chat

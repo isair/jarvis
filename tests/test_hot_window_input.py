@@ -1586,3 +1586,60 @@ class TestIntentJudgeGating:
 
         assert mock_judge.judge.call_count == 1
         listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: overheard speech is consumed once
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestOverheardSegmentConsumption:
+    """`⏳ Heard during TTS` rows are marked processed so each prints once."""
+
+    @patch("builtins.print")
+    def test_overheard_segment_is_marked_processed(self, mock_print):
+        """An ignored during-TTS utterance leaves no unprocessed row."""
+        listener, _ = _create_listener(tts_speaking=True)
+        now = time.time()
+        listener._transcript_buffer.add(
+            "the weather looks nice today",
+            start_time=now, end_time=now + 0.5,
+            energy=0.01, is_during_tts=True,
+        )
+
+        listener._process_transcript(
+            "The weather looks nice today", utterance_energy=0.01)
+
+        segments = listener._transcript_buffer.get_last_seconds(120.0)
+        assert segments, "the segment must still be in the rolling buffer"
+        assert all(seg.processed for seg in segments), (
+            "every decision path consumes its row so the next VAD tick starts "
+            "from a clean buffer")
+        listener.state_manager.stop()
+
+    @patch("builtins.print")
+    def test_repeated_ticks_print_the_row_once(self, mock_print):
+        """Each tick reports its own transcript, and every row is consumed."""
+        listener, _ = _create_listener(tts_speaking=True)
+        now = time.time()
+        listener._transcript_buffer.add(
+            "the weather looks nice today",
+            start_time=now, end_time=now + 0.5,
+            energy=0.01, is_during_tts=True,
+        )
+
+        for _ in range(3):
+            listener._process_transcript(
+                "The weather looks nice today", utterance_energy=0.01)
+
+        lines = [
+            call.args[0] for call in mock_print.call_args_list if call.args
+        ]
+        overheard = [line for line in lines if "Heard during TTS" in str(line)]
+        assert len(overheard) == 3, "one line per transcript handed in"
+        assert all(
+            seg.processed
+            for seg in listener._transcript_buffer.get_last_seconds(120.0)
+        ), "the single buffered row is consumed, not replayed"
+        listener.state_manager.stop()
+

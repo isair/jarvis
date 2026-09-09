@@ -193,6 +193,8 @@ After TTS finishes, allow wake-word-free follow-up.
 
 While TTS is playing, echo rejection and stop commands are handled with fast text-based checks (no LLM). This prevents self-loops where the mic picks up TTS output. After TTS finishes, the intent judge takes over.
 
+**Segment consumption:** Every decision path consumes its buffer row, including the "ignored" ones. An utterance printed as `⏳ Heard during TTS (waiting for hot window)` is marked processed right after the print, so the next VAD tick starts from a clean buffer. Without that mark the row stays the newest unprocessed match and is re-printed once per tick until a fresh utterance displaces it.
+
 **Stop detection:**
 - Text-based: Check for "stop", "quiet", "shut up", etc.
 - Intent judge can also detect stop commands
@@ -323,10 +325,15 @@ If the intent judge later rejects the query (and no hot window override applies)
   "transcript_buffer_duration_sec": 120,
 
   "fast_model": "gemma4:e2b",
-  "intent_judge_timeout_sec": 6.0,
+  "intent_judge_timeout_sec": 15.0,
 
   "hot_window_seconds": 3.0,
-  "echo_tolerance": 0.3
+  "echo_tolerance": 0.3,
+
+  "whisper_language": "auto",
+  "speech_spellcheck_enabled": true,
+  "speech_spellcheck_languages": ["en", "cs", "vi", "sk"],
+  "speech_spellcheck_protected_terms": []
 }
 ```
 
@@ -335,8 +342,63 @@ If the intent judge later rejects the query (and no hot window override applies)
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
 | `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
 | `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
+| `whisper_language` | `"auto"` | Forced ASR language. The value is lowercased on load and only `en`, `cs`, `vi`, `sk` survive, anything else becomes `"auto"`. A code goes to Whisper as the forced language on the warmup clip and on every utterance; `"auto"` keeps per-utterance detection. Exposed as a choice in the Settings window under *Whisper* (Auto, English, Čeština, Tiếng Việt, Slovenčina). |
+| `speech_spellcheck_enabled` | `true` | Master switch for the offline Hunspell repair of the final transcript. `false` is a transparent bypass. |
+| `speech_spellcheck_languages` | `["en", "cs", "vi", "sk"]` | The codes that ship a vendored dictionary (ids `en_US`, `cs_CZ`, `vi_VN`, `sk_SK`). Any other code gets the raw text. |
+| `speech_spellcheck_protected_terms` | `[]` | Extra names and terms the post-processor keeps verbatim, on top of the built-in protected set (wake aliases, persona name, satellite entity names). Compared casefolded, the output keeps the original spelling. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
+
+**Judge budget:** `intent_judge_timeout_sec` is one contract with the judge's generation cap, not an independent knob. The decode floor is `max_tokens / tokens_per_sec` on top of the prompt prefill (a ~2k-token system prompt plus up to ~1.5k tokens of transcript buffer). Plain mode caps at 400 tokens, thinking mode at 1500 and multiplies the wall clock by 3, so a 45 tok/s host stays inside the window instead of answering with `unavailable (no response from backend)`.
+
+### Whisper Decode Settings
+
+Endpointing is the outer webrtcvad/RMS path, so the decoder receives an already-trimmed clip. Both backends decode with the same contract:
+
+| Flag | Value | Reason |
+|------|-------|--------|
+| `language` | `cfg.whisper_language` code, `None` for `"auto"` | A configured code is the forced language on the warmup clip and on every utterance in both backends, which lifts transcript precision for that language. `"auto"` passes `None` and keeps per-utterance detection. `self._last_detected_language` holds the code in play (the configured code overrides it when one is set) and is the label the post-processing step reads. |
+| `vad_filter` | `False` (faster-whisper) | The outer VAD did the endpointing; a second Silero pass would only re-cut the clip. |
+| `condition_on_previous_text` | `False` | Clips are short and self-contained. Carrying the previous segment's text is what makes the decoder emit its boilerplate (`Thank you.`, `If so....`, `Let's go.`) on the next near-empty clip. All decision-relevant context rides in the transcript buffer instead. |
+| `without_timestamps` | `True` | Only `text`, `avg_logprob` and `no_speech_prob` are read from segments; buffer timings come from the VAD. Fewer emitted tokens per clip. |
+| `suppress_nospeech_text` | `True` (faster-whisper) | Drops non-speech marker tokens so bare `(mrmusic)`-style rows cannot reach the judge. |
+
+`_filter_noisy_segments` then applies the two configured gates in order: the `no_speech_prob` hard cutoff, then the `avg_logprob`-derived confidence. Between `whisper_min_confidence / 3` and `whisper_min_confidence` the segment is dropped and the marginal-confidence line is printed; below that it is debug-only.
+
+## Final Transcript Post-Processing
+
+The final transcript gets one offline repair pass before anything else reads it:
+
+```
+audio → Whisper → final transcript → post-processor → wake detection / command routing / intent judge / LLM
+```
+
+Only the final transcript is touched; partial, in-progress utterance text keeps its original form. The pass lives in `src/jarvis/listening/transcript_postprocessor.py` and runs once per final transcript, after the confidence and no-speech filtering and before `_process_transcript`. It returns a frozen `TranscriptCorrection(raw, corrected, language, replacements)`, so both values survive: `raw` is Whisper's text, `corrected` is what downstream consumers see, and `replacements` pairs each swapped token with its replacement in document order.
+
+**Mechanics**
+
+- Normalisation is Unicode NFC only: no NFKD, no diacritic stripping, no case changes.
+- Word tokens come from `WORD_RE` letter runs. The output is reassembled from the original spans, so punctuation and whitespace are unchanged apart from the replaced words.
+- Work bounds: 256 word tokens per transcript, 5 Hunspell candidates per token. Words past the 256 budget ride verbatim so the voice loop stays unblocked.
+- Candidates are ranked by Damerau-Levenshtein distance to the token, with the dictionary's own suggestion order as the tie-break.
+- A replacement happens only when the best candidate is unique at distance 1, or at distance 2 when the token length is at least 8. Any other case leaves the token as it is.
+- Casing follows the token: lowercase, Capitalised, and ALL-CAPS shapes are applied to the candidate. Mixed-case tokens are never rewritten.
+
+**Protected tokens** (never rewritten): URL-ish tokens (`://`, `www.`, dotted technical tokens and TLDs), e-mail addresses (any token containing `@`), tokens with digits or underscores, ALL-CAPS abbreviations, CamelCase and other mixed-case forms, single letters, wake aliases, persona names, satellite entity names, and every `speech_spellcheck_protected_terms` entry. Protected terms are compared casefolded and the output keeps the original spelling.
+
+**`vi` segmentation rule:** Vietnamese keeps the exact token segmentation, so only one-token to one-token repairs are eligible; Hunspell cannot decide compound-word spaces.
+
+**Bypass rules** (transparent, the original text comes back with an empty `replacements` tuple): `speech_spellcheck_enabled` is false, the text is empty, the language has no vendored dictionary, or the dictionary cannot be read. A missing or broken dictionary logs one structured warning (`event=speech_spellcheck_dictionary_unavailable language=... dictionary=... error=...`) and returns the raw text.
+
+**Dictionaries:** the ids are `en_US`, `cs_CZ`, `sk_SK`, `vi_VN`, loaded lazily once per id through `importlib.resources` with a `sys._MEIPASS` fallback for the frozen build. The `.aff`/`.dic` pairs are vendored in `src/jarvis/resources/hunspell` (see `SOURCES.md` in that folder) and read by `spylls`, a pure-Python reader, so no system Hunspell, LibreOffice, or network is involved.
+
+**Structured log line**, emitted through `debug_log` when the pass actually changed the text:
+
+```
+event=speech_transcript_corrected language=... replacement_count=... latency_ms=... raw_text=... corrected_text=...
+```
+
+The `raw_text` and `corrected_text` payloads follow the existing `voice_debug` setting: with it off, only the language, the replacement count, and the latency are emitted.
 
 ## State Transitions
 

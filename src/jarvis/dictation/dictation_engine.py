@@ -1134,6 +1134,17 @@ class DictationEngine:
                 except Exception:
                     pass
 
+    def _language_code(self) -> Optional[str]:
+        """Selector value for the ASR stage, or ``None`` for auto-detection.
+
+        Same rule as the voice loop: one configured code is sent to both
+        Whisper backends, which lifts transcript precision for that language.
+        """
+        code = str(getattr(self._cfg, "whisper_language", "auto") or "auto").strip().lower()
+        if not code or code == "auto":
+            return None
+        return code
+
     def _transcribe(self, audio) -> str:
         """Transcribe audio using the shared Whisper model."""
         backend = self._whisper_backend_ref()
@@ -1154,7 +1165,11 @@ class DictationEngine:
             return ""
         try:
             import mlx_whisper
-            result = mlx_whisper.transcribe(audio, path_or_hf_repo=repo, language=None)
+            result = mlx_whisper.transcribe(
+                audio,
+                path_or_hf_repo=repo,
+                language=self._language_code(),
+            )
             text = result.get("text", "").strip() if isinstance(result, dict) else ""
             return text
         except Exception as exc:
@@ -1162,11 +1177,12 @@ class DictationEngine:
             return ""
 
     def _transcribe_faster_whisper(self, model, audio) -> str:
+        language = self._language_code()
         try:
             try:
-                segments, _info = model.transcribe(audio, language=None, vad_filter=False)
+                segments, _info = model.transcribe(audio, language=language, vad_filter=False)
             except TypeError:
-                segments, _info = model.transcribe(audio, language=None)
+                segments, _info = model.transcribe(audio, language=language)
             return " ".join(seg.text for seg in segments).strip()
         except Exception as exc:
             debug_log(f"faster-whisper transcription error: {exc}", "dictation")

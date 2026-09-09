@@ -371,7 +371,7 @@ Behaviour:
 - **No new facts**: the distil is forbidden from adding facts not present in the tool output — no year, cast, director etc. unless they appear verbatim in the payload.
 - **NONE sentinel**: when the distil judges nothing relevant it returns NONE; the caller keeps the raw payload (suppressing it entirely is worse than a noisy substrate). A user-facing `🧩 Tool digest: no relevant facts — using raw payload (Nch)` line prints on this branch so the fallback is visible in the field.
 - **Length cap**: each per-batch digest is truncated to `_TOOL_DIGEST_MAX_CHARS` (600 chars) with an ellipsis.
-- **Timeout**: the memory digest, tool-result digest, and max-turn loop digest all share `llm_digest_timeout_sec` (default 8 s), kept separate from `llm_tools_timeout_sec` (which can reach minutes for long-running tool execution) so a hung distil can't stall the reply loop for five minutes per turn.
+- **Timeout**: the memory digest, tool-result digest, and max-turn loop digest all share `llm_digest_timeout_sec` (default 12 s, covering the largest of their caps at 300 tokens), kept separate from `llm_tools_timeout_sec` (which can reach minutes for long-running tool execution) so a hung distil can't stall the reply loop for five minutes per turn.
 - **User-facing logging**: prints `🧩 Tool digest: N chars — "preview…"` when the digest replaces the raw payload, or the NONE fallback line above. Debug logs under the `tools` category record raw→digest size plus batch counts.
 - **Raw payload preserved in debug**: the debug logs capture the original length so field captures can compare digested vs raw behaviour.
 

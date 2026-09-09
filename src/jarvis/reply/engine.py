@@ -585,7 +585,7 @@ def _maybe_digest_tool_result(
             tool_result=raw_tool_result,
             cfg=cfg,
             chat_model=cfg.llm_chat_model,
-            timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
+            timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 12.0)),
             thinking=getattr(cfg, 'llm_thinking_enabled', False),
         )
     except Exception as e:
@@ -1338,7 +1338,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 graph_parts=raw_graph_parts,
                 cfg=cfg,
                 chat_model=cfg.llm_chat_model,
-                timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
+                timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 12.0)),
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
             # Replace the raw injections with the digest note (or nothing
@@ -2024,7 +2024,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             llm_resp = chat_with_messages(
                 cfg=cfg,
                 messages=messages,
-                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 180.0)),
                 extra_options=None,
                 tools=_dump_tools_schema,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
@@ -2054,7 +2054,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             llm_resp = chat_with_messages(
                 cfg=cfg,
                 messages=messages,
-                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 180.0)),
                 extra_options=None,
                 tools=None,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),

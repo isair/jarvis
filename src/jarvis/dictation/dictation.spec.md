@@ -14,6 +14,7 @@ assistant pipeline (no wake words, intent judge, profiles, or TTS).
 | `dictation_hotkey`            | string | Win: `"ctrl+cmd"`, macOS/Linux: `"ctrl+alt"`   | Hold-to-record hotkey combination               |
 | `dictation_filler_removal`    | bool   | `false`                                        | LLM-based filler word removal via Ollama        |
 | `dictation_custom_dictionary` | list   | `[]`                                           | Custom replacements in `"wrong -> right"` format|
+| `whisper_language`            | string | `"auto"`                                       | Forced ASR code shared with the voice listener: `en`, `cs`, `vi`, `sk`, or `auto` |
 
 Defaults are aligned with WisprFlow. Modifier-only combos are supported
 (e.g. `"ctrl+cmd"` activates when both keys are held, with no extra trigger
@@ -68,7 +69,14 @@ After transcription, text passes through these stages in order:
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
-  and backend info — no double memory usage.
+  and backend info, so there is no double memory usage. Both backends receive the
+  configured `whisper_language` code from `_language_code()`: a supported code
+  (`en`, `cs`, `vi`, `sk`) is passed as the forced `language=` argument, and
+  `auto` passes `None` so Whisper keeps per-utterance detection. The same rule
+  that the voice loop follows, applied to the MLX and faster-whisper paths.
+- **Shared transcribe lock**: the engine is constructed with the listener's
+  `transcribe_lock`, so dictation and the voice loop serialise on one
+  `threading.Lock` around the single Whisper model.
 - **Separate `sounddevice.InputStream`** for dictation audio — avoids
   modifying the complex listener code.
 - **Pause flag** on the main listener to prevent dictation speech being

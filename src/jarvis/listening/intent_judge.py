@@ -20,6 +20,14 @@ from .transcript_buffer import TranscriptSegment
 DEFAULT_OLLAMA_KEEP_ALIVE = "30m"
 LOW_POWER_OLLAMA_KEEP_ALIVE = "1m"
 
+# Generation cap for a judgment with thinking disabled: the bare JSON answer
+# plus the measured 326-token reasoning+answer baseline, with margin.
+_PLAIN_MAX_TOKENS = 400
+# Thinking mode pays for thinking tokens on top of the answer, so its wall
+# clock is roughly 3x the plain budget (1500-token cap, ~33s of decode plus
+# prefill at 45 tok/s against a 15s plain budget).
+_THINKING_TIMEOUT_FACTOR = 3.0
+
 
 def _is_low_power_mode_enabled(cfg: Any) -> bool:
     """Return True only when Settings.low_power_mode is explicitly enabled."""
@@ -447,24 +455,33 @@ Examples:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
+            # The generation cap and the wall-clock budget are one contract:
+            # the decode floor is `max_tokens / tokens_per_sec` on top of the
+            # prompt prefill, so the cap sets the smallest useful timeout.
+            # Thinking mode pays for thinking tokens; plain mode answers with a
+            # bare JSON object.
+            max_tokens = 1500 if self.config.thinking else _PLAIN_MAX_TOKENS
+            timeout_sec = self.config.timeout_sec * (
+                _THINKING_TIMEOUT_FACTOR if self.config.thinking else 1.0
+            )
             try:
                 resp = get_llm_backend(self.config.cfg).chat(
                     self.config.model,
                     messages,
-                    timeout_sec=self.config.timeout_sec,
+                    timeout_sec=timeout_sec,
                     extra_options={
                         "temperature": 0.0,
-                        # Reasoning models count thinking tokens against
-                        # this cap, so it must cover reasoning + the JSON
-                        # answer. Too tight a cap truncates ``content``
-                        # mid-JSON on complex transcripts and the whole
-                        # judgment is lost (500 cut this exact case off at
-                        # "I said tomorro"). 1500 gives ~4.5x headroom over
-                        # the measured 326-token reasoning+answer baseline
-                        # while ``intent_judge_timeout_sec`` (6s default)
-                        # still bounds slow or runaway generations; the
-                        # model normally stops long before the cap.
-                        "max_tokens": 1500,
+                        # Reasoning models count thinking tokens against this
+                        # cap, so it must cover reasoning + the JSON answer. Too
+                        # tight a cap truncates ``content`` mid-JSON on complex
+                        # transcripts and the whole judgment is lost (500 cut
+                        # this exact case off at "I said tomorro"), so thinking
+                        # mode keeps the wide 1500. Without thinking the answer
+                        # is the JSON object alone and 400 covers the measured
+                        # 326-token reasoning+answer baseline while holding the
+                        # decode floor inside ``intent_judge_timeout_sec``. The
+                        # model normally stops long before the cap either way.
+                        "max_tokens": max_tokens,
                         "num_ctx": 8192,
                         "keep_alive": _ollama_keep_alive_for_power_mode(
                             self.config.cfg
@@ -557,7 +574,7 @@ def create_intent_judge(cfg) -> IntentJudge:
         aliases=list(getattr(cfg, "wake_aliases", [])),
         model=resolve_model(cfg, Tier.FAST),
         cfg=cfg,
-        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 6.0)),
+        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 15.0)),
         thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
     return IntentJudge(config)

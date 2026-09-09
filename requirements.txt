@@ -13,6 +13,9 @@ pytesseract==0.3.13
 Pillow==10.4.0
 webrtcvad==2.0.10
 rapidfuzz==3.6.1
+# Offline Hunspell spell-check for the final Whisper transcript (reads the
+# vendored .aff/.dic pairs under src/jarvis/resources/hunspell directly)
+spylls==0.1.7
 pynput>=1.7.6
 geoip2==4.8.0
 tzdata==2026.1; sys_platform == "win32"
@@ -20,6 +23,11 @@ miniupnpc==2.2.8
 pytest==8.3.2
 pytest-repeat==0.9.3
 mcp==1.13.1
+# ESPHome Native API client (Voice PE satellite transport, TCP 6053)
+aioesphomeapi>=14.0.0
+zeroconf>=0.132.0
+# Optional BLE onboarding (Improv) for the Voice PE; guarded by an import check
+bleak>=0.22.0
 chatterbox-tts==0.1.2
 piper-tts>=1.3.0
 pygame>=2.1.0

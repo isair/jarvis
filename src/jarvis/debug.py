@@ -7,7 +7,10 @@ from .config import load_settings
 
 _last_check_time: float = 0.0
 _cached_voice_debug: Optional[bool] = None
-_CACHE_TTL_SECONDS: float = 2.0
+# One settings parse per minute. ``load_settings()`` rebuilds every default on
+# each pass, so a very short TTL repeats that work on every ``debug_log`` call
+# and dominates the frozen (windowed) boot before Qt's event loop starts.
+_CACHE_TTL_SECONDS: float = 60.0
 
 
 def _is_debug_enabled() -> bool:

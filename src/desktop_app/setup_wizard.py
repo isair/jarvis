@@ -668,6 +668,7 @@ class WelcomePage(QWizardPage):
         self.server_status = self._create_status_row("🌐 Ollama Server", "Checking...")
         self.models_status = self._create_status_row("🧠 AI Models", "Checking...")
         self.location_status = self._create_status_row("📍 Location", "Checking...")
+        self.voice_pe_status = self._create_status_row("🎙️ Voice PE", "Checking...")
 
         # MLX Whisper status (only shown on Apple Silicon)
         self.mlx_whisper_status = self._create_status_row("🎤 MLX Whisper", "Checking...")
@@ -683,6 +684,7 @@ class WelcomePage(QWizardPage):
             self.mlx_whisper_status.setVisible(False)
 
         status_layout.addWidget(self.location_status)
+        status_layout.addWidget(self.voice_pe_status)
 
         layout.addWidget(self.status_card)
 
@@ -751,7 +753,7 @@ class WelcomePage(QWizardPage):
         self.refresh_btn.setText("⏳ Checking...")
 
         # Reset status labels
-        for row in [self.cli_status, self.server_status, self.models_status]:
+        for row in [self.cli_status, self.server_status, self.models_status, self.voice_pe_status]:
             status_label = row.findChild(QLabel, "status_label")
             if status_label:
                 status_label.setText("Checking...")
@@ -809,6 +811,23 @@ class WelcomePage(QWizardPage):
                 # Extract just the location part after "Location: "
                 loc_text = location_context.replace("Location: ", "")
                 self._update_status_row(self.location_status, f"✅ {loc_text}", True)
+
+        # Update Voice PE status (stored metadata only: the live mDNS scan runs
+        # in "jarvis voice-pe discover"). The centre button opens the first
+        # session, follow-ups continue without a wake word.
+        try:
+            from jarvis.integrations.voice_pe.config import wizard_status as _voice_pe_status
+            try:
+                _vp_settings = load_settings()
+            except Exception:
+                _vp_settings = None
+            _vp_ok, _vp_text = _voice_pe_status(_vp_settings)
+        except Exception as err:
+            _vp_ok, _vp_text = False, f"Not available ({err})"
+        if _vp_ok:
+            self._update_status_row(self.voice_pe_status, f"✅ {_vp_text}", True)
+        else:
+            self._update_status_row(self.voice_pe_status, f"⚠️ {_vp_text}", False)
 
         # Update MLX Whisper status (Apple Silicon only)
         if self._is_apple_silicon:

@@ -1619,8 +1619,15 @@ class TestRuntimeStatusDialog:
         assert by_key["Chat"] == "gemma4:e2b"
         assert by_key["Embeddings"] == "ollama / nomic-embed-text"
         assert by_key["Configured servers"] == "2"
+        assert by_key["Status"] == "disabled"
         sections = [section for section, _key, _value in rows]
-        assert sections == ["🎙️ Assistant"] * 4 + ["🦙 Ollama"] * 4 + ["🧠 Models"] * 3 + ["🔌 MCP"] * 1
+        assert sections == (
+            ["🎙️ Assistant"] * 4
+            + ["🦙 Ollama"] * 4
+            + ["🧠 Models"] * 3
+            + ["🔌 MCP"] * 1
+            + ["🛰️ Voice PE"] * 1
+        )
 
     def test_format_still_matches_legacy_text_layout(self):
         """The text formatter (used by tests and any terminal path) must

@@ -842,7 +842,7 @@ def digest_loop_for_max_turns(
         return None
 
     try:
-        timeout_sec = float(getattr(cfg, "llm_digest_timeout_sec", 8.0))
+        timeout_sec = float(getattr(cfg, "llm_digest_timeout_sec", 12.0))
     except (TypeError, ValueError):
         timeout_sec = 8.0
     thinking = bool(getattr(cfg, "llm_thinking_enabled", False))

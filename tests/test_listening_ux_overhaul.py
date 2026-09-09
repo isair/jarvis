@@ -245,6 +245,67 @@ class TestConfigNewOptions:
         assert isinstance(defaults["intent_judge_timeout_sec"], (int, float))
         assert defaults["intent_judge_timeout_sec"] > 0
 
+    def test_every_llm_budget_covers_its_generation_cap(self):
+        """Each timeout budget must cover its own `max_tokens` at 45 tok/s.
+
+        The budget and the cap are one contract: decode time is
+        `max_tokens / tokens_per_sec`, so a cap larger than the budget makes
+        the request fail by arithmetic on any host. The slowest plausible
+        local decode here is 45 tok/s.
+        """
+        from jarvis.config import get_default_config
+
+        defaults = get_default_config()
+        tokens_per_sec = 45.0
+
+        # (budget key, largest cap used with that budget, thinking multiplier)
+        pairs = [
+            ("intent_judge_timeout_sec", 1500, 3.0),   # thinking-on cap
+            ("intent_judge_timeout_sec", 400, 1.0),    # plain cap
+            ("planner_timeout_sec", 150, 1.0),
+            ("llm_digest_timeout_sec", 300, 1.0),
+        ]
+
+        for key, cap, factor in pairs:
+            budget = float(defaults[key]) * factor
+            assert budget >= cap / tokens_per_sec, (
+                f"{key}: {cap} tokens at {tokens_per_sec} tok/s needs "
+                f"{cap / tokens_per_sec:.1f}s, budget is {budget:.1f}s")
+
+    def test_fallback_literals_match_declared_defaults(self):
+        """A partially-populated Settings must not silently change a budget.
+
+        The `getattr` fallbacks at call sites mirror `get_default_config()` so
+        the two paths cannot disagree.
+        """
+        import pathlib
+
+        from jarvis.config import get_default_config
+
+        defaults = get_default_config()
+        src = pathlib.Path(__file__).resolve().parent.parent / "src" / "jarvis"
+        joined = "\n".join(
+            p.read_text(encoding="utf-8") for p in src.rglob("*.py")
+        )
+
+        for key in (
+            "intent_judge_timeout_sec",
+            "planner_timeout_sec",
+            "llm_digest_timeout_sec",
+            "llm_chat_timeout_sec",
+        ):
+            literal = f'"{key}", {defaults[key]!r}'
+            single = f"'{key}', {_fmt(defaults[key])}"
+            assert literal in joined or single in joined, (
+                f"{key}: no call-site fallback matches the default "
+                f"{defaults[key]!r}")
+
+
+def _fmt(value: float) -> str:
+    """Render a float the way the source spells it (``180.0`` not ``180.0``)."""
+    return f"{value!r}"
+
+
     def test_transcript_buffer_config_defaults(self):
         """Transcript buffer config has correct defaults."""
         from jarvis.config import get_default_config

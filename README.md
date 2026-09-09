@@ -170,6 +170,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
 - **MCP Integration** - Connect to thousands of external tools (Home Assistant, GitHub, Slack, etc.)
+- **Voice PE Satellite** - Attaches the stock Home Assistant Voice: Preview Edition as an extra microphone over the Native API: push-to-talk on the centre button with continued conversation, streamed TTS on the device ring, LED phases from the standard assistant events
 
 ## System Requirements
 
@@ -291,6 +292,23 @@ The Toustovač can speak up on its own when something meaningful happens (startu
 - **Multilingual** (default, 99 languages): `"whisper_model": "medium"`
 - **English Only** (slightly better English accuracy): `"whisper_model": "medium.en"`
 
+#### Language Selector And Offline Spell-Check
+
+Pick one transcription language, or keep detection automatic. A fixed code is sent to Whisper as the forced language on the warmup clip and on every utterance (both backends), which lifts transcript precision for that language; `"auto"` keeps per-utterance detection:
+
+```json
+{
+  "whisper_language": "auto",                            // "auto" detects per utterance, or force one code
+  "speech_spellcheck_enabled": true,                     // offline Hunspell repair of the final transcript
+  "speech_spellcheck_languages": ["en", "cs", "vi", "sk"], // codes that ship a bundled dictionary
+  "speech_spellcheck_protected_terms": []                // extra names/terms kept verbatim
+}
+```
+
+Four languages are supported: `en` (English), `cs` (Čeština), `vi` (Tiếng Việt), `sk` (Slovenčina). On top of the decoder, an offline Hunspell layer repairs the final transcript only, in the same language: pure-Python `spylls` reads bundled `.aff`/`.dic` pairs, so there is no network round-trip and no system dictionary package to install. Partial, in-progress utterance text keeps Whisper's original form. The protected-token, candidate-ranking, and bypass rules are in `src/jarvis/listening/listening.spec.md`.
+
+All four keys appear in the Settings window under *Whisper*: the language is a dropdown (Auto, English, Čeština, Tiếng Việt, Slovenčina) and the other three are a toggle plus two list editors.
+
 #### Model Sizes
 | Model | English | Multilingual | Download | VRAM | Speed |
 |-------|---------|--------------|----------|------|-------|
@@ -331,7 +349,7 @@ Both thresholds are exposed in the Settings window under *Whisper*.
 ```json
 {
   "planner_enabled": true,          // set to false to disable the planner entirely
-  "planner_timeout_sec": 6.0        // per-call timeout for plan and step-resolver LLM calls
+  "planner_timeout_sec": 10.0       // per-call timeout for plan and step-resolver LLM calls
 }
 ```
 
@@ -356,6 +374,57 @@ Both digest passes auto-enable for small models (≤7B) and stay off for large m
 ```
 
 Field logs show `🧩 Memory digest: …` and `🧩 Tool digest: …` lines when a pass ran, so you can see when the substrate was replaced.
+
+</details>
+
+<details>
+<summary><strong>Voice PE Satellite (Home Assistant Voice: Preview Edition)</strong></summary>
+
+Jarvis can act as the satellite-side client of the stock **Voice: Preview Edition** over the ESPHome Native API on TCP `6053`. Product mode is `Stock Voice PE / push-to-talk + continued conversation`: the centre button opens the first wake-free session and `continue_conversation` carries the follow-ups. The audio path is PCM16LE at 16 kHz mono in, and the same shape out in 512-sample chunks paced against the fixed 512 ms device ring buffer.
+
+```json
+{
+  "voice_pe_enabled": true,
+  "voice_pe_discovery_enabled": true,
+  "voice_pe_host": "192.168.1.50",
+  "voice_pe_port": 6053,
+  "voice_pe_room": "study",
+  "voice_pe_disable_wake_words": true,
+  "voice_pe_prefer_api_audio": true,
+  "voice_pe_preferred_input_channel": 0,
+  "voice_pe_continued_conversation": true,
+  "voice_pe_conversation_timeout_s": 300.0,
+  "voice_pe_reconnect_min_s": 1.0,
+  "voice_pe_reconnect_max_s": 30.0,
+  "voice_pe_audio_queue_ms": 300,
+  "voice_pe_led_brightness": 0.66,
+  "voice_pe_led_rgb": [0.55, 0.0, 1.0],
+  "voice_pe_button_actions": {
+    "double_press": "toggle_overlay",
+    "triple_press": "open_command_palette",
+    "long_press": "cancel_current_agent_run",
+    "easter_egg_press": "toaster_easter_egg"
+  }
+}
+```
+
+The Noise PSK lives inside `voice_pe_devices` in the same `0o600` file (`JARVIS_VOICE_PE_PSK` overrides it in-process), and only its length is ever logged. Stock firmware limits: the rotary encoder publishes no raw wheel entity (the media-player volume is authoritative), the single centre click is resolved on the device, `voice_assistant_leds` is internal and driven by the assistant events, and microphone and TTS are separate phases rather than simultaneous.
+
+Hand-rolled CLI in the existing `sys.argv` style:
+
+```
+jarvis voice-pe discover
+jarvis voice-pe pair
+jarvis voice-pe list
+jarvis voice-pe status <device>
+jarvis voice-pe set-led <device> --rgb 8c00ff --brightness 0.66
+jarvis voice-pe announce <device> "text"
+jarvis voice-pe play <device> <url>
+jarvis voice-pe stop <device>
+jarvis voice-pe forget <device>
+```
+
+`forget` removes the Jarvis-side metadata and the local secret and leaves the device itself untouched. `jarvis.integrations/voice_pe/voice_pe.spec.md` holds the full contract.
 
 </details>
 

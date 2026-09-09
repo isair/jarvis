@@ -64,6 +64,11 @@ _global_dictation_engine = None  # Dictation engine reference for history UI
 # Proactive remark service (see proactive.spec.md); created once main()
 # finishes booting component init.
 _global_proactive_service: Optional[ProactiveToasterService] = None
+# Home Assistant Voice PE manager (see
+# src/jarvis/integrations/voice_pe/voice_pe.spec.md). One manager owns the
+# asyncio loop thread and one device entry per paired satellite. None when the
+# feature is off.
+_global_voice_pe_manager = None
 # Config + DB booted by main(). Shared by the voice listener and the text-chat
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
@@ -616,8 +621,24 @@ def get_tts_engine():
 
 
 def get_dictation_engine():
-    """Get the global dictation engine (used by desktop app for history window)."""
     return _global_dictation_engine
+
+
+def get_voice_pe_manager():
+    """Voice PE manager instance, or ``None`` when the integration is off."""
+    return _global_voice_pe_manager
+
+
+def voice_pe_health() -> dict:
+    """Health snapshot for the diagnostics panel (empty when disabled)."""
+    manager = _global_voice_pe_manager
+    if manager is None:
+        return {"enabled": False, "devices": [], "metrics": {}}
+    try:
+        return manager.health()
+    except Exception as err:
+        return {"enabled": True, "devices": [], "metrics": {}, "error": str(err)}
+
 
 
 def _install_signal_handlers() -> None:
@@ -781,6 +802,7 @@ def main(smoke_test: bool = False) -> None:
     """
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener, _global_proactive_service
+    global _global_voice_pe_manager
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -801,7 +823,7 @@ def main(smoke_test: bool = False) -> None:
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
     try:
         from .config import hardware_report
-        _hw = hardware_report()
+        _hw = hardware_report(cfg)
         _hw_models = _hw.get("models") or {}
         _npu = _hw.get("npu")
         if _hw.get("kind") == "nvidia":
@@ -819,6 +841,22 @@ def main(smoke_test: bool = False) -> None:
         )
     except Exception:
         pass
+
+    # Shared-GPU budget: the chat model and Whisper are resident at the same
+    # time on one CUDA context, so print the summed demand and the free
+    # headroom the user must leave unallocated.
+    try:
+        from .utils.vram import estimate_cuda_vram_plan, format_cuda_vram_budget
+        _plan = estimate_cuda_vram_plan(
+            str(getattr(cfg, "llm_chat_model", "") or ""),
+            str(getattr(cfg, "whisper_model", "") or ""),
+            str(getattr(cfg, "whisper_compute_type", "int8") or "int8"),
+        )
+        _budget_text = format_cuda_vram_budget(_plan)
+        if _budget_text:
+            print(_budget_text, flush=True)
+    except Exception as exc:
+        debug_log(f"VRAM budget estimate unavailable: {exc}", "vram")
 
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}
@@ -1068,6 +1106,25 @@ def main(smoke_test: bool = False) -> None:
     except Exception as e:
         debug_log(f"proactive service init failed (non-fatal): {e}", "proactive")
 
+    # Voice PE satellite transport (voice_pe.spec.md). Another microphone
+    # transport on top of the same VAD/STT/agent/TTS pipeline: the local
+    # PortAudio listener above stays the primary path and is not replaced.
+    try:
+        from .integrations import voice_pe as _voice_pe
+
+        _global_voice_pe_manager = _voice_pe.start(cfg, voice_thread, tts)
+        if _global_voice_pe_manager is not None:
+            print(
+                f"🎙️ Voice PE attached: {len(_global_voice_pe_manager.devices)} device(s)",
+                flush=True,
+            )
+        else:
+            print("🎙️ Voice PE disabled", flush=True)
+    except Exception as e:
+        _global_voice_pe_manager = None
+        debug_log(f"voice_pe init failed (non-fatal): {e}", "voice")
+        print(f"  ⚠ Voice PE not available: {e}", flush=True)
+
     if smoke_test:
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
@@ -1079,6 +1136,15 @@ def main(smoke_test: bool = False) -> None:
                 dictation.stop()
             except Exception:
                 pass
+
+        if _global_voice_pe_manager is not None:
+            try:
+                from .integrations import voice_pe as _voice_pe
+
+                _voice_pe.stop()
+            except Exception:
+                pass
+            _global_voice_pe_manager = None
 
         if voice_thread is not None:
             try:
@@ -1224,6 +1290,17 @@ def main(smoke_test: bool = False) -> None:
             dictation.stop()
             debug_log("dictation engine stopped", "jarvis")
 
+        if _global_voice_pe_manager is not None:
+            debug_log("stopping voice_pe manager...", "jarvis")
+            try:
+                from .integrations import voice_pe as _voice_pe
+
+                _voice_pe.stop()
+            except Exception as _e:
+                debug_log(f"voice_pe shutdown error: {_e}", "jarvis")
+            _global_voice_pe_manager = None
+            debug_log("voice_pe manager stopped", "jarvis")
+
         if voice_thread is not None:
             debug_log("stopping voice thread...", "jarvis")
             voice_thread.stop()
@@ -1291,5 +1368,10 @@ def main(smoke_test: bool = False) -> None:
 
 if __name__ == "__main__":
     import sys as _sys
-    smoke_test = "--smoke-test" in set(_sys.argv[1:])
+    _argv = list(_sys.argv[1:])
+    if _argv and _argv[0] == "voice-pe":
+        from .integrations.voice_pe import run_cli as _voice_pe_cli
+
+        raise SystemExit(_voice_pe_cli(_argv[1:]))
+    smoke_test = "--smoke-test" in set(_argv)
     main(smoke_test=smoke_test)

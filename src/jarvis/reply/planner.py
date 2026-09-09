@@ -462,7 +462,7 @@ def plan_query(
     effective_timeout = float(
         timeout_sec
         if timeout_sec is not None
-        else getattr(cfg, "planner_timeout_sec", 3.0)
+        else getattr(cfg, "planner_timeout_sec", 10.0)
     )
 
     system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
@@ -745,7 +745,7 @@ def resolve_next_tool_call(
     effective_timeout = float(
         timeout_sec
         if timeout_sec is not None
-        else getattr(cfg, "planner_timeout_sec", 3.0)
+        else getattr(cfg, "planner_timeout_sec", 10.0)
     )
 
     user_content = (

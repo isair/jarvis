@@ -367,7 +367,7 @@ def evaluate_turn(
         return EvaluatorResult(terminal=True, reason="evaluator_failed_open")
 
     try:
-        timeout_sec = float(getattr(cfg, "llm_digest_timeout_sec", 8.0))
+        timeout_sec = float(getattr(cfg, "llm_digest_timeout_sec", 12.0))
     except (TypeError, ValueError):
         timeout_sec = 8.0
     thinking = bool(getattr(cfg, "llm_thinking_enabled", False))

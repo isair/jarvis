@@ -80,6 +80,19 @@ try:
 except Exception as e:
     print(f"Warning: Could not collect Qt plugins: {e}")
 
+# Hunspell dictionaries for the offline transcript post-processor. Each
+# dictionary directory is bundled under its package-relative path so
+# importlib.resources and the frozen fallback resolve the same layout.
+_hunspell_root = src_path / 'jarvis' / 'resources' / 'hunspell'
+if _hunspell_root.exists():
+    for _dict_dir in sorted(p for p in _hunspell_root.iterdir() if p.is_dir()):
+        datas.append(
+            (str(_dict_dir), f'jarvis/resources/hunspell/{_dict_dir.name}')
+        )
+    if (_hunspell_root / 'SOURCES.md').exists():
+        datas.append((str(_hunspell_root / 'SOURCES.md'), 'jarvis/resources/hunspell'))
+    print(f"Bundling Hunspell dictionaries from {_hunspell_root}")
+
 # Note: Qt WebEngine resources are handled by PyInstaller's hook-PyQt6.QtWebEngineWidgets.py
 # Manual collection can conflict with the hook and cause crashes
 
@@ -92,6 +105,27 @@ hiddenimports = [
     'jarvis.debug',
     'jarvis.llm',
     'jarvis.main',
+    # Integrations (Home Assistant Voice: Preview Edition satellite)
+    'jarvis.integrations',
+    'jarvis.integrations.voice_pe',
+    'jarvis.integrations.voice_pe.models',
+    'jarvis.integrations.voice_pe.config',
+    'jarvis.integrations.voice_pe.discovery',
+    'jarvis.integrations.voice_pe.provisioning',
+    'jarvis.integrations.voice_pe.capabilities',
+    'jarvis.integrations.voice_pe.entities',
+    'jarvis.integrations.voice_pe.voice_transport',
+    'jarvis.integrations.voice_pe.tts_stream',
+    'jarvis.integrations.voice_pe.media',
+    'jarvis.integrations.voice_pe.events',
+    'jarvis.integrations.voice_pe.led',
+    'jarvis.integrations.voice_pe.device',
+    'jarvis.integrations.voice_pe.manager',
+    'jarvis.integrations.voice_pe.cli',
+    'aioesphomeapi',
+    'zeroconf',
+    'zeroconf.asyncio',
+    'bleak',
     # Desktop app modules
     'desktop_app',
     'desktop_app.app',
@@ -111,6 +145,7 @@ hiddenimports = [
     'jarvis.listening.wake_detection',
     'jarvis.listening.transcript_buffer',
     'jarvis.listening.intent_judge',
+    'jarvis.listening.transcript_postprocessor',
     # Memory modules
     'jarvis.memory',
     'jarvis.memory.conversation',

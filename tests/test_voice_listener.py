@@ -697,15 +697,22 @@ class TestCpuOptimisations:
         assert call_kwargs["without_timestamps"] is True
         assert call_kwargs["condition_on_previous_text"] is False
 
-    def test_gpu_does_not_get_cpu_optimisations(self):
-        """CUDA mode does not apply CPU-specific transcribe optimisations."""
+    def test_gpu_uses_the_same_decode_contract_as_cpu(self):
+        """The per-clip decode settings are identical on CUDA.
+
+        Endpointing is the outer VAD's job on both devices, so the decoder gets
+        the same trimmed, self-contained clip and the same flags regardless of
+        where it runs.
+        """
         listener, mock_model = self._create_listener_for_transcribe_test("cuda")
         listener._finalize_utterance()
 
         mock_model.transcribe.assert_called_once()
         call_kwargs = mock_model.transcribe.call_args[1]
-        assert call_kwargs["without_timestamps"] is False
-        assert call_kwargs["condition_on_previous_text"] is True
+        assert call_kwargs["without_timestamps"] is True
+        assert call_kwargs["condition_on_previous_text"] is False
+        assert call_kwargs["vad_filter"] is False
+        assert call_kwargs["suppress_nospeech_text"] is True
 
 
 class TestRepetitiveHallucinationDetectionExtended:

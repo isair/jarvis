@@ -13,7 +13,8 @@ import os
 import re
 import subprocess
 import sys
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from ..debug import debug_log
 
@@ -342,3 +343,250 @@ def required_vram_mb(model_id: str) -> Optional[int]:
         if mid == model_id:
             return vram_mb
     return None
+
+
+# ---------------------------------------------------------------------------
+# Shared-GPU VRAM budget: chat LLM + Whisper resident on one CUDA device
+# ---------------------------------------------------------------------------
+# The chat model and Whisper share a single CUDA context pool, so the useful
+# figure is not each model's own requirement but the *sum* that has to fit.
+# These helpers build that sum from real numbers where possible: the on-disk
+# GGUF size for the LLM and the shipped CTranslate2 weight size for Whisper.
+
+#: CTranslate2 ``int8`` weight sizes (MB) — the ``model.bin`` of each shipped
+#: faster-whisper snapshot. ``float16`` / ``float32`` are scaled from these.
+_WHISPER_INT8_WEIGHTS_MB: Dict[str, int] = {
+    "tiny": 75,
+    "base": 143,
+    "small": 243,
+    "medium": 397,
+    "large-v3": 631,
+    "large-v3-turbo": 484,
+}
+
+#: Weight-size multipliers relative to ``int8`` (8-bit + fp16 scales).
+_WEIGHTS_FACTOR: Dict[str, float] = {
+    "int8": 1.0,
+    "int8_float16": 1.1,
+    "float16": 1.9,
+    "bfloat16": 1.9,
+    "float32": 3.8,
+}
+
+#: Static per-process overhead of the resident runtime (CUDA context plus
+#: decoder KV / activation buffers). Kept separate from the weights so the
+#: arithmetic stays traceable.
+_WHISPER_RUNTIME_MB = 128
+_LLM_RUNTIME_MB = 256
+
+#: KV-cache + activation slack on top of the on-disk GGUF weights.
+_LLM_KV_SLACK = 1.10
+
+#: Extra slack kept on top of the summed requirement.
+_BUDGET_MARGIN_MB = 256
+
+
+def _fmt_mb(mb: Optional[int]) -> str:
+    """Human-readable MB/GB string (``None`` → ``?``)."""
+    if mb is None:
+        return "?"
+    if mb >= 1024:
+        return f"{mb / 1024:.1f} GB"
+    return f"{mb} MB"
+
+
+def _weights_factor(compute_type: str) -> float:
+    return _WEIGHTS_FACTOR.get(str(compute_type or "int8").strip().lower(), 1.0)
+
+
+def whisper_weights_mb(model_id: str, compute_type: str = "int8") -> Optional[int]:
+    """Weight footprint of a Whisper model in MB for ``compute_type``."""
+    key = str(model_id or "").strip()
+    if not key:
+        return None
+    base = _WHISPER_INT8_WEIGHTS_MB.get(key)
+    if base is None:
+        # Strip a trailing language tag: "small.en" / "medium.en" share the
+        # multilingual checkpoint size.
+        base = _WHISPER_INT8_WEIGHTS_MB.get(key.split(".")[0])
+    if base is None:
+        return None
+    return int(round(base * _weights_factor(compute_type)))
+
+
+def _chat_weights_mb(chat_model: str) -> tuple[Optional[int], bool]:
+    """Return ``(weights_mb, is_catalog_total)`` for the configured chat model.
+
+    A filesystem path (LM Studio / llama.cpp GGUF) is measured directly off
+    disk, so the figure is exact. A pull-style name is resolved through
+    ``SUPPORTED_CHAT_MODELS``, whose value is already a whole-model budget —
+    the ``is_catalog_total`` flag stops us from double-counting the runtime.
+    """
+    name = str(chat_model or "").strip()
+    if not name:
+        return None, False
+    try:
+        path = Path(name)
+        if path.suffix.lower() in (".gguf", ".bin") and path.exists():
+            size = path.stat().st_size
+            if size:
+                return max(1, size // (1024 * 1024)), False
+    except OSError:
+        pass
+    table_mb = required_vram_mb(name)
+    if table_mb is not None:
+        return table_mb, True
+    return None, False
+
+
+def detect_used_vram_mb() -> Optional[int]:
+    """Currently occupied VRAM in MB (``nvidia-smi``), or ``None``.
+
+    DXGI's adapter descriptor exposes only the total, so the measured "used"
+    value comes from ``nvidia-smi`` when it is on ``PATH``. Fail-open.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+        if not lines:
+            return None
+        return int(lines[0])
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError):
+        return None
+
+
+def estimate_cuda_vram_plan(
+    chat_model: str,
+    whisper_model: str,
+    compute_type: str = "int8",
+) -> Dict[str, Any]:
+    """Sum the resident VRAM demand of the chat LLM and Whisper model.
+
+    Returns a dict with, in MB: the detected ``total_mb``, each model split
+    into weights plus runtime, the summed ``required_mb``, the ``keep_free_mb``
+    figure (requirement + margin) to leave unallocated, and the resulting
+    ``headroom_mb`` against ``total_mb`` plus a ``fits`` flag. Unknown inputs
+    stay ``None`` so the caller can print whatever *is* known.
+    """
+    plan: Dict[str, Any] = {
+        "total_mb": detect_total_vram_mb(),
+        "used_mb": detect_used_vram_mb(),
+        "llm_weights_mb": None,
+        "llm_runtime_mb": 0,
+        "llm_total_mb": 0,
+        "whisper_weights_mb": None,
+        "whisper_runtime_mb": 0,
+        "whisper_total_mb": 0,
+        "required_mb": 0,
+        "margin_mb": _BUDGET_MARGIN_MB,
+        "keep_free_mb": 0,
+        "headroom_mb": None,
+        "fits": None,
+        "notes": [],
+    }
+
+    weights, from_catalog = _chat_weights_mb(chat_model)
+    if weights is not None:
+        if from_catalog:
+            # Catalogue value is already a whole-model budget.
+            plan["llm_weights_mb"] = weights
+            plan["llm_total_mb"] = weights
+            plan["notes"].append("chat figure from model catalogue (incl. runtime)")
+        else:
+            runtime = _LLM_RUNTIME_MB + int(
+                round(weights * (_LLM_KV_SLACK - 1.0))
+            )
+            plan["llm_weights_mb"] = weights
+            plan["llm_runtime_mb"] = runtime
+            llm_total = weights + runtime
+            plan["llm_total_mb"] = llm_total
+            plan["notes"].append(
+                f"chat weights measured from GGUF file; +{runtime} MB KV/runtime"
+            )
+
+    w_weights = whisper_weights_mb(whisper_model, compute_type)
+    if w_weights is not None:
+        plan["whisper_weights_mb"] = w_weights
+        plan["whisper_runtime_mb"] = _WHISPER_RUNTIME_MB
+        plan["whisper_total_mb"] = w_weights + _WHISPER_RUNTIME_MB
+        plan["notes"].append(
+            f"whisper {compute_type} weights + {_WHISPER_RUNTIME_MB} MB CT2 runtime"
+        )
+
+    required = int(plan["llm_total_mb"]) + int(plan["whisper_total_mb"])
+    plan["required_mb"] = required
+    if required:
+        plan["keep_free_mb"] = required + _BUDGET_MARGIN_MB
+
+    total = plan["total_mb"]
+    if total and required:
+        plan["headroom_mb"] = int(total) - required
+        plan["fits"] = bool((total - required) >= 0)
+    return plan
+
+
+def format_cuda_vram_budget(plan: Dict[str, Any]) -> str:
+    """Render :func:`estimate_cuda_vram_plan` output as indented log lines."""
+    if not plan:
+        return ""
+
+    lines: list[str] = []
+    total = plan.get("total_mb")
+    used = plan.get("used_mb")
+    if total:
+        suffix = f" · nvidia-smi used: {_fmt_mb(int(used))}" if used else ""
+        lines.append(f"     💾 GPU VRAM total: {_fmt_mb(int(total))}{suffix}")
+
+    llm_weights = plan.get("llm_weights_mb")
+    if llm_weights:
+        llm_runtime = int(plan.get("llm_runtime_mb") or 0)
+        detail = f"{_fmt_mb(int(llm_weights))} weights"
+        if llm_runtime:
+            detail += f" + {_fmt_mb(llm_runtime)} KV/runtime (LLM)"
+        lines.append(f"     🧠 Chat model resident: {detail} = "
+                     f"{_fmt_mb(int(plan.get('llm_total_mb') or 0))}")
+
+    w_weights = plan.get("whisper_weights_mb")
+    if w_weights:
+        lines.append(
+            f"     🎤 Whisper resident: {_fmt_mb(int(w_weights))} weights + "
+            f"{_fmt_mb(int(plan.get('whisper_runtime_mb') or 0))} CT2 runtime = "
+            f"{_fmt_mb(int(plan.get('whisper_total_mb') or 0))}"
+        )
+
+    required = int(plan.get("required_mb") or 0)
+    keep_free = int(plan.get("keep_free_mb") or 0)
+    if required:
+        lines.append(
+            f"     📐 Combined CUDA demand: {_fmt_mb(required)} "
+            f"(keep at least {_fmt_mb(keep_free)} unallocated)"
+        )
+
+    headroom = plan.get("headroom_mb")
+    if headroom is not None:
+        fits = plan.get("fits")
+        marker = "✅" if fits else "⚠️"
+        if fits:
+            lines.append(
+                f"     {marker} Both models fit on this GPU — "
+                f"{_fmt_mb(int(headroom))} spare after both are resident"
+            )
+        else:
+            lines.append(
+                f"     {marker} Combined demand is {_fmt_mb(required)} but only "
+                f"{_fmt_mb(int(total))} is installed — expect a CUDA fallback to "
+                f"CPU or an out-of-memory load; use a smaller chat quant or "
+                f"whisper model"
+            )
+
+    note = "; ".join(str(n) for n in plan.get("notes") or [])
+    if note:
+        lines.append(f"     ℹ️  {note}")
+    return "\n".join(lines)
+
