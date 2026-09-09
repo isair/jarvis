@@ -12,6 +12,7 @@ def __getattr__(name: str):
     """Lazily import public names on first access."""
     _imports = {
         "VoiceListener": ".listener",
+        "LowConfidenceEvent": ".listener",
         "EchoDetector": ".echo_detection",
         "StateManager": ".state_manager",
         "ListeningState": ".state_manager",
@@ -33,6 +34,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "VoiceListener",
+    "LowConfidenceEvent",
     "EchoDetector",
     "StateManager",
     "ListeningState",
