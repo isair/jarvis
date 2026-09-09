@@ -1,0 +1,64 @@
+{
+	"cold": {
+		"label": "cold",
+		"ready_seconds": 229.56,
+		"stdout": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache-verification\\cold.out.log",
+		"stderr": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache-verification\\cold.err.log"
+	},
+	"warm": {
+		"label": "warm",
+		"ready_seconds": 12.54,
+		"stdout": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache-verification\\warm.out.log",
+		"stderr": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache-verification\\warm.err.log"
+	},
+	"profiles": [
+		{
+			"event": "compiled_model_ready",
+			"profile": "embedding-b1-s2048",
+			"cache_status": "cold",
+			"compile_or_import_ms": 100983.0978000009,
+			"cache_path": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\embedding-b1-s2048-3f05abba491cf5c8-props-3da344534be9",
+			"execution_devices": ["NPU"]
+		},
+		{
+			"event": "compiled_model_ready",
+			"profile": "reranker-b1-s512",
+			"cache_status": "cold",
+			"compile_or_import_ms": 48231.43130000062,
+			"cache_path": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s512-1b5073441469f32d-props-3da344534be9",
+			"execution_devices": ["NPU"]
+		},
+		{
+			"event": "compiled_model_ready",
+			"profile": "reranker-b1-s1024",
+			"cache_status": "cold",
+			"compile_or_import_ms": 66923.10179999913,
+			"cache_path": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s1024-1b5073441469f32d-props-3da344534be9",
+			"execution_devices": ["NPU"]
+		},
+		{
+			"event": "compiled_model_ready",
+			"profile": "embedding-b1-s2048",
+			"cache_status": "warm-inferred",
+			"compile_or_import_ms": 637.9527999997663,
+			"cache_path": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\embedding-b1-s2048-3f05abba491cf5c8-props-3da344534be9",
+			"execution_devices": ["NPU"]
+		},
+		{
+			"event": "compiled_model_ready",
+			"profile": "reranker-b1-s512",
+			"cache_status": "warm-inferred",
+			"compile_or_import_ms": 916.3822000009532,
+			"cache_path": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s512-1b5073441469f32d-props-3da344534be9",
+			"execution_devices": ["NPU"]
+		},
+		{
+			"event": "compiled_model_ready",
+			"profile": "reranker-b1-s1024",
+			"cache_status": "warm-inferred",
+			"compile_or_import_ms": 1035.485599999447,
+			"cache_path": "D:\\_SATIN_AI_2\\Kelvin-Clyne\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s1024-1b5073441469f32d-props-3da344534be9",
+			"execution_devices": ["NPU"]
+		}
+	]
+}

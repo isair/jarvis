@@ -1,0 +1,3 @@
+[setupvars] OpenVINO environment initialized
+[setupvars] OpenVINO Python environment initialized
+Native OpenVINO NPU service listening on http://127.0.0.1:8010

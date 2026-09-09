@@ -1,0 +1,221 @@
+<?xml version="1.0"?>
+<net name="detokenizer" version="11">
+	<layers>
+		<layer id="0" name="Parameter_63921" type="Parameter" version="opset1">
+			<data shape="?,?" element_type="i64" />
+			<output>
+				<port id="0" precision="I64" names="Parameter_63921">
+					<dim>-1</dim>
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="1" name="Convert_64120" type="Convert" version="opset1">
+			<data destination_type="i32" />
+			<input>
+				<port id="0" precision="I64">
+					<dim>-1</dim>
+					<dim>-1</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1" precision="I32">
+					<dim>-1</dim>
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="2" name="Constant_63923" type="Const" version="opset1">
+			<data element_type="i32" shape="151669" offset="0" size="606676" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>151669</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="3" name="Constant_63925" type="Const" version="opset1">
+			<data element_type="i32" shape="151669" offset="606676" size="606676" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>151669</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="4" name="Constant_63927" type="Const" version="opset1">
+			<data element_type="u8" shape="976309" offset="1213352" size="976309" />
+			<output>
+				<port id="0" precision="U8">
+					<dim>976309</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="5" name="Slice_63932" type="Const" version="opset1">
+			<data element_type="i32" shape="14" offset="2189661" size="56" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>14</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="6" name="VocabDecoder_63934" type="VocabDecoder" version="extension">
+			<data skip_tokens="" />
+			<input>
+				<port id="0" precision="I32">
+					<dim>-1</dim>
+					<dim>-1</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>151669</dim>
+				</port>
+				<port id="2" precision="I32">
+					<dim>151669</dim>
+				</port>
+				<port id="3" precision="U8">
+					<dim>976309</dim>
+				</port>
+				<port id="4" precision="I32">
+					<dim>14</dim>
+				</port>
+			</input>
+			<output>
+				<port id="5" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="6" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="7" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="8" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="9" precision="U8">
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="7" name="FuzeRagged_63935" type="FuzeRagged" version="extension">
+			<input>
+				<port id="0" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="2" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="3" precision="I32">
+					<dim>-1</dim>
+				</port>
+			</input>
+			<output>
+				<port id="4" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="5" precision="I32">
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="8" name="UTF8Validate_63936" type="UTF8Validate" version="extension">
+			<data replace_mode="true" />
+			<input>
+				<port id="0" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="2" precision="U8">
+					<dim>-1</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="4" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="5" precision="U8">
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="9" name="StringTensorPack_63937" type="StringTensorPack" version="opset15">
+			<input>
+				<port id="0" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>-1</dim>
+				</port>
+				<port id="2" precision="U8">
+					<dim>-1</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="STRING" names="Result_63938,string_output">
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="10" name="Result_63938" type="Result" version="opset1" output_names="Result_63938,string_output">
+			<input>
+				<port id="0" precision="STRING">
+					<dim>-1</dim>
+				</port>
+			</input>
+		</layer>
+	</layers>
+	<edges>
+		<edge from-layer="0" from-port="0" to-layer="1" to-port="0" />
+		<edge from-layer="1" from-port="1" to-layer="6" to-port="0" />
+		<edge from-layer="2" from-port="0" to-layer="6" to-port="1" />
+		<edge from-layer="3" from-port="0" to-layer="6" to-port="2" />
+		<edge from-layer="4" from-port="0" to-layer="6" to-port="3" />
+		<edge from-layer="5" from-port="0" to-layer="6" to-port="4" />
+		<edge from-layer="6" from-port="7" to-layer="7" to-port="2" />
+		<edge from-layer="6" from-port="9" to-layer="8" to-port="2" />
+		<edge from-layer="6" from-port="8" to-layer="7" to-port="3" />
+		<edge from-layer="6" from-port="6" to-layer="7" to-port="1" />
+		<edge from-layer="6" from-port="5" to-layer="7" to-port="0" />
+		<edge from-layer="7" from-port="4" to-layer="8" to-port="0" />
+		<edge from-layer="7" from-port="5" to-layer="8" to-port="1" />
+		<edge from-layer="8" from-port="3" to-layer="9" to-port="0" />
+		<edge from-layer="8" from-port="4" to-layer="9" to-port="1" />
+		<edge from-layer="8" from-port="5" to-layer="9" to-port="2" />
+		<edge from-layer="9" from-port="3" to-layer="10" to-port="0" />
+	</edges>
+	<rt_info>
+		<add_attention_mask value="True" />
+		<add_prefix_space />
+		<add_special_tokens value="True" />
+		<chat_template value="{%- if tools %}&#10;    {{- '&lt;|im_start|>system\n' }}&#10;    {%- if messages[0].role == 'system' %}&#10;        {{- messages[0].content + '\n\n' }}&#10;    {%- endif %}&#10;    {{- &quot;# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within &lt;tools>&lt;/tools> XML tags:\n&lt;tools>&quot; }}&#10;    {%- for tool in tools %}&#10;        {{- &quot;\n&quot; }}&#10;        {{- tool | tojson }}&#10;    {%- endfor %}&#10;    {{- &quot;\n&lt;/tools>\n\nFor each function call, return a json object with function name and arguments within &lt;tool_call>&lt;/tool_call> XML tags:\n&lt;tool_call>\n{\&quot;name\&quot;: &lt;function-name>, \&quot;arguments\&quot;: &lt;args-json-object>}\n&lt;/tool_call>&lt;|im_end|>\n&quot; }}&#10;{%- else %}&#10;    {%- if messages[0].role == 'system' %}&#10;        {{- '&lt;|im_start|>system\n' + messages[0].content + '&lt;|im_end|>\n' }}&#10;    {%- endif %}&#10;{%- endif %}&#10;{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}&#10;{%- for message in messages[::-1] %}&#10;    {%- set index = (messages|length - 1) - loop.index0 %}&#10;    {%- if ns.multi_step_tool and message.role == &quot;user&quot; and not(message.content.startswith('&lt;tool_response>') and message.content.endswith('&lt;/tool_response>')) %}&#10;        {%- set ns.multi_step_tool = false %}&#10;        {%- set ns.last_query_index = index %}&#10;    {%- endif %}&#10;{%- endfor %}&#10;{%- for message in messages %}&#10;    {%- if (message.role == &quot;user&quot;) or (message.role == &quot;system&quot; and not loop.first) %}&#10;        {{- '&lt;|im_start|>' + message.role + '\n' + message.content + '&lt;|im_end|>' + '\n' }}&#10;    {%- elif message.role == &quot;assistant&quot; %}&#10;        {%- set content = message.content %}&#10;        {%- set reasoning_content = '' %}&#10;        {%- if message.reasoning_content is defined and message.reasoning_content is not none %}&#10;            {%- set reasoning_content = message.reasoning_content %}&#10;        {%- else %}&#10;            {%- if '&lt;/think>' in message.content %}&#10;                {%- set content = message.content.split('&lt;/think>')[-1].lstrip('\n') %}&#10;                {%- set reasoning_content = message.content.split('&lt;/think>')[0].rstrip('\n').split('&lt;think>')[-1].lstrip('\n') %}&#10;            {%- endif %}&#10;        {%- endif %}&#10;        {%- if loop.index0 > ns.last_query_index %}&#10;            {%- if loop.last or (not loop.last and reasoning_content) %}&#10;                {{- '&lt;|im_start|>' + message.role + '\n&lt;think>\n' + reasoning_content.strip('\n') + '\n&lt;/think>\n\n' + content.lstrip('\n') }}&#10;            {%- else %}&#10;                {{- '&lt;|im_start|>' + message.role + '\n' + content }}&#10;            {%- endif %}&#10;        {%- else %}&#10;            {{- '&lt;|im_start|>' + message.role + '\n' + content }}&#10;        {%- endif %}&#10;        {%- if message.tool_calls %}&#10;            {%- for tool_call in message.tool_calls %}&#10;                {%- if (loop.first and content) or (not loop.first) %}&#10;                    {{- '\n' }}&#10;                {%- endif %}&#10;                {%- if tool_call.function %}&#10;                    {%- set tool_call = tool_call.function %}&#10;                {%- endif %}&#10;                {{- '&lt;tool_call>\n{&quot;name&quot;: &quot;' }}&#10;                {{- tool_call.name }}&#10;                {{- '&quot;, &quot;arguments&quot;: ' }}&#10;                {%- if tool_call.arguments is string %}&#10;                    {{- tool_call.arguments }}&#10;                {%- else %}&#10;                    {{- tool_call.arguments | tojson }}&#10;                {%- endif %}&#10;                {{- '}\n&lt;/tool_call>' }}&#10;            {%- endfor %}&#10;        {%- endif %}&#10;        {{- '&lt;|im_end|>\n' }}&#10;    {%- elif message.role == &quot;tool&quot; %}&#10;        {%- if loop.first or (messages[loop.index0 - 1].role != &quot;tool&quot;) %}&#10;            {{- '&lt;|im_start|>user' }}&#10;        {%- endif %}&#10;        {{- '\n&lt;tool_response>\n' }}&#10;        {{- message.content }}&#10;        {{- '\n&lt;/tool_response>' }}&#10;        {%- if loop.last or (messages[loop.index0 + 1].role != &quot;tool&quot;) %}&#10;            {{- '&lt;|im_end|>\n' }}&#10;        {%- endif %}&#10;    {%- endif %}&#10;{%- endfor %}&#10;{%- if add_generation_prompt %}&#10;    {{- '&lt;|im_start|>assistant\n' }}&#10;    {%- if enable_thinking is defined and enable_thinking is false %}&#10;        {{- '&lt;think>\n\n&lt;/think>\n\n' }}&#10;    {%- endif %}&#10;{%- endif %}" />
+		<clean_up_tokenization_spaces />
+		<detokenizer_input_type value="i64" />
+		<eos_token_id value="151645" />
+		<handle_special_tokens_with_re />
+		<max_length />
+		<number_of_inputs value="1" />
+		<openvino_tokenizers_version value="2026.0.0.0-632-47cea02a2d4" />
+		<openvino_version value="2026.0.0-20961-f08e8b36350-releases/2026/0" />
+		<original_post_processor_template value="{&quot;type&quot;: &quot;Sequence&quot;, &quot;processors&quot;: [{&quot;type&quot;: &quot;ByteLevel&quot;, &quot;add_prefix_space&quot;: false, &quot;trim_offsets&quot;: false, &quot;use_regex&quot;: false}, {&quot;type&quot;: &quot;TemplateProcessing&quot;, &quot;single&quot;: [{&quot;Sequence&quot;: {&quot;id&quot;: &quot;A&quot;, &quot;type_id&quot;: 0}}, {&quot;SpecialToken&quot;: {&quot;id&quot;: &quot;&lt;|endoftext|>&quot;, &quot;type_id&quot;: 0}}], &quot;pair&quot;: [{&quot;Sequence&quot;: {&quot;id&quot;: &quot;A&quot;, &quot;type_id&quot;: 0}}, {&quot;Sequence&quot;: {&quot;id&quot;: &quot;B&quot;, &quot;type_id&quot;: 0}}, {&quot;SpecialToken&quot;: {&quot;id&quot;: &quot;&lt;|endoftext|>&quot;, &quot;type_id&quot;: 0}}], &quot;special_tokens&quot;: {&quot;&lt;|endoftext|>&quot;: {&quot;id&quot;: &quot;&lt;|endoftext|>&quot;, &quot;ids&quot;: [151643], &quot;tokens&quot;: [&quot;&lt;|endoftext|>&quot;]}}}]}" />
+		<original_tokenizer_class value="&lt;class 'transformers.models.qwen2.tokenization_qwen2_fast.Qwen2TokenizerFast'>" />
+		<pad_token_id value="151643" />
+		<processed_post_processor_template value="{&quot;single&quot;: {&quot;ids&quot;: [-1, 151643], &quot;type_ids&quot;: [0, 0]}, &quot;pair&quot;: {&quot;ids&quot;: [-1, -2, 151643], &quot;type_ids&quot;: [0, 0, 0]}}" />
+		<sentencepiece_version value="0.2.1" />
+		<skip_special_tokens value="True" />
+		<streaming_detokenizer value="False" />
+		<tiktoken_version value="0.12.0" />
+		<tokenizer_output_type value="i64" />
+		<tokenizers_version value="0.22.2" />
+		<transformers_version value="4.57.6" />
+		<use_max_padding value="False" />
+		<use_sentencepiece_backend value="False" />
+		<utf8_replace_mode value="replace" />
+		<with_detokenizer value="True" />
+	</rt_info>
+</net>

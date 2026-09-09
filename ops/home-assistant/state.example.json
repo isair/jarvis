@@ -1,0 +1,18 @@
+{
+  "vm_name": "TalkieToaster-HA",
+  "vm_uuid": "1a2b3c4d-0000-4000-8000-000000000001",
+  "haos_version": "18.2",
+  "asset_url": "https://github.com/home-assistant/operating-system/releases/download/18.2/haos_ova-18.2.vdi.zip",
+  "asset_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "bridge_adapter": "Ethernet",
+  "guest_ip": "192.168.1.50",
+  "ha_url": "http://homeassistant.local:8123",
+  "phase": "onboarding-pending",
+  "checkpoints": {
+    "owner_account": "pending",
+    "long_lived_token": "pending",
+    "hacs": "pending",
+    "alexa_media_player": "pending"
+  },
+  "last_run_utc": "2026-09-09T06:00:00Z"
+}

@@ -46,6 +46,14 @@ from .tools.registry import initialize_mcp_tools
 from .debug import debug_log
 from .listening.listener import VoiceListener
 from .utils.location import get_location_context, is_location_available
+from .system_prompt import build_system_prompt
+from .proactive import (
+    ProactiveToasterService,
+    make_chat_callable,
+    resolve_service_settings,
+    emit_remark,
+    run_periodic_checks,
+)
 
 # Global instances for coordination between modules
 _global_dialogue_memory: Optional[DialogueMemory] = None
@@ -53,6 +61,9 @@ _global_stop_requested: bool = False
 _warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
+# Proactive remark service (see proactive.spec.md); created once main()
+# finishes booting component init.
+_global_proactive_service: Optional[ProactiveToasterService] = None
 # Config + DB booted by main(). Shared by the voice listener and the text-chat
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
@@ -412,6 +423,15 @@ def submit_text_query(
             from .utils.redact import redact
             display_query = redact(text)
             _notify_chat("start", display_query, callbacks=callbacks, use_ipc=use_ipc)
+            # Proactive wiring: any arriving turn answers the pending
+            # unsolicited remark; direct commands additionally fold the
+            # service into a cooldown window (proactive.spec.md).
+            if _global_proactive_service is not None:
+                try:
+                    _global_proactive_service.mark_user_response()
+                    _global_proactive_service.apply_directive(text)
+                except Exception:
+                    pass
             from .reply.engine import run_reply_engine
             reply = run_reply_engine(
                 db=db,
@@ -426,6 +446,19 @@ def submit_text_query(
                 debug_log("chat query cancelled, dropping reply", "chat")
                 reply = None
             _notify_chat("complete", reply, callbacks=callbacks, use_ipc=use_ipc)
+            # Proactive service feed: one completed tool action per turn
+            # (proactive.spec.md). Text chat never speaks its remark aloud —
+            # the reply above is the audio output for this turn — so it only
+            # lands in the debug log.
+            if _global_proactive_service is not None and reply is not None:
+                try:
+                    _global_proactive_service.handle_event({
+                        "type": "tool.completed",
+                        "timestamp": time.time(),
+                        "context": {"tool": "chat", "success": True},
+                    })
+                except Exception as e:
+                    debug_log(f"proactive chat-feed error (non-fatal): {e}", "proactive")
         except Exception as exc:
             debug_log(f"chat query worker error: {exc}", "chat")
             try:
@@ -747,7 +780,7 @@ def main(smoke_test: bool = False) -> None:
             Used by CI smoke tests to verify the build is not broken.
     """
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
-    global _warm_profile_graph_listener
+    global _warm_profile_graph_listener, _global_proactive_service
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -766,6 +799,26 @@ def main(smoke_test: bool = False) -> None:
     print("✓ Daemon started", flush=True)
     print(f"🧠 Using chat model: {cfg.llm_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
+    try:
+        from .config import hardware_report
+        _hw = hardware_report()
+        _hw_models = _hw.get("models") or {}
+        _npu = _hw.get("npu")
+        if _hw.get("kind") == "nvidia":
+            _hw_label = "NVIDIA CUDA"
+        elif _hw.get("kind") == "intel":
+            _hw_label = "Intel Arc/NPU (OpenVINO)"
+        else:
+            _hw_label = "CPU"
+        if _npu:
+            _hw_label += f" + NPU {_npu}"
+        print(
+            f"🖥  Compute: {_hw_label} · chat={_hw_models.get('chat')} "
+            f"whisper={_hw_models.get('whisper')} device={_hw_models.get('device')}",
+            flush=True,
+        )
+    except Exception:
+        pass
 
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}
@@ -991,6 +1044,30 @@ def main(smoke_test: bool = False) -> None:
     else:
         print("🎙️ Dictation disabled", flush=True)
 
+    # Proactive toaster service (proactive.spec.md): policy-gated unsolicited
+    # remarks in the configured interruption mode. Starts with the
+    # app.startup stimulus so the persona introduces itself once per boot.
+    try:
+        _svc_settings = resolve_service_settings(cfg)
+        _global_proactive_service = ProactiveToasterService(
+            make_chat_callable(cfg),
+            mode=_svc_settings["mode"],
+            min_gap_sec=_svc_settings["min_gap_sec"],
+            hour_limit=_svc_settings["hour_limit"],
+            system_prompt=build_system_prompt(cfg.assistant_display_name, cfg.persona_lines),
+        )
+        _startup_remark = _global_proactive_service.handle_event({
+            "type": "app.startup",
+            "timestamp": time.time(),
+            "context": {"model": cfg.llm_chat_model, "whisper_model": cfg.whisper_model},
+        })
+        if _startup_remark:
+            from .proactive import update_face
+            update_face("success", label="Startup")
+        emit_remark(_startup_remark, tts)
+    except Exception as e:
+        debug_log(f"proactive service init failed (non-fatal): {e}", "proactive")
+
     if smoke_test:
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
@@ -1036,12 +1113,16 @@ def main(smoke_test: bool = False) -> None:
         _global_dialogue_memory = None
         _global_tts_engine = None
         _global_dictation_engine = None
+        _global_proactive_service = None
 
         return
 
     # Periodic diary update checking
     last_diary_check = time.time()
     diary_check_interval = 60.0
+    # Proactive environment sweep (inactivity, day windows, sensors).
+    last_proactive_check = 0.0
+    proactive_check_interval = 10.0
 
     # Start stdin monitor thread.
     # Two jobs:
@@ -1108,6 +1189,22 @@ def main(smoke_test: bool = False) -> None:
             if now - last_diary_check >= diary_check_interval:
                 _check_and_update_diary(db, cfg, verbose=False)
                 last_diary_check = now
+
+            # Proactive service sampling (proactive.spec.md). Cheap probes on
+            # the 1 s tick; the per-remark gap inside the service keeps the
+            # firehose rate sane when several probes co-fire.
+            if _global_proactive_service is not None and now - last_proactive_check >= proactive_check_interval:
+                try:
+                    for _remark in run_periodic_checks(
+                        _global_proactive_service,
+                        dialogue_memory=_global_dialogue_memory,
+                        llm_base_url=cfg.llm_base_url,
+                        tts=tts,
+                    ):
+                        emit_remark(_remark, tts)
+                except Exception as e:
+                    debug_log(f"proactive tick error (non-fatal): {e}", "proactive")
+                last_proactive_check = now
 
         # Keep voice thread alive (unless stop requested)
         if voice_thread is not None:

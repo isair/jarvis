@@ -1,0 +1,8 @@
+[setupvars] OpenVINO environment initialized
+[setupvars] OpenVINO Python environment initialized
+Native OpenVINO NPU service listening on http://127.0.0.1:8010
+{"event": "native_retrieval_initialization_started", "service": "native-npu-retrieval", "embedding_model": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\models\\Qwen3-Embedding-0.6B-int4-cw-ov\\1", "reranker_model": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\models\\Qwen3-Reranker-0.6B-int8-ov\\1", "device": "NPU"}
+{"event": "compiled_model_ready", "profile": "embedding-b1-s2048", "cache_status": "warm-inferred", "compile_or_import_ms": 385.29510000080336, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\embedding-b1-s2048-3f05abba491cf5c8-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "compiled_model_ready", "profile": "reranker-b1-s512", "cache_status": "warm-inferred", "compile_or_import_ms": 1162.1428000071319, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s512-1b5073441469f32d-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "compiled_model_ready", "profile": "reranker-b1-s1024", "cache_status": "warm-inferred", "compile_or_import_ms": 372.43129999842495, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s1024-1b5073441469f32d-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "native_retrieval_ready", "service": "native-npu-retrieval", "device": "NPU"}

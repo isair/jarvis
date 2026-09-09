@@ -1,0 +1,49 @@
+{
+	"dtype": "int4",
+	"input_info": null,
+	"optimum_version": "2.1.0.dev0",
+	"output_attentions": false,
+	"quantization_config": {
+		"_dataset_kwargs": {},
+		"dataset": null,
+		"default_config": {
+			"quant_method": "default"
+		},
+		"ignored_scope": null,
+		"num_samples": null,
+		"processor": null,
+		"quantization_configs": {
+			"model": {
+				"_dataset_kwargs": {},
+				"all_layers": null,
+				"backup_precision": null,
+				"bits": 4,
+				"dataset": null,
+				"dq_group_size": null,
+				"dtype": "int4",
+				"gptq": null,
+				"group_size": -1,
+				"group_size_fallback": null,
+				"ignored_scope": {
+					"names": [
+						"__module.layers.27.mlp.up_proj/aten::linear/MatMul",
+						"__module.layers.27.mlp.gate_proj/aten::linear/MatMul"
+					]
+				},
+				"lora_correction": null,
+				"num_samples": null,
+				"processor": null,
+				"quant_method": "default",
+				"ratio": 1.0,
+				"scale_estimation": null,
+				"sensitivity_metric": null,
+				"statistics_path": null,
+				"sym": true,
+				"tokenizer": "/nfs/ov-share-01/data/cv_bench_cache/NATIVE_GEN-AI_MODELS/qwen3-embedding-0.6b/pytorch/NATIVE"
+			}
+		},
+		"tokenizer": "/nfs/ov-share-01/data/cv_bench_cache/NATIVE_GEN-AI_MODELS/qwen3-embedding-0.6b/pytorch/NATIVE"
+	},
+	"save_onnx_model": false,
+	"transformers_version": "4.57.6"
+}

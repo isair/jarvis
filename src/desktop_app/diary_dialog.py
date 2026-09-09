@@ -100,7 +100,7 @@ class DiaryUpdateDialog(QDialog):
         layout.addWidget(self.diary_text, stretch=1)
 
         # Hint at bottom
-        hint = QLabel("Please wait while Jarvis saves your conversations...")
+        hint = QLabel("Please wait while Toustovač saves your conversations...")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setObjectName("subtitle")
         layout.addWidget(hint)

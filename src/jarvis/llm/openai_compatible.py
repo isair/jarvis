@@ -360,6 +360,15 @@ class OpenAICompatibleBackend(LLMBackend):
                 headers=self._headers(),
                 timeout=timeout_sec,
             )
+            if resp.status_code >= 400:
+                # Some OpenAI-shaped servers (e.g. the native OpenVINO NPU
+                # retrieval service) only accept `input` as a list.
+                resp = requests.post(
+                    f"{self._base_url}/embeddings",
+                    json={"model": model, "input": [text]},
+                    headers=self._headers(),
+                    timeout=timeout_sec,
+                )
             resp.raise_for_status()
             data = resp.json()
             arr = data.get("data") if isinstance(data, dict) else None

@@ -1,0 +1,53 @@
+services:
+  ovms:
+    image: openvino/model_server:2026.1
+    container_name: kelvin-ovms-npu
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "9000:9000"
+    environment:
+      OVMS_TARGET_DEVICE: NPU
+    command:
+      - "--config_path"
+      - "/config/config.json"
+      - "--target_device"
+      - "NPU"
+      - "--port"
+      - "9000"
+      - "--rest_port"
+      - "8000"
+      - "--metrics_enable"
+      - "--cache_dir"
+      - "/cache"
+    volumes:
+      - ./models:/models:ro
+      - ./config.json:/config/config.json:ro
+      - ./cache:/cache
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/accel:/dev/accel
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v2/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: kelvin-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  qdrant_storage:

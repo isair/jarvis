@@ -1,6 +1,6 @@
 # Jarvis
 
-**A 100% private AI voice assistant that lives on your computer** (works offline). Talk naturally as if Jarvis is a third person in the room — say its name anywhere in your sentence and get conversational, context-aware responses. It remembers everything, always knows the current location and time, can search the web, read your screen, control Chrome, track nutrition, and much more with support for unlimited MCPs and tools without context rot. Sensitive info is automatically redacted before anything is saved to disk.
+**A 100% private AI voice assistant that lives on your computer** (works offline). Talk naturally as if Toustovač is a third person in the room — say its name anywhere in your sentence and get conversational, context-aware responses. It remembers everything, always knows the current location and time, can search the web, read your screen, control Chrome, track nutrition, and much more with support for unlimited MCPs and tools without context rot. Sensitive info is automatically redacted before anything is saved to disk.
 
 🔒 100% local processing. No subscriptions. No data harvesting. Automatic redaction of sensitive info. Free offline dictation included.
 
@@ -20,7 +20,7 @@
   <img src="docs/img/memory-viewer-meals.png" alt="Memory Viewer - Meals" width="280">
 </p>
 
-## Why Jarvis?
+## Why Toustovač?
 
 **🔒 Your data stays yours** - 100% local AI processing. No cloud, no subscriptions, no data harvesting. Automatic redaction of sensitive info. This is non-negotiable.
 
@@ -34,7 +34,7 @@
 
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
 
-**🚧 Known limitations:** Jarvis is under active development. Primary development happens on macOS. Windows/Linux support may lag behind. We're building in the open, [issues](https://github.com/isair/jarvis/issues) and [contributions](https://github.com/isair/jarvis/pulls) welcome!
+**🚧 Known limitations:** Toustovač is under active development. Primary development happens on macOS. Windows/Linux support may lag behind. We're building in the open, [issues](https://github.com/isair/jarvis/issues) and [contributions](https://github.com/isair/jarvis/pulls) welcome!
 - No mobile apps ([#17](https://github.com/isair/jarvis/issues/17))
 - "Stop" commands during speech sometimes get filtered as echo ([#24](https://github.com/isair/jarvis/issues/24))
 - Dictation is not available on macOS 26+ (Tahoe) due to a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172))
@@ -46,7 +46,7 @@
 ```
 👤 Alice: I wonder what the weather will be like tomorrow
 👤 Bob: Yeah, we should check before planning the picnic
-👤 Alice: Jarvis, what do you think?
+👤 Alice: Toustovač, what do you think?
   📝 Heard: "What do you think Jarvis?"
   🧠 Intent (wake word): directed → "what do you think about the weather for the picnic"
 
@@ -54,33 +54,33 @@
   🧰 Tool: getWeather…
   💬 Generating response...
 
-🤖 Jarvis
+🤖 Toustovač
 Tomorrow looks great for a picnic! Sunny with highs around 22°C...
 ```
-Jarvis understood the entire conversation and gave a contextual answer — no need to repeat the question.
+Toustovač understood the entire conversation and gave a contextual answer — no need to repeat the question.
 
 **Browser automation via MCP:**
 ```
-  📝 Heard: "Open YouTube Jarvis."
+  📝 Heard: "Open YouTube Toustovač."
   🧠 Intent (wake word): directed → "open YouTube"
 
 ✨ Working on it: open YouTube
   💬 Generating response...
 
-🤖 Jarvis
+🤖 Toustovač
 I have opened YouTube for you.
 ```
 
 **Health-aware advice:**
 ```
-  📝 Heard: "Should I order pizza tonight considering my health goals Jarvis?"
+  📝 Heard: "Should I order pizza tonight considering my health goals Toustovač?"
   🧠 Intent (wake word): directed → "should I order pizza tonight considering my health goals"
 
 ✨ Working on it: should I order pizza tonight considering my health goals
   🧰 Tool: fetchMeals…
   💬 Generating response...
 
-🤖 Jarvis
+🤖 Toustovač
 Looking at your week — you mentioned wanting to lose 5kg by June...
 Today you've had about 860 calories so far. Given your 1,800 calorie target,
 you've got room for pizza! But maybe consider thin crust to save calories.
@@ -88,7 +88,7 @@ you've got room for pizza! But maybe consider thin crust to save calories.
 
 **Personalised news search:**
 ```
-  📝 Heard: "What are some news from today that might interest me Jarvis?"
+  📝 Heard: "What are some news from today that might interest me Toustovač?"
   🧠 Intent (wake word): directed → "what are some news from today that might interest me"
 
 ✨ Working on it: what are some news from today that might interest me
@@ -96,25 +96,25 @@ you've got room for pizza! But maybe consider thin crust to save calories.
   🧰 Tool: webSearch…
   💬 Generating response...
 
-🤖 Jarvis
+🤖 Toustovač
 Here's a quick snapshot of today's headlines...
 ```
 
-**Natural wake word placement** (say "Jarvis" anywhere):
+**Natural wake word placement** (say "toustovač" anywhere):
 ```
-  📝 Heard: "Give me a random topic to discuss Jarvis."
+  📝 Heard: "Give me a random topic to discuss Toustovač."
   🧠 Intent (wake word): directed → "give me a random topic to discuss"
 
 ✨ Working on it: give me a random topic to discuss
   💬 Generating response...
 
-🤖 Jarvis
+🤖 Toustovač
 How about the Fermi Paradox? Given the vast number of stars...
 ```
 
 **Echo detection** (Jarvis ignores its own speech):
 ```
-🤖 Jarvis
+🤖 Toustovač
 I have opened YouTube for you.
 
 👂 Listening for follow-up (3s)...
@@ -176,9 +176,11 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 | Hardware | VRAM | Model |
 |----------|------|-------|
 | Low-VRAM / CPU | 2GB+ | `qwen3.5:0.8b` |
-| Most users | 8GB+ | `gemma4:e2b` (default) |
+| Most users / Intel Arc iGPU (140T, B390, …) | 8GB+ | `gemma4:e2b` (default, Whisper `medium` on CPU int8) |
 | Better quality | 16GB+ | `gemma4:e4b` |
 | High-end | 24GB+ | `qwen3.8:27b` |
+
+New installs probe hardware at first start and pick the defaults automatically: NVIDIA CUDA (e.g. RTX 4090) selects `qwen3.8:27b` + Whisper `large-v3-turbo` on `cuda` (fast model `qwen3.5:0.8b`); Intel Arc iGPU / NPU (OpenVINO provider present) and plain CPU keep `gemma4:e2b` + `medium` on CPU int8. The probe fails open to the plain-CPU defaults. On the campaign preflight host (Intel Core Ultra 9 285K + Intel Arc 140T + RTX 4090) all three compute targets — CUDA 4090, Arc 140T and the NPU (where OpenVINO packages are installed) — are reported in the startup line `🖥 Compute: …`.
 
 > **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
 
@@ -258,6 +260,27 @@ enable **⚙️ Settings → ✨ Features → Low Power Mode**.
 Low Power Mode skips LLM startup warmup and shortens Ollama model residency for
 the intent judge from 30 minutes to 1 minute. Whisper still warms so voice input
 is ready. The first LLM-backed request after startup or idle may be slower.
+
+</details>
+
+<details>
+<summary><strong>Proactive Interruption Modes</strong></summary>
+
+The Toustovač can speak up on its own when something meaningful happens (startup, completed build or download, long silence, low battery, temperature, network change, day windows). Pick a mode in config:
+
+```json
+{
+  "proactive_mode": "authentic",
+  "proactive_min_gap_sec": null,
+  "proactive_hour_limit": null
+}
+```
+
+- `polite`: only critical events (errors, network, battery, build, temperature) or direct user interaction speak; at least 15 min apart, max 2 per hour.
+- `authentic` (default, campaign build): proactive offers at contextually amusing moments, at least 90 s apart, max 6 per hour; remarks prefer completed actions and natural silence, never interrupt an utterance.
+- `demo`: deterministic scripted triggers for recording videos — no timing-dependent interruptions, counters reset via Demo → Reset Talkie Toaster.
+
+`null` keeps the per-mode defaults (gap 900/90/0 s, limit 2/6/99, in the order above). Direct commands also work in speech and typed chat: `Ticho` / `Buď ticho` / `Přestaň mluvit` suppress all proactive speech until `Můžeš zase mluvit` or restart; `Přestaň nabízet toast` drops the offers for the session; `Teď ne` / `Nyní ne` skips only the current proposal. Any suppression state is visible in `stats()["suppression"]`; every policy-stage failure records `reason=policy_error` (fail-closed).
 
 </details>
 

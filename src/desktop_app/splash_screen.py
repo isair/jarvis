@@ -1,5 +1,5 @@
 """
-🚀 Jarvis Splash Screen
+🚀 Toustovač Splash Screen
 
 A stylish startup splash screen with animated loading indicator
 that shows progress during application initialization.
@@ -12,6 +12,10 @@ from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QRadialGradient, QFont
 from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
 
 from desktop_app.themes import COLORS
+from jarvis.config import get_branding
+
+BRAND = get_branding()
+DISPLAY_NAME = str(BRAND["display_name"])  # "Toustovač"
 
 
 class AnimatedOrb(QWidget):
@@ -139,7 +143,7 @@ class SplashScreen(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Title
-        title = QLabel("JARVIS")
+        title = QLabel("TOUSTOVAČ")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont()
         title_font.setPointSize(28)

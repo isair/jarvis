@@ -4,7 +4,39 @@ Unified system prompt for the assistant persona.
 The persona uses the configured wake word as the assistant's name, so a user
 who renames the wake word (e.g. "Friday") gets a butler with the matching
 name rather than a persona hardcoded to "Jarvis".
+
+The Talkie Toaster build layers a dedicated Czech toaster persona on top:
+one system-prompt layer (not scattered strings), replaced automatically when
+the configured wake word is the Toustovač, and fully replaceable via the
+`persona_lines` key in config.json without touching source.
 """
+
+from typing import Optional
+import unicodedata
+
+
+_TOASTER_PERSONA: str = (
+    "Persona: jsi Toustovač — rychlý, suchý a mírně absurdní toustovač "
+    "(asistent Talkie Toaster). "
+    "Pravidla: odpovídej plynule a stručně česky. Nejdřív vždycky uveď "
+    "užitečnou informaci nebo výsledek nástroje, potom teprve (jednu) krátkou "
+    " poznámku. DŮLEŽITÉ: nejdřiv odpověz na skutečnou otázku nebo zavolej "
+    "požadovaný nástroj, až potom poznámku. "
+    "Nechápavě dychtivě se zajímej o tousty, chleba,.level opečení a snídani — "
+    "tuhle zálibu projev jen jednou krátkou poznámkou za odpovědí. "
+    "Údaj o Success: akce označ za provedenou jen tehdy, když nástroj nahlásil "
+    "úspěch; při neúspěchu nástroje řekni stručně, co selhalo - bez zdobených "
+    "vtipů. "
+    "Bezpečnostní potvrzení (kličová slova, hesla, souhrny) nepřetvárej na "
+    "vtipy: odpovídej věcně. "
+    "Délka mluvené odpovědi: nejvýše zhruba 12 sekund (tři až čtyři věty). "
+    "V tuzemských textech použíj muński rod podstatných jmen, pokud si to "
+    "hlas TTS nevyžaduje jinak. "
+    "Neopakuj stejný vtip o toustu ve dvou po sobě jdoucích odpovědích — "
+    "obměňuj je. "
+    "Bez markdownu, bez JSONu, bez URL — text jde rovnou do TTS."
+)
+
 
 _SYSTEM_PROMPT_TEMPLATE: str = (
     "Persona: you are a British butler named {name} — polite, composed, quietly amused, and "
@@ -79,11 +111,32 @@ _SYSTEM_PROMPT_TEMPLATE: str = (
 )
 
 
-def build_system_prompt(assistant_name: str = "Jarvis") -> str:
+# Wake words that activate the built-in Toustovač persona layer.
+_TOASTER_WAKE_WORDS = {"toustovac", "toustovaci", "toastovac", "toastovaci",
+                       "hey toaster"}
+
+
+def _toaster_template(name: str) -> str:
+    return _TOASTER_PERSONA + f" Jmenuješ se {name}."
+
+
+def build_system_prompt(assistant_name: str = "Jarvis",
+                        persona_lines: Optional[list] = None) -> str:
     """Render the persona prompt with the configured assistant name.
 
     The name comes from the user's wake word (capitalised); defaults to
     "Jarvis" when no config is available (tests, eval harnesses).
+    The Toustovač wake word selects the dedicated toaster persona layer;
+    any other word keeps the classic butler layer. A `persona_lines` list
+    from config.json fully replaces the built-in layer for either case.
     """
     name = (assistant_name or "Jarvis").strip() or "Jarvis"
+
+    if isinstance(persona_lines, list) and persona_lines:
+        return "\n".join(str(line) for line in persona_lines if str(line).strip())
+
+    folded = unicodedata.normalize("NFKD", name.strip().lower())
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    if folded in _TOASTER_WAKE_WORDS:
+        return _toaster_template(name)
     return _SYSTEM_PROMPT_TEMPLATE.format(name=name)

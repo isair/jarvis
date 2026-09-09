@@ -1,46 +1,42 @@
 """
-Low-poly grid face widget for Jarvis with intelligent state management and organic idle behavior.
+Vector toaster widget for the Talkie Toaster desktop app with state-driven
+animations (complete replacement of the old low-poly orange head).
 
-Features:
-- Low-poly wireframe aesthetic with glowing effects
-- State-specific visual indicators:
-  * LISTENING: Expanding ring echoes of face outline (bell chime effect)
-  * THINKING: Animated spinner pupils (3 rotating arcs)
-  * SPEAKING: Smooth continuous waveform mouth
-- Smooth continuous waveform mouth visualization:
-  * Uses multiple layered sine waves for natural audio-like appearance
-  * Amplitude and frequency vary to simulate speech patterns
-  * Edge tapering for organic look
-  * 60-point smooth curve with glow effect
-- Comprehensive state system (ASLEEP, IDLE, LISTENING, THINKING, SPEAKING)
-- Smooth wake/sleep transitions with opacity-based activation
-- Intelligent idle activity system (only active in IDLE state) that alternates between behaviors:
-  * looking_around (33%) - Frequent eye movement scanning the environment
-  * hovering (24%) - Gentle vertical floating motion
-  * head_tilt (19%) - Subtle head rotation
-  * deep_gaze (10%) - Focused staring at one point
-  * stretch (7%) - Bigger movement with enhanced breathing
-  * wink (4%) - Playful one-eye wink with slight head tilt
-  * yawn (3%) - Rare tired behavior with eye closing
-- Base breathing animation always active when awake
-- All activities smoothly transition and respect current state
-- Multiple expressions for future use (neutral, happy, sad, thinking, etc.)
+Drawn entirely with Qt's QPainter primitives (code-native vector, resolution
+independent, transparent background). The state machine is shared with the
+daemon through a small file-based channel so dev (subprocess) and bundled
+(QThread) modes both drive the same widget.
+
+States (JarvisState):
+  * ASLEEP: dark, static.
+  * IDLE: subtle breathing glow, toast rests inside the slots.
+  * WAKE: lever clicks down + one short acknowledgement pulse.
+  * LISTENING: toast rises slightly, input-level glow.
+  * THINKING: heating elements fill progressively.
+  * TOOL: running status dot scans a strip on the body.
+  * SPEAKING: mouth arc + light pulse (follows last TTS level when known).
+  * SUCCESS: toast pops up once, settles.
+  * ERROR: heating glow switches to red briefly, no pop.
+  * MUTED: lever up, mic indicator visibly disabled.
+  * DICTATING / DICTATION_PROCESSING: pulsing ring (same as before).
+
+Animation is timer-driven (~30 FPS), pauses while the widget is hidden,
+becomes a plain static render under the Windows reduced-motion hint, and the
+drawing is derived from wall-clock time so restarts stay phase-stable.
 """
 
 from __future__ import annotations
 import math
-import random
-import threading
 import time as _time
-from typing import Optional, List, Tuple
 from enum import Enum
+from typing import Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
 
 class Expression(Enum):
-    """Available face expressions."""
+    """Available face expressions (kept for API compatibility)."""
     NEUTRAL = "neutral"
     HAPPY = "happy"
     SAD = "sad"
@@ -52,20 +48,28 @@ class Expression(Enum):
 
 
 class JarvisState(Enum):
-    """Overall Jarvis state for face animation."""
-    ASLEEP = "asleep"          # Daemon not started yet
-    IDLE = "idle"              # Awake and ready, waiting for wake word
-    LISTENING = "listening"    # Actively listening (collecting or hot window)
-    THINKING = "thinking"      # Processing query
-    SPEAKING = "speaking"      # Speaking response
-    DICTATING = "dictating"    # Hold-to-dictate recording active
+    """Overall assistant state for the toaster animation."""
+    ASLEEP = "asleep"                 # Daemon not started yet
+    IDLE = "idle"                     # Awake and ready, waiting for wake word
+    LISTENING = "listening"           # Actively listening (collecting or hot window)
+    THINKING = "thinking"             # Processing query
+    SPEAKING = "speaking"             # Speaking response
+    DICTATING = "dictating"           # Hold-to-dictate recording active
     DICTATION_PROCESSING = "dictation_processing"  # Transcribing & pasting captured dictation
+    WAKE = "wake"                     # Wake phrase recognised this moment
+    TOOL = "tool"                     # A tool execution is running
+    SUCCESS = "success"               # Tool/reply finished successfully
+    ERROR = "error"                   # Tool/reply failed
+    MUTED = "muted"                   # Microphone disabled / not listening
 
 
-# Global Jarvis state - allows daemon to signal overall state to face widget
-# Uses a file-based approach to work across processes (dev mode runs daemon as subprocess)
+# Global assistant state - allows daemon to signal overall state to the widget.
+# Uses a file-based approach to work across processes (dev mode runs daemon as
+# subprocess). Format: "<state_value>" | "<state_value>|<level_float>" |
+# "<state_value>|<level>|<reason label>".
 import tempfile
 import os
+
 
 def _get_jarvis_state_file() -> str:
     """Get the path to the Jarvis state file."""
@@ -73,7 +77,7 @@ def _get_jarvis_state_file() -> str:
 
 
 class JarvisStateManager(QObject):
-    """Global singleton for Jarvis state management.
+    """Global singleton for assistant state management.
 
     Uses a file-based approach to communicate across processes:
     - In dev mode, daemon runs as subprocess (different process)
@@ -88,8 +92,10 @@ class JarvisStateManager(QObject):
     def __init__(self):
         super().__init__()
         self._state = JarvisState.ASLEEP  # Start asleep
-        self._state_lock = threading.Lock()
+        self._state_lock = threading_lock()
         self._state_file = _get_jarvis_state_file()
+        self._level: float = 0.0
+        self._label: str = ""
         # Always start fresh in ASLEEP state on app launch
         # (state file is for cross-process communication during a session,
         # not for persisting state across app restarts)
@@ -98,12 +104,19 @@ class JarvisStateManager(QObject):
     @property
     def state(self) -> JarvisState:
         """Read current state (checks file for cross-process communication)."""
-        # First check file (for cross-process), then fall back to memory
         try:
             if os.path.exists(self._state_file):
                 with open(self._state_file, 'r') as f:
                     content = f.read().strip()
-                    return JarvisState(content)
+                if content:
+                    parts = content.split("|")
+                    head = parts[0]
+                    try:
+                        self._level = float(parts[1]) if len(parts) > 1 and parts[1] else 0.0
+                    except ValueError:
+                        pass
+                    self._label = parts[2] if len(parts) > 2 else ""
+                    return JarvisState(head)
         except (ValueError, OSError):
             # Invalid content or read error - fall back to in-memory state
             pass
@@ -111,22 +124,62 @@ class JarvisStateManager(QObject):
         with self._state_lock:
             return self._state
 
-    def _write_state(self, state: JarvisState) -> None:
-        """Write state to file for cross-process communication."""
+    @property
+    def level(self) -> float:
+        """0..1 amplitude for glow/mouth following (0 when unknown)."""
+        # Refresh from file (cheap 1-read) so cross-process levels arrive.
         try:
+            if os.path.exists(self._state_file):
+                with open(self._state_file, 'r') as f:
+                    content = f.read().strip()
+                parts = content.split("|")
+                if len(parts) > 1 and parts[1]:
+                    return float(parts[1])
+        except (ValueError, OSError):
+            pass
+        return self._level
+
+    @property
+    def label(self) -> str:
+        """Short reason label (e.g. 'CPU temperature') shown under the body."""
+        try:
+            if os.path.exists(self._state_file):
+                with open(self._state_file, 'r') as f:
+                    content = f.read().strip()
+                parts = content.split("|")
+                if len(parts) > 2:
+                    return parts[2]
+        except OSError:
+            pass
+        return self._label
+
+    def _write_state(self, state: JarvisState, level: float = 0.0, label: str = "") -> None:
+        """Write state (and optional level/label) to file for cross-process use."""
+        try:
+            parts = [state.value]
+            if label and not level:
+                parts.append("")  # keep slot ordering for the label field
+            if level:
+                parts.append(f"{level:.3f}")
+            if label:
+                parts.append(label)
             with open(self._state_file, 'w') as f:
-                f.write(state.value)
+                f.write("|".join(parts))
         except OSError:
             # File write failed - state won't be shared across processes
             pass
 
-    def set_state(self, state: JarvisState) -> None:
-        """Set the Jarvis state (thread-safe, cross-process)."""
+    def set_state(self, state: JarvisState, level: float = 0.0, label: Optional[str] = None) -> None:
+        """Set the assistant state (thread-safe, cross-process)."""
         with self._state_lock:
             self._state = state
+            if level:
+                self._level = level
+            if label is not None:
+                self._label = label
 
         # Write to file for cross-process communication
-        self._write_state(state)
+        self._write_state(state, level or self._level, label or self._label)
 
         # Emit signal for same-process listeners
         try:
@@ -136,8 +189,14 @@ class JarvisStateManager(QObject):
             pass
 
 
+def threading_lock():
+    import threading
+    return threading.Lock()
+
+
 # Module-level singleton instance
 _jarvis_state_instance: Optional[JarvisStateManager] = None
+import threading
 _jarvis_state_lock = threading.Lock()
 
 
@@ -152,920 +211,461 @@ def get_jarvis_state() -> JarvisStateManager:
 
 class LowPolyFaceWidget(QWidget):
     """
-    A low-poly wireframe face widget with expressions and speaking animation.
-    
-    The face is rendered as a geometric mesh with glowing vertices and edges,
-    creating a futuristic AI assistant aesthetic.
+    Vector toaster widget with expressions and speaking animation.
+
+    The old low-poly head is fully replaced: the widget now draws a compact
+    polished-metal toaster (two bread slots, two toast slices, lever, warm
+    heating glow) whose face is integrated into the body. No raster assets.
     """
-    
+
     # Colors
-    PRIMARY_COLOR = QColor("#fbbf24")  # Amber/gold - matches Jarvis theme
-    SECONDARY_COLOR = QColor("#f59e0b")  # Darker amber
-    GLOW_COLOR = QColor("#fcd34d")  # Light amber for glow
-    BG_COLOR = QColor("#0a0a0a")  # Near black background
-    GRID_COLOR = QColor("#1f1f1f")  # Dark gray for background grid
-    
+    PRIMARY_COLOR = QColor("#fbbf24")     # Amber/gold accents
+    SECONDARY_COLOR = QColor("#f59e0b")
+    GLOW_COLOR = QColor("#fcd34d")
+    BG_COLOR = QColor(10, 11, 15, 242)    # Near-black rounded panel
+    GRID_COLOR = QColor("#1f1f1f")
+    BODY_LIGHT = QColor("#d7dbe0")
+    BODY_DARK = QColor("#8f959c")
+    ERROR_COLOR = QColor("#ef4444")
+    TOAST_COLOR = QColor("#e8b96b")
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(300, 400)
 
-        # Current Jarvis state
-        self._jarvis_state = JarvisState.ASLEEP  # Start asleep until daemon ready
-        self._mouth_openness = 0.0  # 0.0 = closed, 1.0 = fully open
-        self._target_mouth_openness = 0.0
-        self._blink_timer = 0
-        self._is_blinking = False
-        self._blink_progress = 0.0
-
-        # Soundwave visualization (for mouth) - continuous line waveform
-        self._waveform_time = 0.0  # Time parameter for waveform animation
-        self._waveform_amplitude = 0.0  # Overall amplitude (smoothly changes)
-        self._waveform_frequency_base = 0.15  # Base frequency for wave oscillation
-        self._waveform_detail_offset = 0.0  # Offset for detail variations
-
-        # Expression state
-        self._expression = Expression.NEUTRAL
-        self._expression_transition = 1.0  # 1.0 = fully transitioned
-
-        # Vertex jitter for organic feel
-        self._jitter_offset = 0.0
-        self._vertex_jitters: List[Tuple[float, float]] = []
-
-        # Activation state (for sleep/wake animation)
-        self._activation_level = 0.0  # 0.0 = asleep, 1.0 = fully awake
-        self._target_activation = 0.0
-
-        # Idle animations - base layer (always active when awake)
-        self._breathing_scale = 1.0  # Breathing scale factor
-        self._breathing_time = 0.0
-
-        # Idle activity system - activities alternate with different probabilities
-        self._current_activity = None  # Current idle activity
-        self._activity_timer = 0  # Frames in current activity
-        self._activity_duration = 0  # Duration of current activity
-        self._activity_cooldown = 0  # Frames until next activity selection
-
-        # Activity-specific animation state
-        self._hover_offset = 0.0
-        self._hover_time = 0.0
-        self._head_tilt = 0.0
-        self._head_tilt_time = 0.0
-        self._gaze_x = 0.0
-        self._gaze_y = 0.0
-        self._target_gaze_x = 0.0
-        self._target_gaze_y = 0.0
-        self._stretch_intensity = 0.0  # For stretching activity
-        self._yawn_progress = 0.0  # For yawning activity
-        self._wink_progress = 0.0  # For winking activity
-        self._wink_eye = "left"  # Which eye is winking
-
-        # Thinking spinner animation
-        self._spinner_angle = 0.0  # Rotation angle for thinking spinner
-
-        # Listening animation - bell ring echoes
-        self._listening_started_at: Optional[float] = None  # Wall-clock start time
-        self._listening_rings_spawned = 0  # How many rings spawned this session
-        self._listening_rings: List[float] = []  # Active ring expansions (0.0 to 1.0)
-        self._dictation_pulse_phase = 0.0  # Steady pulse phase for DICTATING state
-
-        # Connect to global Jarvis state
+        # Current assistant state
         self._state_manager = get_jarvis_state()
         self._state_manager.state_changed.connect(self._on_state_changed)
+        self._jarvis_state = self._state_manager.state
 
-        # Animation timer
+        self._expression = Expression.NEUTRAL
+
+        # Animation clock (wall time keeps animations phase-stable across
+        # pauses; frame counters only exist for the blink scheduler).
+        self._t0 = _time.monotonic()
+        self._last_tick = self._t0
+
+        # Reduced-motion hint (Windows: Settings > Accessibility).
+        self._reduced_motion = self._detect_reduced_motion()
+
+        # Per-transition marks (pop / lever / pulse bookkeeping).
+        self._wake_at: Optional[float] = None
+        self._success_at: Optional[float] = None
+        self._error_until: float = 0.0
+        self._prev_state: JarvisState = JarvisState.ASLEEP
+
+        # Blink timers (only meaningful without reduced motion).
+        self._is_blinking = False
+        self._blink_started_at: Optional[float] = None
+        self._schedule_next_blink()
+
+        # Animation timer (≈30 FPS). Paused while the widget is hidden.
         self._animation_timer = QTimer(self)
         self._animation_timer.timeout.connect(self._animate)
-        self._animation_timer.start(33)  # ~30 FPS
+        if self._reduced_motion:
+            # Reduced motion: still animate, but the render path uses
+            # fewer, larger steps (see _animate). Timer stays at 33 ms.
+            pass
+        self._animation_timer.start(33)
 
-        # Blink timer (random intervals)
-        self._schedule_next_blink()
-        
-    def _schedule_next_blink(self):
-        """Schedule the next blink at a random interval."""
-        interval = random.randint(2000, 5000)  # 2-5 seconds
-        QTimer.singleShot(interval, self._start_blink)
-    
-    def _start_blink(self):
-        """Start a blink animation."""
-        if not self._is_blinking:
-            self._is_blinking = True
-            self._blink_progress = 0.0
-        self._schedule_next_blink()
+    # ------------------------------------------------------------------ #
+    # State plumbing
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _detect_reduced_motion() -> bool:
+        """Honour the Windows reduced-motion accessibility hint when Qt
+        exposes it (Qt >= 6.3: styleHints().timeLineCurveStyle())."""
+        app = QApplication.instance()
+        if app is None:
+            return False
+        try:
+            return app.styleHints().timeLineCurveStyle() == Qt.TimeLineCurveStyle.CurveStyleLinear
+        except Exception:
+            return False
 
     def _on_state_changed(self, state_value: str):
-        """Handle Jarvis state change from global state."""
         try:
-            self._jarvis_state = JarvisState(state_value)
+            new_state = JarvisState(state_value)
         except ValueError:
-            pass
+            return
+        self._apply_state(new_state)
+
+    def _apply_state(self, new_state: JarvisState) -> None:
+        now = _time.monotonic() - self._t0
+        if new_state != self._prev_state:
+            if new_state == JarvisState.WAKE:
+                self._wake_at = now
+            elif new_state == JarvisState.SUCCESS:
+                self._success_at = now
+            elif new_state == JarvisState.ERROR:
+                self._error_until = now + 1.2
+        self._prev_state = new_state
+        self._jarvis_state = new_state
+
+    def showEvent(self, event):
+        self._animation_timer.start(33)
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        self._animation_timer.stop()  # No repaints while hidden.
+        super().hideEvent(event)
 
     def set_expression(self, expression: Expression):
-        """Set the face expression."""
         if expression != self._expression:
             self._expression = expression
-            self._expression_transition = 0.0
 
-    def _select_idle_activity(self) -> str:
-        """Select a random idle activity based on weighted probabilities."""
-        activities = [
-            ("looking_around", 33),  # Most common - natural eye movement
-            ("hovering", 24),        # Common - gentle floating
-            ("head_tilt", 19),       # Common - subtle head rotation
-            ("deep_gaze", 10),       # Occasional - stare at one spot
-            ("stretch", 7),          # Occasional - bigger movement
-            ("wink", 4),             # Rare - playful one-eye wink
-            ("yawn", 3),             # Rare - eyes close briefly
-        ]
+    # ------------------------------------------------------------------ #
+    # Animation tick
+    # ------------------------------------------------------------------ #
+    def _schedule_next_blink(self):
+        if self._reduced_motion:
+            return  # Static eyes under reduced motion.
+        interval = random_interval_ms()
+        QTimer.singleShot(interval, self._start_blink)
 
-        # Weighted random selection
-        total_weight = sum(weight for _, weight in activities)
-        rand = random.random() * total_weight
-        cumulative = 0
+    def _start_blink(self):
+        if not self._is_blinking:
+            self._is_blinking = True
+            self._blink_started_at = _time.monotonic() - self._t0
+        self._schedule_next_blink()
 
-        for activity, weight in activities:
-            cumulative += weight
-            if rand <= cumulative:
-                return activity
-
-        return "looking_around"  # Fallback
-
-    def _get_activity_duration(self, activity: str) -> int:
-        """Get duration in frames for an activity."""
-        durations = {
-            "looking_around": random.randint(90, 240),   # 3-8 seconds
-            "hovering": random.randint(120, 300),        # 4-10 seconds
-            "head_tilt": random.randint(90, 210),        # 3-7 seconds
-            "deep_gaze": random.randint(150, 360),       # 5-12 seconds (longer stare)
-            "stretch": random.randint(60, 120),          # 2-4 seconds (quick stretch)
-            "wink": random.randint(30, 50),              # 1-1.7 seconds (quick wink)
-            "yawn": random.randint(90, 150),             # 3-5 seconds
-        }
-        return durations.get(activity, 120)
-
-    def _update_activity_animation(self):
-        """Update animation for the current activity."""
-        if self._current_activity == "looking_around":
-            # Frequently change gaze direction
-            if self._activity_timer % 60 == 0:  # Change every 2 seconds
-                self._target_gaze_x = (random.random() - 0.5) * 25  # ±12.5 pixels
-                self._target_gaze_y = (random.random() - 0.5) * 15  # ±7.5 pixels
-            self._gaze_x += (self._target_gaze_x - self._gaze_x) * 0.08
-            self._gaze_y += (self._target_gaze_y - self._gaze_y) * 0.08
-            # Minimal other movements
-            self._hover_offset *= 0.95
-            self._head_tilt *= 0.95
-            self._stretch_intensity *= 0.9
-
-        elif self._current_activity == "hovering":
-            # Gentle floating motion
-            self._hover_time += 0.02
-            self._hover_offset = math.sin(self._hover_time) * 8.0
-            # Minimal other movements
-            self._gaze_x *= 0.98
-            self._gaze_y *= 0.98
-            self._head_tilt *= 0.95
-            self._stretch_intensity *= 0.9
-
-        elif self._current_activity == "head_tilt":
-            # Subtle head rotation
-            self._head_tilt_time += 0.015
-            self._head_tilt = math.sin(self._head_tilt_time * 0.7) * 2.5
-            # Minimal other movements
-            self._gaze_x *= 0.98
-            self._gaze_y *= 0.98
-            self._hover_offset *= 0.95
-            self._stretch_intensity *= 0.9
-
-        elif self._current_activity == "deep_gaze":
-            # Stare at one spot intently
-            if self._activity_timer == 0:  # Pick spot at start
-                self._target_gaze_x = (random.random() - 0.5) * 30  # ±15 pixels (wider range)
-                self._target_gaze_y = (random.random() - 0.5) * 20  # ±10 pixels
-            self._gaze_x += (self._target_gaze_x - self._gaze_x) * 0.04  # Slower, more focused
-            self._gaze_y += (self._target_gaze_y - self._gaze_y) * 0.04
-            # Very minimal other movements
-            self._hover_offset *= 0.98
-            self._head_tilt *= 0.98
-            self._stretch_intensity *= 0.9
-
-        elif self._current_activity == "stretch":
-            # Bigger movement - scale up briefly
-            progress = self._activity_timer / self._activity_duration
-            if progress < 0.3:  # Stretch out
-                self._stretch_intensity += (1.0 - self._stretch_intensity) * 0.15
-            elif progress > 0.7:  # Return to normal
-                self._stretch_intensity *= 0.85
-            else:  # Hold stretch
-                self._stretch_intensity += (1.0 - self._stretch_intensity) * 0.05
-
-            # Apply stretch to breathing scale (enhance it)
-            stretch_boost = self._stretch_intensity * 0.03
-            self._breathing_scale += stretch_boost
-
-            # Add movement during stretch
-            self._hover_time += 0.03
-            self._hover_offset = math.sin(self._hover_time) * 12.0 * self._stretch_intensity
-            self._head_tilt = math.sin(self._activity_timer * 0.1) * 4.0 * self._stretch_intensity
-
-        elif self._current_activity == "wink":
-            # Playful one-eye wink
-            if self._activity_timer == 0:  # Pick which eye at start
-                self._wink_eye = random.choice(["left", "right"])
-
-            progress = self._activity_timer / self._activity_duration
-            if progress < 0.25:  # Close winking eye
-                self._wink_progress += (1.0 - self._wink_progress) * 0.25
-            elif progress > 0.6:  # Open winking eye
-                self._wink_progress *= 0.8
-            else:  # Hold the wink
-                self._wink_progress += (1.0 - self._wink_progress) * 0.1
-
-            # Slight head tilt toward winking eye for extra charm
-            tilt_dir = -1 if self._wink_eye == "left" else 1
-            self._head_tilt += (tilt_dir * 2.0 - self._head_tilt) * 0.08
-
-            # Minimal other movements
-            self._gaze_x *= 0.95
-            self._gaze_y *= 0.95
-            self._hover_offset *= 0.95
-            self._stretch_intensity *= 0.9
-            self._yawn_progress *= 0.9
-
-        elif self._current_activity == "yawn":
-            # Eyes close and open, subtle mouth movement
-            progress = self._activity_timer / self._activity_duration
-            if progress < 0.3:  # Close eyes
-                self._yawn_progress += (1.0 - self._yawn_progress) * 0.15
-            elif progress > 0.7:  # Open eyes
-                self._yawn_progress *= 0.85
-            else:  # Hold
-                self._yawn_progress += (1.0 - self._yawn_progress) * 0.05
-
-            # Minimal other movements
-            self._gaze_x *= 0.95
-            self._gaze_y *= 0.95
-            self._hover_offset *= 0.95
-            self._head_tilt *= 0.95
-            self._stretch_intensity *= 0.9
-            self._wink_progress *= 0.9
-
-    def _decay_activity_animations(self):
-        """Smoothly decay all activity animations when not idle."""
-        self._gaze_x *= 0.92
-        self._gaze_y *= 0.92
-        self._hover_offset *= 0.92
-        self._head_tilt *= 0.92
-        self._stretch_intensity *= 0.85
-        self._yawn_progress *= 0.85
-        self._wink_progress *= 0.85
-        self._target_gaze_x *= 0.92
-        self._target_gaze_y *= 0.92
-    
     def _animate(self):
-        """Animation tick - update all animated properties."""
-        # Poll Jarvis state directly (more reliable than cross-thread signals)
-        prev_state = self._jarvis_state
+        """Timer tick: refresh the state from the shared file and repaint."""
         try:
-            self._jarvis_state = self._state_manager.state
+            polled = self._state_manager.state
         except Exception:
-            pass
-        # Re-anchor the listening ring clock each time we enter LISTENING
-        # so the first ring lands with the first audible click and later
-        # rings stay phase-locked to wall time.
-        if (self._jarvis_state == JarvisState.LISTENING
-                and prev_state != JarvisState.LISTENING):
-            self._listening_started_at = _time.monotonic()
-            self._listening_rings_spawned = 0
+            polled = self._jarvis_state
+        if polled != self._jarvis_state:
+            self._apply_state(polled)
 
-        # Update activation level based on state
-        if self._jarvis_state == JarvisState.ASLEEP:
-            self._target_activation = 0.0
-        else:
-            # IDLE, LISTENING, THINKING, SPEAKING, DICTATING, or DICTATION_PROCESSING - all should be awake
-            self._target_activation = 1.0
-
-        # Smooth activation transition
-        activation_diff = self._target_activation - self._activation_level
-        self._activation_level += activation_diff * 0.05  # Slow wake/sleep
-
-        # Check if idle (when awake but not actively doing anything)
-        # ONLY IDLE state gets idle activities - not listening, thinking, or speaking
-        is_idle = self._jarvis_state == JarvisState.IDLE and self._activation_level > 0.5
-
-        # Base layer: Breathing animation (always active when awake)
-        self._breathing_time += 0.025
-        breathing_factor = math.sin(self._breathing_time) * 0.015 * self._activation_level
-        self._breathing_scale = 1.0 + breathing_factor
-
-        # Idle activity system
-        if is_idle:
-            # Activity selection and management
-            if self._activity_cooldown > 0:
-                self._activity_cooldown -= 1
-            elif self._current_activity is None or self._activity_timer >= self._activity_duration:
-                # Select new activity
-                self._current_activity = self._select_idle_activity()
-                self._activity_duration = self._get_activity_duration(self._current_activity)
-                self._activity_timer = 0
-                # Set cooldown before next activity (1-3 seconds of neutral state)
-                if self._current_activity != self._current_activity:  # Reset on new activity
-                    self._activity_cooldown = 0
-            else:
-                self._activity_timer += 1
-
-            # Update current activity
-            self._update_activity_animation()
-        else:
-            # Not idle - smoothly decay all activity animations
-            self._current_activity = None
-            self._activity_timer = 0
-            self._activity_cooldown = 0
-            self._decay_activity_animations()
-
-        # Reduce gaze when speaking
-        if self._jarvis_state == JarvisState.SPEAKING:
-            self._gaze_x *= 0.95
-            self._gaze_y *= 0.95
-
-        # Listening animation - bell ring echoes.
-        # Phase-locked to wall time since LISTENING started, matched to
-        # the thinking pad's 2s pulse cycle. Frame-counting drifts vs
-        # the 44.1 kHz audio clock; wall time doesn't.
-        pulse_cycle_s = 2.0
-        ring_lifespan_s = 2.0
-        if self._jarvis_state == JarvisState.LISTENING and self._listening_started_at is not None:
-            elapsed = _time.monotonic() - self._listening_started_at
-            target_spawned = int(elapsed / pulse_cycle_s) + 1  # First ring at t=0
-            while self._listening_rings_spawned < target_spawned:
-                spawn_time = self._listening_rings_spawned * pulse_cycle_s
-                age = max(0.0, elapsed - spawn_time)
-                self._listening_rings.append(age / ring_lifespan_s)
-                self._listening_rings_spawned += 1
-
-            # Age existing rings by one frame (33ms at 30 FPS).
-            new_rings = []
-            for ring in self._listening_rings:
-                ring += (1.0 / 30.0) / ring_lifespan_s
-                if ring < 1.0:
-                    new_rings.append(ring)
-            self._listening_rings = new_rings
-        else:
-            # Fade out any remaining rings when not listening
-            new_rings = []
-            for ring in self._listening_rings:
-                ring += 0.04  # Faster fadeout
-                if ring < 1.0:
-                    new_rings.append(ring)
-            self._listening_rings = new_rings
-
-        # Dictation pulse animation (during recording and post-recording processing)
-        if self._jarvis_state in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
-            self._dictation_pulse_phase += 0.08  # Steady pulse speed
-
-        # Spinner animation (while thinking or post-dictation processing).
-        # One full revolution per pad pulse cycle (2s = 60 frames at 30 FPS).
-        if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
-            self._spinner_angle += 6.0  # 6 deg/frame → one rev per 2s
-            if self._spinner_angle >= 360:
-                self._spinner_angle -= 360
-
-        # Soundwave animation (when speaking)
-        if self._jarvis_state == JarvisState.SPEAKING:
-            # Animate waveform parameters for natural audio-like movement
-            self._waveform_time += 0.12  # Speed of wave movement
-            self._waveform_detail_offset += 0.08  # Speed of detail variations
-
-            # Vary amplitude smoothly (simulates volume changes in speech)
-            target_amplitude = 0.6 + random.random() * 0.4  # 0.6 to 1.0
-            self._waveform_amplitude += (target_amplitude - self._waveform_amplitude) * 0.15
-
-            # Occasionally change base frequency (simulates pitch changes in speech)
-            if random.random() < 0.02:  # 2% chance per frame
-                self._waveform_frequency_base = 0.1 + random.random() * 0.15  # 0.1 to 0.25
-        else:
-            # Decay waveform to flat line when not speaking
-            self._waveform_amplitude *= 0.85
-            self._waveform_time += 0.03  # Slower drift when not speaking
-
-        # Blink animation (only when awake)
-        if self._activation_level > 0.5:
-            if self._is_blinking:
-                self._blink_progress += 0.15
-                if self._blink_progress >= 1.0:
-                    self._is_blinking = False
-                    self._blink_progress = 0.0
-        else:
-            # When asleep, keep eyes closed (will be forced in draw logic)
-            self._is_blinking = False
-            self._blink_progress = 0.0
-
-        # Expression transition
-        if self._expression_transition < 1.0:
-            self._expression_transition += 0.1
-            self._expression_transition = min(1.0, self._expression_transition)
-
-        # Vertex jitter (reduce when asleep)
-        jitter_speed = 0.1 * self._activation_level
-        self._jitter_offset += jitter_speed
+        # Blink progression (0.24 s close+open cycle).
+        if self._is_blinking and self._blink_started_at is not None:
+            elapsed = (_time.monotonic() - self._t0) - self._blink_started_at
+            if elapsed > 0.24:
+                self._is_blinking = False
+                self._blink_started_at = None
 
         self.update()
-    
-    def _get_jitter(self, index: int, scale: float = 1.0) -> Tuple[float, float]:
-        """Get a subtle jitter offset for a vertex."""
-        t = self._jitter_offset + index * 0.5
-        jx = math.sin(t * 1.3) * scale
-        jy = math.cos(t * 1.7) * scale
-        return (jx, jy)
-    
+
+    # ------------------------------------------------------------------ #
+    # Drawing helpers
+    # ------------------------------------------------------------------ #
+    def _elapsed(self) -> float:
+        return _time.monotonic() - self._t0
+
+    def _blink_factor(self) -> float:
+        if self._activation() < 0.5:
+            return 1.0
+        if self._is_blinking and self._blink_started_at is not None:
+            p = min(1.0, max(0.0, (_time.monotonic() - self._t0 - self._blink_started_at) / 0.24))
+            return p * 2 if p < 0.5 else 2 - p * 2
+        return 0.0
+
+    def _activation(self) -> float:
+        return 0.0 if self._jarvis_state == JarvisState.ASLEEP else 1.0
+
+    def _level(self) -> float:
+        try:
+            return max(0.0, min(1.0, self._state_manager.level))
+        except Exception:
+            return 0.0
+
     def paintEvent(self, event):
-        """Render the low-poly face."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
 
-        # Apply hover offset to center position
-        cy += self._hover_offset
+        # Panel (rounded, translucent-dark) — no orange head behind it.
+        painter.setPen(QPen(QColor("#27272a"), 1))
+        painter.setBrush(QBrush(self.BG_COLOR))
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 14, 14)
 
-        # Draw background
-        self._draw_background(painter, w, h)
+        activation = self._activation()
+        t = self._elapsed()
 
-        # Save painter state and apply transformations
+        # Geometry: centred 3:4-ish toaster body.
+        body_w = min(w, h) * 0.62
+        body_h = body_w * 0.78
+        cx, cy = w / 2, h / 2 + body_h * 0.06
+        left, top = cx - body_w / 2, cy - body_h / 2
+        right, bottom = cx + body_w / 2, cy + body_h / 2
+
+        op = 0.35 + 0.65 * activation  # activation-driven opacity
+
+        # Breathing scale (IDLE/LISTENING): tiny, slow.
+        breathe = 1.0
+        if self._jarvis_state in (JarvisState.IDLE, JarvisState.LISTENING) and not self._reduced_motion:
+            breathe = 1.0 + 0.012 * math.sin(t * 1.6) * activation
+
         painter.save()
-        painter.translate(cx, cy)  # Move origin to face center
-        painter.scale(self._breathing_scale, self._breathing_scale)  # Apply breathing scale
-        painter.rotate(self._head_tilt)  # Apply subtle rotation
-        painter.translate(-cx, -cy)  # Move origin back
+        painter.translate(cx, cy)
+        painter.scale(*_pair(breathe))
+        painter.translate(-cx, -cy)
 
-        # Calculate face dimensions
-        face_width = min(w, h) * 0.7
-        face_height = face_width * 1.3
-
-        # Draw listening ring echoes (behind the face)
-        self._draw_listening_rings(painter, cx, cy, face_width, face_height)
-
-        # Draw dictation pulse ring (behind the face)
-        self._draw_dictation_pulse(painter, cx, cy, face_width, face_height)
-
-        # Draw the face mesh
-        self._draw_face_mesh(painter, cx, cy, face_width, face_height)
-
-        # Draw eyes
-        self._draw_eyes(painter, cx, cy, face_width, face_height)
-
-        # Draw mouth
-        self._draw_mouth(painter, cx, cy, face_width, face_height)
-
-        # Draw accent lines
-        self._draw_accent_lines(painter, cx, cy, face_width, face_height)
-
-        # Restore painter state
-        painter.restore()
-
-        painter.end()
-    
-    def _draw_background(self, painter: QPainter, w: int, h: int):
-        """Draw the dark background with subtle grid."""
-        # Solid background
-        painter.fillRect(0, 0, w, h, self.BG_COLOR)
-        
-        # Subtle background grid
-        grid_pen = QPen(self.GRID_COLOR, 1)
-        painter.setPen(grid_pen)
-        
-        grid_size = 30
-        for x in range(0, w, grid_size):
-            painter.drawLine(x, 0, x, h)
-        for y in range(0, h, grid_size):
-            painter.drawLine(0, y, w, y)
-    
-    def _draw_face_mesh(self, painter: QPainter, cx: float, cy: float,
-                        face_width: float, face_height: float):
-        """Draw the low-poly face outline mesh."""
-        # Face outline vertices (low-poly style)
-        vertices = self._get_face_vertices(cx, cy, face_width, face_height)
-
-        # Apply activation level to opacity
-        base_glow_opacity = 0.3 * self._activation_level
-        base_opacity = 0.3 + (0.7 * self._activation_level)  # 0.3 to 1.0
-
-        # Draw mesh edges with glow effect
-        glow_pen = QPen(self.GLOW_COLOR, 4)
-        glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(glow_pen)
-        painter.setOpacity(base_glow_opacity)
-
-        for i in range(len(vertices)):
-            p1 = vertices[i]
-            p2 = vertices[(i + 1) % len(vertices)]
-            painter.drawLine(QPointF(*p1), QPointF(*p2))
-
-        # Draw main edges
-        painter.setOpacity(base_opacity)
-        main_pen = QPen(self.PRIMARY_COLOR, 2)
-        main_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(main_pen)
-
-        for i in range(len(vertices)):
-            p1 = vertices[i]
-            p2 = vertices[(i + 1) % len(vertices)]
-            painter.drawLine(QPointF(*p1), QPointF(*p2))
-
-        # Draw vertices as glowing points
-        for i, (vx, vy) in enumerate(vertices):
-            jx, jy = self._get_jitter(i, 1.5)
-            self._draw_vertex_glow(painter, vx + jx, vy + jy, self._activation_level)
-    
-    def _get_face_vertices(self, cx: float, cy: float, 
-                           face_width: float, face_height: float) -> List[Tuple[float, float]]:
-        """Generate vertices for the face outline polygon."""
-        hw = face_width / 2
-        hh = face_height / 2
-        
-        # Low-poly face shape (10 vertices)
-        vertices = [
-            (cx, cy - hh),  # Top
-            (cx + hw * 0.5, cy - hh * 0.85),  # Top right
-            (cx + hw * 0.8, cy - hh * 0.5),  # Upper right
-            (cx + hw, cy - hh * 0.1),  # Mid right upper
-            (cx + hw * 0.9, cy + hh * 0.3),  # Mid right
-            (cx + hw * 0.6, cy + hh * 0.7),  # Lower right
-            (cx + hw * 0.3, cy + hh * 0.9),  # Chin right
-            (cx, cy + hh),  # Chin
-            (cx - hw * 0.3, cy + hh * 0.9),  # Chin left
-            (cx - hw * 0.6, cy + hh * 0.7),  # Lower left
-            (cx - hw * 0.9, cy + hh * 0.3),  # Mid left
-            (cx - hw, cy - hh * 0.1),  # Mid left upper
-            (cx - hw * 0.8, cy - hh * 0.5),  # Upper left
-            (cx - hw * 0.5, cy - hh * 0.85),  # Top left
-        ]
-        
-        return vertices
-    
-    def _draw_vertex_glow(self, painter: QPainter, x: float, y: float, activation: float = 1.0):
-        """Draw a glowing vertex point."""
-        # Outer glow (scaled by activation)
-        alpha = int(200 * activation)
-        gradient = QRadialGradient(x, y, 8)
-        gradient.setColorAt(0, QColor(251, 191, 36, alpha))
-        gradient.setColorAt(1, QColor(251, 191, 36, 0))
-        painter.setBrush(gradient)
+        # ---- Glow (warm heating; red briefly on ERROR) ----
+        glow_alpha = op
+        glow_color = QColor(self.ERROR_COLOR) if self._jarvis_state == JarvisState.ERROR else QColor(self.GLOW_COLOR)
+        pulse = 1.0
+        if not self._reduced_motion and self._jarvis_state in (JarvisState.IDLE, JarvisState.LISTENING, JarvisState.SPEAKING):
+            pulse = 0.55 + 0.45 * math.sin(t * 2.4)
+        glow = QRadialGradient(cx, cy, body_w * 0.85)
+        c = QColor(glow_color)
+        c.setAlphaF(0.35 * glow_alpha * pulse)
+        glow.setColorAt(0, c)
+        c.setAlphaF(0)
+        glow.setColorAt(1, c)
+        painter.setBrush(QBrush(glow))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setOpacity(activation)
-        painter.drawEllipse(QPointF(x, y), 8, 8)
+        painter.drawEllipse(QPointF(cx, cy), body_w * 0.85, body_w * 0.85)
 
-        # Core
-        painter.setBrush(self.PRIMARY_COLOR)
-        painter.drawEllipse(QPointF(x, y), 3, 3)
-    
-    def _draw_eyes(self, painter: QPainter, cx: float, cy: float,
-                   face_width: float, face_height: float):
-        """Draw the geometric eyes with expression-based shapes."""
-        eye_y = cy - face_height * 0.15
-        eye_spacing = face_width * 0.25
-        eye_size = face_width * 0.12
-
-        # Calculate blink factor (0 = open, 1 = closed)
-        blink_factor = 0.0
-
-        # If asleep (low activation), force eyes closed
-        if self._activation_level < 0.5:
-            blink_factor = 1.0  # Fully closed
-        elif self._is_blinking:
-            # Smooth blink curve (close then open)
-            if self._blink_progress < 0.5:
-                blink_factor = self._blink_progress * 2
+        # ---- Toast slices behind the slots (rise per state) ----
+        slice_w = body_w * 0.30
+        slice_h = body_h * 0.26
+        gap = body_w * 0.10
+        slice_top = top - body_h * 0.06
+        rise = 0.0
+        if self._jarvis_state == JarvisState.LISTENING:
+            rise = slice_h * 0.30
+        elif self._jarvis_state == JarvisState.SUCCESS:
+            # One-time pop: overshoot then settle.
+            since = t - (self._success_at if self._success_at is not None else t)
+            if since < 0.6:
+                rise = slice_h * 0.9 * math.sin(min(1.0, since / 0.6) * math.pi * 1.15) + slice_h * 0.35
             else:
-                blink_factor = 1.0 - (self._blink_progress - 0.5) * 2
-
-        # Add yawn factor (eyes close during yawn) - only when awake
-        if self._activation_level >= 0.5:
-            yawn_factor = self._yawn_progress * 0.7  # Partial close, not full
-            blink_factor = max(blink_factor, yawn_factor)
-
-        # Calculate wink factors for each eye
-        left_blink = blink_factor
-        right_blink = blink_factor
-
-        # Apply wink to just one eye
-        if self._wink_progress > 0.05:
-            if self._wink_eye == "left":
-                left_blink = max(blink_factor, self._wink_progress)
-            else:
-                right_blink = max(blink_factor, self._wink_progress)
-
-        # Draw left eye
-        self._draw_eye(painter, cx - eye_spacing, eye_y, eye_size, left_blink, is_left=True)
-
-        # Draw right eye
-        self._draw_eye(painter, cx + eye_spacing, eye_y, eye_size, right_blink, is_left=False)
-    
-    def _draw_eye(self, painter: QPainter, ex: float, ey: float,
-                  size: float, blink_factor: float, is_left: bool):
-        """Draw a single geometric eye."""
-        # Expression-based eye shape modifications
-        height_mult = 1.0
-        y_offset = 0.0
-
-        if self._expression == Expression.HAPPY:
-            height_mult = 0.6  # Squinted happy eyes
-            y_offset = -size * 0.1
-        elif self._expression == Expression.SAD:
-            height_mult = 0.8
-            y_offset = size * 0.1
-        elif self._expression == Expression.SURPRISED:
-            height_mult = 1.3  # Wide eyes
-        elif self._expression == Expression.CURIOUS:
-            # One eyebrow raised
-            if is_left:
-                y_offset = -size * 0.15
-        elif self._expression == Expression.THINKING:
-            # Looking up/to the side
-            y_offset = -size * 0.1
-
-        # Apply blink
-        height_mult *= (1.0 - blink_factor * 0.9)
-
-        ey += y_offset
-
-        # Eye shape - hexagonal for geometric look
-        eye_height = size * height_mult
-
-        # Apply activation level to glow
-        glow_alpha = int(100 * self._activation_level)
-        glow_gradient = QRadialGradient(ex, ey, size * 1.5)
-        glow_gradient.setColorAt(0, QColor(251, 191, 36, glow_alpha))
-        glow_gradient.setColorAt(1, QColor(251, 191, 36, 0))
-        painter.setBrush(glow_gradient)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setOpacity(self._activation_level)
-        painter.drawEllipse(QPointF(ex, ey), size * 1.5, size * 1.5)
-
-        # Draw eye outline (diamond/hexagon shape)
-        eye_path = QPainterPath()
-
-        if self._expression == Expression.HAPPY:
-            # Curved happy eye (arc shape)
-            eye_path.moveTo(ex - size, ey)
-            eye_path.quadTo(ex, ey - eye_height, ex + size, ey)
-        else:
-            # Diamond eye
-            eye_path.moveTo(ex - size, ey)
-            eye_path.lineTo(ex, ey - eye_height)
-            eye_path.lineTo(ex + size, ey)
-            eye_path.lineTo(ex, ey + eye_height * 0.5)
-            eye_path.closeSubpath()
-
-        # Draw outline with activation-adjusted opacity
-        eye_opacity = 0.3 + (0.7 * self._activation_level)
-        painter.setOpacity(eye_opacity)
-        painter.setPen(QPen(self.PRIMARY_COLOR, 2))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(eye_path)
-
-        # Draw pupil or spinner (if not blinking and awake)
-        if blink_factor < 0.7 and self._activation_level > 0.5:
-            pupil_size = size * 0.3 * (1.0 - blink_factor)
-
-            # Check if we should draw a spinner (thinking state)
-            if self._jarvis_state in (JarvisState.THINKING, JarvisState.DICTATION_PROCESSING):
-                # Draw spinning loader instead of pupil
-                painter.setPen(QPen(self.PRIMARY_COLOR, 2))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-
-                # Draw 3 arc segments that rotate
-                for i in range(3):
-                    start_angle = (self._spinner_angle + i * 120) % 360
-                    # Convert to Qt's angle format (1/16th of a degree)
-                    qt_start = int(start_angle * 16)
-                    qt_span = int(80 * 16)  # 80 degree arc
-
-                    # Draw arc
-                    painter.drawArc(
-                        int(ex - pupil_size), int(ey - pupil_size),
-                        int(pupil_size * 2), int(pupil_size * 2),
-                        qt_start, qt_span
-                    )
-            else:
-                # Draw normal pupil
-                # Apply gaze offset to pupil position
-                pupil_x = ex + self._gaze_x * 0.25  # Scale down gaze for subtle movement
-                pupil_y = ey + self._gaze_y * 0.25
-
-                # Clamp pupil within eye bounds
-                max_offset = size * 0.5
-                pupil_x = max(ex - max_offset, min(ex + max_offset, pupil_x))
-                pupil_y = max(ey - max_offset * 0.6, min(ey + max_offset * 0.6, pupil_y))
-
-                painter.setBrush(self.PRIMARY_COLOR)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(QPointF(pupil_x, pupil_y), pupil_size, pupil_size)
-    
-    def _draw_mouth(self, painter: QPainter, cx: float, cy: float,
-                    face_width: float, face_height: float):
-        """Draw smooth continuous waveform mouth with speaking animation."""
-        mouth_y = cy + face_height * 0.25
-        mouth_width = face_width * 0.35
-        max_wave_height = face_height * 0.08  # Maximum amplitude of waveform
-
-        # Apply activation level to mouth opacity
-        mouth_opacity = 0.3 + (0.7 * self._activation_level)
-
-        # Generate waveform path using multiple sine waves for natural audio appearance
-        wave_path = QPainterPath()
-        num_points = 60  # Number of points for smooth curve
-
-        # Start at left edge
-        start_x = cx - mouth_width
-        wave_path.moveTo(start_x, mouth_y)
-
-        # Generate points along the waveform
-        for i in range(num_points + 1):
-            # Position along the mouth
-            t = i / num_points
-            x = start_x + (mouth_width * 2 * t)
-
-            # Calculate waveform height using multiple sine waves for complexity
-            # Main wave (low frequency, large amplitude)
-            wave1 = math.sin((t * 3.0 + self._waveform_time) * self._waveform_frequency_base * 20)
-
-            # Detail wave 1 (medium frequency)
-            wave2 = math.sin((t * 8.0 + self._waveform_detail_offset) * 0.5) * 0.4
-
-            # Detail wave 2 (high frequency, small amplitude for texture)
-            wave3 = math.sin((t * 15.0 + self._waveform_time * 2) * 0.3) * 0.2
-
-            # Combine waves with weighted sum
-            combined_wave = (wave1 + wave2 + wave3) / 1.6
-
-            # Apply amplitude envelope (less amplitude at edges)
-            edge_factor = 1.0 - abs(t - 0.5) * 0.5  # Tapers at edges
-            y = mouth_y + (combined_wave * max_wave_height * self._waveform_amplitude * edge_factor)
-
-            wave_path.lineTo(x, y)
-
-        # Draw glow effect
-        painter.setOpacity(mouth_opacity * 0.25)
-        glow_pen = QPen(self.GLOW_COLOR, 4)
-        glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        glow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(glow_pen)
-        painter.drawPath(wave_path)
-
-        # Draw main waveform line
-        painter.setOpacity(mouth_opacity)
-        main_pen = QPen(self.PRIMARY_COLOR, 2.5)
-        main_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        main_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(main_pen)
-        painter.drawPath(wave_path)
-
-        # Draw endpoint vertices
-        painter.setOpacity(1.0)
-        jx1, jy1 = self._get_jitter(100, 1.5)
-        jx2, jy2 = self._get_jitter(101, 1.5)
-        self._draw_vertex_glow(painter, cx - mouth_width + jx1, mouth_y + jy1, self._activation_level)
-        self._draw_vertex_glow(painter, cx + mouth_width + jx2, mouth_y + jy2, self._activation_level)
-    
-    def _draw_accent_lines(self, painter: QPainter, cx: float, cy: float,
-                           face_width: float, face_height: float):
-        """Draw decorative accent lines for the futuristic look."""
-        # Apply activation level to accent lines
-        accent_opacity = 0.5 * self._activation_level
-
-        # Cheekbone lines
-        painter.setPen(QPen(self.SECONDARY_COLOR, 1))
-        painter.setOpacity(accent_opacity)
-
-        cheek_y = cy + face_height * 0.05
-        cheek_length = face_width * 0.15
-
-        # Left cheekbone
-        painter.drawLine(
-            QPointF(cx - face_width * 0.35, cheek_y),
-            QPointF(cx - face_width * 0.35 + cheek_length, cheek_y + cheek_length * 0.3)
-        )
-
-        # Right cheekbone
-        painter.drawLine(
-            QPointF(cx + face_width * 0.35, cheek_y),
-            QPointF(cx + face_width * 0.35 - cheek_length, cheek_y + cheek_length * 0.3)
-        )
-
-        # Forehead lines (expression-dependent)
-        if self._expression in [Expression.SURPRISED, Expression.CONCERNED]:
-            forehead_y = cy - face_height * 0.35
-            line_width = face_width * 0.2
-
-            painter.drawLine(
-                QPointF(cx - line_width, forehead_y),
-                QPointF(cx + line_width, forehead_y)
+                rise = slice_h * 0.35
+        for sgn in (-1, 1):
+            sx = cx + sgn * (slice_w / 2 + gap / 2)
+            rect_top = slice_top - rise
+            toast_pen = QPen(QColor("#c98f3d"), 2)
+            painter.setOpacity(op)
+            painter.setPen(toast_pen)
+            painter.setBrush(QBrush(QColor("#e8b96b")))
+            painter.drawRoundedRect(
+                QRectF_(sx - slice_w / 2, rect_top, slice_w, slice_h),
+                slice_w * 0.18, slice_h * 0.18,
+            )
+            # Crust inner line
+            inner = QPen(QColor("#b0782f"), 1)
+            painter.setPen(inner)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF_(sx - slice_w / 2 + 3, rect_top + 3, slice_w - 6, slice_h - 6),
+                slice_w * 0.14, slice_h * 0.14,
             )
 
-        painter.setOpacity(1.0)
+        # ---- Toaster body (polished metal gradient) ----
+        grad = QLinearGradient(left, top, right, bottom)
+        grad.setColorAt(0.0, self.BODY_LIGHT)
+        grad.setColorAt(0.55, self.BODY_DARK)
+        grad.setColorAt(1.0, self.BODY_LIGHT)
+        painter.setOpacity(op)
+        painter.setPen(QPen(QColor("#5f666d"), 2))
+        painter.setBrush(QBrush(grad))
+        painter.drawRoundedRect(QRectF_(left, top, body_w, body_h), 14, 12)
 
-    def _draw_listening_rings(self, painter: QPainter, cx: float, cy: float,
-                                face_width: float, face_height: float):
-        """Draw expanding ring echoes of the face outline (bell chime effect)."""
-        if not self._listening_rings:
-            return
+        # Two bread slots on the top edge.
+        slot_h = body_h * 0.10
+        for sgn in (-1, 1):
+            sx = cx + sgn * (slice_w / 2 + gap / 2)
+            painter.setPen(QPen(QColor("#3a4046"), 1))
+            painter.setBrush(QBrush(QColor(20, 23, 30, int(230 * op))))
+            painter.drawRoundedRect(
+                QRectF_(sx - slice_w / 2 + 4, top + 2, slice_w - 8, slot_h),
+                slot_h * 0.5, slot_h * 0.5,
+            )
 
-        # Get base vertices
-        base_vertices = self._get_face_vertices(cx, cy, face_width, face_height)
+        # Lever (front-right side). Pressed down in WAKE, up otherwise.
+        lever_x = right - body_w * 0.08
+        track_top = top + body_h * 0.22
+        track_bottom = top + body_h * 0.62
+        painter.setPen(QPen(QColor("#5f666d"), 2))
+        painter.drawLine(QPointF(lever_x, track_top), QPointF(lever_x, track_bottom))
+        pressed = 1.0
+        if self._jarvis_state == JarvisState.WAKE:
+            since = t - (self._wake_at if self._wake_at is not None else t)
+            # Quick click: down (0.12 s), hold, rebound (0.35 s total).
+            if since < 0.35:
+                pressed = 1.0 if since > 0.25 else 0.0 + (since / 0.28) * 0.15
+        knob_y = track_bottom - (track_bottom - track_top) * (0.35 + 0.65 * pressed)
+        painter.setBrush(QBrush(self.PRIMARY_COLOR))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(lever_x, knob_y), body_w * 0.035, body_w * 0.035)
 
-        for ring_progress in self._listening_rings:
-            # Scale factor - rings expand outward from 1.0 to ~1.3
-            scale = 1.0 + (ring_progress * 0.35)
+        # ---- Heating elements (inside body, below slots) ----
+        elem_top = top + body_h * 0.16
+        elem_h = body_h * 0.055
+        elem_gap = body_h * 0.045
+        element_color = QColor(self.ERROR_COLOR) if self._jarvis_state == JarvisState.ERROR else self.SECONDARY_COLOR
+        fill = 0.0
+        if self._jarvis_state == JarvisState.THINKING:
+            # Progressive: three lines fill in sequence over ~1.8 s.
+            if self._wake_at is None:
+                self._wake_at = t  # anchor for the loop cycle
+            cycle = (t % 1.8) / 1.8
+            fill = cycle
+            painter.setPen(QPen(element_color, 2))
+            for i in range(3):
+                frac = max(0.0, min(1.0, fill * 3 - i))
+                yy = elem_top + (elem_h + elem_gap) * i
+                x0 = cx - body_w * 0.30
+                x1 = x0 + body_w * 0.60 * frac
+                if x1 > x0:
+                    painter.drawLine(QPointF(x0, yy), QPointF(x1, yy))
+        else:
+            painter.setOpacity(op * 0.9)
+            painter.setPen(QPen(element_color, 2))
+            for i in range(3):
+                yy = elem_top + (elem_h + elem_gap) * i
+                painter.drawLine(
+                    QPointF(cx - body_w * 0.30, yy),
+                    QPointF(cx + body_w * 0.30, yy),
+                )
 
-            # Opacity fades as ring expands (starts at ~0.6, fades to 0)
-            opacity = (1.0 - ring_progress) * 0.5 * self._activation_level
+        # ---- Tool execution: running dot across a strip ----
+        if self._jarvis_state == JarvisState.TOOL:
+            strip_y = bottom - body_h * 0.10
+            painter.setPen(QPen(QColor("#3a4046"), 1))
+            painter.drawLine(QPointF(cx - body_w * 0.32, strip_y),
+                             QPointF(cx + body_w * 0.32, strip_y))
+            prog = (t % 1.2) / 1.2
+            dot_x = cx - body_w * 0.32 + (body_w * 0.64) * prog
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self.PRIMARY_COLOR))
+            painter.drawEllipse(QPointF(dot_x, strip_y), 3.0, 3.0)
 
-            if opacity < 0.02:
-                continue
+        # ---- Face: eyes + mouth integrated into the body ----
+        eye_y = elem_top + 3 * (elem_h + elem_gap) + body_h * 0.04
+        eye_r = body_w * 0.045
+        blink = self._blink_factor() if not self._reduced_motion else 1.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self.PRIMARY_COLOR))
+        for sgn in (-1, 1):
+            ex = cx + sgn * body_w * 0.16
+            er = eye_r * (1.0 - blink * 0.85)
+            if er > 0.4:
+                painter.drawEllipse(QPointF(ex, eye_y), er, max(er, 0.8))
 
-            # Scale vertices outward from center
-            scaled_vertices = []
-            for vx, vy in base_vertices:
-                # Vector from center to vertex
-                dx, dy = vx - cx, vy - cy
-                # Scale outward
-                new_x = cx + dx * scale
-                new_y = cy + dy * scale
-                scaled_vertices.append((new_x, new_y))
-
-            # Draw the ring outline
-            painter.setOpacity(opacity)
-            ring_pen = QPen(self.PRIMARY_COLOR, 1.5)
-            ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(ring_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-
-            # Draw edges
-            for i in range(len(scaled_vertices)):
-                p1 = scaled_vertices[i]
-                p2 = scaled_vertices[(i + 1) % len(scaled_vertices)]
-                painter.drawLine(QPointF(*p1), QPointF(*p2))
-
-        painter.setOpacity(1.0)
-
-    def _draw_dictation_pulse(self, painter: QPainter, cx: float, cy: float,
-                              face_width: float, face_height: float):
-        """Draw a pulsing ring around the face during dictation / post-dictation processing."""
-        if self._jarvis_state not in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
-            return
-
-        # Pulsing opacity and scale driven by a sine wave
-        pulse = (math.sin(self._dictation_pulse_phase) + 1.0) / 2.0  # 0..1
-        scale = 1.12 + pulse * 0.08  # 1.12..1.20 gentle breathing
-        opacity = (0.35 + pulse * 0.25) * self._activation_level
-
-        base_vertices = self._get_face_vertices(cx, cy, face_width, face_height)
-
-        scaled_vertices = []
-        for vx, vy in base_vertices:
-            dx, dy = vx - cx, vy - cy
-            scaled_vertices.append((cx + dx * scale, cy + dy * scale))
-
-        painter.setOpacity(opacity)
-        # Use a red-ish tint to differentiate from listening rings
-        dictation_colour = QColor(239, 68, 68)  # Warm red (#ef4444)
-        ring_pen = QPen(dictation_colour, 2.0)
-        ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(ring_pen)
+        # Mouth: waveform follows level when known, else gentle sine.
+        level = self._level()
+        mouth_y = eye_y + body_h * 0.10
+        mouth_w = body_w * 0.22
+        amp = max(0.10, level) * body_h * 0.045
+        if self._jarvis_state == JarvisState.SPEAKING and not self._reduced_motion:
+            amp = level or (0.35 + 0.35 * math.sin(t * 5.2))
+            amp *= body_h * 0.045 + 1.2
+        painter.setOpacity(op)
+        path = QPainterPath()
+        n = 36
+        x0 = cx - mouth_w
+        path.moveTo(x0, mouth_y)
+        for i in range(n + 1):
+            tt = i / n
+            x = x0 + mouth_w * 2 * tt
+            edge = 1.0 - abs(tt - 0.5) * 1.2
+            if not self._reduced_motion and self._jarvis_state == JarvisState.SPEAKING:
+                yy = mouth_y + amp * edge * math.sin((tt * 6.0 + t * 4.0) * math.pi) 
+            else:
+                yy = mouth_y + 2.5 * edge
+            path.lineTo(x, yy)
+        mpen = QPen(self.PRIMARY_COLOR, 2.0)
+        mpen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(mpen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
 
-        for i in range(len(scaled_vertices)):
-            p1 = scaled_vertices[i]
-            p2 = scaled_vertices[(i + 1) % len(scaled_vertices)]
-            painter.drawLine(QPointF(*p1), QPointF(*p2))
+        # ---- Muted state: gray mic indicator, lever stays up ----
+        if self._jarvis_state == JarvisState.MUTED:
+            painter.setOpacity(op)
+            mic_r = body_w * 0.05
+            painter.setPen(QPen(QColor("#a1a1aa"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, bottom - body_h * 0.19), mic_r, mic_r)
+            painter.drawLine(QPointF(cx - mic_r * 0.6, bottom - body_h * 0.19 - mic_r * 0.6),
+                             QPointF(cx + mic_r * 0.6, bottom - body_h * 0.19 + mic_r * 0.6))
 
+        # ---- Dictation ring (same as legacy, around the body) ----
+        if self._jarvis_state in (JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING):
+            pulse = (math.sin(t * 2.6) + 1.0) / 2.0
+            scale = 1.08 + pulse * 0.07
+            ring_color = QColor(239, 68, 68) if self._jarvis_state == JarvisState.DICTATING else QColor(self.GLOW_COLOR)
+            painter.setOpacity(0.35 + pulse * 0.25)
+            painter.setPen(QPen(ring_color, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF_(cx - body_w * scale / 2, cy - body_h * scale / 1.55,
+                        body_w * scale, body_h * scale * 0.95),
+                14, 12,
+            )
+
+        painter.restore()
         painter.setOpacity(1.0)
+
+        # ---- Reason label for proactive speech (why did it just speak?) ----
+        try:
+            reason_label = (self._state_manager.label or "").strip()
+        except Exception:
+            reason_label = ""
+        if reason_label and activation > 0:
+            painter.setPen(QPen(self.PRIMARY_COLOR))
+            font = painter.font()
+            font.setPixelSize(max(10, int(body_h * 0.075)))
+            painter.setFont(font)
+            painter.drawText(
+                QRectF_(left, bottom + body_h * 0.04, body_w, body_h * 0.10),
+                int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop),
+                reason_label,
+            )
+
+        painter.end()
+
+    def _draw_background(self, painter: QPainter, w: int, h: int):
+        # Kept for API parity with the legacy widget name set.
+        pass
+
+
+def QRectF_(x, y, w, h):
+    from PyQt6.QtCore import QRectF
+    return QRectF(x, y, w, h)
+
+
+def _pair(v):
+    return (v, v)
+
+
+def random_interval_ms() -> int:
+    import random
+    return random.randint(2000, 5000)
 
 
 class FaceWindow(QWidget):
-    """A standalone window containing the Jarvis face."""
+    """A standalone window containing the Toustovač toaster."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🤖 Jarvis")
+        try:
+            from jarvis.config import BRANDING
+            self.setWindowTitle(f"🍞 {BRANDING['display_name']}")
+        except Exception:
+            self.setWindowTitle("Toustovač")
         self.setMinimumSize(320, 420)
         self.resize(350, 450)
 
-        # Set window flags for floating window
+        # Set window flags for floating window (always-on-top; recording mode
+        # keeps the overlay persistent but unobtrusive).
         self.setWindowFlags(
             Qt.WindowType.Window |
             Qt.WindowType.WindowStaysOnTopHint
         )
 
-        # Dark background
-        self.setStyleSheet("background-color: #0a0a0a;")
+        # Transparent background
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
 
         # Layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        # Face widget
+        # Toaster widget
         self.face = LowPolyFaceWidget()
         layout.addWidget(self.face)
 
@@ -1082,6 +682,17 @@ class FaceWindow(QWidget):
         window_width = self.width()
         window_height = self.height()
 
+        # Animate overlay scale from config (recording mode).
+        try:
+            from jarvis.config import load_config
+            scale = float(load_config().get("overlay_scale", 1.0) or 1.0)
+        except Exception:
+            scale = 1.0
+        if 0.4 <= scale <= 2.0 and abs(scale - 1.0) > 1e-6:
+            window_width = max(240, int(window_width * scale))
+            window_height = max(320, int(window_height * scale))
+            self.resize(window_width, window_height)
+
         # Position on right side with margin, vertically centered
         margin = 20
         x = screen_geometry.right() - window_width - margin
@@ -1092,4 +703,3 @@ class FaceWindow(QWidget):
     def set_expression(self, expression: Expression):
         """Set the face expression."""
         self.face.set_expression(expression)
-

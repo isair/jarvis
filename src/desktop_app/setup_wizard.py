@@ -494,7 +494,7 @@ class SetupWizard(QWizard):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🚀 Jarvis Setup Wizard")
+        self.setWindowTitle("🚀 Toustovač Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.setMinimumSize(700, 875)
 
@@ -537,7 +537,7 @@ class SetupWizard(QWizard):
         # Custom button labels
         self.setButtonText(QWizard.WizardButton.NextButton, "Next →")
         self.setButtonText(QWizard.WizardButton.BackButton, "← Back")
-        self.setButtonText(QWizard.WizardButton.FinishButton, "🎉 Start Jarvis")
+        self.setButtonText(QWizard.WizardButton.FinishButton, "🎉 Start Toustovač")
         self.setButtonText(QWizard.WizardButton.CancelButton, "Exit")
 
         # Store status for sharing between pages
@@ -638,7 +638,7 @@ class WelcomePage(QWizardPage):
         # Header
         header_layout = QVBoxLayout()
 
-        title = QLabel("🤖 Welcome to Jarvis")
+        title = QLabel("🤖 Welcome to Toustovač")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(title)
@@ -864,7 +864,7 @@ class ProviderChoicePage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Welcome to Jarvis. Choose how it runs its language model. Both "
+            "Welcome to Toustovač. Choose how it runs its language model. Both "
             "options keep everything on machines you control, never a "
             "third-party cloud."
         )
@@ -894,7 +894,7 @@ class ProviderChoicePage(QWizardPage):
         self._button_group.addButton(self._openai_radio)
         openai_card = self._provider_card(
             self._openai_radio,
-            "Point Jarvis at a server that speaks the OpenAI API. This is "
+            "Point Toustovač at a server that speaks the OpenAI API. This is "
             "usually another local app (LM Studio, oMLX, llama.cpp, vLLM, "
             "LocalAI) running on your own machine or network. You provide its "
             "URL and model name on the next step.",
@@ -1054,6 +1054,12 @@ class OpenAICompatiblePage(QWizardPage):
 
     _DEFAULT_BASE_URL = "http://localhost:1234/v1"  # LM Studio default
 
+    # Native OpenVINO NPU retrieval service (see ops/services + infra/openvino-npu).
+    _NPU_HEALTH_URL = "http://127.0.0.1:8010/health"
+    _NPU_CAPS_URL = "http://127.0.0.1:8010/v1/capabilities"
+    _NPU_BASE_URL = "http://127.0.0.1:8010/v1"
+    _NPU_MODEL = "Qwen3-Embedding-0.6B-int4-cw-ov"
+
     # Well-known local OpenAI-compatible servers, used both for the app preset
     # picker and for auto-discovery. All loopback, so probing never leaves the
     # machine.
@@ -1064,6 +1070,7 @@ class OpenAICompatiblePage(QWizardPage):
         ("llama.cpp / LocalAI", "http://localhost:8080/v1"),
         ("vLLM", "http://localhost:8000/v1"),
         ("oMLX (ol.mlx)", "http://localhost:9876/v1"),
+        ("BeeLlama (llama.cpp)", "http://127.0.0.1:8888/v1"),
     ]
 
     def __init__(self, parent=None):
@@ -1082,8 +1089,8 @@ class OpenAICompatiblePage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Point Jarvis at a local server (LM Studio, Ollama, Jan, llama.cpp, "
-            "vLLM, …). Pick your app or let Jarvis find it, then Connect to load "
+            "Point Toustovač at a local server (LM Studio, Ollama, Jan, llama.cpp, "
+            "vLLM, …). Pick your app or let Toustovač find it, then Connect to load "
             "its models. Only the base URL and chat model are required."
         )
         subtitle.setObjectName("subtitle")
@@ -1164,14 +1171,44 @@ class OpenAICompatiblePage(QWizardPage):
         self._use_ollama_embed = QCheckBox(
             "Use Ollama for embeddings instead (keeps full semantic memory)")
         self._use_ollama_embed.setVisible(False)
+        # NPU retrieval auto-fill (native OpenVINO, :8010; infra/openvino-npu):
+        # the embedding pair is already local — no downloads needed.
+        self._npu_info = self._probe_npu()
+        if self._npu_info:
+            self._embed_model_combo.setCurrentText(self._npu_info.get("model") or self._NPU_MODEL)
         self._use_ollama_embed.toggled.connect(lambda *_: self.completeChanged.emit())
         form.addWidget(self._use_ollama_embed)
+        npu = self._npu_info or {}
+        if npu:
+            model = npu.get("model") or self._NPU_MODEL
+            npu_label = QLabel(
+                f"✅ NPU retrieval detected — embeddings pre-filled: "
+                f"{model} @ {self._NPU_BASE_URL} (Qwen3 reranker on NPU)")
+            npu_label.setObjectName("subtitle")
+            npu_label.setWordWrap(True)
+            form.addWidget(npu_label)
+        # NPU retrieval (OpenVINO native, port 8010): when up, pre-fill the
+        # embedding pair in one click (installer auto-fill). See
+        # infra/openvino-npu + ops/services.
+        npu = self._probe_npu()
+        if npu:
+            self._embed_base_url = self._NPU_BASE_URL
+            self._NPU_MODEL = npu.get("model") or self._NPU_MODEL
+            self._embed_model_combo.setCurrentText(self._NPU_MODEL)
+            npu_label = QLabel(
+                f"✅ NPU retrieval detected — embeddings pre-filled: "
+                f"{self._NPU_MODEL} @ {self._NPU_BASE_URL} "
+                f"({npu.get('dimensions', 1024)} dim, Qwen3-Reranker on NPU)")
+            npu_label.setObjectName("subtitle")
+            npu_label.setWordWrap(True)
+            form.addWidget(npu_label)
+        self._npu_info = npu
 
         layout.addWidget(form_card)
 
         tip = QLabel(
             "💡  Memory search uses embeddings. If your server has no "
-            "embeddings endpoint, leave the embedding model empty and Jarvis "
+            "embeddings endpoint, leave the embedding model empty and Toustovač "
             "falls back to keyword search."
         )
         tip.setWordWrap(True)
@@ -1236,6 +1273,33 @@ class OpenAICompatiblePage(QWizardPage):
             if OpenAICompatiblePage._fetch_models(url, "", timeout=timeout):
                 found.append((label, url))
         return found
+
+    @staticmethod
+    def _probe_npu(timeout: float = 2.0) -> dict:
+        """Probe the native OpenVINO NPU retrieval service (:8010).
+
+        Returns ``{"model", "dimensions"}`` when up (model name preferably
+        from /v1/capabilities, else the known constant), ``{}`` otherwise.
+        Loopback only; fail-soft like the other probes."""
+        import json as _json
+        import urllib.request as _req
+        for url, parser in (
+            (OpenAICompatiblePage._NPU_CAPS_URL,
+             lambda d: {"model": str(d.get("embedding_model")
+                                     or OpenAICompatiblePage._NPU_MODEL),
+                        "dimensions": d.get("embedding_dimensions", 1024)}),
+            (OpenAICompatiblePage._NPU_HEALTH_URL,
+             lambda d: {"model": OpenAICompatiblePage._NPU_MODEL,
+                        "dimensions": d.get("embedding_dimensions", 1024)
+                        if isinstance(d, dict) else 1024}),
+        ):
+            try:
+                with _req.urlopen(url, timeout=timeout) as resp:
+                    data = _json.loads(resp.read().decode("utf-8"))
+                return parser(data)
+            except Exception:
+                continue
+        return {}
 
     @staticmethod
     def _classify_models(models: list) -> tuple:
@@ -1334,6 +1398,14 @@ class OpenAICompatiblePage(QWizardPage):
         self._use_ollama_embed.setVisible(needs_split)
         if not needs_split:
             self._use_ollama_embed.setChecked(False)
+        if not getattr(caps, "reachable", False):
+            self._npu_info = self._probe_npu()
+            if self._npu_info:
+                self._embed_model_combo.setCurrentText(self._npu_info.get("model") or self._NPU_MODEL)
+                if getattr(caps, "embeddings", False):
+                    self._connect_status.setText(
+                        self._connect_status.text()
+                        + f" | ✅ NPU embeddings: {self._NPU_MODEL} ({self._npu_info.get('dimensions', 1024)} dim)")
         self.completeChanged.emit()
 
     @staticmethod
@@ -1664,7 +1736,7 @@ class OllamaServerPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("The Ollama server needs to be running for Jarvis to use AI models.")
+        subtitle = QLabel("The Ollama server needs to be running for Toustovač to use AI models.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -2315,7 +2387,7 @@ class ModelsPage(QWizardPage):
 
     def _skip_models(self):
         self._is_complete = True
-        self.status_label.setText("Skipped model installation. Jarvis may not work correctly.")
+        self.status_label.setText("Skipped model installation. Toustovač may not work correctly.")
         self.status_label.setStyleSheet("color: #fbbf24;")
         self.completeChanged.emit()
 
@@ -3044,7 +3116,7 @@ class LocationPage(QWizardPage):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        subtitle = QLabel("Location helps Jarvis provide weather, local services, and time-aware responses.")
+        subtitle = QLabel("Location helps Toustovač provide weather, local services, and time-aware responses.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -3505,7 +3577,7 @@ class MCPPage(QWizardPage):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "MCP (Model Context Protocol) servers give Jarvis extra abilities. "
+            "MCP (Model Context Protocol) servers give Toustovač extra abilities. "
             "Select any you'd like to enable — you can always change these later in Settings."
         )
         subtitle.setObjectName("subtitle")
@@ -3651,7 +3723,7 @@ class SearchProvidersPage(QWizardPage):
     Ordering mirrors the runtime fallback chain: DDG → Brave → Wikipedia →
     honest "blocked" envelope. The page is always shown (even when nothing
     needs configuring) because the explainer itself is the point — users
-    should understand what Jarvis will and won't reach over the network
+    should understand what Toustovač will and won't reach over the network
     before they start using it.
     """
 
@@ -3736,7 +3808,7 @@ class SearchProvidersPage(QWizardPage):
         layout.addWidget(wiki_card)
 
         tip = QLabel(
-            "💡  When every provider fails, Jarvis tells you the search was "
+            "💡  When every provider fails, Toustovač tells you the search was "
             "blocked rather than making something up."
         )
         tip.setWordWrap(True)
@@ -3858,8 +3930,8 @@ class CompletePage(QWizardPage):
 
         tips = QLabel(
             "• Say your wake word (e.g. 'Jarvis') anywhere in your sentence to activate the assistant\n"
-            "• After Jarvis replies, speak your follow-up — no need to repeat the wake word\n"
-            "• Jarvis will appear in your system tray (menu bar on macOS)\n"
+            "• After Toustovač replies, speak your follow-up — no need to repeat the wake word\n"
+            "• Toustovač will appear in your system tray (menu bar on macOS)\n"
             "• Right-click the tray icon to access settings and controls\n"
             "• View logs by clicking '📝 View Logs' in the tray menu"
         )

@@ -1,6 +1,6 @@
 """
-Generate simple icons for the Jarvis desktop app.
-This creates idle and listening state icons.
+Generate simple icons for the Talkie Toaster (Toustovač) desktop app.
+Code-native vector drawing via PIL — idle and listening state toaster icons.
 """
 
 from PIL import Image, ImageDraw, ImageFont
@@ -9,15 +9,15 @@ from pathlib import Path
 
 # Deterministic, cross-platform icon font.
 #
-# The icon generator used to resolve the system font (Helvetica on macOS,
-# Arial on Windows, PIL's bitmap default on Linux), so the same script
+# The icon generator historically resolved the system font (Helvetica on
+# macOS, Arial on Windows, PIL's bitmap default on Linux), so the same script
 # produced different pixels on every platform — every local build/run
 # regenerated the committed assets and git reported them as changed.
 #
 # DejaVu Sans is bundled in ``fonts/`` (Bitstream Vera license, see
-# ``fonts/LICENSE``) and used unconditionally, so the output is byte-
-# identical everywhere. ``load_default()`` is only a last-resort guard if
-# the file ever goes missing — it must never be the primary path.
+# ``fonts/LICENSE``) and used unconditionally for the optional letter mark,
+# so the output is byte-identical everywhere. ``load_default()`` is only a
+# last-resort guard if the file ever goes missing.
 _BUNDLED_FONT = Path(__file__).resolve().parent / "fonts" / "DejaVuSans.ttf"
 
 
@@ -29,33 +29,45 @@ def _load_font(size: int) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
 
 
 def create_icon(color: str, filename: str, size: int = 256) -> None:
-    """Create a simple circular icon with a 'J' letter."""
+    """Create a flat vector toaster icon (transparent background)."""
     # Create image with transparency
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Draw circle
-    margin = size // 8
-    draw.ellipse(
-        [(margin, margin), (size - margin, size - margin)],
-        fill=color,
-        outline=None
-    )
+    s = size / 256.0
 
-    # Draw letter J
-    font = _load_font(size // 2)
+    def R(*vals):
+        return tuple(int(v * s) for v in vals)
 
-    text = "J"
-    # Get text bounding box
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
+    # Toast slices (behind the body top edge) — two golden rounds.
+    toast = "#e8b96b"
+    toast_edge = "#b0782f"
+    draw.rounded_rectangle(R(74, 52, 110, 96), radius=int(8 * s), fill=toast, outline=toast_edge, width=max(1, int(3 * s)))
+    draw.rounded_rectangle(R(146, 52, 182, 96), radius=int(8 * s), fill=toast, outline=toast_edge, width=max(1, int(3 * s)))
 
-    # Center the text
-    x = (size - text_width) // 2 - bbox[0]
-    y = (size - text_height) // 2 - bbox[1]
+    # Toaster body — polished rounded rectangle in the state colour.
+    draw.rounded_rectangle(R(48, 86, 208, 208), radius=int(22 * s), fill=color, outline="#26262b", width=max(1, int(4 * s)))
 
-    draw.text((x, y), text, fill='white', font=font)
+    # Two bread slots on the top surface.
+    slot = "#14171e"
+    draw.rounded_rectangle(R(74, 96, 118, 110), radius=int(6 * s), fill=slot)
+    draw.rounded_rectangle(R(138, 96, 182, 110), radius=int(6 * s), fill=slot)
+
+    # Heating glow hint between the slots.
+    draw.rounded_rectangle(R(122, 98, 134, 108), radius=int(4 * s), fill="#fcd34d")
+
+    # Front face: two dot eyes + tiny smile line (integrated, minimal).
+    eye = "#0a0b0f"
+    draw.ellipse(R(104, 130, 116, 142), fill=eye)
+    draw.ellipse(R(140, 130, 152, 142), fill=eye)
+    draw.arc(R(112, 140, 144, 158), start=0, end=180, fill=eye, width=max(1, int(3 * s)))
+
+    # Lever on the right edge: track + knob.
+    draw.line(R(200, 108, 200, 188), fill="#26262b", width=max(1, int(3 * s)))
+    draw.ellipse(R(192, 138, 210, 156), fill=color, outline="#26262b", width=max(1, int(3 * s)))
+
+    # Base plate.
+    draw.rounded_rectangle(R(44, 202, 212, 216), radius=int(6 * s), fill="#26262b")
 
     # Save in multiple sizes for better cross-platform support
     img.save(filename)
@@ -67,7 +79,7 @@ def create_icon(color: str, filename: str, size: int = 256) -> None:
 
     # Create .ico file for Windows (multiple sizes in one file)
     ico_sizes = [16, 32, 48, 64, 128, 256]
-    ico_images = [img.resize((s, s), Image.Resampling.LANCZOS) for s in ico_sizes]
+    ico_images = [img.resize((sz, sz), Image.Resampling.LANCZOS) for sz in ico_sizes]
     ico_filename = filename.replace('.png', '.ico')
     # Save ICO with multiple sizes - PIL handles multi-size ICO via append_images
     ico_images[-1].save(
@@ -103,4 +115,3 @@ if __name__ == '__main__':
     print("Created icon_listening.png")
 
     print("\nIcon generation complete!")
-

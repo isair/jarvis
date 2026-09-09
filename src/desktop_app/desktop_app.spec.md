@@ -86,11 +86,13 @@ flowchart TD
 
 The central controller that manages:
 
-- **System tray icon** with context menu
+- **System tray icon** with context menu (tooltip = `BRANDING["display_name"]`, i.e. "Toustovač")
 - **Daemon lifecycle** (start/stop the Jarvis voice assistant)
 - **Window management** (log viewer, memory viewer, face window)
 - **Update checking** on startup and on-demand
 - **Runtime diagnostics** (`🩺 Runtime Status`): shows whether the assistant is listening, the daemon mode/PID, whether Low Power Mode is active, whether Ollama is needed/running, whether Jarvis owns the current Ollama runtime, active chat/embedding models, and configured MCP server count. The dialog is informational and never starts or stops services.
+- **Demo submenu** (`Demo → Reset Talkie Toaster`): clears only the temporary dialogue-memory conversation (in-process `DialogueMemory.clear()` or `__CHAT_NEW_SESSION__` stdin IPC for subprocess mode), returns the toaster face to IDLE, and preserves config.json (provider keys untouched).
+- **Recording mode** (`recording_mode: true` in config.json): launch opens only the toaster overlay (no log viewer window), the log view auto-hides 6 s after being opened, the stopped-face state becomes `MUTED`, and `overlay_scale` / `overlay_always_on_top` tune the overlay. Model warmup (Whisper + LLM + TTS) still completes before the "Listening!" readiness line, so the ready state is a real ready state.
 
 ### Windows
 
@@ -98,15 +100,15 @@ The central controller that manages:
 |--------|---------|
 | **LogViewerWindow** | Real-time log output from the daemon, with "Report Issue" button |
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
-| **FaceWindow** | Animated face that reacts to speaking state |
+| **FaceWindow** | Animated vector toaster (Talkie Toaster / "Toustovač"): polished-metal body, two bread slots, two toast slices, a lever, warm heating glow and an integrated minimal face. States: ASLEEP·IDLE (breathing glow)·WAKE (lever click pulse)·LISTENING (toast rise + level-following glow)·THINKING (progressive heating)·TOOL (running status dot)·SPEAKING (mouth waveform)·SUCCESS (one pop)·ERROR (red glow, no pop)·MUTED (lever up + disabled mic)·DICTATING(+ring). Pure QPainter vectors, transparent panel, no raster head. |
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
 | **ChatWindow** | Text chat interface alongside voice; shares one conversation with the voice path and is enabled only while the daemon is running (see `chat_window.spec.md`) |
 
-Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
+The tray's `🍞 Show Toaster` / `📝 View Logs` actions are the only visibility controls. In recording mode the log viewer stays hidden at launch (overlay-only) with the transcript auto-hiding on open.
 
-**Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
+**Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use; optional `|level` suffix carries mic/TTS amplitude for glow + mouth following). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` (`MUTED` in recording mode) so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
 ### Tray Menu: GPU Library Recovery (Windows)
 

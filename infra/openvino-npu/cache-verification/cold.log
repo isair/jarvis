@@ -1,0 +1,8 @@
+[setupvars] OpenVINO environment initialized
+[setupvars] OpenVINO Python environment initialized
+{"event": "compiled_model_ready", "profile": "embedding-b1-s2048", "cache_status": "cold", "compile_or_import_ms": 100983.0978000009, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\embedding-b1-s2048-3f05abba491cf5c8-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "compiled_model_ready", "profile": "reranker-b1-s512", "cache_status": "cold", "compile_or_import_ms": 48231.43130000062, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s512-1b5073441469f32d-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "compiled_model_ready", "profile": "reranker-b1-s1024", "cache_status": "cold", "compile_or_import_ms": 66923.10179999913, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s1024-1b5073441469f32d-props-3da344534be9", "execution_devices": ["NPU"]}
+Native OpenVINO NPU service listening on http://127.0.0.1:8010
+You're using a Qwen2TokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+127.0.0.1 - - [02/Aug/2026 22:35:05] "GET /readyz HTTP/1.1" 200 -

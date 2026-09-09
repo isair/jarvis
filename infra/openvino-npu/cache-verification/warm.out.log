@@ -1,0 +1,6 @@
+[setupvars] OpenVINO environment initialized
+[setupvars] OpenVINO Python environment initialized
+{"event": "compiled_model_ready", "profile": "embedding-b1-s2048", "cache_status": "warm-inferred", "compile_or_import_ms": 637.9527999997663, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\embedding-b1-s2048-3f05abba491cf5c8-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "compiled_model_ready", "profile": "reranker-b1-s512", "cache_status": "warm-inferred", "compile_or_import_ms": 916.3822000009532, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s512-1b5073441469f32d-props-3da344534be9", "execution_devices": ["NPU"]}
+{"event": "compiled_model_ready", "profile": "reranker-b1-s1024", "cache_status": "warm-inferred", "compile_or_import_ms": 1035.485599999447, "cache_path": "D:\\_SATIN_AI_2\\Zoo-Code\\infra\\openvino-npu\\cache\\compiled\\ov-2026.2.1\\driver-32.0.100.4778\\reranker-b1-s1024-1b5073441469f32d-props-3da344534be9", "execution_devices": ["NPU"]}
+Native OpenVINO NPU service listening on http://127.0.0.1:8010

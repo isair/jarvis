@@ -1,7 +1,8 @@
 """
-Jarvis Desktop App - System Tray Application
+Talkie Toaster (Toustovač) Desktop App - System Tray Application
 
-A cross-platform system tray app for controlling the Jarvis voice assistant.
+A cross-platform system tray app for controlling the Talkie Toaster voice
+assistant (internally still "jarvis" for config compatibility).
 Supports Windows, Ubuntu (Linux), and macOS.
 """
 
@@ -537,7 +538,7 @@ def setup_crash_logging():
             import faulthandler
             faulthandler.enable(file=log_handle)
 
-            print(f"=== Jarvis Desktop App Crash Log ===", flush=True)
+            print(f"=== Toustovač Desktop App Crash Log ===", flush=True)
             print(f"Timestamp: {__import__('datetime').datetime.now()}", flush=True)
             print(f"Platform: {sys.platform}", flush=True)
             print(f"Python: {sys.version}", flush=True)
@@ -744,7 +745,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
             def __init__(self, crash_info: str):
                 super().__init__()
                 self.crash_info = crash_info
-                self.setWindowTitle("🐛 Jarvis Crash Report")
+                self.setWindowTitle("🐛 Toustovač Crash Report")
                 self.setMinimumSize(600, 450)
                 self.setStyleSheet(JARVIS_THEME_STYLESHEET)
                 self._setup_ui()
@@ -754,7 +755,7 @@ def show_crash_report_dialog(crash_content: str) -> None:
                 layout.setSpacing(16)
 
                 # Header
-                header = QLabel("😵 Jarvis crashed in the previous session")
+                header = QLabel("😵 Toustovač crashed in the previous session")
                 header.setStyleSheet("font-size: 18px; font-weight: bold; color: #f87171;")
                 layout.addWidget(header)
 
@@ -948,7 +949,7 @@ def show_unsupported_model_dialog(model_name: str) -> bool:
                 # Description
                 supported_list = ", ".join(sorted(SUPPORTED_CHAT_MODELS))
                 desc = QLabel(
-                    f"You're using <b>{self.model}</b> which hasn't been tested with Jarvis.\n\n"
+                    f"You're using <b>{self.model}</b> which hasn't been tested with Toustovač.\n\n"
                     f"Officially supported models: <b>{supported_list}</b>\n\n"
                     "Other models may work but could have issues with tool calling, "
                     "response formatting, or performance."
@@ -1083,8 +1084,8 @@ def show_instance_conflict_dialog() -> bool:
     from PyQt6.QtGui import QIcon
 
     msg = QMessageBox()
-    msg.setWindowTitle("Jarvis Already Running")
-    msg.setText("Another instance of Jarvis is already running.")
+    msg.setWindowTitle("Toustovač Already Running")
+    msg.setText("Another instance of Toustovač is already running.")
     msg.setInformativeText("Would you like to close the existing instance and start a new one?")
     msg.setIcon(QMessageBox.Icon.Question)
 
@@ -1180,7 +1181,7 @@ class LogViewerWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("📝 Jarvis Logs")
+        self.setWindowTitle("📝 Toustovač Logs")
         self.setGeometry(100, 100, 900, 650)
 
         # Apply theme
@@ -1205,7 +1206,7 @@ class LogViewerWindow(QMainWindow):
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(4)
 
-        title = QLabel("📝 Jarvis Logs")
+        title = QLabel("📝 Toustovač Logs")
         title.setObjectName("title")
         title.setStyleSheet("font-size: 20px; font-weight: 600; color: #fbbf24;")
         title_layout.addWidget(title)
@@ -1268,7 +1269,7 @@ class LogViewerWindow(QMainWindow):
         layout.addWidget(self.log_display)
 
         # Initial message
-        self.append_log("🚀 Jarvis Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
+        self.append_log("🚀 Toustovač Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
 
     def append_log(self, text: str) -> None:
         """Append text to the log display."""
@@ -1348,7 +1349,7 @@ class MemoryViewerWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🧠 Jarvis Memory")
+        self.setWindowTitle("🧠 Toustovač Memory")
         self.setGeometry(150, 150, 1200, 900)
 
         # Apply theme
@@ -1709,7 +1710,7 @@ class DaemonThread(KeepAliveWorker):
             try:
                 # Import and run the daemon
                 from jarvis.daemon import main as daemon_main
-                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
+                self.log_signals.new_log.emit("🚀 Toustovač daemon started\n")
                 self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
 
                 # Run daemon - this should run the main loop
@@ -1744,7 +1745,7 @@ class DaemonThread(KeepAliveWorker):
 
 
 class JarvisSystemTray:
-    """System tray application for Jarvis voice assistant."""
+    """System tray application for the Toustovač voice assistant."""
 
     def __init__(
         self,
@@ -1816,6 +1817,18 @@ class JarvisSystemTray:
 
         # Create system tray icon
         self.tray_icon = QSystemTrayIcon()
+        try:
+            from jarvis.config import get_branding
+            tray_tooltip = get_branding()["display_name"]
+        except Exception:
+            tray_tooltip = "Toustovač"
+        self.tray_icon.setToolTip(tray_tooltip)
+        self._recording_mode = False
+        try:
+            from jarvis.config import load_config as _lc
+            self._recording_mode = bool(_lc().get("recording_mode", False))
+        except Exception:
+            pass
         self.update_icon()
 
         # Create context menu
@@ -1906,7 +1919,7 @@ class JarvisSystemTray:
         self.menu.addAction(self.chat_action)
 
         # Face window action
-        self.face_action = QAction("👤 Show Face")
+        self.face_action = QAction("🍞 Show Toaster")
         self.face_action.triggered.connect(self.show_face_window)
         self.menu.addAction(self.face_action)
 
@@ -1924,6 +1937,13 @@ class JarvisSystemTray:
         self.runtime_status_action = QAction("🩺 Runtime Status")
         self.runtime_status_action.triggered.connect(self.show_runtime_status)
         self.menu.addAction(self.runtime_status_action)
+
+        # Demo submenu with the campaign reset action.
+        self.demo_menu = QMenu("Demo")
+        self.reset_action = QAction("Reset Talkie Toaster")
+        self.reset_action.triggered.connect(self.reset_talkie_toaster)
+        self.demo_menu.addAction(self.reset_action)
+        self.menu.addMenu(self.demo_menu)
 
         # Check for updates action
         self.check_updates_action = QAction("🔄 Check for Updates")
@@ -1966,6 +1986,51 @@ class JarvisSystemTray:
         self.menu.addAction(self.quit_action)
 
         self.tray_icon.setContextMenu(self.menu)
+
+    def reset_talkie_toaster(self) -> None:
+        """Demo-mode reset: clear temporary conversation state only.
+
+        Keeps provider credentials and user config on disk untouched.
+        In-process daemon: call the dialogue memory directly. Subprocess
+        daemon: send the new-session marker over stdin IPC.
+        """
+        cleared = False
+        try:
+            from jarvis import daemon as _daemon
+            dm = getattr(_daemon, "_global_dialogue_memory", None)
+            if dm is not None:
+                dm.clear()
+                cleared = True
+        except Exception as exc:
+            debug_log(f"reset in-process cleared nothing: {exc}", "desktop")
+
+        if not cleared and self.daemon_process is not None:
+            try:
+                from jarvis.daemon import CHAT_NEW_SESSION_IPC_PREFIX
+                stdin = getattr(self.daemon_process, "stdin", None)
+                if stdin is not None:
+                    stdin.write(CHAT_NEW_SESSION_IPC_PREFIX + "\n")
+                    stdin.flush()
+                    cleared = True
+            except Exception as exc:
+                debug_log(f"reset via stdin failed: {exc}", "desktop")
+
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            get_jarvis_state().set_state(JarvisState.IDLE)
+        except Exception:
+            pass
+
+        try:
+            self.tray_icon.showMessage(
+                "Talkie Toaster",
+                "Demo stav obnovena · Toustovač je připraven",
+                QSystemTrayIcon.MessageIcon.Information,
+                1500,
+            )
+        except Exception:
+            pass
+        debug_log("talkie toaster demo state reset", "desktop")
 
     def _maybe_add_cuda_recovery_action(self) -> None:
         """Add the GPU-libraries reinstall action to the tray menu, when applicable."""
@@ -2028,7 +2093,7 @@ class JarvisSystemTray:
             "Reinstall GPU libraries",
             (
                 "The CUDA installer is running. Once it finishes, restart "
-                f"Jarvis to use GPU acceleration. See {action_spec.target_dir / 'install.log'} "
+                f"Toustovač to use GPU acceleration. See {action_spec.target_dir / 'install.log'} "
                 "for details."
             ),
         )
@@ -2070,7 +2135,7 @@ class JarvisSystemTray:
         if result == QDialog.DialogCode.Accepted and self.is_listening:
             reply = QMessageBox.question(
                 None, "🔄 Restart?",
-                "Settings saved. Restart Jarvis now to apply changes?",
+                "Settings saved. Restart Toustovač now to apply changes?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
@@ -2183,24 +2248,41 @@ class JarvisSystemTray:
                 show_update_error_dialog(str(e))
 
     def show_launch_windows(self) -> None:
-        """Open the log viewer and face window once at app launch.
+        """Open the overlay windows once at app launch.
 
         Starting or stopping the assistant never changes window visibility
         (start_daemon/stop_daemon leave it untouched), so the
         launch windows are opened here explicitly instead of inside
         start_daemon.
+
+        In recording mode the log viewer stays closed: the toaster overlay
+        is the persistent, unobtrusive surface and transcripts auto-hide
+        after each response.
+        """
+        if not getattr(self, "_recording_mode", False):
+            self.log_viewer.show()
+            self.log_viewer.raise_()
+            self.log_viewer.activateWindow()
+        self.face_window.show()
+        self.face_window.raise_()
+        # Deterministic readiness state for the overlay before recording.
+        try:
+            from desktop_app.face_widget import get_jarvis_state
+            _ = get_jarvis_state()  # initialises IDLE/ASLEEP file immediately
+        except Exception:
+            pass
+
+    def show_log_viewer(self) -> None:
+        """Show the log viewer window and bring it to front.
+
+        In recording mode the transcript auto-hides shortly after opening
+        so the demo stays clip-able without extra edits.
         """
         self.log_viewer.show()
         self.log_viewer.raise_()
         self.log_viewer.activateWindow()
-        self.face_window.show()
-        self.face_window.raise_()
-
-    def show_log_viewer(self) -> None:
-        """Show the log viewer window and bring it to front."""
-        self.log_viewer.show()
-        self.log_viewer.raise_()
-        self.log_viewer.activateWindow()
+        if getattr(self, "_recording_mode", False):
+            QTimer.singleShot(6000, self.log_viewer.hide)
 
     def show_memory_viewer(self) -> None:
         """Show the memory viewer window and bring it to front."""
@@ -2346,22 +2428,24 @@ class JarvisSystemTray:
             icon = QIcon(str(icon_path))
         else:
             # Use a simple text-based icon as fallback
-            from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
+            from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QPen
             pixmap = QPixmap(64, 64)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
 
-            # Draw a circle
+            # Draw a rounded toaster silhouette (body + slots + lever)
             color = QColor("#4CAF50" if self.is_listening else "#9E9E9E")
             painter.setBrush(color)
             painter.setPen(color)
-            painter.drawEllipse(4, 4, 56, 56)
-
-            # Draw letter J
-            painter.setPen(Qt.GlobalColor.white)
-            font = QFont("Arial", 32, QFont.Weight.Bold)
-            painter.setFont(font)
-            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "J")
+            painter.drawRoundedRect(10, 22, 44, 30, 8, 8)
+            painter.setBrush(QColor("#0a0b0f"))
+            painter.drawRoundedRect(18, 27, 10, 3, 1, 1)
+            painter.drawRoundedRect(36, 27, 10, 3, 1, 1)
+            # Lever nub on the right edge
+            painter.setPen(QPen(color, 4))
+            painter.drawLine(49, 26, 49, 44)
+            painter.setBrush(color)
+            painter.drawEllipse(45, 38, 8, 8)
 
             painter.end()
             icon = QIcon(pixmap)
@@ -2369,10 +2453,17 @@ class JarvisSystemTray:
         self.tray_icon.setIcon(icon)
 
     def _set_face_asleep(self) -> None:
-        """Reset the face to asleep so it doesn't look ready while the daemon is down."""
+        """Reset the face to asleep so it doesn't look ready while the daemon is down.
+
+        Recording mode uses the explicit MUTED state (lever up + disabled
+        mic indicator) instead of the dark ASLEEP rendering.
+        """
         try:
             from desktop_app.face_widget import JarvisState, get_jarvis_state
-            get_jarvis_state().set_state(JarvisState.ASLEEP)
+            if getattr(self, "_recording_mode", False):
+                get_jarvis_state().set_state(JarvisState.MUTED)
+            else:
+                get_jarvis_state().set_state(JarvisState.ASLEEP)
         except Exception:
             pass
 
@@ -2515,7 +2606,7 @@ class JarvisSystemTray:
                 )
                 log_thread.start()
                 self.log_reader_threads.append(log_thread)
-                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
+                self.log_signals.new_log.emit("🚀 Toustovač daemon started\n")
 
             self.is_listening = True
             self.toggle_action.setText("⏸️ Stop Listening")
@@ -2524,7 +2615,7 @@ class JarvisSystemTray:
             self._set_chat_daemon_status("running")
 
             self.tray_icon.showMessage(
-                "Jarvis Started",
+                "Toustovač Started",
                 "Voice assistant is now listening",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
@@ -2538,7 +2629,7 @@ class JarvisSystemTray:
             self._set_chat_daemon_status("crashed")
             self.log_signals.new_log.emit(f"❌ Failed to start: {str(e)}\n{traceback.format_exc()}\n")
             self.tray_icon.showMessage(
-                "Error Starting Jarvis",
+                "Error Starting Toustovač",
                 f"Failed to start: {str(e)}",
                 QSystemTrayIcon.MessageIcon.Critical,
                 3000
@@ -2630,7 +2721,7 @@ class JarvisSystemTray:
             if self.is_bundled and self.daemon_thread:
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
-                self.log_signals.new_log.emit("⏸️ Stopping Jarvis daemon...\n")
+                self.log_signals.new_log.emit("⏸️ Stopping Toustovač daemon...\n")
 
                 # Show diary update dialog for bundled app
                 if show_diary_dialog:
@@ -2837,13 +2928,13 @@ class JarvisSystemTray:
             self._set_face_asleep()
 
             self.tray_icon.showMessage(
-                "Jarvis Stopped",
+                "Toustovač Stopped",
                 "Voice assistant is no longer listening",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
             )
 
-            self.log_signals.new_log.emit("⏸️ Jarvis daemon stopped\n")
+            self.log_signals.new_log.emit("⏸️ Toustovač daemon stopped\n")
             debug_log("daemon stopped from desktop app", "desktop")
 
         except Exception as e:
@@ -2863,7 +2954,7 @@ class JarvisSystemTray:
                 # Thread has terminated
                 self._on_daemon_finished()
                 self.tray_icon.showMessage(
-                    "Jarvis Stopped",
+                    "Toustovač Stopped",
                     "Voice assistant process ended unexpectedly",
                     QSystemTrayIcon.MessageIcon.Warning,
                     3000
@@ -2886,7 +2977,7 @@ class JarvisSystemTray:
                     self._set_face_asleep()
 
                     self.tray_icon.showMessage(
-                        "Jarvis Stopped",
+                        "Toustovač Stopped",
                         "Voice assistant process ended unexpectedly",
                         QSystemTrayIcon.MessageIcon.Warning,
                         3000
@@ -2940,7 +3031,7 @@ def _ollama_runtime_flags(cfg) -> tuple[bool, bool]:
 def _check_openai_compat_reachable(cfg, timeout_sec: float = 4.0) -> bool:
     """True when the configured OpenAI-compatible server answers its model
     listing. Used at startup to warn the user early if their local server
-    isn't running, since (unlike Ollama) Jarvis cannot start it for them."""
+    isn't running, since (unlike Ollama) Toustovač cannot start it for them."""
     try:
         from jarvis.llm import get_llm_backend
         return bool(get_llm_backend(cfg).list_models(timeout_sec=timeout_sec))
@@ -2953,9 +3044,9 @@ def _build_unreachable_message(cfg) -> str:
     without Qt dependencies so tests can verify it directly."""
     base = (getattr(cfg, "llm_base_url", "") or "").strip() or "your configured server"
     return (
-        f"⚠️ Jarvis couldn't reach a ready LLM server at {base}.\n\n"
+        f"⚠️ Toustovač couldn't reach a ready LLM server at {base}.\n\n"
         "Make sure your local server (for example LM Studio, Ollama, llama.cpp, "
-        "vLLM) is running with a model loaded, and Jarvis will connect "
+        "vLLM) is running with a model loaded, and Toustovač will connect "
         "automatically.\n\n"
         "You can open the Setup Wizard to change your server, or close and "
         "adjust Settings later via the tray menu \u2192 LLM Provider."
@@ -2967,7 +3058,7 @@ def _show_openai_unreachable_dialog(cfg) -> None:
     from PyQt6.QtWidgets import QMessageBox
 
     dialog = QMessageBox()
-    dialog.setWindowTitle("Jarvis")
+    dialog.setWindowTitle("Toustovač")
     dialog.setText(_build_unreachable_message(cfg))
     dialog.setIcon(QMessageBox.Icon.Warning)
     open_wizard_btn = dialog.addButton("🔧 Open Setup Wizard", QMessageBox.ButtonRole.ActionRole)
@@ -3153,7 +3244,7 @@ def main() -> int:
     # Single-instance check
     # This prevents multiple tray icons and log windows from spawning
     if not acquire_single_instance_lock():
-        print("⚠️ Another instance of Jarvis Desktop is already running.", flush=True)
+        print("⚠️ Another instance of Toustovač Desktop is already running.", flush=True)
 
         # Create a minimal QApplication for the dialog
         from PyQt6.QtWidgets import QApplication
@@ -3202,7 +3293,7 @@ def main() -> int:
     # Register clean exit handler
     atexit.register(mark_session_clean_exit)
 
-    print("Starting Jarvis Desktop App...", flush=True)
+    print("Starting Toustovač Desktop App...", flush=True)
     print(f"Python executable: {sys.executable}", flush=True)
     print(f"Working directory: {os.getcwd()}", flush=True)
     print(f"__file__: {__file__}", flush=True)
@@ -3571,7 +3662,7 @@ def main() -> int:
                 splash.set_status("Model check complete!")
                 app.processEvents()
 
-        splash.set_status("Loading Jarvis...")
+        splash.set_status("Loading Toustovač...")
         print("Initializing JarvisSystemTray...", flush=True)
         tray_instance = JarvisSystemTray(
             ollama_runtime_ownership=ollama_runtime_ownership,
@@ -3580,7 +3671,7 @@ def main() -> int:
 
         # Always auto-start listening
         splash.set_status("Starting voice assistant...")
-        print("🚀 Auto-starting Jarvis listener...", flush=True)
+        print("🚀 Auto-starting Toustovač listener...", flush=True)
         tray_instance.start_daemon()
 
         # Close splash screen
@@ -3596,7 +3687,7 @@ def main() -> int:
             # Show notification with log file location
             from PyQt6.QtWidgets import QSystemTrayIcon
             tray_instance.tray_icon.showMessage(
-                "Jarvis Started",
+                "Toustovač Started",
                 f"Crash logs available at:\n{crash_log_file}",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000
@@ -3617,8 +3708,8 @@ def main() -> int:
 
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Icon.Critical)
-            msg.setWindowTitle("Jarvis Desktop App Error")
-            msg.setText("Failed to start Jarvis Desktop App")
+            msg.setWindowTitle("Toustovač Desktop App Error")
+            msg.setText("Failed to start Toustovač Desktop App")
             msg.setDetailedText(str(e) + "\n\n" + traceback.format_exc())
             if crash_log_file:
                 msg.setInformativeText(f"Check log file at:\n{crash_log_file}")

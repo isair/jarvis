@@ -44,7 +44,7 @@ class TestChatWindowStructure:
 
         win = ChatWindow()
         title = win.windowTitle()
-        assert "Jarvis" in title
+        assert "Toustovač" in title
 
 
 @pytest.mark.unit
@@ -737,7 +737,7 @@ class TestChatWindowSmsLook:
         win.show()
         qapp.processEvents()
         texts = [label.text() for label in win.findChildren(QLabel)]
-        assert "Jarvis" in texts
+        assert "Toustovač" in texts
         assert "Online" in texts
 
     def test_header_shows_typing_while_query_in_flight(self, qapp, monkeypatch):

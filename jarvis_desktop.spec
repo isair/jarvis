@@ -87,7 +87,6 @@ except Exception as e:
 hiddenimports = [
     # Jarvis core modules
     'jarvis',
-    'jarvis._version',
     'jarvis.daemon',
     'jarvis.config',
     'jarvis.debug',
@@ -116,7 +115,6 @@ hiddenimports = [
     'jarvis.memory',
     'jarvis.memory.conversation',
     'jarvis.memory.db',
-    'jarvis.memory.embeddings',
     # Output modules
     'jarvis.output',
     'jarvis.output.tts',
@@ -125,7 +123,7 @@ hiddenimports = [
     'piper',
     'piper.voice',
     'piper.config',
-    'piper.download',
+    'piper.download_voices',
     'piper.download_voices',
     'piper.phonemize_espeak',
     'piper.phoneme_ids',
@@ -134,8 +132,6 @@ hiddenimports = [
     'onnxruntime.capi',
     'onnxruntime.capi._pybind_state',
     # Profile modules
-    'jarvis.profile',
-    'jarvis.profile.profiles',
     # Reply modules
     'jarvis.reply',
     'jarvis.reply.engine',
@@ -152,7 +148,6 @@ hiddenimports = [
     'jarvis.tools.builtin.nutrition.delete_meal',
     'jarvis.tools.builtin.nutrition.fetch_meals',
     'jarvis.tools.builtin.nutrition.log_meal',
-    'jarvis.tools.builtin.recall_conversation',
     'jarvis.tools.builtin.refresh_mcp_tools',
     'jarvis.tools.builtin.screenshot',
     'jarvis.tools.builtin.web_search',

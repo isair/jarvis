@@ -92,6 +92,20 @@ Instead of extracting post-wake-word audio, we:
 
 Wake word detection operates on the rolling transcript buffer. When Whisper produces text, it is checked for the configured wake word and aliases using fuzzy matching (`rapidfuzz`). This supports arbitrary wake words in any language.
 
+**Toustovač identity (Talkie Toaster campaign):** the primary wake word and its
+aliases come from the centralized `BRANDING` block in `jarvis.config`
+(assistant_id `talkie_toaster`, display name "Toustovač"; wake words:
+`toustovač`, `toustovači`, `toastovač`, `toastovači`, `hej toustovač`,
+`hej toustovači`, `hey toaster`). All are Whisper-multilingual transcriptions —
+no Porcupine, single audio stack. Matching rules in `wake_detection.py`:
+- NFKD fold with combining marks stripped, so `toustovač`/`toustovac` align.
+- Interior punctuation normalised to spaces for phrase aliases.
+- Alias list sorted longest-first; the longest matching phrase wins.
+- The extraction removes exactly ONE matched phrase (by original-string index
+  map) so diacritics survive: "Hej toustovač, jaké je počasí v Praze?" →
+  "jaké je počasí v Praze?" (single utterance, no pause needed).
+- Per-token fuzzy fallback (default ratio 0.78) for common mishearings.
+
 ### 3. Context-Aware Intent Judge
 
 The intent judge receives full context and makes intelligent decisions:

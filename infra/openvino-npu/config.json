@@ -1,0 +1,22 @@
+{
+	"model_config_list": [
+		{
+			"config": {
+				"name": "Qwen3-Embedding-0.6B-int4-cw-ov",
+				"base_path": "/models/Qwen3-Embedding-0.6B-int4-cw-ov",
+				"target_device": "NPU",
+				"batch_size": 8,
+				"shape": "auto"
+			}
+		},
+		{
+			"config": {
+				"name": "Qwen3-Reranker-0.6B-int8-ov",
+				"base_path": "/models/Qwen3-Reranker-0.6B-int8-ov",
+				"target_device": "NPU",
+				"batch_size": 4,
+				"shape": "auto"
+			}
+		}
+	]
+}

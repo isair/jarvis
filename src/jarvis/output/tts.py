@@ -23,8 +23,9 @@ from ..utils.audio_lock import portaudio_lock
 # Piper TTS Model Configuration
 # ============================================================================
 # Default voice model for automatic download
-# en_GB-alan-medium: Good quality, ~60MB, British English male
-PIPER_DEFAULT_VOICE = "en_GB-alan-medium"
+# cs_CZ-jirka-medium: Czech male neural voice (jirka), the Toustovač preset.
+# The parser below understands the {lang}_{region}-{name}-{quality} shape.
+PIPER_DEFAULT_VOICE = "cs_CZ-jirka-medium"
 PIPER_VOICE_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
 
 
@@ -592,7 +593,10 @@ class ChatterboxTTS:
             state_manager = get_jarvis_state()
             if is_speaking:
                 debug_log("setting face state to SPEAKING (chatterbox)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
+                # Coarse amplitude proxy from text length so the mouth arc
+                # has a real initial level; the widget adds per-frame sine.
+                level = max(0.3, min(1.0, len(self._last_spoken_text.split()) / 40.0))
+                state_manager.set_state(JarvisState.SPEAKING, level)
             # Note: When speaking ends, we don't change state here - let daemon manage transitions
         except ImportError:
             debug_log("face widget not available (ImportError) (chatterbox)", "tts")
@@ -955,7 +959,8 @@ class PiperTTS:
             state_manager = get_jarvis_state()
             if is_speaking:
                 debug_log("setting face state to SPEAKING (piper)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
+                level = max(0.3, min(1.0, len(self._last_spoken_text.split()) / 40.0))
+                state_manager.set_state(JarvisState.SPEAKING, level)
         except ImportError:
             debug_log("face widget not available (ImportError) (piper)", "tts")
         except Exception as e:

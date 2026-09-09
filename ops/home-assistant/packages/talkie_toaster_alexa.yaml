@@ -1,0 +1,42 @@
+# Talkie Toaster <-> Alexa bridging package for Home Assistant.
+# Merge into configuration.yaml (`!include packages/talkie_toaster_alexa.yaml`)
+# or paste into the UI-based YAML package directory. Secrets live in
+# Home Assistant's own secrets.yaml, not here.
+
+script:
+  talkie_toaster_run_alexa_routine:
+    alias: Talkie Toaster - Run Alexa Routine
+    mode: single
+    fields:
+      routine_name:
+        required: true
+        selector:
+          text:
+    sequence:
+      - action: media_player.play_media
+        target:
+          entity_id: !secret alexa_execution_device
+        data:
+          media:
+            media_content_id: "{{ routine_name }}"
+            media_content_type: routine
+            metadata: {}
+
+# Fallback path (used when the media_player entity or Alexa Media Player is
+# unavailable): a plain input_button that the official Alexa Smart Home
+# integration can also be pointed at, plus the automation that dispatches
+# the same routine by name.
+input_button:
+  talkie_toaster_alexa_fallback:
+    name: Talkie Toaster Alexa Fallback
+    icon: mdi:refresh
+
+automation:
+  - alias: Talkie Toaster - fallback triggers routine
+    triggers:
+      - trigger: state
+        entity_id: input_button.talkie_toaster_alexa_fallback
+    actions:
+      - action: script.talkie_toaster_run_alexa_routine
+        data:
+          routine_name: "{{ states('input_text.talkie_toaster_routine_name') or 'Kettle on' }}"

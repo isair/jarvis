@@ -1,0 +1,2 @@
+You're using a Qwen2TokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+127.0.0.1 - - [02/Aug/2026 22:35:05] "GET /readyz HTTP/1.1" 200 -

@@ -21,6 +21,7 @@ from .builtin.weather import WeatherTool
 from .builtin.time_tool import TimeTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
+from .builtin.windows_actions import WindowsActionsTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -39,9 +40,26 @@ BUILTIN_TOOLS = {
     "refreshMCPTools": RefreshMCPToolsTool(),
     "getWeather": WeatherTool(),
     "getTime": TimeTool(),
+    "windowsActions": WindowsActionsTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
 }
+
+
+def _face_tool_event(start: bool, success: bool = True) -> None:
+    """Push tool lifecycle states to the desktop toaster widget (no-op in
+    headless/test runs where Qt isn't initialised)."""
+    try:
+        from desktop_app.face_widget import get_jarvis_state, JarvisState
+        if get_jarvis_state() is not None:
+            if start:
+                get_jarvis_state().set_state(JarvisState.TOOL)
+            else:
+                get_jarvis_state().set_state(
+                    JarvisState.SUCCESS if success else JarvisState.ERROR
+                )
+    except Exception:
+        pass
 
 # Global MCP tools cache
 _mcp_tools_cache: Dict[str, "ToolSpec"] = {}
@@ -326,17 +344,21 @@ def run_tool_with_retries(
         server_name, mcp_tool_name = raw_name.split("__", 1)
         mcps_config = getattr(cfg, "mcps", {})
         if mcps_config and server_name in mcps_config:
+            _face_tool_event(start=True)
             try:
                 if MCPClient is None:
+                    _face_tool_event(start=False, success=False)
                     return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
 
                 client = MCPClient(mcps_config)
                 result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool_name, arguments=tool_args or {})
                 is_error = bool(result.get("isError", False))
                 text = result.get("text") or None
+                _face_tool_event(start=False, success=(not is_error))
                 return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
             except Exception as e:
                 detail = str(e) or type(e).__name__
+                _face_tool_event(start=False, success=False)
                 return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP tool '{raw_name}' error: {detail}")
 
     # Friendly user print helper (non-debug only)
@@ -353,7 +375,8 @@ def run_tool_with_retries(
     # Check builtin tools first
     if name in BUILTIN_TOOLS:
         tool = BUILTIN_TOOLS[name]
-        return tool.execute(
+        _face_tool_event(start=True)
+        result = tool.execute(
             db=db,
             cfg=cfg,
             tool_args=tool_args,
@@ -364,6 +387,8 @@ def run_tool_with_retries(
             user_print=_user_print,
             language=language,
         )
+        _face_tool_event(start=False, success=bool(getattr(result, "success", False)))
+        return result
 
     # Unknown tool
     debug_log(f"unknown tool requested: {tool_name}", "tools")

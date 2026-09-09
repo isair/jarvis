@@ -41,6 +41,37 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     },
 }
 
+# ============================================================================
+# ASSISTANT IDENTITY / BRANDING — Single Source of Truth
+# ============================================================================
+# Centralised persona + wake-word identity for the Talkie Toaster build.
+# All user-visible strings come from here; internal keys (config paths, JSON
+# field names) keep the historical "jarvis" spelling so existing
+# ~/.config/jarvis/config.json installs keep working after the upgrade.
+BRANDING: Dict[str, Any] = {
+    "assistant_id": "talkie_toaster",
+    "display_name": "Toustovač",
+    "wake_words": [
+        "toustovač",
+        "toustovači",
+        "toastovač",
+        "toastovači",
+        "hej toustovač",
+        "hej toustovači",
+        "hey toaster",
+    ],
+}
+
+
+def get_branding() -> Dict[str, Any]:
+    """Return the centralized branding/persona identity mapping (copy)."""
+    return dict(BRANDING)
+
+
+# Default Czech male Piper voice for the Toustovač character (jirka, neural,
+# medium quality). Falls back through the existing piper auto-download path.
+DEFAULT_TTS_VOICE: str = "cs_CZ-jirka-medium"
+
 # The default chat model (first in the supported list)
 DEFAULT_CHAT_MODEL = "gemma4:e2b"
 # Ollama-path default for the fast tier (voice intent, tool routing, and the
@@ -48,6 +79,227 @@ DEFAULT_CHAT_MODEL = "gemma4:e2b"
 # provider an unset fast model resolves to the active chat model instead —
 # this pull-name only exists on Ollama.
 DEFAULT_FAST_MODEL = "gemma4:e2b"
+
+# ── Hardware-aware model ladder (new installs / defaults only) ──────────────
+# Preferred pair per visible compute kind. On the campaign hosts:
+#   NVIDIA RTX 4090           -> chat qwen3.8:27b  + Whisper large-v3-turbo
+#   Intel Arc (140T / B390)   -> chat gemma4:e2b   + Whisper medium
+#   CPU only                  -> chat gemma4:e2b   + Whisper medium
+# Detection probes ctranslate2 (CUDA device count), onnxruntime providers
+# (AzureExecutionProvider/OpenVINO-backed NPU/GPU EPs) and the Windows PCI
+# device enum as fallback. Probes are try/except-guarded; on failure we keep
+# the plain defaults above.
+
+_HW_NVIDIA_CUDA = ("cublas64_12.dll", "cudnn_ops64_9.dll")
+
+
+def _hardware_compute_kind() -> str:
+    """Order-preferred compute kind: 'nvidia', 'intel' or 'cpu'.
+
+    - NVIDIA: CUDA is visible through ctranslate2 (or a DLL probe fallback)
+      -> RTX 4090 style discrete GPUs.
+    - Intel:  an OpenVINO-flavoured execution provider appears in onnxruntime
+      (CPU + NPU on Arrow/Lunar Lake: Intel(R) Graphics iGPU 140T/B390 and
+      the NPU device) -> Arc / NPU path.
+    - Otherwise plain CPU.
+    """
+    try:
+        import ctranslate2 as ct2
+        if ct2.get_cuda_device_count() > 0:
+            return "nvidia"
+    except Exception:
+        pass
+
+    try:
+        import onnxruntime as ort
+        provider_blob = " ".join(ort.get_available_providers())
+        for marker in ("NPU", "OpenVINO", "GPU.0", "GPU.1", "DML"):
+            if marker in provider_blob:
+                return "intel"
+    except Exception:
+        pass
+
+    try:
+        import ctypes
+        for name in _HW_NVIDIA_CUDA:
+            if not name.startswith("cublas"):
+                ctypes.CDLL(name)
+        return "nvidia"
+    except Exception:
+        pass
+
+    # Windows PCI enumeration fallback for the integrated Intel GPU.
+    try:
+        import os
+
+        if os.name == "nt":
+            enum_key = r"HARDWARE\DESCRIPTION\System\BiOS"
+            # PCI device class names carry the integrated GPU identifier.
+            names: list[str] = []
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System") as key:
+                i = 0
+                while True:
+                    try:
+                        names.append(winreg.EnumValue(key, i)[1])
+                        i += 1
+                    except OSError:
+                        break
+            joined = " ".join(str(n) for n in names)
+            if "Arc" in joined or "Intel" in joined:
+                return "intel"
+    except Exception:
+        pass
+
+    return "cpu"
+
+
+def _probe_npu_retrieval(retries: int = 3) -> Dict[str, Any]:
+    """Probe the native OpenVINO NPU retrieval service (port 8010).
+
+    Returns {"model", "dimensions"} when reachable, else {}. Model names on
+    the preflight host: Qwen3-Embedding-0.6B-int4-cw-ov (1024-dim),
+    Qwen3-Reranker-0.6B-int8-ov — both already local (no downloads).
+    """
+    import urllib.request
+    for _ in range(max(1, retries)):
+        try:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8010/v1/capabilities", timeout=3
+            ) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "model": str(data.get("embedding_model", "Qwen3-Embedding-0.6B-int4-cw-ov")),
+                "dimensions": data.get("embedding_dimensions", 1024),
+            }
+        except Exception:
+            try:
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:8010/health", timeout=3
+                ) as resp:
+                    json.loads(resp.read().decode("utf-8"))
+                return {
+                    "model": "Qwen3-Embedding-0.6B-int4-cw-ov",
+                    "dimensions": 1024,
+                }
+            except Exception:
+                pass
+    return {}
+
+
+def _detect_whisper_cache_dir() -> str:
+    """First HuggingFace-style cache root holding the pre-placed weights.
+
+    ``snapshot_download(cache_dir=...)`` expects the directory that contains
+    the ``models--org--name`` folders directly (the resolved ``hub`` dir), so
+    both the HF_HOME layout (<root>/hub/models--) and the flat layout
+    (<root>/models--) are probed on the known preflight roots."""
+    marker = "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
+    candidates = [
+        r"D:\_MODELS\hub",
+        r"D:\_MODELS",
+        r"E:\_MODELS\huggingface\hub",
+        r"E:\_MODELS\huggingface",
+    ]
+    try:
+        env_home = (os.environ.get("HF_HOME") or os.environ.get("HUGGINGFACE_HUB_CACHE") or "").strip()
+        if env_home:
+            candidates += [os.path.join(env_home, "hub"), env_home]
+    except Exception:
+        pass
+    for cand in candidates:
+        try:
+            if not cand or not os.path.isdir(cand):
+                continue
+            snaps = os.path.join(cand, marker, "snapshots")
+            if not os.path.isdir(snaps):
+                continue
+            for snap in sorted(os.listdir(snaps), reverse=True):
+                model_bin = os.path.join(snaps, snap, "model.bin")
+                if os.path.isfile(model_bin) and os.path.getsize(model_bin) > 0:
+                    return cand
+        except Exception:
+            pass
+    return ""
+
+
+def _hardware_details() -> Dict[str, Any]:
+    """Structured hardware report for the startup summary."""
+    kind = _hardware_compute_kind()
+    details: Dict[str, Any] = {
+        "kind": kind,
+        "models": {},
+        "npu": _detect_npu(),
+        "npu_retrieval": _probe_npu_retrieval(),
+    }
+    if kind == "nvidia":
+        details["models"] = {"chat": "qwen3.8:27b", "whisper": "large-v3-turbo", "device": "cuda"}
+    elif kind == "intel":
+        details["models"] = {"chat": "gemma4:e2b", "whisper": "medium", "device": "cpu"}
+    else:
+        details["models"] = {"chat": "gemma4:e2b", "whisper": "medium", "device": "cpu"}
+    return details
+
+
+def _detect_npu() -> Optional[str]:
+    """NPU presence via installable inference stacks (try-order, fail-open).
+
+    - openvino package (if installed) exposes devices like 'NPU' / 'NPU.0'
+    - otherwise the ORT NPU execution provider name from onnxruntime
+    Returns the detected device/provider id, or ``None``.
+    """
+    try:
+        import openvino as ov  # type: ignore
+        devs = ov.Core().available_devices
+        for d in devs:
+            if "NPU" in str(d).upper():
+                return str(d)
+    except Exception:
+        pass
+    try:
+        import onnxruntime as ort
+        provs = ort.get_available_providers()
+        for p in ("NPUExecutionProvider", "OpenVINOExecutionProvider"):
+            if p in provs:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _default_fast_model() -> str:
+    """Default fast-tier model (small, agentic) for detected compute kind."""
+    kind = _hardware_compute_kind()
+    if kind == "nvidia":
+        # Discrete GPU handles the big chat model; keep the fast tier tiny.
+        return "qwen3.5:0.8b"
+    return "gemma4:e2b"
+
+
+def _default_chat_model() -> str:
+    kind = _hardware_compute_kind()
+    if kind == "nvidia":
+        return "qwen3.8:27b"
+    return "gemma4:e2b"
+
+
+def _default_whisper_model() -> str:
+    kind = _hardware_compute_kind()
+    if kind == "nvidia":
+        return "large-v3-turbo"
+    return "medium"
+
+
+def _default_whisper_device() -> str:
+    kind = _hardware_compute_kind()
+    if kind == "nvidia":
+        return "cuda"
+    return "cpu"
+
+
+def hardware_report() -> Dict[str, Any]:
+    """Public structured hardware report: {kind, models, npu}."""
+    return _hardware_details()
 
 
 def get_supported_model_ids() -> set[str]:
@@ -276,6 +528,22 @@ class Settings:
     # MCP Integration
     mcps: Dict[str, Any]
 
+    # Centralized identity / recording profile (Talkie Toaster)
+    assistant_display_name: str = BRANDING["display_name"]
+    persona_lines: list = None  # None → built-in Toustovač persona layer
+    recording_mode: bool = False
+    overlay_always_on_top: bool = True
+    overlay_scale: float = 1.0
+    # Proactive interruption service (see src/jarvis/proactive.spec.md).
+    # "" = per-mode default: polite 2 s, authentic 90 s, demo 0 s.
+    proactive_mode: str = "authentic"
+    proactive_min_gap_sec: Optional[float] = None
+    proactive_hour_limit: Optional[int] = None
+
+    # Local model cache root for Whisper weights (e.g. D:\_MODELS on the
+    # preflight host; empty = HF default cache).
+    whisper_cache_dir: str = ""
+
 
 
 def default_config_path() -> Path:
@@ -395,6 +663,30 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
         cfg_json["_config_version"] = 3
         modified = True
 
+    # Migration v4: Jarvis → Talkie Toaster (Toustovač) rebrand. Existing
+    # installs that carry the old ``jarvis`` wake word in their on-disk
+    # config get promoted to the Czech Toustovač identity so the campaign
+    # demo works out of the box. Only the untouched default is rewritten;
+    # any other custom wake word keeps its value verbatim.
+    if migration_version < 4:
+        old_wake = str(cfg_json.get("wake_word", "") or "").strip().lower()
+        if old_wake == "jarvis":
+            cfg_json["wake_word"] = BRANDING["wake_words"][0]
+            cfg_json["wake_aliases"] = [
+                "toustovači", "toastovač", "toastovači",
+                "hej toustovač", "hej toustovači", "hey toaster",
+                "jarvis",
+            ]
+            print("🍞 Rebranded wake word: jarvis → toustovač (Toustovač persona)", flush=True)
+        # Promote the old built-in alias list to the new one when it still
+        # matches the historic defaults exactly (no custom edits lost).
+        legacy_aliases = ["joris", "charis", "chavis", "jar is", "jaivis", "jervis",
+                          "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"]
+        if "wake_aliases" in cfg_json and [str(a).lower() for a in _ensure_list(cfg_json.get("wake_aliases"))] == legacy_aliases:
+            cfg_json["wake_aliases"] = [a for a in BRANDING["wake_words"][1:]] + ["jarvis"]
+        cfg_json["_config_version"] = 4
+        modified = True
+
     # Save migrated config
     if modified:
         if _save_json(cfg_path, cfg_json):
@@ -485,13 +777,19 @@ def get_default_config() -> Dict[str, Any]:
         "llm_base_url": "",  # falls back to ollama_base_url when empty
         "llm_api_key": "",
         "llm_chat_model": "",  # falls back to ollama_chat_model when empty
-        "embedding_provider": "",  # "" = same as llm_provider
-        "embedding_base_url": "",
+        # When the native OpenVINO NPU retrieval service is up (:8010), the
+        # wizard/installer pre-fills embeddings with it — already local, no
+        # downloads: Qwen3-Embedding-0.6B-int4-cw-ov, 1024-dim, OpenAI-shaped
+        # /v1/embeddings + /v1/rerank. Otherwise "" (= same provider as chat).
+        "embedding_provider": "openai_compatible" if _probe_npu_retrieval() else "",
+        "embedding_base_url": "http://127.0.0.1:8010/v1" if _probe_npu_retrieval() else "",
         "embedding_api_key": "",
-        "embedding_model": "",  # falls back to ollama_embed_model when empty
+        "embedding_model": (_probe_npu_retrieval() or {}).get("model", "") if _probe_npu_retrieval() else "",
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_embed_model": "nomic-embed-text",
-        "ollama_chat_model": DEFAULT_CHAT_MODEL,
+        # Hardware-aware default: qwen3.8:27b on CUDA/RTX, gemma4:e2b on the
+        # Intel Arc / NPU / plain-CPU path (see _hardware_compute_kind).
+        "ollama_chat_model": _default_chat_model(),
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
         # Cheap distil passes should fail fast — a hung digest call would
@@ -541,16 +839,47 @@ def get_default_config() -> Dict[str, Any]:
         "voice_collect_seconds": 4.5,
         "voice_max_collect_seconds": 180.0,
 
-        # Wake Word Detection
-        "wake_word": "jarvis",
-        "wake_aliases": ["joris", "charis", "chavis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
+        # Wake Word Detection (Czech, Talkie Toaster / Toustovač)
+        "wake_word": BRANDING["wake_words"][0],
+        "wake_aliases": [
+            "toustovači",
+            "toastovač",
+            "toastovači",
+            "hej toustovač",
+            "hej toustovači",
+            "hey toaster",
+            # Legacy spellings kept for smooth upgrades of existing configs.
+            "jarvis",
+        ],
         "wake_fuzzy_ratio": 0.78,
 
+        # Assistant identity (overridable without touching source code)
+        "assistant_display_name": BRANDING["display_name"],
+        # Persona prompt lines (see src/jarvis/system_prompt.py). A non-empty
+        # list here fully replaces the built-in Toustovač persona layer.
+        "persona_lines": [],
+
+        # Recording / demo mode (viral-video tuned profile)
+        "recording_mode": False,
+        "overlay_always_on_top": True,
+        "overlay_scale": 1.0,
+
+        # Proactive interruption service (see src/jarvis/proactive.spec.md)
+        "proactive_mode": "authentic",  # "polite" | "authentic" | "demo"
+        "proactive_min_gap_sec": None,  # None = per-mode default (2 / 90 / 0 s)
+        "proactive_hour_limit": None,   # None = per-mode default (20 / 6 / 99)
+
+
         # Whisper Speech Recognition
-        "whisper_model": "medium",
+        # Hardware-aware default: large-v3-turbo on CUDA/RTX hosts, medium on
+        # the Intel Arc / NPU / plain-CPU path (see _hardware_compute_kind).
+        "whisper_model": _default_whisper_model(),
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
-        "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
+        "whisper_device": _default_whisper_device(),  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
+        # Local-first HF-style cache root for pre-placed Whisper weights
+        # (preflight host: D:\_MODELS; layout <root>/hub/models--org--name).
+        "whisper_cache_dir": _detect_whisper_cache_dir(),
         "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
@@ -778,6 +1107,7 @@ def load_settings() -> Settings:
     if whisper_device not in ("cuda", "auto", "cpu"):
         whisper_device = "auto"
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
+    whisper_cache_dir = str(merged.get("whisper_cache_dir", "") or "").strip()
     whisper_vad = bool(merged.get("whisper_vad", True))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
@@ -874,6 +1204,48 @@ def load_settings() -> Settings:
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
+
+    # Centralized identity / recording profile
+    assistant_display_name = str(
+        merged.get("assistant_display_name", BRANDING["display_name"]) or BRANDING["display_name"]
+    ).strip()
+    raw_persona_lines = merged.get("persona_lines")
+    persona_lines = (
+        [str(x) for x in raw_persona_lines if str(x).strip()]
+        if isinstance(raw_persona_lines, list) else None
+    )
+    recording_mode = bool(merged.get("recording_mode", False))
+    overlay_always_on_top = bool(merged.get("overlay_always_on_top", True))
+    try:
+        overlay_scale = float(merged.get("overlay_scale", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        overlay_scale = 1.0
+    if overlay_scale <= 0:
+        overlay_scale = 1.0
+
+    # Proactive interruption service (see src/jarvis/proactive.spec.md).
+    proactive_mode = str(merged.get("proactive_mode", "authentic") or "authentic").strip().lower()
+    if proactive_mode not in ("polite", "authentic", "demo"):
+        proactive_mode = "authentic"
+    _gap_raw = merged.get("proactive_min_gap_sec")
+    proactive_min_gap_sec: Optional[float]
+    if _gap_raw is None or str(_gap_raw).strip() == "" or str(_gap_raw).strip().lower() == "null":
+        proactive_min_gap_sec = None
+    else:
+        try:
+            proactive_min_gap_sec = max(0.0, float(_gap_raw))
+        except (TypeError, ValueError):
+            proactive_min_gap_sec = None
+    _limit_raw = merged.get("proactive_hour_limit")
+    proactive_hour_limit: Optional[int]
+    if _limit_raw is None or str(_limit_raw).strip() == "" or str(_limit_raw).strip().lower() == "null":
+        proactive_hour_limit = None
+    else:
+        try:
+            proactive_hour_limit = max(1, int(_limit_raw))
+        except (TypeError, ValueError):
+            proactive_hour_limit = None
+
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
@@ -951,6 +1323,7 @@ def load_settings() -> Settings:
         # Whisper Speech Recognition
         whisper_model=whisper_model,
         whisper_backend=whisper_backend,
+        whisper_cache_dir=whisper_cache_dir,
         whisper_device=whisper_device,
         whisper_compute_type=whisper_compute_type,
         whisper_vad=whisper_vad,
@@ -1018,4 +1391,14 @@ def load_settings() -> Settings:
 
         # MCP Integration
         mcps=mcps,
+
+        # Centralized identity / recording profile (Talkie Toaster)
+        assistant_display_name=assistant_display_name,
+        persona_lines=persona_lines,
+        recording_mode=recording_mode,
+        overlay_always_on_top=overlay_always_on_top,
+        overlay_scale=overlay_scale,
+        proactive_mode=proactive_mode,
+        proactive_min_gap_sec=proactive_min_gap_sec,
+        proactive_hour_limit=proactive_hour_limit,
     )

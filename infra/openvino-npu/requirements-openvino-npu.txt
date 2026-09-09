@@ -1,0 +1,5 @@
+# Runtime dependencies for the native OpenVINO NPU service.
+# Keep this separate from the Node workspace and install it into .venv-openvino-npu.
+openvino==2026.2.1
+numpy>=2.0,<3
+transformers>=4.50,<5

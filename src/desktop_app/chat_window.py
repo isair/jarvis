@@ -214,18 +214,18 @@ _MESSAGE_TEXT_STYLES = {
 }
 
 _DAEMON_STATUS_MESSAGES = {
-    "starting": "Starting Jarvis...",
-    "stopping": "Stopping Jarvis...",
+    "starting": "Starting Toustovač...",
+    "stopping": "Stopping Toustovač...",
     "stopped": "Start Listening from the tray to use chat.",
-    "crashed": "Jarvis stopped unexpectedly. Start Listening to reconnect.",
+    "crashed": "Toustovač stopped unexpectedly. Start Listening to reconnect.",
 }
 
 _DAEMON_STATUS_PLACEHOLDERS = {
-    "starting": "Jarvis is starting",
-    "stopping": "Jarvis is stopping",
+    "starting": "Toustovač is starting",
+    "stopping": "Toustovač is stopping",
     "stopped": "Start Listening from the tray to use chat",
     "crashed": "Start Listening from the tray to reconnect chat",
-    "running": "Type a message to Jarvis... (Enter to send, Shift+Enter for newline)",
+    "running": "Type a message to Toustovač... (Enter to send, Shift+Enter for newline)",
 }
 
 _HEADER_STATUS_TEXTS = {
@@ -260,7 +260,7 @@ class ChatWindow(QMainWindow):
         control_fn: Optional[Callable[[str, Optional[dict]], None]] = None,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("Jarvis Chat")
+        self.setWindowTitle("Toustovač Chat")
         # A portrait, phone-like window reads as a message thread. The tray
         # re-shows the same instance, so the size persists for the session.
         self.setMinimumSize(440, 600)
@@ -312,7 +312,7 @@ class ChatWindow(QMainWindow):
         header.addWidget(avatar)
         name_col = QVBoxLayout()
         name_col.setSpacing(0)
-        name_label = QLabel("Jarvis")
+        name_label = QLabel("Toustovač")
         name_label.setStyleSheet(
             f"color: {COLORS['text_primary']}; font-size: 15px; font-weight: 700;"
         )
@@ -523,7 +523,7 @@ class ChatWindow(QMainWindow):
 
     def _on_busy(self) -> None:
         self._set_thinking(False)
-        self._append_system("Jarvis is busy with another query already.")
+        self._append_system("Toustovač is busy with another query already.")
 
     # --- Subprocess IPC entry point --------------------------------------
 
@@ -717,7 +717,7 @@ class ChatWindow(QMainWindow):
 
     def _refresh_status_label(self) -> None:
         if self._query_in_flight:
-            self._status_label.setText("  Jarvis is thinking…")
+            self._status_label.setText("  Toustovač is thinking…")
             self._status_label.setVisible(True)
             return
 

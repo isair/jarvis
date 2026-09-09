@@ -27,3 +27,12 @@ qt.conf
 # Auto-generated version file (created at build time)
 src/jarvis/_version.py
 .reasonix/
+
+# Local deployment state for Home Assistant ops scripts (may contain IPs)
+ops/home-assistant/local-state.json
+
+# Regenerated runtime caches (OpenVINO NPU compiled binaries, profiler data)
+infra/openvino-npu/cache/
+infra/openvino-npu/cache-verification/npu_profiling_data
+infra/openvino-npu/models/Qwen3-Embedding-0.6B-int4-cw-ov/1/openvino_model.bin
+infra/openvino-npu/models/Qwen3-Reranker-0.6B-int8-ov/1/openvino_model.bin

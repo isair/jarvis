@@ -1,0 +1,14 @@
+{
+  "mcps": {
+    "home_assistant": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://homeassistant.local:8123/api/mcp",
+        "--header",
+        "Authorization: Bearer <HA_LONG_LIVED_ACCESS_TOKEN>"
+      ]
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+	"dtype": "",
+	"input_info": null,
+	"optimum_version": "2.1.0.dev0",
+	"output_attentions": false,
+	"quantization_config": {
+		"_dataset_kwargs": {},
+		"dataset": null,
+		"default_config": {
+			"quant_method": "default"
+		},
+		"ignored_scope": null,
+		"num_samples": null,
+		"processor": null,
+		"quantization_configs": {},
+		"tokenizer": "/nfs/ov-share-01/data/cv_bench_cache/NATIVE_GEN-AI_MODELS/qwen3-reranker-0.6b/pytorch/NATIVE"
+	},
+	"save_onnx_model": false,
+	"transformers_version": "4.57.6"
+}

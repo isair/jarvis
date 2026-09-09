@@ -205,6 +205,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | tracks chat model (CHAT tier; runs only when that model is SMALL) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
+| 16 | Proactive remarks | 0-N per event | dual gate (policy + gap/dedup) | tracks chat model (CHAT tier) |
 
 ## Size-aware auto switches
 
@@ -221,7 +222,7 @@ Driven by `detect_model_size(model_name) → SMALL (≤7.5B) | LARGE (>7.5B)` �
 
 - Models: `llm_chat_model` (CHAT tier), `fast_model` (FAST tier). Every context resolves via `resolve_model(cfg, tier)`. Legacy on-disk keys (`ollama_chat_model` as a v1 → v2 alias; `intent_judge_model` / `tool_router_model` / `evaluator_model` / `planner_model` folded into `fast_model` by the v2 → v3 migration) are readable but no longer part of `Settings`.
 - Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`, `low_power_mode`
-- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
+- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6/#16), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
 - Caps: `agentic_max_turns` (8), `tool_search_max_calls` (3), `_LLM_MAX_SELECTED` (5), `_DIGEST_MAX_CHARS` (400), `_TOOL_DIGEST_MAX_CHARS` (600). Per-context `max_tokens` caps listed above (50–1500 depending on task — the intent judge's 1500 covers reasoning + answer on reasoning models; rewrite tasks scale with input length).
 - Runtime residency: `low_power_mode` skips startup LLM warmups and shortens Ollama `keep_alive` for intent judge and warmup calls from `"30m"` to `"1m"`. It does not change prompts, model selection, timeouts, or context limits.
 
@@ -269,6 +270,15 @@ user input
 6. Consider single-model deployments: the FAST tier prefers a small dedicated model while the planner tracks `llm_chat_model`; loading a second model hurts cold-start latency on small hardware. (On an OpenAI-compatible chat provider an unset `fast_model` already resolves to the chat model, so every context rides the one served model.)
 7. Narrow `llm_thinking_enabled` to router/planner only, not every context.
 8. `intent_judge_timeout_sec` was already reduced from 15s → 6s. Consider racing it against text-based wake detection to avoid blocking the audio loop entirely.
+
+## 16. Proactive Toaster Service (unsolicited remarks, policy-gated)
+
+- **File**: [src/jarvis/proactive.py](src/jarvis/proactive.py) — `ProactiveToasterService.handle_event()`; spec at [src/jarvis/proactive.spec.md](src/jarvis/proactive.spec.md).
+- **Trigger**: structured application/system events (startup, login/unlock, completed tool action, download, build result, inactivity, battery/charger, temperature, food browser page, day windows, app error, network transitions, microphone, app switching). The daemon feeds them from boot, the 1 s main-loop sweep, and each query completion; the voice listener feeds `tool.completed` per turn.
+- **Model / gating**: two-stage. Stage 1 is a deterministic pure-Python policy in one of three interruption modes (`polite`: 2 s gap, critical events only; `authentic` — campaign build: 90 s gap, 6 remarks/hour, prefers completed-action and silence seams; `demo`: deterministic scripted triggers, no model call at all). The shape/type/gate/dedup/directive/gap checks never pay a model round-trip for suppressed events. Stage 2 rides `resolve_model(cfg, Tier.CHAT)` via `make_chat_callable(cfg)` — same chat model as #1, so the persona stays identical.
+- **Inputs**: the persona system prompt (byte-static, from `build_system_prompt`) + a per-call user block `Event <type>: <note>` + variety hints from the last three remarks. Dynamic content lives in the user message only (KV-cache discipline respected). Direct commands (`Ticho`, `Teď ne`, `Přestaň nabízet toast`) fold into a session cooldown / single-event pass before any model call.
+- **Output**: one short spoken remark printed `🍞`-led and pushed to TTS; not written to `DialogueMemory`. Empty on any policy skip or model failure.
+- **Limits**: `llm_digest_timeout_sec` (8 s, shared with #4/#5/#6), `num_ctx: 2048`, remark min-gap 8 s, dedup window 30 s. Fail-open everywhere: no remark is an acceptable outcome.
 
 ## 21. Model warm-up probe (OpenAI-compatible path)
 
