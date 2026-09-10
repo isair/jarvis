@@ -15,13 +15,13 @@ the Jarvis-side glue on top of the existing pipeline.
 
 | Module | Responsibility |
 |---|---|
-| `models.py` | Protocol constants, config/identity/session models, device and session states |
+| `models.py` | Protocol constants, config/identity/session models, device and session states, `AudioFrame`, `TurnContext`, `PendingPlayback` |
 | `config.py` | Flat `voice_pe_*` keys to `VoicePEConfig`, stored metadata, PSK access |
 | `discovery.py` | mDNS, last known IP, manual host; identification by `DeviceInfoResponse` |
 | `provisioning.py` | Improv BLE Wi-Fi onboarding, runtime Noise PSK provisioning |
 | `capabilities.py` | Feature-flag plus entity decoding into one per-generation snapshot |
 | `entities.py` | `object_id` based entity index (`led_ring`, `button_press_event`, media, mute) |
-| `voice_transport.py` | Bounded microphone queue with an in-queue `EndOfStream` marker, PCM to float32, UDP fallback receiver |
+| `voice_transport.py` | Bounded microphone queue of `AudioFrame` items with a weightless in-queue `EndOfStream` marker, PCM to float32, UDP fallback receiver |
 | `tts_stream.py` | WAV/PCM normalisation, 512-sample paced and per-sentence streaming on a dedicated executor, LAN HTTP WAV server with per-key hit counts |
 | `media.py` | Media player and announcement control with volume-source tracking |
 | `events.py` | Pipeline events, LED phase table, button mapping and action runner |
@@ -180,30 +180,61 @@ remainder is the only continuation: it becomes the head of the next block's
 frame grid and is not also pushed into the pre-roll, so no sample is counted
 twice at the speech boundary.
 
-The microphone end is an in-queue `EndOfStream(source, generation)` marker on
-the same FIFO as the PCM blocks. The pump delivers every block of the run first
-and only then states the stream end, so the last audio is never dropped by a
-reset. `abort=True` still drops the queued audio, because that is a cancel.
+The microphone end is an in-queue `EndOfStream(source, generation)` marker on the
+same FIFO as the PCM blocks. The pump delivers every block of the run first and
+only then states the stream end, so the last audio is never dropped by a reset.
+The marker is weightless: it has its own slot beside the PCM budget, it is never
+refused, and the overflow rule always drops PCM blocks instead of it. `reset()`
+tells `AudioFrame` and `EndOfStream` apart, so the sample bookkeeping stays
+exact. `abort=True` still drops the queued audio, because that is a cancel; the
+shared listener queue is drained by `_clear_audio_buffers()`, not only followed
+by a sentinel.
 
 ## Turn token, non-blocking synthesis, one close per run
 
-`ActiveAudioLease(source_id, device_id, session_generation)` is the token of one
-turn. It is taken when the utterance starts and travels with `vad_start`,
-`vad_end`, `transcript`, `reply` and `error`. Every stage checks the token at
-its entry, so a late reply of a cancelled question cannot land in the run the
-next button press opened. The check is at the STT and reply entries, not only
-inside the TTS transport.
+`TurnContext(source, device_id, connection_generation, session_generation)` is
+the immutable identity of one turn. It is taken when the utterance opens and
+travels with `vad_start`, `vad_end`, `transcript`, `reply` and `error`. Terminal
+milestones are sent only with their own context: with no context they are not
+sent at all and no value is taken from the lease in force at that moment. Every
+stage checks the context at its entry, so a late reply of a cancelled question
+is dropped instead of landing in the run the next button press opened. The check
+is at the STT and reply entries, not only inside the TTS transport.
+
+Queue items are stamped too: `AudioFrame(source, generation, samples)`. The
+listener drops a frame whose generation is no longer the open one, so audio of a
+cancelled run cannot widen a newer utterance.
 
 Synthesis runs on its own single worker (`_TTS_EXECUTOR`), never on the ESPHome
 event loop, which also carries keepalive, button, mute, media-state and
-reconnect callbacks. The raw-PCM branch synthesizes sentence by sentence, so
-the first chunk is on the wire while the rest of the answer is still made.
+reconnect callbacks. The raw-PCM branch synthesizes sentence by sentence and
+streams each sentence as soon as it is ready, so the first chunk is on the wire
+while the second sentence is still being made. A cancelled task leaves at most
+one finished job in the worker, which the next turn picks up as its first item.
 
-`abort_run(generation, reason)` is the single close of a run: it cancels the TTS
-task, clears both audio queues, stops an active media player, sends `ERROR` and
-`RUN_END`, and releases session, lease and playback latch together. A long press
-and a reply-engine error both go through it. With a satellite turn the local PC
-speaker stays silent, also on the error path.
+`abort_run(generation, reason, context)` is the single close of a run and compares
+the generation as its very first step. It cancels the TTS task, drains both audio
+queues, stops an active media player, sends `ERROR` and `RUN_END`, and releases
+session, lease and playback latch together. A long press, a mute and a
+reply-engine error each capture the context first and then go through it, and the
+local PC speaker stays silent on the satellite path including the error branch.
+
+## Playback and the device's own acknowledgements
+
+`PendingPlayback(generation, session_generation, media_id, egress)` is recorded for
+every delivered reply. Announcements complete in order on the device, so the
+`AnnounceFinished` callbacks are matched to those entries first-in-first-out:
+`last_finished_generation` is the generation of the delivered reply, not the
+moment the callback landed. A callback with no pending entry only reports
+`last_announce_success`, which keeps the pre-announce from releasing a reply.
+
+The media player's own push is the acknowledgement of a command: `pushes` counts
+those pushes and `device_state`/`device_volume`/`device_muted` hold exactly what
+the device published. `volume_source` is the order of the two real events — a
+device push versus an own command — as `device`, `jarvis` or `none`, never an
+elapsed-time guess. The public `led_ring` light pushes its own state as well,
+kept as `last_light_push`.
+
 
 A source-tagged transcript skips the wake-word check and the intent judge: the
 centre-button press already is the engagement signal and the transcript is the
@@ -245,11 +276,11 @@ addresses, port, MAC and decoded feature flags. `VoicePEManager.start()` waits
 `metrics()` are already filled and the generation reached `READY`; `list` and
 `status` report that state plus the decoded feature list.
 
-`ActiveAudioLease(source_id, device_id, session_generation)` names the one owner
-of the current run. `SinkFanout` resolves it and hands each milestone to that
-device alone, together with the token of the turn; with no lease every device
-drops it and the local microphone answers. Wake words are confirmed by a
-read-back of the assistant configuration after the write:
+`TurnContext(source, device_id, connection_generation, session_generation)` names
+the one owner of the current run. `SinkFanout` resolves it and hands each
+milestone to that device alone, together with the context of the turn; a terminal
+milestone with no context is not re-stamped and not delivered. Wake words are
+confirmed by a read-back of the assistant configuration after the write:
 `wake_words_disabled` is the device's own answer, and a non-empty active list
 closes the generation instead of reporting a ready push-to-talk device. The same
 table gives every published event a built-in handler: `single_press` and
@@ -266,13 +297,15 @@ The hardware smoke test is `scripts/_voice_pe_smoke.py`: it boots the real stack
 (`Database`, `Settings`, Piper TTS, `VoiceListener` with WebRTC VAD and Whisper,
 `VoicePEManager`, one `VoicePEDevice`) and walks one conversation over 16
 checkpoints: boot to `READY`, decoded flags, enumeration, wake-word read-back,
-run opened by the centre button or by `start_conversation`, the lease, API audio
-chunks, one pump per generation, VAD+Whisper transcript, `TTS_END` URL on a
-still-open server, the device GET of that exact WAV key, a successful
-`AnnounceFinished` of the same generation, the ring and avatar phase series
-(`thinking` → `replying` → `idle`), the second run, the media command round-trip
-and the closing metrics. Each checkpoint compares a baseline read just before it
-with the value after it, so an older counter cannot satisfy a later step, and the
+run opened by the centre button or by `start_conversation`, the turn context,
+microphone blocks that reached the VAD, one pump per generation, VAD+Whisper
+transcript, `TTS_END` URL on a still-open server, the device GET of that exact
+WAV key, a successful `AnnounceFinished` matched to that delivery, the ring and avatar phase series
+(`thinking` → `replying` → `idle`), the second run, the media command round-trip with a later
+device push and the closing metrics. Each checkpoint compares a baseline read just before it
+with the value after it, so an older counter cannot satisfy a later step; events
+are read per generation from `event_ledger`, the ring state from the `led_ring`
+entity's own push and the media state from the device's `pushes` counter, and the
 HTTP server counts per payload key with the misses separate. The TTS server stays
 open for the whole run, so the fetched URL is the one the device got. Exit code =
 number of failed checkpoints, 0 on the retail unit with one spoken sentence in

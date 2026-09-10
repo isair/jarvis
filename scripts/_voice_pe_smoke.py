@@ -12,9 +12,10 @@ engine, ``VoiceListener`` (WebRTC VAD + Whisper) in its own thread and the
     button -> API audio -> VAD -> Whisper -> Jarvis reply
            -> device GET of that WAV key -> audible playback -> AnnounceFinished
 
-Every checkpoint compares a baseline read just before the step with the value
-after it, so an older counter can never satisfy a later check. The device's own
-TTS HTTP server stays open for the whole run and is counted per payload key.
+Every checkpoint compares a baseline read just before it with the value after,
+so an older counter cannot satisfy a later step. Events come from the device's
+per-generation ledger, the TTS server counts per payload key with the misses
+separate, and the media step is judged by the device's own state pushes.
 
 Each line is ``ok`` or ``FAIL``; the exit code is the number of failed
 checkpoints, so CI can call it directly. No Home Assistant server, no mocks.
@@ -48,11 +49,7 @@ def _report(index: int, name: str, ok: bool, detail: str = "") -> None:
 
 
 def _poll(predicate, timeout_s: float, step_s: float = 0.05, recorder=None):
-    """Poll ``predicate`` until it returns a truthy value or time is up.
-
-    ``recorder`` is called with every snapshot, which is how the phase series of
-    the ring and the avatar are collected.
-    """
+    """Poll ``predicate`` until it returns a truthy value or time is up."""
     deadline = time.monotonic() + timeout_s
     value = None
     while time.monotonic() < deadline:
@@ -81,12 +78,22 @@ def _avatar_state() -> str:
         return "?"
 
 
-def _metrics(device) -> dict:
-    return device.metrics
-
-
 def _counter(device, key: str) -> int:
-    return int(_metrics(device).get(key, 0) or 0)
+    return int(device.metrics.get(key, 0) or 0)
+
+
+def _ledger(device, generation: int) -> list:
+    """Names of the Voice Assistant events sent for one session generation."""
+    return [name for gen, name in device.event_ledger if int(gen) == int(generation)]
+
+
+def _is_subsequence(needle: list, haystack: list) -> bool:
+    """Order-aware check: ``needle`` appears inside ``haystack`` in order."""
+    index = 0
+    for item in haystack:
+        if index < len(needle) and item == needle[index]:
+            index += 1
+    return index == len(needle)
 
 
 def _submit(manager, coro):
@@ -176,7 +183,8 @@ def main() -> int:
         3,
         "entity enumeration non-empty",
         device.capabilities.entity_count > 0,
-        f"{device.capabilities.entity_count} entities",
+        f"{device.capabilities.entity_count} entities, "
+        f"led_key={device.entities.led_key()}",
     )
 
     # 4. Wake-word mode as the device reports it, not as the write requested.
@@ -184,9 +192,9 @@ def main() -> int:
         4,
         "wake words off per device read-back",
         bool(device.wake_words_disabled)
-        and int(_metrics(device).get("wake_words_active", -1)) == 0,
+        and int(device.metrics.get("wake_words_active", -1)) == 0,
         f"disabled={device.wake_words_disabled} "
-        f"active={_metrics(device).get('wake_words_active')} err={device.last_error or '-'}",
+        f"active={device.metrics.get('wake_words_active')} err={device.last_error or '-'}",
     )
 
     phases: list = []
@@ -222,11 +230,15 @@ def main() -> int:
         started = _poll(
             lambda: int(device.session_generation) > gen_before, 20.0, recorder=_record
         )
+    generation = int(device.session_generation)
     _report(
         5,
         "one pipeline run opened, generation moved by one",
-        bool(started) and int(device.session_generation) == gen_before + 1,
-        f"generation={device.session_generation} (was {gen_before})",
+        bool(started)
+        and generation == gen_before + 1
+        and "RUN_START" in _ledger(device, generation),
+        f"generation={generation} (was {gen_before}) "
+        f"ledger={_ledger(device, generation)}",
     )
     if not started:
         voice_pe.stop()
@@ -234,35 +246,33 @@ def main() -> int:
         return 1
 
     sink = getattr(listener, "_voice_pe_sink", None)
-    lease = sink.lease() if sink is not None else None
+    context = sink.current_context() if sink is not None else None
     _report(
         6,
-        "lease names the satellite as the audio owner",
-        lease is not None
-        and lease.source_id == "voice_pe"
-        and lease.device_id == device.device_id
-        and int(lease.session_generation) == int(device.session_generation),
-        f"{None if lease is None else (lease.source_id, lease.device_id, lease.session_generation)}",
+        "turn context names the satellite and this generation",
+        context is not None
+        and context.source == "voice_pe"
+        and context.device_id == device.device_id
+        and int(context.session_generation) == generation,
+        f"{None if context is None else (context.source, context.device_id, context.session_generation)}",
     )
 
-    # 7/8. API audio ingress through exactly one persistent pump.
+    # 7. Audio really reached the VAD: the listener's own milestone followed.
     chunks_before = _counter(device, "audio_chunks")
-    _poll(
-        lambda: _counter(device, "audio_chunks") > chunks_before,
-        6.0,
-        recorder=_record,
-    )
+    _poll(lambda: "STT_VAD_START" in _ledger(device, generation), 20.0, recorder=_record)
     _report(
         7,
-        "API audio reached the listener queue",
-        _counter(device, "audio_chunks") > chunks_before,
-        f"chunks {chunks_before} -> {_counter(device, 'audio_chunks')}",
+        "microphone blocks reached the VAD (not just the queue)",
+        "STT_VAD_START" in _ledger(device, generation)
+        and _counter(device, "audio_chunks") > chunks_before,
+        f"chunks {chunks_before} -> {_counter(device, 'audio_chunks')} "
+        f"ledger={_ledger(device, generation)}",
     )
     _report(
         8,
         "one microphone pump for this connection generation",
-        int(_metrics(device).get("pump_tasks", 0)) == 1,
-        f"pump_tasks={_metrics(device).get('pump_tasks')}",
+        int(device.metrics.get("pump_tasks", 0)) == 1,
+        f"pump_tasks={device.metrics.get('pump_tasks')}",
     )
 
     # 9. VAD + Whisper produced a transcript accepted without a wake word.
@@ -272,8 +282,10 @@ def main() -> int:
     _report(
         9,
         "VAD + Whisper transcript accepted for the open run",
-        _counter(device, "stt_end") > stt_before,
-        f"stt_end {stt_before} -> {_counter(device, 'stt_end')}",
+        _counter(device, "stt_end") > stt_before
+        and "STT_END" in _ledger(device, generation),
+        f"stt_end {stt_before} -> {_counter(device, 'stt_end')} "
+        f"ledger={_ledger(device, generation)}",
     )
 
     # 10. Reply reached the device as a LAN WAV URL on the still-open server.
@@ -291,7 +303,8 @@ def main() -> int:
         _counter(device, "tts_url_deliveries") > delivered_before
         and server is not None
         and server.port > 0
-        and bool(key),
+        and bool(key)
+        and "TTS_END" in _ledger(device, generation),
         f"deliveries={_counter(device, 'tts_url_deliveries')} "
         f"port={getattr(server, 'port', 0)} key='{key}'",
     )
@@ -308,11 +321,12 @@ def main() -> int:
         11,
         "device fetched that exact WAV key",
         server is not None and server.hit_count(key) > hits_before,
-        f"key '{key}' hits {hits_before} -> {server.hit_count(key) if server else 0}, "
-        f"misses {missing_before} -> {getattr(server, 'missing', 0)}",
+        f"key '{key}' hits {hits_before} -> "
+        f"{server.hit_count(key) if server else 0}, misses {missing_before} -> "
+        f"{getattr(server, 'missing', 0)}",
     )
 
-    # 12. Audible playback: AnnounceFinished of this generation, success True.
+    # 12. Audible playback, closed by the finished report of this delivery.
     finished_before = _counter(device, "announcements_finished")
     _poll(
         lambda: _counter(device, "announcements_finished") > finished_before,
@@ -321,24 +335,37 @@ def main() -> int:
     )
     _report(
         12,
-        "playback closed with a successful AnnounceFinished of this run",
+        "playback closed by a successful AnnounceFinished of this run",
         _counter(device, "announcements_finished") > finished_before
         and device.last_announce_success is True
-        and int(device.last_finished_generation) == int(device.session_generation),
+        and int(device.last_finished_generation) == int(generation),
         f"finished={_counter(device, 'announcements_finished')} "
         f"success={device.last_announce_success} generation="
-        f"{device.last_finished_generation}/{device.session_generation}",
+        f"{device.last_finished_generation}/{generation}",
     )
 
-    # 13. Phase progression of the ring and the avatar over the whole walk.
-    _poll(lambda: phases[-1] == 1, 5.0, recorder=_record)
+    # 13. Event order for this generation, avatar order, and the ``led_ring``
+    #     entity's own push as the device-side acknowledgement of the ring.
+    _poll(
+        lambda: _ledger(device, generation).count("RUN_END") >= 1, 90.0, recorder=_record
+    )
+    ordered = _ledger(device, generation)
+    # The pre-announce already wrote a ``speaking`` before the mic opened, so the
+    # progression is judged from the last ``thinking`` onwards.
+    try:
+        thought_at = max(i for i, name in enumerate(avatars) if name == "thinking")
+    except ValueError:
+        thought_at = -1
+    spoke_after_thinking = any(name == "speaking" for name in avatars[thought_at + 1 :])
     _report(
         13,
-        "ring and avatar followed thinking -> replying -> idle",
-        4 in phases and 5 in phases and phases[-1] == 1
-        and "thinking" in avatars
-        and "speaking" in avatars,
-        f"led={phases} avatars={avatars}",
+        "event order, avatar order and the ring's own state push",
+        _is_subsequence(["INTENT_START", "TTS_START", "TTS_END", "RUN_END"], ordered)
+        and _is_subsequence(["listening", "thinking"], avatars)
+        and spoke_after_thinking
+        and device.last_light_push is not None,
+        f"ledger={ordered} avatars={avatars} led={phases} "
+        f"ring_push={device.last_light_push}",
     )
 
     # 14. A second run of the same generation keeps that single pump.
@@ -366,12 +393,14 @@ def main() -> int:
     _report(
         14,
         "second run reuses the generation's pump",
-        bool(second) and int(_metrics(device).get("pump_tasks", 0)) == 1,
+        bool(second) and int(device.metrics.get("pump_tasks", 0)) == 1,
         f"generation={device.session_generation} "
-        f"pump_tasks={_metrics(device).get('pump_tasks')}",
+        f"pump_tasks={device.metrics.get('pump_tasks')}",
     )
 
-    # 15. Media commands round-trip through the API and the device's own push.
+    # 15. Media commands with the device's own push as the acknowledgement.
+    before = manager.media_state("")
+    pushes_before = int(before.get("pushes", 0) or 0)
     accepted = True
     try:
         accepted = bool(
@@ -384,29 +413,31 @@ def main() -> int:
         accepted = False
         print(f"   note: media commands: {err}", flush=True)
     _poll(
-        lambda: manager.media_state("").get("volume_source") in ("device", "echo"),
-        8.0,
+        lambda: int(manager.media_state("").get("pushes", 0) or 0) > pushes_before,
+        12.0,
         recorder=_record,
     )
-    snapshot = manager.media_state("")
+    after = manager.media_state("")
     _report(
         15,
-        "pause/resume/volume/mute accepted, state echoed by the device",
-        accepted and snapshot.get("volume_source") in ("device", "echo"),
-        f"accepted={accepted} state={snapshot.get('state')} "
-        f"volume={snapshot.get('volume')} src={snapshot.get('volume_source')}",
+        "pause/resume/volume/mute accepted with a later device push",
+        accepted and int(after.get("pushes", 0) or 0) > pushes_before,
+        f"accepted={accepted} pushes {pushes_before} -> {after.get('pushes')} "
+        f"device_volume={after.get('device_volume')} "
+        f"device_state={after.get('device_state')} source={after.get('volume_source')}",
     )
 
-    # 16. Metrics close the conversation.
-    _poll(lambda: _counter(device, "run_end") >= 1, 120.0, recorder=_record)
+    # 16. Metrics close the conversation, on counts since the boot baseline. The
+    #     answer of a cold 27B model is what this window mostly waits for.
+    _poll(lambda: _counter(device, "run_end") >= 2, 300.0, recorder=_record)
     _report(
         16,
         "metrics close the conversation",
         _counter(device, "sessions") >= 2
         and _counter(device, "stt_end") >= 1
-        and _counter(device, "run_end") >= 1,
+        and _counter(device, "run_end") >= 2,
         f"sessions={_counter(device, 'sessions')} stt_end={_counter(device, 'stt_end')} "
-        f"run_end={_counter(device, 'run_end')} errors={_metrics(device).get('errors')}",
+        f"run_end={_counter(device, 'run_end')} errors={device.metrics.get('errors')}",
     )
 
     voice_pe.stop()

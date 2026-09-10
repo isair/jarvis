@@ -16,7 +16,12 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
-from .models import AUDIO_SOURCE_VOICE_PE, SAMPLE_RATE, VoicePEConfig
+from .models import (
+    AUDIO_SOURCE_VOICE_PE,
+    SAMPLE_RATE,
+    AudioFrame,
+    VoicePEConfig,
+)
 
 try:
     import numpy as np
@@ -50,7 +55,12 @@ def pcm16_to_float32(payload: bytes):
 
 
 class AudioIngress:
-    """Bounded microphone queue with oldest-first drop on overflow."""
+    """Bounded microphone queue: PCM frames plus one weightless EOS marker.
+
+    Queue items are ``AudioFrame(source, generation, pcm)`` or ``EndOfStream``,
+    so both the pump and the listener can tell the two kinds apart and every
+    block carries the generation that owns it.
+    """
 
     def __init__(self, listener, config: VoicePEConfig, metrics: dict) -> None:
         self._listener = listener
@@ -60,16 +70,43 @@ class AudioIngress:
             SAMPLES_PER_CHUNK_MIN, config.audio_queue_ms * SAMPLES_PER_MS
         )
         self._budget_samples = int(budget_samples)
+        # One slot beside the PCM budget belongs to the EOS marker, so the
+        # marker can always be appended without displacing audio.
         self._queue: asyncio.Queue = asyncio.Queue(
-            maxsize=max(4, int(budget_samples // 512) + 2)
+            maxsize=max(5, int(budget_samples // 512) + 3)
         )
         self._pending_samples = 0
         self._closed = False
 
     # -- producer side (ESPHome callback thread) -------------------------
 
-    def put(self, data: bytes, data2: Optional[bytes] = None) -> None:
-        """Never-blocking ingest from ``handle_audio``."""
+    def _drop_oldest_pcm(self) -> bool:
+        """Drop the oldest PCM block, keeping the weightless marker in place."""
+        held: list = []
+        dropped = False
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, EndOfStream):
+                held.append(item)
+                continue
+            self._pending_samples = max(0, self._pending_samples - len(item.samples) // 2)
+            self._metrics["audio_dropped_chunks"] = (
+                int(self._metrics.get("audio_dropped_chunks", 0)) + 1
+            )
+            dropped = True
+            break
+        for marker in held:
+            try:
+                self._queue.put_nowait(marker)
+            except asyncio.QueueFull:  # pragma: no cover - weightless, rare
+                pass
+        return dropped
+
+    def put(self, data: bytes, data2: Optional[bytes] = None, generation: int = 0) -> None:
+        """Never-blocking ingest from ``handle_audio``, stamped with a turn."""
         if self._closed:
             return
         payload = data
@@ -84,25 +121,19 @@ class AudioIngress:
 
         samples = len(payload) // (2 * 1)
         while self._pending_samples + samples > self._budget_samples:
-            try:
-                oldest = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
+            if not self._drop_oldest_pcm():
                 break
-            # Only PCM blocks carry samples; the EOS marker is weightless.
-            if isinstance(oldest, EndOfStream):
-                continue
-            self._pending_samples -= len(oldest) // 2
-            self._metrics["audio_dropped_chunks"] = (
-                int(self._metrics.get("audio_dropped_chunks", 0)) + 1
-            )
         self._pending_samples += samples
+        frame = AudioFrame(AUDIO_SOURCE_VOICE_PE, int(generation), payload)
         try:
-            self._queue.put_nowait(payload)
-        except asyncio.QueueFull:  # pragma: no cover - budget keeps it rare
-            self._metrics["audio_dropped_chunks"] = (
-                int(self._metrics.get("audio_dropped_chunks", 0)) + 1
-            )
-            self._pending_samples = max(0, self._pending_samples - samples)
+            self._queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            # Freshest audio wins: make room once, then the fresh block stands.
+            self._drop_oldest_pcm()
+            try:
+                self._queue.put_nowait(frame)
+            except asyncio.QueueFull:  # pragma: no cover - marker-only queue
+                self._pending_samples = max(0, self._pending_samples - samples)
         self._metrics["audio_chunks"] = int(self._metrics.get("audio_chunks", 0)) + 1
         self._metrics["audio_bytes"] = int(self._metrics.get("audio_bytes", 0)) + len(
             payload
@@ -111,40 +142,57 @@ class AudioIngress:
     # -- consumer side (pump task) --------------------------------------
 
     def mark_end_of_stream(self, source: str, generation: int) -> None:
-        """Append the EOS marker of this run behind the queued PCM blocks."""
+        """Append the EOS marker of this run behind the queued PCM blocks.
+
+        Never refused: the marker is weightless, so a full queue gives way by
+        dropping the oldest PCM block, which is the same freshest-audio rule the
+        budget already applies.
+        """
         if self._closed:
             return
+        marker = EndOfStream(source, int(generation))
+        for _ in range(self._queue.maxsize + 1):
+            try:
+                self._queue.put_nowait(marker)
+                return
+            except asyncio.QueueFull:
+                if not self._drop_oldest_pcm():
+                    break
+        # Still full (only markers in front): replace the front marker in place.
         try:
-            self._queue.put_nowait(EndOfStream(source, int(generation)))
-        except asyncio.QueueFull:  # pragma: no cover - markers are weightless
-            self._metrics["audio_dropped_chunks"] = (
-                int(self._metrics.get("audio_dropped_chunks", 0)) + 1
-            )
+            self._queue.get_nowait()
+            self._queue.put_nowait(marker)
+        except Exception:  # pragma: no cover - queue touched only here
+            pass
 
     async def pump(self) -> None:
         """Feed the shared listener queue until the session closes."""
         while not self._closed:
             try:
-                payload = await self._queue.get()
+                item = await self._queue.get()
             except asyncio.CancelledError:  # pragma: no cover
                 raise
-            if isinstance(payload, EndOfStream):
+            if isinstance(item, EndOfStream):
                 # FIFO: every PCM block of this run is already on the listener
                 # queue, so this source's stream is closed in order here.
-                self._close_stream(payload)
+                self._close_stream(item)
+                continue
+            if not isinstance(item, AudioFrame):
+                # A bare block from a queue written before the stamping shape.
+                item = AudioFrame(AUDIO_SOURCE_VOICE_PE, 0, item)
+            if not item.samples:
+                # The UDP path states the close with one empty datagram.
+                self._close_stream(EndOfStream(item.source, item.generation))
                 continue
             self._pending_samples = max(
-                0, self._pending_samples - len(payload) // 2
+                0, self._pending_samples - len(item.samples) // 2
             )
             self._metrics["microphone_queue_depth_ms"] = self.depth_ms()
+            delivered = AudioFrame(
+                item.source, item.generation, pcm16_to_float32(item.samples)
+            )
             try:
-                # Tagged item: exactly one microphone owns an utterance.
-                self._listener._audio_q.put_nowait(
-                    (
-                        AUDIO_SOURCE_VOICE_PE,
-                        pcm16_to_float32(payload),
-                    )
-                )
+                self._listener._audio_q.put_nowait(delivered)
             except Exception:
                 # The listener queue is bounded too: freshest audio wins.
                 self._metrics["audio_dropped_chunks"] = (
@@ -163,13 +211,15 @@ class AudioIngress:
             pass
 
     def reset(self) -> None:
-        """Drop stale audio for a new generation / cancel."""
+        """Drop stale audio for a new generation / cancel; markers are ignored."""
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            self._pending_samples = max(0, self._pending_samples - len(item) // 2)
+            if isinstance(item, EndOfStream):
+                continue
+            self._pending_samples = max(0, self._pending_samples - len(item.samples) // 2)
         self._pending_samples = 0
 
     def close(self) -> None:
@@ -194,28 +244,31 @@ SAMPLES_PER_CHUNK_MIN = 320
 class UdpAudioServer(asyncio.DatagramProtocol):
     """UDP microphone receiver for firmware without the API_AUDIO flag."""
 
-    def __init__(self, queue: asyncio.Queue) -> None:
+    def __init__(self, queue: asyncio.Queue, generation: int = 0) -> None:
         super().__init__()
         self._queue = queue
+        self.generation = int(generation)
         self.transport: Optional[asyncio.DatagramTransport] = None
         self.remote_addr = None
 
     def connection_made(self, transport) -> None:  # type: ignore[override]
         self.transport = transport
 
-    def datagram_received(self, data, addr) -> None:  # type: ignore[override]
-        if self.remote_addr is None:
-            self.remote_addr = addr
+    def _stamp(self, payload: bytes) -> None:
         try:
-            self._queue.put_nowait(data)
+            self._queue.put_nowait(
+                AudioFrame(AUDIO_SOURCE_VOICE_PE, self.generation, payload)
+            )
         except asyncio.QueueFull:
             pass
 
+    def datagram_received(self, data, addr) -> None:  # type: ignore[override]
+        if self.remote_addr is None:
+            self.remote_addr = addr
+        self._stamp(data)
+
     def error_received(self, exc) -> None:  # type: ignore[override]
-        try:
-            self._queue.put_nowait(b"")
-        except asyncio.QueueFull:
-            pass
+        self._stamp(b"")
 
     def close(self) -> None:
         if self.transport is not None:

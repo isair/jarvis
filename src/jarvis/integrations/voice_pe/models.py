@@ -16,6 +16,7 @@ Hard stock-firmware limits represented here and in the UI:
 
 from __future__ import annotations
 
+from collections import namedtuple
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
@@ -110,6 +111,54 @@ def make_client(
 #: readable at a time, so each frame carries the source it came from.
 AUDIO_SOURCE_LOCAL = "local"
 AUDIO_SOURCE_VOICE_PE = "voice_pe"
+
+
+#: One microphone block with the identity of the turn it belongs to. The
+#: listener drops a frame whose generation is no longer the open one, so audio of
+#: a cancelled run cannot be appended to a newer utterance.
+AudioFrame = namedtuple("AudioFrame", "source generation samples")
+
+
+@dataclass(frozen=True)
+class TurnContext:
+    """Immutable identity of one pipeline turn, carried to its terminal event.
+
+    Taken when the utterance opens and passed with the transcript, the reply and
+    the error, so a callback of an older generation stays recognisable as old
+    after the next button press, with no fallback to the lease in force then.
+    """
+
+    source: str
+    device_id: str
+    connection_generation: int
+    session_generation: int
+
+
+@dataclass
+class PendingPlayback:
+    """One delivered reply waiting for the device's own end-of-playback report.
+
+    Announcements complete in order on the device, so the finished callbacks are
+    matched to these entries first-in-first-out; that is what ties a callback to
+    the generation that produced the audio instead of to the moment it arrives.
+    """
+
+    generation: int
+    session_generation: int
+    media_id: str
+    egress: str
+
+
+def is_current_turn(
+    context: Optional[TurnContext], device_id: str, session_generation: int
+) -> bool:
+    """Whether ``context`` still names the open run of ``device_id``."""
+    if context is None:
+        return False
+    return str(context.device_id) == str(device_id) and int(
+        context.session_generation
+    ) == int(session_generation)
+
 
 
 class DeviceState(str, Enum):

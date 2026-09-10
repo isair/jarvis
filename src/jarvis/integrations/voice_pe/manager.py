@@ -20,7 +20,12 @@ from typing import Any, Optional
 from . import config as pe_config
 from .device import VoicePEDevice
 from .discovery import discover
-from .models import AUDIO_SOURCE_VOICE_PE, DeviceState, VoicePEConfig
+from .models import (
+    AUDIO_SOURCE_VOICE_PE,
+    DeviceState,
+    TurnContext,
+    VoicePEConfig,
+)
 
 try:  # pragma: no cover - trivial import shim
     from jarvis.debug import debug_log
@@ -36,100 +41,104 @@ def _kv(pairs: dict) -> str:
     )
 
 
-@dataclass(frozen=True)
-class ActiveAudioLease:
-    """Which microphone currently owns the one pipeline run.
-
-    ``source_id`` is the ``local``/``voice_pe`` tag the listener queue uses, so
-    a milestone reaches exactly the microphone that produced its transcript.
-    """
-
-    source_id: str
-    device_id: str
-    session_generation: int
-
-
 class SinkFanout:
     """Fan the listener's pipeline milestones out to the owning device only.
 
-    Only the device holding the open session has ``session`` set; the router
-    passes to that one and lets the others drop each milestone without sending
-    events. With no lease at all (a local-microphone turn) every device drops
-    it and the local TTS answers.
+    The context of the turn decides everything: it names the device and the
+    generation that produced the transcript, and it is never replaced by the
+    lease that happens to be in force when a late callback arrives. A terminal
+    milestone with no context is a local-microphone turn: no device gets it and
+    the local TTS answers.
     """
 
     def __init__(self, devices: list[VoicePEDevice]) -> None:
         self._devices = list(devices)
 
-    # -- lease ------------------------------------------------------------
+    # -- turn identity ----------------------------------------------------
 
-    def lease(self) -> Optional[ActiveAudioLease]:
-        """The single device holding the run, or ``None`` for a local turn."""
-        for device in self._devices:
-            if device.holds_session():
-                return ActiveAudioLease(
-                    source_id=AUDIO_SOURCE_VOICE_PE,
-                    device_id=device.device_id,
-                    session_generation=device.session_generation,
-                )
-        return None
-
-    def holds_session(self) -> bool:
-        """True while exactly one attached satellite owns the open run."""
-        return self.lease() is not None
-
-    def _owner(self, token: Optional[ActiveAudioLease] = None) -> Optional[VoicePEDevice]:
-        """Device of the token if it still holds its run, else current owner."""
-        if token is not None:
-            for device in self._devices:
-                if device.device_id == token.device_id and device.holds_session():
-                    return device
-            return None
+    def _holder(self) -> Optional[VoicePEDevice]:
         for device in self._devices:
             if device.holds_session():
                 return device
         return None
 
+    def current_context(self) -> Optional[TurnContext]:
+        """Immutable identity of the open run, for the listener to carry."""
+        device = self._holder()
+        if device is None:
+            return None
+        return TurnContext(
+            source=AUDIO_SOURCE_VOICE_PE,
+            device_id=device.device_id,
+            connection_generation=int(device.connection_generation),
+            session_generation=int(device.session_generation),
+        )
+
+    def current_session_generation(self) -> Optional[int]:
+        """Generation of the open run, ``None`` when no satellite holds one."""
+        device = self._holder()
+        return None if device is None else int(device.session_generation)
+
+    def lease(self) -> Optional[TurnContext]:
+        """Alias of ``current_context``, kept for the documented name."""
+        return self.current_context()
+
+    def holds_session(self) -> bool:
+        """True while exactly one attached satellite owns the open run."""
+        return self._holder() is not None
+
+    def _owner(self, context: Optional[TurnContext]) -> Optional[VoicePEDevice]:
+        """Device named by ``context``, only while its run is still open."""
+        if context is None:
+            return None
+        for device in self._devices:
+            if device.device_id != context.device_id:
+                continue
+            if device.holds_session() and int(device.session_generation) == int(
+                context.session_generation
+            ):
+                return device
+            return None
+        return None
+
     # -- milestones -------------------------------------------------------
     #
-    # Every milestone carries the token of the turn it belongs to, so a callback
-    # of an older generation is dropped at the entry of the stage instead of
-    # landing in a newer run.
+    # Every milestone carries the context of its own turn, so a callback of an
+    # older generation is dropped at the entry of the stage instead of landing in
+    # a newer run. No milestone falls back to the lease in force at that moment.
 
-    def on_vad_start(self, token: Optional[ActiveAudioLease] = None) -> None:
-        token = token or self.lease()
-        device = self._owner(token)
+    def on_vad_start(self, context: Optional[TurnContext] = None) -> None:
+        device = self._owner(context)
         if device is not None:
-            device.on_vad_start(token)
+            device.on_vad_start(context)
 
-    def on_vad_end(self, token: Optional[ActiveAudioLease] = None) -> None:
-        token = token or self.lease()
-        device = self._owner(token)
+    def on_vad_end(self, context: Optional[TurnContext] = None) -> None:
+        device = self._owner(context)
         if device is not None:
-            device.on_vad_end(token)
+            device.on_vad_end(context)
 
-    def on_transcript(self, text: str, token: Optional[ActiveAudioLease] = None) -> None:
-        token = token or self.lease()
-        device = self._owner(token)
+    def on_transcript(
+        self, text: str, context: Optional[TurnContext] = None
+    ) -> None:
+        device = self._owner(context)
         if device is not None:
-            device.on_transcript(text, token)
+            device.on_transcript(text, context)
 
-    def on_reply(self, reply: str, token: Optional[ActiveAudioLease] = None) -> None:
-        token = token or self.lease()
-        device = self._owner(token)
+    def on_reply(self, reply: str, context: Optional[TurnContext] = None) -> None:
+        device = self._owner(context)
         if device is not None:
-            device.on_reply(reply, token)
+            device.on_reply(reply, context)
 
     def on_error(
-        self, code: str, message: str, token: Optional[ActiveAudioLease] = None
+        self, code: str, message: str, context: Optional[TurnContext] = None
     ) -> None:
-        token = token or self.lease()
-        device = self._owner(token)
-        target = device if device is not None else (
-            self._devices[0] if len(self._devices) == 1 else None
-        )
-        if target is not None:
-            target.on_error(code, message, token)
+        device = self._owner(context)
+        if device is None and context is None and len(self._devices) == 1:
+            # A single satellite without a turn context: still the only target
+            # that can report the failure in its own health snapshot.
+            device = self._devices[0]
+        if device is not None:
+            device.on_error(code, message, context)
 
 
 class VoicePEManager:

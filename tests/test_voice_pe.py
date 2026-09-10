@@ -433,9 +433,12 @@ class TestAudioIngress:
     def test_channel_one_is_used_when_preferred(self):
         metrics = {}
         ingress = AudioIngress(FakeListener(), _config(preferred_input_channel=1), metrics)
-        ingress.put(b"\x01\x01", b"\x02\x02")
+        ingress.put(b"\x01\x01", b"\x02\x02", 7)
         item = ingress._queue.get_nowait()
-        assert item == b"\x02\x02"
+        # Every queued block carries the turn it belongs to.
+        assert item.samples == b"\x02\x02"
+        assert item.generation == 7
+        assert item.source == "voice_pe"
 
 
 # ---------------------------------------------------------------------------
@@ -557,13 +560,14 @@ class TestFrameGrid:
     def _walk(self, blocks, frame_samples=320):
         import numpy as np
 
+        from jarvis.integrations.voice_pe.models import AudioFrame
         from jarvis.listening.listener import VoiceListener
 
         frames = []
         remaining = None
         for block in blocks:
-            _source, buf = VoiceListener._tagged_audio(
-                ("voice_pe", np.asarray(block, dtype=np.float32))
+            _source, _generation, buf = VoiceListener._tagged_audio(
+                AudioFrame("voice_pe", 1, np.asarray(block, dtype=np.float32))
             )
             mono = VoiceListener._mono_audio(buf)
             produced, remaining = VoiceListener._frame_grid(mono, remaining, frame_samples)
@@ -589,16 +593,44 @@ class TestFrameGrid:
         assert np.array_equal(joined, stream[: joined.size])
         assert joined.size == 320 * 6
 
-    def test_tagged_and_bare_items_agree(self):
+    def test_tagged_bare_and_stamped_items_agree(self):
         import numpy as np
 
+        from jarvis.integrations.voice_pe.models import AudioFrame
         from jarvis.listening.listener import VoiceListener
 
         buf = np.zeros(512, dtype=np.float32)
-        tagged = VoiceListener._tagged_audio(("voice_pe", buf))
+        stamped = VoiceListener._tagged_audio(AudioFrame("voice_pe", 3, buf))
+        legacy = VoiceListener._tagged_audio(("voice_pe", buf))
         bare = VoiceListener._tagged_audio(buf)
-        assert tagged[0] == "voice_pe" and bare[0] == "local"
-        assert tagged[1] is buf and bare[1] is buf
+        assert stamped[0] == "voice_pe" and stamped[1] == 3
+        assert legacy[0] == "voice_pe" and legacy[1] == 0
+        assert bare[0] == "local"
+        assert stamped[2] is buf and legacy[2] is buf and bare[2] is buf
+
+    def test_stale_generation_frame_is_dropped(self):
+        from jarvis.integrations.voice_pe.models import AudioFrame
+        from jarvis.listening.listener import VoiceListener
+
+        listener = _bare_listener()
+
+        class _Sink:
+            def __init__(self):
+                self.generation = 2
+
+            def holds_session(self):
+                return True
+
+            def current_session_generation(self):
+                return self.generation
+
+        sink = _Sink()
+        listener._voice_pe_sink = sink
+        assert listener._is_current_frame("voice_pe", 2) is True
+        assert listener._is_current_frame("voice_pe", 1) is False
+        # A local block has no satellite generation to be stale against.
+        assert listener._is_current_frame("local", 0) is True
+        listener.state_manager.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -753,11 +785,14 @@ class TestDeviceSession:
         async def _run():
             await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
             await device.handle_audio(b"\x01\x01", b"\x02\x02")
-            return device.session.enhanced, device._ingress._queue.get_nowait()
+            frame = device._ingress._queue.get_nowait()
+            return device.session.enhanced, frame.samples, frame.generation
 
-        enhanced, payload = _run_loop(_run, device)
+        enhanced, payload, generation = _run_loop(_run, device)
         assert enhanced is False
         assert payload == b"\x02\x02"
+        # Ingested blocks carry the generation of the run that opened them.
+        assert generation == 1
 
     def test_single_channel_firmware_falls_back_to_channel_zero(self):
         device = _device(
@@ -786,10 +821,14 @@ class TestDeviceSession:
 
         async def _run():
             await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            device._on_state(SimpleNamespace(key=7, state=True))
+            for _ in range(3):
+                await asyncio.sleep(0.02)
 
         _run_loop(_run, device)
-        device._on_state(SimpleNamespace(key=7, state=True))
+        # Mute goes through the one guarded close, so the session is gone too.
         assert device.session_state is SessionState.IDLE
+        assert device.session is None
         assert device.media.muted is True
 
     def test_button_event_maps_to_the_configured_action(self):
@@ -807,25 +846,60 @@ class TestDeviceSession:
 
         async def _run():
             await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            device._handle_button_event("long_press")
+            for _ in range(3):
+                await asyncio.sleep(0.02)
 
         _run_loop(_run, device)
-        device._handle_button_event("long_press")
+        # The guarded close ran: session and latch are gone, the events landed.
         assert device.session_state is SessionState.IDLE
+        assert device.session is None
+        ledger = [name for _gen, name in device.event_ledger]
+        assert ledger[-2:] == ["ERROR", "RUN_END"]
 
     def test_announcement_finished_moves_to_continue_or_idle(self):
+        from jarvis.integrations.voice_pe.models import PendingPlayback
+
         device = self._api_device()
         device.session_state = SessionState.SPEAKING
+        device._pending_playback = PendingPlayback(
+            generation=1, session_generation=1, media_id="1-1", egress="url"
+        )
         _run_loop(
             lambda: device.handle_announcement_finished(SimpleNamespace(success=True)),
             device,
         )
         # continued_conversation is on: the next turn needs no wake word.
         assert device.session_state is SessionState.CONTINUE_PENDING
+        assert device.last_finished_generation == 1
+        device._pending_playback = PendingPlayback(
+            generation=1, session_generation=1, media_id="1-2", egress="url"
+        )
         _run_loop(
             lambda: device.handle_announcement_finished(SimpleNamespace(success=True)),
             device,
         )
         assert device.session_state is SessionState.IDLE
+
+    def test_finished_without_pending_playback_only_reports(self):
+        from jarvis.integrations.voice_pe.models import PendingPlayback
+
+        device = self._api_device()
+        device.session_state = SessionState.SPEAKING
+
+        async def _run():
+            # Pre-announce finished: nothing was delivered yet.
+            await device.handle_announcement_finished(SimpleNamespace(success=True))
+            state_after_pre = device.session_state
+            device._pending_playback = PendingPlayback(
+                generation=1, session_generation=1, media_id="1-1", egress="url"
+            )
+            await device.handle_announcement_finished(SimpleNamespace(success=True))
+            return state_after_pre, device.session_state
+
+        before, after = _run_loop(_run, device)
+        assert before is SessionState.SPEAKING
+        assert after is SessionState.CONTINUE_PENDING
 
     def test_health_snapshot_has_the_documented_keys(self):
         device = self._api_device()
@@ -1279,7 +1353,7 @@ class TestLeaseAndBridges:
     """The lease routes milestones; the bridges drive phase and pump."""
 
     def test_lease_names_the_single_owner(self):
-        from jarvis.integrations.voice_pe.manager import ActiveAudioLease
+        from jarvis.integrations.voice_pe.models import TurnContext
 
         first = _no_speaker_device(FakeClient())
         second = _no_speaker_device(FakeClient())
@@ -1291,11 +1365,12 @@ class TestLeaseAndBridges:
             await first.handle_pipeline_start("conv", 0, SimpleNamespace(), None)
 
         _run_loop(_run, first)
-        lease = fan.lease()
-        assert isinstance(lease, ActiveAudioLease)
-        assert lease.source_id == "voice_pe"
-        assert lease.device_id == first.device_id
-        assert lease.session_generation == first.session_generation
+        context = fan.lease()
+        assert isinstance(context, TurnContext)
+        assert context.source == "voice_pe"
+        assert context.device_id == first.device_id
+        assert context.session_generation == first.session_generation
+        assert context.connection_generation == first.connection_generation
 
     def test_milestones_reach_only_the_owner(self, monkeypatch):
         owner = _no_speaker_device(_AnnounceClient())
@@ -1308,7 +1383,10 @@ class TestLeaseAndBridges:
 
         async def _run():
             await owner.handle_pipeline_start("c", 0, SimpleNamespace(), None)
-            fan.on_reply("Four two one.")
+            # The context is taken for the turn, as the listener would.
+            context = fan.current_context()
+            fan.on_transcript("Four.", context)
+            fan.on_reply("Four two one.", context)
             for _ in range(4):
                 await asyncio.sleep(0.02)
             if owner._http is not None:
@@ -1322,6 +1400,32 @@ class TestLeaseAndBridges:
         assert 8 in owner_events and 2 in owner_events
         # The idle device emitted nothing at all: the lease names one owner.
         assert other_events == []
+
+    def test_no_fallback_for_a_stale_or_missing_context(self):
+        from jarvis.integrations.voice_pe.models import TurnContext
+
+        owner = _no_speaker_device(FakeClient())
+        fan = _Fanout([owner, _no_speaker_device(FakeClient())])
+
+        async def _run():
+            await owner.handle_pipeline_start("c", 0, SimpleNamespace(), None)
+            current = fan.current_context()
+            stale = TurnContext(
+                source="voice_pe",
+                device_id=owner.device_id,
+                connection_generation=current.connection_generation,
+                session_generation=current.session_generation - 1,
+            )
+            fan.on_reply("old answer", stale)
+            fan.on_reply("no context", None)
+            for _ in range(2):
+                await asyncio.sleep(0.02)
+            return [event for event, _ in owner._client.events]
+
+        events = _run_loop(_run, owner)
+        # Only the two start events of the run: neither untitled nor stale
+        # terminal milestone was re-stamped with the lease in force.
+        assert events == [1, 3]
 
     def test_error_reaches_the_single_device(self):
         device = _no_speaker_device(FakeClient())
@@ -1741,19 +1845,66 @@ class TestStreamEndAndTokens:
         # The marker stayed in front and only the PCM block counted as samples.
         assert items[0].source == AUDIO_SOURCE_VOICE_PE
         assert items[0].generation == 1
-        assert isinstance(items[1], bytes)
+        assert items[1].samples == b"\x01\x02"
         # One sample of 16 kHz is 0.0625 ms, rounded to one decimal.
         assert ingress.depth_ms() == 0.1
 
+    def test_over_budget_put_keeps_the_marker_and_the_freshest_block(self):
+        from jarvis.integrations.voice_pe.models import AUDIO_SOURCE_VOICE_PE
+        from jarvis.integrations.voice_pe.voice_transport import (
+            AudioIngress,
+            EndOfStream,
+        )
+
+        class _Listener:
+            _audio_q = None
+
+        ingress = AudioIngress(_Listener(), _config(audio_queue_ms=60), {})
+        ingress.mark_end_of_stream(AUDIO_SOURCE_VOICE_PE, 4)
+        for index in range(40):
+            ingress.put(bytes([index % 251 + 1]) * 512, None, 4)
+        kinds = []
+        while not ingress._queue.empty():
+            item = ingress._queue.get_nowait()
+            kinds.append("eos" if isinstance(item, EndOfStream) else item.generation)
+        # The marker survived the overflow and every kept block is stamped.
+        assert "eos" in kinds
+        assert kinds.count("eos") == 1
+        assert set(g for g in kinds if g != "eos") == {4}
+
+    def test_reset_drops_pcm_and_leaves_the_marker_counted_once(self):
+        from jarvis.integrations.voice_pe.models import AUDIO_SOURCE_VOICE_PE
+        from jarvis.integrations.voice_pe.voice_transport import AudioIngress
+
+        class _Listener:
+            _audio_q = None
+
+        ingress = AudioIngress(_Listener(), _config(audio_queue_ms=60), {})
+        ingress.put(b"\x01\x02" * 8, None, 2)
+        ingress.mark_end_of_stream(AUDIO_SOURCE_VOICE_PE, 2)
+        ingress.reset()
+        assert ingress.depth_ms() == 0.0
+        assert ingress.is_empty()
+
     def test_older_generation_token_is_dropped_at_both_entries(self):
-        from jarvis.integrations.voice_pe.manager import ActiveAudioLease
+        from jarvis.integrations.voice_pe.models import TurnContext
 
         device = _no_speaker_device(_AnnounceClient())
 
         async def _run():
             await device.handle_pipeline_start("c", 0, SimpleNamespace(), None)
-            current = ActiveAudioLease("voice_pe", device.device_id, device.session_generation)
-            stale = ActiveAudioLease("voice_pe", device.device_id, device.session_generation - 1)
+            current = TurnContext(
+                source="voice_pe",
+                device_id=device.device_id,
+                connection_generation=device.connection_generation,
+                session_generation=device.session_generation,
+            )
+            stale = TurnContext(
+                source="voice_pe",
+                device_id=device.device_id,
+                connection_generation=device.connection_generation,
+                session_generation=device.session_generation - 1,
+            )
             await device._on_transcript_async("first", current)
             await device._on_reply_async("Done.", stale)
             await device._on_reply_async("Done.", current)
@@ -1777,7 +1928,13 @@ class TestStreamEndAndTokens:
         device.session_state = SessionState.IDLE
         device.led_phase = "idle"
         assert device._face_state_name() == "speaking"
-        # The device's own media push to idle releases the latch.
+        # A plain idle push alone does not release: the device has to have
+        # reported the active state of this playback first.
+        device._on_state(SimpleNamespace(key=11, volume=0.5, muted=False, state=1))
+        assert device._playback_latch == 4
+        # Through playing (seen) and then idle: the latch releases on that pair.
+        device._on_state(SimpleNamespace(key=11, volume=0.5, muted=False, state=2))
+        assert device._playback_seen == 4
         device._on_state(SimpleNamespace(key=11, volume=0.5, muted=False, state=1))
         assert device._playback_latch == 0
         assert device._face_state_name() == "idle"
@@ -1787,9 +1944,17 @@ class TestStreamEndAndTokens:
         assert device._face_state_name() == "idle"
 
     def test_announce_finished_reports_success_and_generation(self):
+        from jarvis.integrations.voice_pe.models import PendingPlayback
+
         device = _no_speaker_device(FakeClient())
         device.session_state = SessionState.SPEAKING
         device._playback_latch = device.session_generation
+        device._pending_playback = PendingPlayback(
+            generation=1,
+            session_generation=device.session_generation,
+            media_id="1-1",
+            egress="url",
+        )
 
         async def _run():
             await device.handle_announcement_finished(SimpleNamespace(success=True))
@@ -1798,6 +1963,7 @@ class TestStreamEndAndTokens:
         assert device.last_announce_success is True
         assert device.last_finished_generation == device.session_generation
         assert device._playback_latch == 0
+        assert device._pending_playback is None
 
     def test_wake_word_readback_decides_the_flag(self, tmp_path, monkeypatch):
         monkeypatch.setenv("JARVIS_CONFIG_PATH", str(tmp_path / "config.json"))
@@ -1829,4 +1995,53 @@ class TestStreamEndAndTokens:
         assert device.session is None
         assert device.session_state is SessionState.IDLE
         assert device._playback_latch == 0
+
+    def test_abort_of_an_other_generation_is_a_no_op(self):
+        from jarvis.integrations.voice_pe.models import TurnContext
+
+        device = _no_speaker_device(FakeClient())
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            open_generation = device.session_generation
+            stale = TurnContext(
+                source="voice_pe",
+                device_id=device.device_id,
+                connection_generation=device.connection_generation,
+                session_generation=open_generation + 5,
+            )
+            await device.abort_run(stale.session_generation, "late", stale)
+            return device.session_state, device.session
+
+        state, session = _run_loop(_run, device)
+        assert state is SessionState.LISTENING
+        assert session is not None
+
+    def test_pad_frames_carry_the_markers_generation(self):
+        import numpy as np
+
+        from jarvis.integrations.voice_pe.models import AudioFrame
+        from jarvis.listening.listener import VoiceListener
+
+        listener = _bare_listener()
+        listener._frame_samples = 320
+
+        class _Sink:
+            def holds_session(self):
+                return True
+
+            def current_session_generation(self):
+                return 7
+
+            def current_context(self):
+                return ("ctx", 7)
+
+        listener._voice_pe_sink = _Sink()
+        pushed = listener.pad_until_endpoint("voice_pe", 7)
+        assert pushed >= 1
+        first = listener._audio_q.get_nowait()
+        assert isinstance(first, AudioFrame)
+        assert first.source == "voice_pe" and first.generation == 7
+        assert first.samples.size == 320
+        listener.state_manager.stop()
 

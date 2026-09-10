@@ -42,7 +42,14 @@ class VoicePEMediaController:
         self.state: str = "none"
         self.volume: float = 0.0
         self.muted: bool = False
+        #: Values the device itself last pushed, apart from the assumed ones.
+        self.device_state: str = "none"
+        self.device_volume: float = 0.0
+        self.device_muted: bool = False
+        #: Counted device pushes, the real acknowledgement of a command.
+        self.pushes: int = 0
         self._last_local_change: float = 0.0
+        self._last_push_at: float = 0.0
 
     # -- state -----------------------------------------------------------
 
@@ -52,6 +59,11 @@ class VoicePEMediaController:
         name = MEDIA_STATE_NAMES.get(raw_state, "none")
         volume = float(getattr(state, "volume", 0.0) or 0.0)
         muted = bool(getattr(state, "muted", False))
+        self.pushes += 1
+        self._last_push_at = time.time()
+        self.device_state = name
+        self.device_volume = volume
+        self.device_muted = muted
         changed = (name, round(volume, 3), muted) != (
             self.state,
             round(self.volume, 3),
@@ -68,10 +80,17 @@ class VoicePEMediaController:
 
     @property
     def volume_source(self) -> str:
-        """`jarvis` while an issued command still covers the echo window."""
-        if (time.time() - self._last_local_change) <= VOLUME_ECHO_WINDOW_S:
-            return "jarvis"
-        return "device"
+        """Which of the two real events was last: a device push or own command.
+
+        Only two writes move these numbers - ``update_state`` for a device push
+        and a command for an own value - so the answer is the order of facts,
+        not an elapsed-time guess.
+        """
+        if self._last_push_at == 0.0 and self._last_local_change == 0.0:
+            return "none"
+        if self._last_push_at >= self._last_local_change:
+            return "device"
+        return "jarvis"
 
     def is_active(self) -> bool:
         return self.state in {"playing", "announcing"}
@@ -135,11 +154,16 @@ class VoicePEMediaController:
         return bool(getattr(response, "success", False))
 
     def snapshot(self) -> dict:
+        """Assumed state plus the device's own last push and the push counter."""
         return {
             "state": self.state,
             "volume": round(self.volume, 3),
             "muted": self.muted,
             "volume_source": self.volume_source,
+            "device_state": self.device_state,
+            "device_volume": round(self.device_volume, 3),
+            "device_muted": self.device_muted,
+            "pushes": self.pushes,
         }
 
 
