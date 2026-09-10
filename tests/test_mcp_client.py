@@ -824,8 +824,11 @@ class TestConnectStdioPathInjection:
         assert env is not None
         path_dirs = env["PATH"].split(os.pathsep)
         assert str(tmp_path) == path_dirs[0], "Command dir should be first in PATH"
-        # Full parent environment should also be present
-        assert "HOME" in env or "USER" in env, "Parent env vars should be inherited"
+        # Full parent environment should also be present: any parent key other
+        # than the injected PATH proves the inheritance (HOME and USER only
+        # exist on some platforms).
+        parent_key = next((k for k in os.environ if k != "PATH"), "PATH")
+        assert parent_key in env, "Parent env vars should be inherited"
 
     def test_user_env_preserved_alongside_path(self, monkeypatch, tmp_path):
         """User-supplied env vars should be preserved when PATH is injected."""

@@ -21,6 +21,31 @@ def _bash_available() -> bool:
         return False
 
 
+def _posix_form(path) -> str:
+    """Windows path in the shape both bash kinds resolve.
+
+    ``C:\\a\\b`` becomes ``/mnt/c/a/b`` (WSL) — the drive-letter root is also the
+    Git-Bash alias ``/c/a/b``, so the ``/mnt`` form is the one both accept.
+    """
+    import re
+
+    posix = Path(path).as_posix()
+    match = re.match(r"^([A-Za-z]):/(.*)$", posix)
+    if not match:
+        return posix
+    return f"/mnt/{match.group(1).lower()}/{match.group(2)}"
+
+
+def _to_posix_script(text: str) -> str:
+    """Rewrite every drive-letter path inside a generated script."""
+    import re
+
+    def _repl(match):
+        return _posix_form(match.group(0).replace("\\", "/"))
+
+    return re.sub(r"[A-Za-z]:\\[^\s'\"]*", _repl, text)
+
+
 from desktop_app.updater import (
     check_for_updates,
     parse_version,
@@ -1087,7 +1112,10 @@ class TestInstallUpdateMacos:
         # shell script that writes a marker file we can check for.
         marker_path = tmp_path / "fallback_fired.marker"
         stub_binary = app_source / "Contents" / "MacOS" / "Jarvis"
-        stub_binary.write_text(f'#!/bin/bash\necho fired > {marker_path}\n')
+        # bash resolves the drive-letter paths in the script and the stub.
+        stub_binary.write_text(
+            _to_posix_script(f'#!/bin/bash\necho fired > {marker_path}\n'), newline="\n"
+        )
         stub_binary.chmod(0o755)
 
         with zipfile.ZipFile(zip_path, "w") as zf:
@@ -1103,9 +1131,9 @@ class TestInstallUpdateMacos:
         # `if [ -x "$LSREGISTER" ]` guard skips it cleanly.
         stub_dir = tmp_path / "path_stubs"
         stub_dir.mkdir()
-        (stub_dir / "open").write_text("#!/bin/bash\nexit 1\n")
+        (stub_dir / "open").write_text("#!/bin/bash\nexit 1\n", newline="\n")
         (stub_dir / "open").chmod(0o755)
-        (stub_dir / "xattr").write_text("#!/bin/bash\nexit 0\n")
+        (stub_dir / "xattr").write_text("#!/bin/bash\nexit 0\n", newline="\n")
         (stub_dir / "xattr").chmod(0o755)
 
         from desktop_app.updater import install_update_macos
@@ -1157,13 +1185,18 @@ class TestInstallUpdateMacos:
         # Fallback nohup also redirects to $LOG_FILE; neutralise it.
         script_text = script_text.replace('>> "$LOG_FILE" 2>&1', '>/dev/null 2>&1')
         runnable = tmp_path / "run.sh"
-        runnable.write_text(script_text)
+        # bash needs LF and POSIX paths: the script is parsed from the file as
+        # written, by WSL bash or Git bash.
+        runnable.write_text(_to_posix_script(script_text), newline="\n")
         runnable.chmod(0o755)
 
         env = os.environ.copy()
-        env["PATH"] = f"{stub_dir}{os.pathsep}{env.get('PATH', '')}"
+        # bash (WSL and Git bash alike) takes the POSIX form of PATH entries;
+        # the parent process still needs the Windows cwd form for ``cwd``.
+        env["PATH"] = f"{_posix_form(stub_dir)}{os.pathsep}{env.get('PATH', '')}"
         result = subprocess.run(
-            ["bash", str(runnable)],
+            ["bash", "run.sh"],
+            cwd=str(tmp_path),
             env=env,
             capture_output=True,
             text=True,

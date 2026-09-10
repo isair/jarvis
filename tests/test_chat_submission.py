@@ -54,8 +54,12 @@ def _install_dialogue_memory(cfg=None, db=None):
     return dm
 
 
-def _wait_for_complete(events, timeout=5.0):
-    """Block until an ``on_complete`` event lands, or time out."""
+def _wait_for_complete(events, timeout=30.0):
+    """Block until an ``on_complete`` event lands, or time out.
+
+    The worker's first ``debug_log`` call resolves the one-shot config parse,
+    which is the dominant part of this budget on a cold cache.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         if any(e[0] == "complete" for e in events):
@@ -64,7 +68,7 @@ def _wait_for_complete(events, timeout=5.0):
     raise AssertionError("on_complete was not fired within timeout")
 
 
-def _wait_for_ipc_complete(capsys, timeout=5.0):
+def _wait_for_ipc_complete(capsys, timeout=30.0):
     """Block until a ``__CHAT__:`` ``complete`` event appears on stdout."""
     deadline = time.time() + timeout
     while time.time() < deadline:

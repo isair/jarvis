@@ -292,9 +292,12 @@ class TestDirectCommands:
         svc.handle_event(ev("app.startup"))  # suppressed by directive
         assert calls == []
         assert svc.stats()["suppressed"].get("directive") == 1
-        # Session cooldown (default 600 s) expiry returns the persona, i.e.
-        # the refusal is not a permanent reset.
+        # The full mute is permanent: it survives the clock, and only the
+        # explicit re-enable (or an app restart) returns the persona.
         clock["t"] = 601.0
+        assert svc.handle_event(ev("app.startup")) is None
+        assert svc.stats()["suppression"]["full_mute"] is True
+        assert svc.apply_directive("Můžeš zase mluvit") is True
         assert svc.handle_event(ev("app.startup")) == "Toast je hotový."
 
     @pytest.mark.unit

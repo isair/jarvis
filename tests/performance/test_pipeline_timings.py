@@ -23,13 +23,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
 import pytest
 import requests
 
-from tests.performance.timing_recorder import TimingRecorder
+try:  # package layout: repo root on sys.path
+    from tests.performance.timing_recorder import TimingRecorder
+except ModuleNotFoundError:  # site-packages ships its own ``tests`` package
+    sys.path.insert(0, str(Path(__file__).parent))
+    from timing_recorder import TimingRecorder
 
 
 OLLAMA_URL = os.environ.get("JARVIS_PERF_OLLAMA_URL", "http://localhost:11434")
