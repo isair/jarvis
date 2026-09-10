@@ -305,7 +305,7 @@ Pick one transcription language, or keep detection automatic. A fixed code is se
 }
 ```
 
-Four languages are supported: `en` (English), `cs` (Čeština), `vi` (Tiếng Việt), `sk` (Slovenčina). On top of the decoder, an offline Hunspell layer repairs the final transcript only, in the same language: pure-Python `spylls` reads bundled `.aff`/`.dic` pairs, so there is no network round-trip and no system dictionary package to install. Partial, in-progress utterance text keeps Whisper's original form. The protected-token, candidate-ranking, and bypass rules are in `src/jarvis/listening/listening.spec.md`.
+Four languages are supported: `en` (English), `cs` (Čeština), `vi` (Tiếng Việt), `sk` (Slovenčina). On top of the decoder, an offline Hunspell layer repairs the final transcript only, in the same language: pure-Python `spylls` reads bundled `.aff`/`.dic` pairs, so there is no network round-trip and no system dictionary package to install. Partial, in-progress utterance text keeps Whisper's original form. An unfinished protected word is also completed from the protected vocabulary, so `toastova` comes back as `toastovač`. The protected-token, candidate-ranking, and bypass rules are in `src/jarvis/listening/listening.spec.md`.
 
 All four keys appear in the Settings window under *Whisper*: the language is a dropdown (Auto, English, Čeština, Tiếng Việt, Slovenčina) and the other three are a toggle plus two list editors.
 

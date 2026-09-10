@@ -383,6 +383,7 @@ Only the final transcript is touched; partial, in-progress utterance text keeps 
 - Candidates are ranked by Damerau-Levenshtein distance to the token, with the dictionary's own suggestion order as the tie-break.
 - A replacement happens only when the best candidate is unique at distance 1, or at distance 2 when the token length is at least 8. Any other case leaves the token as it is.
 - Casing follows the token: lowercase, Capitalised, and ALL-CAPS shapes are applied to the candidate. Mixed-case tokens are never rewritten.
+- Protected-prefix completion (`_protected_prefix_match`) runs after the dictionary `lookup` miss and before the suggest/ranking step: an unknown token is completed from the casefolded protected vocabulary as the unique shortest protected term that strictly extends it. Multi-word protected terms are skipped; two same-length competitors leave the token untouched. So `toastova` resolves to the wake word `toastovač` — it is not a Czech word and the `cs_CZ` dictionary ties five distance-1 candidates (`toastová`, `toastově`, `toastové`, `toastový`, `toastoví`) — and the token's casing shape is kept (`Toastova` → `Toastovač`).
 
 **Protected tokens** (never rewritten): URL-ish tokens (`://`, `www.`, dotted technical tokens and TLDs), e-mail addresses (any token containing `@`), tokens with digits or underscores, ALL-CAPS abbreviations, CamelCase and other mixed-case forms, single letters, wake aliases, persona names, satellite entity names, and every `speech_spellcheck_protected_terms` entry. Protected terms are compared casefolded and the output keeps the original spelling.
 
@@ -399,6 +400,15 @@ event=speech_transcript_corrected language=... replacement_count=... latency_ms=
 ```
 
 The `raw_text` and `corrected_text` payloads follow the existing `voice_debug` setting: with it off, only the language, the replacement count, and the latency are emitted.
+
+**Console lines**, two of them for a repaired utterance:
+
+```
+📝 Heard: "Hey toastova,"
+   ✏️ Hunspell fixed: "Hey toastovač,"
+```
+
+`📝 Heard:` is Whisper's text, unchanged. The `✏️ Hunspell fixed:` line is indented under it and appears only when the repair pass actually changed the text. Downstream consumers — transcript buffer, wake detection, command routing, intent judge, LLM — read the corrected value.
 
 ## State Transitions
 

@@ -167,6 +167,38 @@ def _match_case(token: str, candidate: str) -> str:
     return candidate
 
 
+def _protected_prefix_match(token: str, folded_protected: frozenset[str]) -> str | None:
+    """Complete an unfinished token from the protected vocabulary.
+
+    A protected term is a name the layer must keep verbatim, so it is the
+    authoritative spelling of its own prefix: ``toastova`` is not a Czech word,
+    while ``toastovač`` is the wake word. Returns the unique *shortest* protected
+    term that strictly extends ``token``; ``None`` when there is no such term or
+    when two same-length terms compete. Multi-word terms cannot complete a
+    single token and are skipped.
+    """
+    if not folded_protected:
+        return None
+    folded_token = unicodedata.normalize("NFC", token).casefold()
+    if not folded_token:
+        return None
+
+    extensions: list[str] = []
+    for term in folded_protected:
+        if not term or " " in term:
+            continue
+        if term.startswith(folded_token) and term != folded_token:
+            extensions.append(term)
+    if not extensions:
+        return None
+
+    shortest_len = min(len(term) for term in extensions)
+    shortest = {term for term in extensions if len(term) == shortest_len}
+    if len(shortest) != 1:
+        return None
+    return next(iter(shortest))
+
+
 def _warn_once(warnings: list[str], message: str) -> None:
     if message not in warnings:
         warnings.append(message)
@@ -252,6 +284,23 @@ def correct_transcript(
         except Exception:
             known = True
         if known:
+            pieces.append(token)
+            continue
+
+        # Protected names are the authoritative spelling of their own prefix, so
+        # an unfinished token is completed from that vocabulary before the
+        # dictionary ranking runs. This is what turns the truncated wake word
+        # `toastova` into `toastovač` even though the Czech dictionary offers
+        # several equally-close inflections of `toastov` (`toastová`,
+        # `toastově`, `toastové`, `toastový`, `toastoví`) and the plain
+        # uniqueness gate would leave the token untouched.
+        prefix_term = _protected_prefix_match(token, folded_protected)
+        if prefix_term is not None:
+            prefix_replacement = _match_case(token, prefix_term)
+            if prefix_replacement and prefix_replacement != token:
+                replacements.append((token, prefix_replacement))
+                pieces.append(prefix_replacement)
+                continue
             pieces.append(token)
             continue
 

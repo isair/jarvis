@@ -59,6 +59,10 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
             "jarvis voice-pe set-led <device> --rgb 8c00ff --brightness 0.66",
             "jarvis voice-pe announce <device> \"text\"",
             "jarvis voice-pe play <device> <url>",
+            "jarvis voice-pe pause <device>",
+            "jarvis voice-pe resume <device>",
+            "jarvis voice-pe volume <device> 0.66",
+            "jarvis voice-pe mute <device> on|off",
             "jarvis voice-pe stop <device>",
             "jarvis voice-pe forget <device>",
         ):
@@ -93,14 +97,24 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
         print(f"📋 {len(devices)} device(s)", flush=True)
         for device in devices:
             view = device.ui_view()
+            connection = view["connection"]
+            features = connection.get("voice_features") or []
             print(f"  🛰️ {view['config']['host']} - {device.identity.get('friendly_name', '')}", flush=True)
             print(
                 f"     🎙️ {view['audio']['input_channel']} ch, "
-                f"TTS {view['connection']['session_state']}, "
+                f"TTS {connection['session_state']}, "
                 f"wake words {view['wake_words']}",
                 flush=True,
             )
-        return 0
+            print(
+                f"     🟢 {connection['device_state']}, "
+                f"🧩 {', '.join(features) or 'none'}",
+                flush=True,
+            )
+        return 1 if any(
+            device.health_snapshot().get("device_state") == "error"
+            for device in devices
+        ) else 0
 
     if command == "status":
         key = rest[0] if rest else ""
@@ -132,6 +146,32 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
         url = rest[1] if len(rest) > 1 else ""
         return _await(manager, manager.play(key, url)) if manager else 1
 
+    if command == "pause":
+        key = rest[0] if rest else ""
+        return _await(manager, manager.pause_media(key)) if manager else 1
+
+    if command == "resume":
+        key = rest[0] if rest else ""
+        return _await(manager, manager.resume_media(key)) if manager else 1
+
+    if command == "volume":
+        key = rest[0] if rest else ""
+        try:
+            level = float(rest[1]) if len(rest) > 1 else float(cfg.led_brightness)
+        except (TypeError, ValueError):
+            print("❓ volume expects a number between 0 and 1", flush=True)
+            return 1
+        return _await(manager, manager.set_volume(key, level)) if manager else 1
+
+    if command == "mute":
+        key = rest[0] if rest else ""
+        wanted = str(rest[1] if len(rest) > 1 else "on").strip().lower()
+        return (
+            _await(manager, manager.set_muted(key, wanted in {"on", "1", "true"}))
+            if manager
+            else 1
+        )
+
     if command == "stop":
         key = rest[0] if rest else ""
         return _await(manager, manager.stop_media(key)) if manager else 1
@@ -152,7 +192,13 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
 
 
 def _pair(cfg: VoicePEConfig) -> int:
-    """Discover, provision the Noise key if needed, then store metadata."""
+    """Discover, provision the Noise key if needed, then store metadata.
+
+    Metadata is stored for every matched node, plaintext ones included, so the
+    next start can reconnect from the persisted address instead of scanning
+    again; the integration flag is written as well, otherwise a paired unit
+    would still leave the manager disabled. ``forget`` reverses both.
+    """
     from .provisioning import provision_noise_key
 
     async def _run() -> int:
@@ -162,7 +208,9 @@ def _pair(cfg: VoicePEConfig) -> int:
             return 1
         entry = found[0]
         print(f"🔗 Pairing {entry.get('node_name') or entry.get('host')}", flush=True)
+        mac = str(entry.get("mac_address") or "") or str(entry["host"])
         psk = entry.get("noise_psk") or pe_config.get_psk(cfg, entry.get("mac_address", ""))
+        stored = False
         for attempt in range(2):
             client = make_client(
                 entry["host"],
@@ -173,20 +221,34 @@ def _pair(cfg: VoicePEConfig) -> int:
             try:
                 await client.connect(login=True, log_errors=True)
                 info = await client.device_info()
+                meta = {
+                    "mac_address": str(getattr(info, "mac_address", "") or mac),
+                    "node_name": str(getattr(info, "name", "") or entry.get("node_name", "")),
+                    "friendly_name": str(getattr(info, "friendly_name", "") or ""),
+                    "project_name": str(getattr(info, "project_name", "") or ""),
+                    "project_version": str(getattr(info, "project_version", "") or ""),
+                    "voice_feature_flags": int(
+                        getattr(info, "voice_assistant_feature_flags", 0) or 0
+                    ),
+                    "addresses": [str(entry["host"])],
+                    "port": int(entry["port"]),
+                }
                 if psk:
+                    meta["noise_psk"] = str(psk)
                     print("  ✅ Existing key accepted, no new key generated", flush=True)
-                    return 0
-                if getattr(info, "api_encryption_provisionable", False):
+                elif getattr(info, "api_encryption_provisionable", False):
                     ok, encoded = await provision_noise_key(client, info)
                     if ok and encoded:
-                        pe_config.save_device_metadata(
-                            str(getattr(info, "mac_address", "") or entry["host"]),
-                            {"noise_psk": encoded, "node_name": entry.get("node_name", "")},
-                        )
-                        print("  🔑 Noise PSK installed and stored", flush=True)
+                        meta["noise_psk"] = encoded
                         psk = encoded
-                        continue
-                return 0
+                        print("  🔑 Noise PSK installed and stored", flush=True)
+                    else:
+                        print("  ⚠️  Provisioning window closed, storing plaintext metadata", flush=True)
+                else:
+                    print("  ✅ Plaintext node (no Noise key on this firmware)", flush=True)
+                # Same metadata path as the live device, so both stay in sync.
+                stored = bool(pe_config.save_device_metadata(meta["mac_address"], meta))
+                break
             except Exception as err:
                 print(f"  ⚠️  Attempt {attempt + 1}: {err}", flush=True)
                 psk = None
@@ -195,7 +257,12 @@ def _pair(cfg: VoicePEConfig) -> int:
                     await client.disconnect(True)
                 except Exception:
                     pass
-        return 1
+        if not stored:
+            print("  ❌ Nothing stored - the device is not paired", flush=True)
+            return 1
+        enabled = pe_config.enable_integration(True)
+        print(f"  💾 Stored metadata for {mac} (integration {'enabled' if enabled else 'NOT enabled'})", flush=True)
+        return 0 if enabled else 1
 
     return asyncio.run(_run())
 

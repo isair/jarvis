@@ -646,13 +646,17 @@ class TestCpuOptimisations:
 
                             assert listener._whisper_device == "cpu"
 
-    def _create_listener_for_transcribe_test(self, whisper_device):
+    def _create_listener_for_transcribe_test(
+        self, whisper_device, segment_text="hello", language="auto"
+    ):
         """Create a VoiceListener wired up for transcription tests."""
         import numpy as np
 
         mock_whisper_model = MagicMock()
         mock_segment = MagicMock()
-        mock_segment.text = "hello"
+        mock_segment.text = segment_text
+        mock_segment.avg_logprob = -0.2
+        mock_segment.no_speech_prob = 0.1
         mock_info = MagicMock()
         mock_whisper_model.transcribe.return_value = (iter([mock_segment]), mock_info)
 
@@ -673,6 +677,13 @@ class TestCpuOptimisations:
                     mock_cfg.voice_debug = False
                     mock_cfg.whisper_min_confidence = 0.3
                     mock_cfg.whisper_min_audio_duration = 0.15
+                    mock_cfg.whisper_no_speech_threshold = 0.5
+                    # Spell-check plumbing: a real language code keeps the
+                    # Hunspell pass live, "auto" bypasses it.
+                    mock_cfg.whisper_language = language
+                    mock_cfg.speech_spellcheck_enabled = True
+                    mock_cfg.wake_word = "toustovač"
+                    mock_cfg.wake_aliases = ["toustovači", "toastovač", "toastovači"]
 
                     listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
                     listener.model = mock_whisper_model
@@ -713,6 +724,72 @@ class TestCpuOptimisations:
         assert call_kwargs["condition_on_previous_text"] is False
         assert call_kwargs["vad_filter"] is False
         assert call_kwargs["suppress_nospeech_text"] is True
+
+    def test_two_line_log_and_corrected_text_reaches_downstream(self, capsys):
+        """`📝 Heard:` keeps Whisper's text, `✏️ Hunspell fixed:` follows, and the
+        corrected form is what the buffer, the state manager and the processor get."""
+        listener, _model = self._create_listener_for_transcribe_test(
+            "cpu", segment_text="Hey toastova,", language="cs"
+        )
+
+        # Spy the two downstream sinks so the recorded values survive any later
+        # pruning the wake-word path performs on the buffer itself.
+        seen = []
+        original = listener._process_transcript
+
+        def _process_spy(text, *args, **kwargs):
+            seen.append(text)
+            return original(text, *args, **kwargs)
+
+        listener._process_transcript = _process_spy
+
+        added = []
+        real_add = listener._transcript_buffer.add
+
+        def _add_spy(*args, **kwargs):
+            added.append(kwargs["text"] if "text" in kwargs else args[0])
+            return real_add(*args, **kwargs)
+
+        listener._transcript_buffer.add = _add_spy
+
+        listener._finalize_utterance()
+
+        out = capsys.readouterr().out
+        heard = '📝 Heard: "Hey toastova,"'
+        fixed = '✏️ Hunspell fixed: "Hey toastovač,"'
+        assert heard in out, f"missing the raw Heard line; got:\n{out}"
+        assert fixed in out, f"missing the Hunspell fixed line; got:\n{out}"
+        assert out.index(heard) < out.index(fixed), f"fixed line must follow Heard; got:\n{out}"
+
+        # Every downstream consumer sees the corrected form, never the truncated one.
+        assert added == ["Hey toastovač,"]
+        assert seen == ["Hey toastovač,"]
+        # The state manager keeps the wake-word-stripped remainder of the
+        # corrected transcript ("toastovač" is the wake word and is removed).
+        assert listener.state_manager._pending_query == "hey ,"
+
+    def test_no_fix_line_when_the_hunspell_pass_is_a_no_op(self, capsys):
+        """Dictionary-valid text prints the Heard line alone."""
+        listener, _model = self._create_listener_for_transcribe_test(
+            "cpu", segment_text="Hello world", language="en"
+        )
+
+        added = []
+        real_add = listener._transcript_buffer.add
+
+        def _add_spy(*args, **kwargs):
+            added.append(kwargs["text"] if "text" in kwargs else args[0])
+            return real_add(*args, **kwargs)
+
+        listener._transcript_buffer.add = _add_spy
+
+        listener._finalize_utterance()
+
+        out = capsys.readouterr().out
+        assert out.count("📝 Heard:") == 1
+        assert '📝 Heard: "Hello world"' in out
+        assert "Hunspell fixed" not in out
+        assert added == ["Hello world"]
 
 
 class TestRepetitiveHallucinationDetectionExtended:

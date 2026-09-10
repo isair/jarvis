@@ -192,6 +192,15 @@ def save_device_metadata(mac: str, meta: Dict[str, Any]) -> bool:
     return bool(save_json(path, data))
 
 
+def enable_integration(value: bool = True) -> bool:
+    """Write ``voice_pe_enabled`` so a paired unit is actually started."""
+    default_path, load_json, save_json = _config_io()
+    path = default_path()
+    data = load_json(path)
+    data["voice_pe_enabled"] = bool(value)
+    return bool(save_json(path, data))
+
+
 def forget_device(mac: str) -> bool:
     """Drop Jarvis-side metadata for one MAC. No factory reset is attempted."""
     if not mac:

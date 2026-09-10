@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from .models import SAMPLE_RATE, VoicePEConfig
+from .models import AUDIO_SOURCE_VOICE_PE, SAMPLE_RATE, VoicePEConfig
 
 try:
     import numpy as np
@@ -106,7 +106,13 @@ class AudioIngress:
             )
             self._metrics["microphone_queue_depth_ms"] = self.depth_ms()
             try:
-                self._listener._audio_q.put_nowait(pcm16_to_float32(payload))
+                # Tagged item: exactly one microphone owns an utterance.
+                self._listener._audio_q.put_nowait(
+                    (
+                        AUDIO_SOURCE_VOICE_PE,
+                        pcm16_to_float32(payload),
+                    )
+                )
             except Exception:
                 # The listener queue is bounded too: freshest audio wins.
                 self._metrics["audio_dropped_chunks"] = (

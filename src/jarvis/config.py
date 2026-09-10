@@ -651,6 +651,16 @@ class Settings:
 
 
 def default_config_path() -> Path:
+    """The one config path every reader and writer shares.
+
+    ``JARVIS_CONFIG_PATH`` is the explicit override and wins, exactly as in
+    ``load_settings``; then ``XDG_CONFIG_HOME``; then the XDG default. Writers
+    and readers must agree, otherwise a pairing write and the next start read
+    different files.
+    """
+    override = os.environ.get("JARVIS_CONFIG_PATH")
+    if override:
+        return Path(override).expanduser()
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return Path(xdg) / "jarvis" / "config.json"

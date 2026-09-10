@@ -24,6 +24,15 @@ from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
+
+try:  # pragma: no cover - trivial import shim
+    from ..integrations.voice_pe.models import (
+        AUDIO_SOURCE_LOCAL,
+        AUDIO_SOURCE_VOICE_PE,
+    )
+except ImportError:  # pragma: no cover
+    AUDIO_SOURCE_LOCAL = "local"  # type: ignore[assignment]
+    AUDIO_SOURCE_VOICE_PE = "voice_pe"  # type: ignore[assignment]
 from .transcript_postprocessor import (
     correct_transcript,
     format_correction_event,
@@ -427,6 +436,11 @@ class VoiceListener(threading.Thread):
         self._silence_frames = 0
         self._utterance_frames: list = []
         self._frame_samples = 0
+        # Continuity between queued blocks: a satellite sends 512-sample blocks
+        # while the VAD frame is 320 samples, so the block remainder is kept in
+        # ``_remaining_samples`` instead of being dropped at the block boundary.
+        self._remaining_samples: Any = None
+        self._audio_source: Optional[str] = None
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
         self._vad: Optional = None
 
@@ -497,6 +511,33 @@ class VoiceListener(threading.Thread):
                 sink.on_error(code, message)
         except Exception as e:
             debug_log(f"voice_pe sink note failed ({marker}): {e}", "voice")
+
+    def _sink_holds_session(self) -> bool:
+        """True while one attached satellite holds an open pipeline run."""
+        sink = self._voice_pe_sink
+        if sink is None:
+            return False
+        try:
+            return bool(sink.holds_session())
+        except Exception:
+            return False
+
+    def _accept_satellite_transcript(self, text_lower: str) -> None:
+        """Open the query directly for a satellite push-to-talk run.
+
+        The centre button is the engagement signal, so the wake-word check and
+        the intent judge are both skipped and the transcript is the query.
+        """
+        self.state_manager.cancel_hot_window_activation()
+        self._transcript_buffer.mark_segment_processed(text_lower)
+        self._clear_audio_buffers()
+        self.state_manager.start_collection(text_lower)
+        self._start_thinking_tune()
+        try:
+            print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}", flush=True)
+        except Exception:
+            pass
+        debug_log(f"✅ satellite (Voice PE) transcript accepted: \"{text_lower}\"", "voice")
 
     def stop(self) -> None:
         """Stop the voice listener."""
@@ -576,13 +617,14 @@ class VoiceListener(threading.Thread):
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
-    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0) -> None:
+    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, source: Optional[str] = None) -> None:
         """
         Process a transcript from speech recognition.
 
         Args:
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
+            source: Which microphone fed the utterance (``local`` / ``voice_pe``)
         """
         if not text or not text.strip():
             # Check for timeouts
@@ -606,6 +648,14 @@ class VoiceListener(threading.Thread):
         # utterance would vouch for subsequent unrelated utterances via the
         # `_wake_timestamp is not None` guard in the intent-judge accept path.
         self._wake_timestamp = None
+
+        # A satellite run was opened by the centre button (or by the device's
+        # own continued conversation), and that press already is the engagement
+        # signal. The wake-word gate of the local pipeline must not reject the
+        # transcript: the stock firmware does not repeat a wake word there.
+        if (source or self._audio_source) == AUDIO_SOURCE_VOICE_PE or self._sink_holds_session():
+            self._accept_satellite_transcript(text_lower)
+            return
 
         start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-3] if utterance_start_time > 0 else "N/A"
         end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
@@ -1315,12 +1365,22 @@ class VoiceListener(threading.Thread):
             return
 
         # Satellite milestone: the agent produced the reply text. The attached
-        # device streams its PCM itself, so the local playback below stays the
-        # only path when no satellite is attached.
+        # device delivers the audio itself (API PCM or the ``TTS_END`` WAV URL),
+        # so the local playback below only runs when no satellite holds the run.
         self._voice_pe_event("reply", reply or "")
+        satellite_reply = self._sink_holds_session()
 
         # Handle TTS with proper callbacks
-        if reply and self.tts and self.tts.enabled:
+        if reply and satellite_reply:
+            # The satellite owns the audio of this run: no second local speech,
+            # no local hot window (the device keeps its own continuation).
+            self._stop_thinking_tune()
+            self._flash_face_success()
+            debug_log(
+                f"satellite TTS only ({len(reply)} chars), local playback skipped",
+                "voice",
+            )
+        elif reply and self.tts and self.tts.enabled:
             # Stop thinking tune when TTS starts
             self._stop_thinking_tune()
             # Success pop right after generation, before speech begins.
@@ -1411,6 +1471,9 @@ class VoiceListener(threading.Thread):
         self.is_speech_active = False
         self._silence_frames = 0
 
+        # The block remainder belongs to the dropped audio as well.
+        self._remaining_samples = None
+
         # Clear wake detection state
         self._wake_timestamp = None
 
@@ -1422,6 +1485,50 @@ class VoiceListener(threading.Thread):
             pass
 
         debug_log("audio buffers cleared", "voice")
+
+    @staticmethod
+    def _tagged_audio(item):
+        """Split one queue item into ``(source, buffer)``.
+
+        Both tagged ``("local" | "voice_pe", buffer)`` items and bare buffers are
+        accepted, so every producer shape keeps working.
+        """
+        if isinstance(item, tuple) and len(item) == 2:
+            return str(item[0]), item[1]
+        return AUDIO_SOURCE_LOCAL, item
+
+    @staticmethod
+    def _mono_audio(buf):
+        """First channel of one block, flattened (stereo blocks included)."""
+        try:
+            return buf.reshape(-1, buf.shape[-1])[:, 0] if buf.ndim > 1 else buf.flatten()
+        except Exception:
+            return buf.flatten()
+
+    @staticmethod
+    def _frame_grid(mono, carry, frame_samples):
+        """Frames plus the remainder, continued across block boundaries.
+
+        The satellite pushes 512-sample blocks while a VAD frame is 320 samples
+        at 16 kHz. The 192-sample remainder of a block is prepended to the next
+        block instead of being dropped, so the frame grid stays contiguous over
+        the whole stream.
+        """
+        if carry is not None:
+            try:
+                mono = np.concatenate((carry, mono))
+            except Exception:
+                pass
+        frames: list = []
+        offset = 0
+        total = int(mono.shape[0]) if hasattr(mono, "shape") else len(mono)
+        while frame_samples > 0 and offset + frame_samples <= total:
+            frames.append(mono[offset: offset + frame_samples])
+            offset += frame_samples
+        # Exactly divisible leaves nothing behind; a short tail continues the
+        # next block.
+        remaining = None if offset >= total else mono[offset:]
+        return frames, remaining
 
     def _whisper_language_code(self) -> Optional[str]:
         """Configured ASR language code, or ``None`` for auto-detection.
@@ -1635,7 +1742,7 @@ class VoiceListener(threading.Thread):
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
-                self._audio_q.put_nowait(chunk)
+                self._audio_q.put_nowait((AUDIO_SOURCE_LOCAL, chunk))
             except Exception:
                 pass
         except Exception:
@@ -2504,27 +2611,32 @@ class VoiceListener(threading.Thread):
                     self._silence_frames = 0
                     self._utterance_frames = []
                     self._pre_roll.clear()
+                    self._remaining_samples = None
+                    self._audio_source = None
                     continue
 
                 if np is None:
                     continue
 
-                # Process audio buffer
-                buf = item
-                try:
-                    mono = buf.reshape(-1, buf.shape[-1])[:, 0] if buf.ndim > 1 else buf.flatten()
-                except Exception:
-                    mono = buf.flatten()
+                # Tagged item ``("local" | "voice_pe", buffer)``; a bare buffer
+                # is the local microphone. Only one microphone owns an
+                # utterance, so a block of the other source is skipped while an
+                # utterance is in flight instead of being interleaved into it.
+                source, buf = self._tagged_audio(item)
+                if self._audio_source and source != self._audio_source:
+                    continue
+                self._audio_source = source
 
-                # Process frames
-                offset = 0
-                total = mono.shape[0]
-                frame_timestamp = time.time()  # Timestamp for this batch of frames
+                mono = self._mono_audio(buf)
 
-                while offset + self._frame_samples <= total:
-                    frame = mono[offset: offset + self._frame_samples]
-                    offset += self._frame_samples
+                # Satellite blocks are 512 samples while a VAD frame is 320, so
+                # the frame grid continues across the block boundary.
+                carry = self._remaining_samples
+                frames, self._remaining_samples = self._frame_grid(
+                    mono, carry, self._frame_samples
+                )
 
+                for frame in frames:
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
 
@@ -2570,10 +2682,12 @@ class VoiceListener(threading.Thread):
                     # Check for query timeouts
                     self._check_query_timeout()
 
-                # Handle remaining audio
-                if offset < total:
-                    tail = mono[offset:]
-                    if tail.size > 0:
+                # Seed the pre-roll with the block remainder too, so a speech
+                # onset right at a block boundary keeps its first samples. The
+                # same remainder is the head of the next block's frame grid.
+                if self._remaining_samples is not None:
+                    tail = self._remaining_samples
+                    if getattr(tail, "size", 0) > 0:
                         self._pre_roll.append(tail.copy())
                         while len(self._pre_roll) > pre_roll_max_frames:
                             try:
@@ -2583,10 +2697,15 @@ class VoiceListener(threading.Thread):
 
     def _finalize_utterance(self) -> None:
         """Process completed utterance through speech recognition."""
+        # Whichever microphone fed this utterance, it is complete now: the tag
+        # is taken off here so the next block can come from either source.
+        utterance_source = self._audio_source
+        self._audio_source = None
         if np is None or not self._utterance_frames:
             self.is_speech_active = False
             self._silence_frames = 0
             self._utterance_frames = []
+            self._remaining_samples = None
             return
 
         # Track when utterance ends - but don't overwrite global timing yet
@@ -2742,10 +2861,14 @@ class VoiceListener(threading.Thread):
 
         # Offline Hunspell repair of the FINAL transcript only — partial
         # in-progress text never reaches this point. Both values survive: the
-        # raw Whisper text lives on the correction object and in the structured
-        # log, downstream consumers (wake detection, command routing, intent
-        # judge, LLM) see the corrected one.
+        # raw Whisper text lives on the correction object, in the structured
+        # log and on the `📝 Heard:` line, and the corrected one lives on the
+        # `✏️ Hunspell fixed:` line right below it. Every downstream consumer
+        # (wake detection, command routing, transcript buffer, intent judge,
+        # LLM) is fed the corrected text, so the pipeline sees the fixed
+        # transcript.
         _spellcheck_started = time.perf_counter()
+        whisper_transcript = text
         correction = correct_transcript(
             text,
             self._last_detected_language or self._whisper_language_code(),
@@ -2765,10 +2888,14 @@ class VoiceListener(threading.Thread):
             )
 
         # Log successful transcription — separator omitted on the first utterance since
-        # there is no prior turn to visually separate from.
+        # there is no prior turn to visually separate from. The Whisper text comes
+        # first, the Hunspell-fixed form follows on its own next line whenever the
+        # repair actually changed something.
         separator = "" if self._first_utterance else f"\n{'─' * 50}"
         self._first_utterance = False
-        print(f"{separator}\nðŸ“ Heard: \"{text}\"", flush=True)
+        print(f"{separator}\n📝 Heard: \"{whisper_transcript}\"", flush=True)
+        if text != whisper_transcript:
+            print(f"   ✏️ Hunspell fixed: \"{text}\"", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
@@ -2794,4 +2921,10 @@ class VoiceListener(threading.Thread):
         )
 
         # Process the transcript with pre-calculated energy and utterance timing
-        self._process_transcript(text, utterance_energy, utterance_start_time, utterance_end_time)
+        self._process_transcript(
+            text,
+            utterance_energy,
+            utterance_start_time,
+            utterance_end_time,
+            utterance_source,
+        )

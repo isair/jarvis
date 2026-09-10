@@ -156,11 +156,65 @@ error and while muted. The same `conversation_id` stays valid until
 `START_CONVERSATION` feature through
 `send_voice_assistant_announcement_await_response(..., start_conversation=True)`.
 
-An open-ended reply closes its run first: `RUN_END` is sent, the session moves
-to `CONTINUE_PENDING`, and only then the follow-up is opened by that same
-`start_conversation` announcement RPC. The pipeline therefore never stays in
-the `replying` phase, and the announced reply finishing is what moves
-`CONTINUE_PENDING` to `IDLE`.
+An open-ended reply closes its run first: `RUN_END` is sent and the session
+moves to `CONTINUE_PENDING`. Nothing else is emitted - the stock firmware
+reopens the microphone itself from the `continue_conversation` value of
+`INTENT_END` and calls the start callback again with the same `conversation_id`
+(added in ESPHome 2025.6.0). A second `RUN_END` closes the follow-up. The next
+`handle_pipeline_start` keeps the session and the follow-up transcript is
+accepted without a wake word again.
+
+## Microphone ingress and source ownership
+
+Every item on the shared listener queue is tagged with its source,
+`AUDIO_SOURCE_LOCAL` or `AUDIO_SOURCE_VOICE_PE`, so exactly one microphone owns
+an utterance: while an utterance is in flight, a block of the other source is
+skipped instead of being interleaved. A bare (untagged) buffer still reads as
+the local microphone.
+
+The satellite pushes 512-sample blocks while a VAD frame is 320 samples at
+16 kHz. The 192-sample remainder of a block continues the next block instead of
+being dropped, which keeps the frame grid contiguous over the whole stream.
+
+A source-tagged transcript (or a sink holding a session) skips the wake-word
+check and the intent judge: the centre-button press already is the engagement
+signal and the transcript is the query. The local PC TTS stays silent for a
+satellite reply, because the satellite played it already over the API or from
+the WAV URL.
+
+## LED ring and toaster avatar
+
+One bridge, `LED_PHASE_JARVIS_STATE`, maps the phase the last Voice Assistant
+event left the ring in onto the desktop avatar: `waiting_for_command` and
+`listening_for_command` to `listening`, `thinking` to `thinking`, `replying` to
+`speaking`, `idle` to `idle`, `not_ready` to `asleep`, `error` to `error`. Both
+surfaces therefore follow the same event stream; per-pixel effects stay inside
+the firmware, whose `voice_assistant_leds` light is `internal: true`.
+
+## Startup, pairing and commands
+
+`voice_pe_enabled` starts off; `jarvis voice-pe pair` writes it together with
+the node metadata, so a paired unit is also started. Pairing stores metadata
+for every matched node - Noise-keyed and plaintext units alike - including the
+addresses, port and decoded feature flags. `VoicePEManager._astart` waits
+(bounded) for the generation to reach `READY`, and the `list` and `status`
+subcommands report the device state plus the decoded feature list.
+
+Commands beyond `play`/`stop`: `pause`, `resume`, `volume <0..1>`, `mute
+on|off`, matching the media controller one-to-one. With a single attached
+satellite an unnamed target resolves to it. `pair` and `forget` both write the
+same key. The hardware smoke test is `scripts/_voice_pe_smoke.py`: eight checks
+against a real unit (handshake, enumeration, flag decode, subscription, WAV
+fetch, announcement, configuration) with the failed-check count as exit code.
+
+## Firmware baseline
+
+Stock retail firmware (ESPHome 2025.6.x, `nabu_home_assistant_voice_preview_2`).
+No firmware fork and no Home Assistant server. A missing `SPEAKER` bit does not
+mean a missing loudspeaker: it only says whether raw PCM rides the Native API,
+which is why the flag sets without that bit take the URL egress. Full duplex in
+the simultaneous sense is not available on that firmware: `STREAMING_MICROPHONE`
+and `STREAMING_RESPONSE` stay separate states.
 
 ## Recovery
 
@@ -211,6 +265,10 @@ jarvis voice-pe status <device>
 jarvis voice-pe set-led <device> --rgb 8c00ff --brightness 0.66
 jarvis voice-pe announce <device> "text"
 jarvis voice-pe play <device> <url>
+jarvis voice-pe pause <device>
+jarvis voice-pe resume <device>
+jarvis voice-pe volume <device> 0.66
+jarvis voice-pe mute <device> on|off
 jarvis voice-pe stop <device>
 jarvis voice-pe forget <device>
 ```

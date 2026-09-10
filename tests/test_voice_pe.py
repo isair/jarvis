@@ -547,6 +547,61 @@ class TestTtsStreamHelpers:
 
 
 # ---------------------------------------------------------------------------
+# Frame grid across satellite block boundaries
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestFrameGrid:
+    """512-sample satellite blocks over a 320-sample VAD frame."""
+
+    def _walk(self, blocks, frame_samples=320):
+        import numpy as np
+
+        from jarvis.listening.listener import VoiceListener
+
+        frames = []
+        remaining = None
+        for block in blocks:
+            _source, buf = VoiceListener._tagged_audio(
+                ("voice_pe", np.asarray(block, dtype=np.float32))
+            )
+            mono = VoiceListener._mono_audio(buf)
+            produced, remaining = VoiceListener._frame_grid(mono, remaining, frame_samples)
+            frames.extend(produced)
+        return frames, remaining
+
+    def test_remainder_carries_across_the_block_boundary(self):
+        import numpy as np
+
+        blocks = [np.zeros(512, dtype=np.float32) for _ in range(4)]
+        frames, remaining = self._walk(blocks)
+        # floor(2048 / 320) = 6 frames, the 128-sample tail is still carried.
+        assert len(frames) == 6
+        assert int(remaining.size) == 128
+
+    def test_frames_cover_the_stream_without_gaps(self):
+        import numpy as np
+
+        stream = np.arange(512 * 4, dtype=np.float32)
+        frames, _remaining = self._walk([stream], frame_samples=320)
+        joined = np.concatenate(frames) if frames else np.zeros(0, dtype=np.float32)
+        # Contiguous prefix of the source stream, no sample dropped in between.
+        assert np.array_equal(joined, stream[: joined.size])
+        assert joined.size == 320 * 6
+
+    def test_tagged_and_bare_items_agree(self):
+        import numpy as np
+
+        from jarvis.listening.listener import VoiceListener
+
+        buf = np.zeros(512, dtype=np.float32)
+        tagged = VoiceListener._tagged_audio(("voice_pe", buf))
+        bare = VoiceListener._tagged_audio(buf)
+        assert tagged[0] == "voice_pe" and bare[0] == "local"
+        assert tagged[1] is buf and bare[1] is buf
+
+
+# ---------------------------------------------------------------------------
 # Device sessions
 # ---------------------------------------------------------------------------
 
@@ -846,8 +901,9 @@ class TestEgressBranches:
         assert url.startswith("http://") and url.count(":") >= 2
         assert client.audio == []
         assert device.session_state is SessionState.IDLE
-        # the same URL is handed to the media player as its playable media id
-        assert client.media and client.media[0][1]["media_url"] == url
+        # ``TTS_END`` is the single egress of this flag set: the satellite fetches
+        # and plays the WAV itself, so no second media command may follow.
+        assert client.media == []
 
     def test_url_served_by_the_transport_is_fetchable(self, monkeypatch):
         client = FakeClient()
@@ -874,7 +930,7 @@ class TestEgressBranches:
         assert url.startswith("http://")
         assert payload.endswith(b"\x0a\x0b\x0c\x0d")
 
-    def test_question_closes_the_run_before_start_conversation(self, monkeypatch):
+    def test_question_closes_the_run_and_the_firmware_continues(self, monkeypatch):
         client = _AnnounceClient()
         device = _no_speaker_device(client)
         monkeypatch.setattr(
@@ -895,9 +951,13 @@ class TestEgressBranches:
         state = _run_loop(_run, device)
         sent = [event for event, _ in client.events]
         assert sent[-1] == 2 and sent.count(2) == 1  # one RUN_END, replying closed
+        # The firmware continues from INTENT_END, so no extra RPC is emitted.
+        intent = dict(client.events[sent.index(6)][1])
+        assert intent["continue_conversation"] == "1"
+        assert client.announcements == []
         assert state is SessionState.CONTINUE_PENDING
-        assert client.announcements[0]["start_conversation"] is True
-        assert client.announcements[0]["text"] == "Which room?"
+        # The held session is what feeds the next turn back into Jarvis.
+        assert device.holds_session() is True
 
     def test_statement_closes_the_run_without_a_follow_up(self, monkeypatch):
         client = _AnnounceClient()
@@ -1113,6 +1173,102 @@ class TestCapabilitySyncFailFast:
         # exactly one live handle, and the old one released.
         assert device._unsub_voice_assistant is not first
         assert device.connection_generation == 2
+
+
+@pytest.mark.unit
+class TestSessionOwnership:
+    def test_fanout_reports_the_one_held_session(self):
+        from jarvis.integrations.voice_pe.manager import SinkFanout
+
+        first = _device(FakeClient())
+        second = _device(FakeClient())
+        fan = SinkFanout([first, second])
+        assert fan.holds_session() is False
+
+        async def _run():
+            await first.handle_pipeline_start("", 0, SimpleNamespace(), None)
+
+        _run_loop(_run, first)
+        assert fan.holds_session() is True
+
+    def test_abort_releases_the_session(self):
+        device = _no_speaker_device(FakeClient())
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            held = device.holds_session()
+            await device.handle_pipeline_stop(True)
+            return held, device.holds_session()
+
+        held, released = _run_loop(_run, device)
+        assert held is True and released is False
+
+    def test_microphone_end_marker_keeps_the_session(self):
+        device = _no_speaker_device(FakeClient())
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device.handle_pipeline_stop(False)
+            return device.holds_session()
+
+        assert _run_loop(_run, device) is True
+
+
+# ---------------------------------------------------------------------------
+# Pairing: metadata and the integration flag
+# ---------------------------------------------------------------------------
+
+def _read_written_config() -> dict:
+    """The written JSON, through the same resolver the writers use."""
+    import json
+
+    from jarvis.config import default_config_path
+
+    path = default_config_path()
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+@pytest.mark.unit
+class TestPairingPersists:
+    """Pairing writes metadata for every node shape and enables the feature."""
+
+    def _run_pair(self, client, monkeypatch):
+        from jarvis.integrations.voice_pe import cli
+
+        async def _discover(_cfg, **_kwargs):
+            return [
+                {
+                    "host": "10.0.0.24",
+                    "port": 6053,
+                    "node_name": "home-assistant-voice-aabbcc",
+                    "mac_address": "aa:bb:cc:dd:ee:ff",
+                    "project_name": "esphome/home-assistant-voice-pe",
+                    "project_version": "25.6.0",
+                    "voice_feature_flags": FLAGS_NO_SPEAKER,
+                }
+            ]
+
+        monkeypatch.setattr(cli, "discover", _discover)
+        monkeypatch.setattr(cli, "make_client", lambda *args, **kwargs: client)
+        from unittest.mock import patch
+
+        # The CLI prints emoji; the captured Windows stdout is cp1252.
+        with patch("builtins.print"):
+            return cli._pair(_config())
+
+    def test_plaintext_node_is_stored_and_enabled(self, monkeypatch):
+        assert self._run_pair(_SyncClient(), monkeypatch) == 0
+        saved = _read_written_config()
+        stored = saved["voice_pe_devices"]["aa:bb:cc:dd:ee:ff"]
+        assert stored["addresses"] == ["10.0.0.24"]
+        assert stored["voice_feature_flags"] == FLAGS_NO_SPEAKER
+        assert saved["voice_pe_enabled"] is True
+
+    def test_existing_key_is_carried_into_the_metadata(self, monkeypatch):
+        monkeypatch.setenv("JARVIS_VOICE_PE_PSK", "cHNr")
+        assert self._run_pair(_SyncClient(), monkeypatch) == 0
+        saved = _read_written_config()
+        assert saved["voice_pe_devices"]["aa:bb:cc:dd:ee:ff"]["noise_psk"] == "cHNr"
 
 
 @pytest.mark.unit

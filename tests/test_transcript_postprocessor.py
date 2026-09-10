@@ -161,3 +161,52 @@ class TestStructuredEvent:
         result = correct_transcript("janův", "cs")
         assert result.corrected == "janův"
         assert result.replacements == ()
+
+
+@pytest.mark.unit
+class TestProtectedPrefixCompletion:
+    """A Hunspell miss is first completed from the protected vocabulary.
+
+    The protected term is the authoritative spelling of its own prefix, so a
+    truncated wake word becomes the full term even when the dictionary ranking
+    is blocked by the unique-best gate.
+    """
+
+    _WAKE_TERMS = frozenset({
+        "toustovač",
+        "toustovači",
+        "toastovač",
+        "toastovači",
+        "hej toustovač",
+        "hej toustovači",
+    })
+
+    def test_unfinished_token_is_completed_from_wake_terms(self):
+        result = correct_transcript("Hey toastova, ", "cs", protected_terms=self._WAKE_TERMS)
+        assert result.corrected == "Hey toastovač, "
+        assert result.replacements == (("toastova", "toastovač"),)
+        assert result.raw == "Hey toastova, "
+
+    def test_completion_preserves_the_casing_shape(self):
+        result = correct_transcript("Toastova 11", "cs", protected_terms=self._WAKE_TERMS)
+        assert result.corrected == "Toastovač 11"
+        assert result.replacements == (("Toastova", "Toastovač"),)
+        assert result.raw == "Toastova 11"
+
+    def test_second_wake_spelling_completes_the_same_way(self):
+        result = correct_transcript("Hey toustova,", "cs", protected_terms=self._WAKE_TERMS)
+        assert result.corrected == "Hey toustovač,"
+        assert result.replacements == (("toustova", "toustovač"),)
+        assert result.raw == "Hey toustova,"
+
+    def test_two_same_length_extensions_block_the_completion(self):
+        result = correct_transcript("ab", "cs", protected_terms=frozenset({"abc", "abd"}))
+        assert result.corrected == "ab"
+        assert result.replacements == ()
+        assert result.raw == "ab"
+
+    def test_multi_word_term_does_not_complete_a_single_token(self):
+        result = correct_transcript("hej", "cs", protected_terms=frozenset({"hej toustovač"}))
+        assert result.corrected == "hej"
+        assert result.replacements == ()
+        assert result.raw == "hej"

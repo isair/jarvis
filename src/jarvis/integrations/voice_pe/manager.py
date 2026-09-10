@@ -28,6 +28,13 @@ except ImportError:  # pragma: no cover
         pass
 
 
+def _kv(pairs: dict) -> str:
+    """One structured ``key=value`` debug line, ``None`` values dropped."""
+    return " ".join(
+        f"{key}={value}" for key, value in pairs.items() if value is not None
+    )
+
+
 class SinkFanout:
     """Fan the listener's pipeline milestones out to every attached device.
 
@@ -57,6 +64,10 @@ class SinkFanout:
     def on_error(self, code: str, message: str) -> None:
         for device in self._devices:
             device.on_error(code, message)
+
+    def holds_session(self) -> bool:
+        """True while exactly one attached satellite owns the open run."""
+        return any(device.holds_session() for device in self._devices)
 
 
 class VoicePEManager:
@@ -161,6 +172,24 @@ class VoicePEManager:
             self._devices.append(device)
             try:
                 await device.start()
+                # The handshake plus the capability sync are what makes a
+                # satellite usable, so the start is not reported before them.
+                ready = await device.wait_until_ready(10.0)
+                debug_log(
+                    _kv(
+                        {
+                            "component": "voice_pe",
+                            "host": host,
+                            "device_name": name,
+                            "ready": int(ready),
+                            "device_state": device.state.value,
+                            "features": ",".join(device.capabilities.names()) or "none",
+                            "entities": device.capabilities.entity_count,
+                            "event_type": "device_start",
+                        }
+                    ),
+                    "voice",
+                )
             except Exception as err:
                 device.handle_auth_error(err)
                 debug_log(
@@ -266,7 +295,11 @@ class VoicePEManager:
         return list(self._devices)
 
     def device(self, key: str) -> Optional[VoicePEDevice]:
-        """Find one device by node name, friendly name or MAC address."""
+        """Find one device by node name, friendly name or MAC address.
+
+        One satellite is the common case: an unknown or empty key then resolves
+        to it, so a command never lands on nothing because of a name mismatch.
+        """
         needle = str(key or "").strip().lower()
         if not needle:
             return self._devices[0] if self._devices else None
@@ -281,6 +314,8 @@ class VoicePEManager:
             }
             if needle in candidates:
                 return device
+        if len(self._devices) == 1:
+            return self._devices[0]
         return None
 
     def register_action(self, name: str, handler) -> None:
@@ -348,6 +383,41 @@ class VoicePEManager:
             return False
         device.media.stop()
         return True
+
+    async def pause_media(self, key: str) -> bool:
+        device = self.device(key)
+        if device is None:
+            return False
+        device.media.pause()
+        return True
+
+    async def resume_media(self, key: str) -> bool:
+        device = self.device(key)
+        if device is None:
+            return False
+        device.media.resume()
+        return True
+
+    async def set_volume(self, key: str, volume: float) -> bool:
+        device = self.device(key)
+        if device is None:
+            return False
+        device.media.set_volume(float(volume))
+        return True
+
+    async def set_muted(self, key: str, muted: bool) -> bool:
+        device = self.device(key)
+        if device is None:
+            return False
+        device.media.set_muted(bool(muted))
+        return True
+
+    def media_state(self, key: str) -> dict:
+        """Published media state, incl. the volume the wheel position maps to."""
+        device = self.device(key)
+        if device is None or device.media is None:
+            return {}
+        return device.media.snapshot()
 
     async def set_led(self, key: str, rgb, brightness) -> bool:
         from .led import apply_led

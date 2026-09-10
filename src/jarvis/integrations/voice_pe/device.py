@@ -28,6 +28,7 @@ from .media import VoicePEMediaController
 from .models import (
     ANNOUNCEMENT_TIMEOUT_S,
     COMMAND_FLAG_USE_WAKE_WORD,
+    LED_PHASE_JARVIS_STATE,
     LED_PHASES,
     VA_CONFIG_TIMEOUT_S,
     DeviceState,
@@ -335,6 +336,7 @@ class VoicePEDevice:
         self._persist_identity()
         self.state = DeviceState.READY
         self.led_phase = "idle"
+        self._sync_face_state()
         self._mark_event("connected")
         debug_log(
             _kvp({
@@ -415,6 +417,7 @@ class VoicePEDevice:
             self._ingress.reset()
         self.session = None
         self.session_state = SessionState.IDLE
+        self.led_phase = "not_ready"
         if self._client is not None:
             try:
                 # A forced disconnect runs the ``on_stop`` chain, which is what
@@ -423,6 +426,7 @@ class VoicePEDevice:
             except Exception:
                 pass
         self._mark_event("sync_failed")
+        self._sync_face_state()
         debug_log(
             _kvp({
                 "component": "voice_pe",
@@ -504,7 +508,12 @@ class VoicePEDevice:
         self._cancel_tts_task()
         if abort:
             self.session_state = SessionState.IDLE
+            self.session = None
+            self.led_phase = "idle"
+            self._sync_face_state()
             self._mark_event("aborted")
+        # ``abort=False`` is the microphone end marker: the run stays open
+        # because the transcript and the reply of this generation still follow.
         self._ensure_listener_queue_idle()
 
     async def handle_audio(self, data: bytes, data2: Optional[bytes] = None) -> None:
@@ -529,6 +538,37 @@ class VoicePEDevice:
             self.session_state = SessionState.IDLE
         self.led_phase = "idle"
         self._mark_event("announcement_finished")
+        self._sync_face_state()
+
+    def holds_session(self) -> bool:
+        """True while this device owns the one open pipeline run."""
+        return (
+            self.session is not None
+            and self.session_state is not SessionState.IDLE
+        )
+
+    async def wait_until_ready(self, timeout_s: float = 10.0) -> bool:
+        """Poll until the connection reached ``READY``/``VOICE_ACTIVE``."""
+        deadline = 30
+        for _ in range(max(1, int(timeout_s * 20))):
+            if self.state in (DeviceState.READY, DeviceState.VOICE_ACTIVE):
+                return True
+            if self.state is DeviceState.AUTH_REQUIRED:
+                return False
+            await asyncio.sleep(0.05)
+        return self.state in (DeviceState.READY, DeviceState.VOICE_ACTIVE)
+
+    def _sync_face_state(self) -> None:
+        """One shared bridge: the satellite LED phase drives the toaster face."""
+        name = LED_PHASE_JARVIS_STATE.get(self.led_phase)
+        if not name:
+            return
+        try:
+            from desktop_app.face_widget import JarvisState, get_jarvis_state
+
+            get_jarvis_state().set_state(JarvisState(name))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Sink callbacks, invoked from the voice listener thread
@@ -639,6 +679,7 @@ class VoicePEDevice:
             return
         self.led_phase = pe_events.EVENT_LED_PHASE.get(name, self.led_phase)
         self._mark_event(name)
+        self._sync_face_state()
         try:
             pe_events.send_event(self._client, name, data)
         except Exception as err:
@@ -735,19 +776,11 @@ class VoicePEDevice:
                 url = await self._serve_wav(pcm)
             except Exception as err:
                 self.last_error = f"tts_http: {err}"
-        if not url and pcm:
-            # Media-player fallback: the same WAV under a plain URL command.
-            pass
         if self.session_generation != generation or self._client is None:
             return
         if url:
             await self._event("TTS_END", {"url": url})
             self._bump_metric("tts_url_deliveries")
-            if self.media is not None and self.capabilities.has_media_player:
-                try:
-                    self.media.play_url(url)
-                except Exception as err:
-                    self.last_error = f"media_url: {err}"
         await self._end_run(reply)
 
     async def _serve_wav(self, pcm: bytes) -> str:
@@ -774,44 +807,22 @@ class VoicePEDevice:
         return await self._serve_wav(pcm)
 
     async def _end_run(self, reply: str) -> None:
-        """Close the run, then hand a follow-up turn to ``start_conversation``."""
+        """Close the run; the firmware carries an open follow-up itself."""
         if self._client is None:
             return
+        # ``RUN_END`` is always the last event of a run, so the ring leaves
+        # ``replying`` in both cases. With ``continue_conversation`` set in
+        # ``INTENT_END`` the stock firmware reopens the microphone itself and
+        # calls the start callback again - no extra RPC is needed and sending
+        # one would only restart the already playing reply.
+        await self._event("RUN_END", {})
         if self._should_continue(reply):
-            # ``RUN_END`` first: the ring leaves ``replying`` even when the
-            # follow-up is opened by the announcement RPC below.
-            await self._event("RUN_END", {})
             self.session_state = SessionState.CONTINUE_PENDING
             self._mark_event("continue_pending")
-            await self._start_follow_up(reply)
             return
-        await self._event("RUN_END", {})
         self.session_state = SessionState.IDLE
+        self.session = None
         self._mark_event("run_end")
-
-    async def _start_follow_up(self, reply: str) -> None:
-        """Real ``start_conversation`` so the pipeline never stays in replying."""
-        client = self._client
-        if client is None or not self.capabilities.start_conversation:
-            return
-        try:
-            finished = await client.send_voice_assistant_announcement_await_response(
-                self._tts_media_id,
-                ANNOUNCE_TIMEOUT_S,
-                text=reply or "",
-                start_conversation=True,
-            )
-        except Exception as err:
-            self.last_error = f"start_conversation: {err}"
-            self.session_state = SessionState.IDLE
-            self._mark_event("continue_failed")
-            return
-        self._bump_metric("start_conversations")
-        if not bool(getattr(finished, "success", False)):
-            self.session_state = SessionState.IDLE
-            self._mark_event("continue_failed")
-            return
-        self._mark_event("start_conversation")
 
     # ------------------------------------------------------------------
     # Helpers

@@ -106,6 +106,12 @@ def make_client(
 # States
 # ---------------------------------------------------------------------------
 
+#: Source tag on every item the listener queue receives. One microphone is
+#: readable at a time, so each frame carries the source it came from.
+AUDIO_SOURCE_LOCAL = "local"
+AUDIO_SOURCE_VOICE_PE = "voice_pe"
+
+
 class DeviceState(str, Enum):
     """Per-device connection lifecycle."""
 
@@ -145,6 +151,19 @@ LED_PHASES: Dict[str, int] = {
     "replying": 5,
     "not_ready": 10,
     "error": 11,
+}
+
+#: One bridge from the satellite LED phase to the toaster avatar state, so the
+#: ring and the desktop face show the same phase of the same run. Values are the
+#: ``face_widget.JarvisState`` names.
+LED_PHASE_JARVIS_STATE: Dict[str, str] = {
+    "idle": "idle",
+    "waiting_for_command": "listening",
+    "listening_for_command": "listening",
+    "thinking": "thinking",
+    "replying": "speaking",
+    "not_ready": "asleep",
+    "error": "error",
 }
 
 
