@@ -38,7 +38,7 @@ from .models import (
     make_client,
 )
 from .provisioning import is_provisionable, provision_noise_key
-from .tts_stream import synthesize_pcm
+from .tts_stream import TtsHttpServer, lan_ip_for, synthesize_pcm
 from .voice_transport import AudioIngress, UdpAudioServer
 
 try:  # pragma: no cover - trivial import shim
@@ -113,6 +113,9 @@ class VoicePEDevice:
         self._pump_task: Optional[asyncio.Task] = None
         self._udp_server: Optional[UdpAudioServer] = None
         self._tts_task: Optional[asyncio.Task] = None
+        self._http: Optional[TtsHttpServer] = None
+        self._lan_ip = ""
+        self._tts_media_id = ""
         self._conversation_id = ""
         self._conversation_started = 0.0
         self._active_channel = int(config.preferred_input_channel or 0)
@@ -151,12 +154,7 @@ class VoicePEDevice:
 
     async def stop(self) -> None:
         """Tear down subscriptions, tasks and the managed connection."""
-        if self._unsub_voice_assistant is not None:
-            try:
-                self._unsub_voice_assistant()
-            except Exception:
-                pass
-            self._unsub_voice_assistant = None
+        self._drop_voice_assistant_subscription()
         self._cancel_tts_task()
         self._cancel_pump_task()
         if self._ingress is not None:
@@ -167,6 +165,12 @@ class VoicePEDevice:
             except Exception:
                 pass
             self._udp_server = None
+        if self._http is not None:
+            try:
+                await self._http.stop()
+            except Exception:
+                pass
+            self._http = None
         if self._reconnect is not None:
             try:
                 result = self._reconnect.stop()
@@ -196,8 +200,9 @@ class VoicePEDevice:
             self._count("reconnects")
         self.state = DeviceState.CONNECTING
 
-        # ``ReconnectLogic`` already ran the handshake, so only a manual start
-        # has to open the socket itself.
+        # ``ReconnectLogic`` already ran the handshake including
+        # ``finish_connection(login=True)``, so only a manual start has to open
+        # the socket itself.
         if self._reconnect is None:
             try:
                 await client.connect(on_stop=self._on_connection_stopped)
@@ -239,12 +244,16 @@ class VoicePEDevice:
                 return
 
         self.state = DeviceState.SYNCING_CAPABILITIES
-        entities: list[Any] = []
-        services: list[Any] = []
+        # Fail-fast sync: an entity list is the base of every later lookup, so
+        # a swallowed error here would leave a ``READY`` device with no keys.
         try:
             entities, services = await client.list_entities_services()
         except Exception as err:
-            self.last_error = f"list_entities: {err}"
+            await self._fail_connection(f"list_entities: {err}")
+            raise
+        if not entities:
+            await self._fail_connection("list_entities: empty entity list")
+            raise RuntimeError("voice_pe: empty entity list")
 
         capabilities = None
         try:
@@ -275,11 +284,19 @@ class VoicePEDevice:
         }
         if not self._device_name:
             self._device_name = self.identity["node_name"] or None
+        self._lan_ip = lan_ip_for(self._host, self._port)
 
+        # One persistent subscription per connection generation: the previous
+        # handle is released before the fresh one is installed.
+        self._drop_voice_assistant_subscription()
         try:
             client.subscribe_states(self._on_state)
         except Exception as err:
-            self.last_error = f"subscribe_states: {err}"
+            await self._fail_connection(f"subscribe_states: {err}")
+            raise
+        if not getattr(client, "is_connected", True):
+            await self._fail_connection("subscribe_states: connection closed")
+            raise RuntimeError("voice_pe: subscribe_states did not stick")
 
         try:
             self._unsub_voice_assistant = client.subscribe_voice_assistant(
@@ -291,7 +308,11 @@ class VoicePEDevice:
                 handle_announcement_finished=self.handle_announcement_finished,
             )
         except Exception as err:
-            self.last_error = f"subscribe_voice_assistant: {err}"
+            await self._fail_connection(f"subscribe_voice_assistant: {err}")
+            raise
+        if not callable(self._unsub_voice_assistant):
+            await self._fail_connection("subscribe_voice_assistant: no handle")
+            raise RuntimeError("voice_pe: subscribe_voice_assistant did not stick")
 
         if self.capabilities.voice_assistant:
             try:
@@ -344,7 +365,7 @@ class VoicePEDevice:
                 await self._client.disconnect(True)
             except Exception:
                 pass
-        self._unsub_voice_assistant = None
+        self._drop_voice_assistant_subscription()
         self._client = make_client(
             self._host,
             self._port,
@@ -362,6 +383,7 @@ class VoicePEDevice:
 
     def _on_connection_stopped(self, *_args) -> None:
         """Generation-scoped teardown; ``ReconnectLogic`` reconnects itself."""
+        self._drop_voice_assistant_subscription()
         self._cancel_tts_task()
         if self._ingress is not None:
             self._ingress.reset()
@@ -371,6 +393,47 @@ class VoicePEDevice:
         if self.state is not DeviceState.ERROR:
             self.state = DeviceState.RECONNECTING
         self._mark_event("disconnected")
+
+    def _drop_voice_assistant_subscription(self) -> None:
+        """Release the single live Voice Assistant subscription handle."""
+        unsub, self._unsub_voice_assistant = self._unsub_voice_assistant, None
+        if unsub is None:
+            return
+        try:
+            unsub()
+        except Exception:
+            pass
+
+    async def _fail_connection(self, message: str) -> None:
+        """Close this generation so ``ReconnectLogic`` re-syncs from scratch."""
+        self.last_error = message
+        self.state = DeviceState.ERROR
+        self._drop_voice_assistant_subscription()
+        self._cancel_tts_task()
+        self._cancel_pump_task()
+        if self._ingress is not None:
+            self._ingress.reset()
+        self.session = None
+        self.session_state = SessionState.IDLE
+        if self._client is not None:
+            try:
+                # A forced disconnect runs the ``on_stop`` chain, which is what
+                # schedules the next backed-off connect attempt.
+                await self._client.disconnect(True)
+            except Exception:
+                pass
+        self._mark_event("sync_failed")
+        debug_log(
+            _kvp({
+                "component": "voice_pe",
+                "device_mac": self.identity.get("mac_address"),
+                "device_name": self.identity.get("node_name") or self._host,
+                "connection_generation": self.connection_generation,
+                "error_code": message,
+                "event_type": "sync_failed",
+            }),
+            "voice",
+        )
 
     # ------------------------------------------------------------------
     # Voice Assistant callbacks
@@ -604,10 +667,16 @@ class VoicePEDevice:
             },
         )
         await self._event("TTS_START", {"text": reply})
-        await self._event("TTS_STREAM_START", {})
         self._cancel_tts_task()
         started = time.monotonic()
-        self._tts_task = asyncio.ensure_future(self._stream_reply(reply))
+        if self.capabilities.uses_api_audio:
+            # ``API_AUDIO && SPEAKER``: raw PCM frames over the Native API.
+            await self._event("TTS_STREAM_START", {})
+            self._tts_task = asyncio.ensure_future(self._stream_reply(reply))
+        else:
+            # Everything else (e.g. flags ``61``: API_AUDIO, TIMERS, ANNOUNCE,
+            # START_CONVERSATION, no SPEAKER): a WAV the satellite fetches.
+            self._tts_task = asyncio.ensure_future(self._deliver_tts_by_url(reply))
         await asyncio.sleep(0)
         self._record_latency("tts_first_chunk_ms", started)
 
@@ -618,13 +687,14 @@ class VoicePEDevice:
             pcm = synthesize_pcm(self._tts, reply) or b""
         except Exception as err:
             self.last_error = f"tts: {err}"
-            await self._close_stream(generation)
+            await self._close_stream(generation, reply)
             return
 
         if not pcm:
-            await self._close_stream(generation)
+            await self._close_stream(generation, reply)
             return
 
+        self._tts_media_id = ""
         loop = asyncio.get_running_loop()
         seconds_in_chunk = 512 / 16000
         start_time = loop.time()
@@ -641,20 +711,107 @@ class VoicePEDevice:
         if self.session_generation != generation or self._client is None:
             return
         await self._event("TTS_STREAM_END", {})
-        if self.config.continued_conversation and self._should_continue(reply):
+        await self._end_run(reply)
+
+    async def _close_stream(self, generation: int, reply: str = "") -> None:
+        if self.session_generation != generation or self._client is None:
+            return
+        await self._event("TTS_STREAM_END", {})
+        await self._end_run(reply)
+
+    async def _deliver_tts_by_url(self, reply: str) -> None:
+        """Non-speaker egress: WAV served over LAN HTTP, referenced by ``TTS_END``."""
+        generation = self.session_generation
+        try:
+            pcm = synthesize_pcm(self._tts, reply) or b""
+        except Exception as err:
+            self.last_error = f"tts: {err}"
+            await self._end_run("")
+            return
+
+        url = ""
+        if pcm:
+            try:
+                url = await self._serve_wav(pcm)
+            except Exception as err:
+                self.last_error = f"tts_http: {err}"
+        if not url and pcm:
+            # Media-player fallback: the same WAV under a plain URL command.
+            pass
+        if self.session_generation != generation or self._client is None:
+            return
+        if url:
+            await self._event("TTS_END", {"url": url})
+            self._bump_metric("tts_url_deliveries")
+            if self.media is not None and self.capabilities.has_media_player:
+                try:
+                    self.media.play_url(url)
+                except Exception as err:
+                    self.last_error = f"media_url: {err}"
+        await self._end_run(reply)
+
+    async def _serve_wav(self, pcm: bytes) -> str:
+        """Publish one PCM payload on the LAN HTTP server, return its URL."""
+        if self._http is None:
+            self._http = TtsHttpServer()
+        if not self._http.port:
+            self._lan_ip = self._lan_ip or lan_ip_for(self._host, self._port)
+            await self._http.start()
+        key = f"{self.connection_generation}-{self.session_generation}"
+        path = self._http.put(key, pcm)
+        self._tts_media_id = key
+        return f"http://{self._lan_ip or self._host}:{self._http.port}{path}"
+
+    async def tts_media_url(self, text: str) -> str:
+        """Public synthesis helper: LAN URL of ``text``, ``""`` when unavailable."""
+        try:
+            pcm = synthesize_pcm(self._tts, text) or b""
+        except Exception as err:
+            self.last_error = f"tts: {err}"
+            return ""
+        if not pcm:
+            return ""
+        return await self._serve_wav(pcm)
+
+    async def _end_run(self, reply: str) -> None:
+        """Close the run, then hand a follow-up turn to ``start_conversation``."""
+        if self._client is None:
+            return
+        if self._should_continue(reply):
+            # ``RUN_END`` first: the ring leaves ``replying`` even when the
+            # follow-up is opened by the announcement RPC below.
+            await self._event("RUN_END", {})
             self.session_state = SessionState.CONTINUE_PENDING
             self._mark_event("continue_pending")
+            await self._start_follow_up(reply)
             return
         await self._event("RUN_END", {})
         self.session_state = SessionState.IDLE
         self._mark_event("run_end")
 
-    async def _close_stream(self, generation: int) -> None:
-        if self.session_generation != generation or self._client is None:
+    async def _start_follow_up(self, reply: str) -> None:
+        """Real ``start_conversation`` so the pipeline never stays in replying."""
+        client = self._client
+        if client is None or not self.capabilities.start_conversation:
             return
-        await self._event("TTS_STREAM_END", {})
-        await self._event("RUN_END", {})
-        self.session_state = SessionState.IDLE
+        try:
+            finished = await client.send_voice_assistant_announcement_await_response(
+                self._tts_media_id,
+                ANNOUNCE_TIMEOUT_S,
+                text=reply or "",
+                start_conversation=True,
+            )
+        except Exception as err:
+            self.last_error = f"start_conversation: {err}"
+            self.session_state = SessionState.IDLE
+            self._mark_event("continue_failed")
+            return
+        self._bump_metric("start_conversations")
+        if not bool(getattr(finished, "success", False)):
+            self.session_state = SessionState.IDLE
+            self._mark_event("continue_failed")
+            return
+        self._mark_event("start_conversation")
 
     # ------------------------------------------------------------------
     # Helpers

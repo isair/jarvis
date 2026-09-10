@@ -98,13 +98,15 @@ async def probe(host: str, port: int, config: VoicePEConfig, psk: Optional[str],
 
     Every request is retried once: the single-client limit of the Native API
     makes the first attempt after a lease change end with a closed socket.
+    ``login=True`` is required: without the ``ConnectRequest`` the handshake
+    stops after Hello and only ``device_info`` would answer.
     """
     client = make_client(host, port, psk, device_name=expected_name)
     info: Any = None
     try:
         for _ in range(2):
             try:
-                await client.connect()
+                await client.connect(login=True, log_errors=True)
                 info = await client.device_info()
                 break
             except Exception:

@@ -586,6 +586,14 @@ def format_cuda_vram_budget(plan: Dict[str, Any]) -> str:
             )
 
     note = "; ".join(str(n) for n in plan.get("notes") or [])
+    if total and used and required:
+        delta = int(used) - required
+        pct = abs(delta) / max(required, 1) * 100.0
+        verdict = "matches" if pct <= 15.0 else "differs from"
+        lines.append(
+            f"     🔎 Measured in-use {_fmt_mb(int(used))} {verdict} the estimate "
+            f"({_fmt_mb(required)}, Δ {delta:+d} MB)"
+        )
     if note:
         lines.append(f"     ℹ️  {note}")
     return "\n".join(lines)

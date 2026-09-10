@@ -23,8 +23,11 @@ miniupnpc==2.2.8
 pytest==8.3.2
 pytest-repeat==0.9.3
 mcp==1.13.1
-# ESPHome Native API client (Voice PE satellite transport, TCP 6053)
-aioesphomeapi>=14.0.0
+# ESPHome Native API client (Voice PE satellite transport, TCP 6053).
+# Pinned to the release the transport is written against: ``connect(login=,
+# log_errors=)``, ``device_capabilities_compat`` and the ``VoiceAssistantFeature``
+# bits are all used, so the version is held exactly.
+aioesphomeapi==46.3.0
 zeroconf>=0.132.0
 # Optional BLE onboarding (Improv) for the Voice PE; guarded by an import check
 bleak>=0.22.0

@@ -200,5 +200,5 @@ async def reconnect_with_psk(config: VoicePEConfig, host: str, port: int, psk: s
         device_name=config.device_name,
         mac=(config.mac_address or "").replace(":", "").lower() or None,
     )
-    await client.connect()
+    await client.connect(login=True, log_errors=True)
     return client

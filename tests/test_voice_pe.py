@@ -116,6 +116,19 @@ def _device(client=None, capabilities=None, **config_overrides):
     return device
 
 
+#: ``VOICE_ASSISTANT|API_AUDIO|TIMERS|ANNOUNCE|START_CONVERSATION``: the flag
+#: set of a unit whose on-device mixer reports without the ``SPEAKER`` bit.
+FLAGS_NO_SPEAKER = 61
+
+
+def _no_speaker_device(client=None):
+    caps = build_snapshot(
+        SimpleNamespace(voice_assistant_feature_flags=FLAGS_NO_SPEAKER),
+        [MediaPlayerInfo("external_media_player", 11, "Media Player")],
+    )
+    return _device(client or FakeClient(), caps)
+
+
 def _run_loop(coro, device=None):
     """Run one coroutine on a fresh loop bound to the device (if any)."""
     loop = asyncio.new_event_loop()
@@ -487,6 +500,51 @@ class TestTtsStreamHelpers:
         out = resample_pcm16(pcm, 32000, 16000)
         assert len(out) == len(pcm) // 2
 
+    def test_wav_wrapper_round_trips(self):
+        from jarvis.integrations.voice_pe.tts_stream import wav_from_pcm
+
+        pcm = bytes(range(1, 9)) * 3
+        assert pcm_from_wav(wav_from_pcm(pcm)) == pcm
+
+    def test_tts_http_server_answers_one_get(self):
+        from jarvis.integrations.voice_pe.tts_stream import TtsHttpServer
+
+        pcm = b"\x01\x02\x03\x04"
+
+        async def _run():
+            server = TtsHttpServer()
+            port = await server.start()
+            path = server.put("1-1", pcm)
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+            await writer.drain()
+            payload = await reader.read(4096)
+            writer.close()
+            await server.stop()
+            return port, payload
+
+        port, payload = _run_loop(_run)
+        assert port > 0
+        assert payload.split(b"\r\n", 1)[0].endswith(b"200 OK")
+        assert payload.endswith(pcm)
+
+    def test_tts_http_server_reports_a_missing_key(self):
+        from jarvis.integrations.voice_pe.tts_stream import TtsHttpServer
+
+        async def _run():
+            server = TtsHttpServer()
+            port = await server.start()
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"GET /nope HTTP/1.1\r\nHost: x\r\n\r\n")
+            await writer.drain()
+            payload = await reader.read(4096)
+            writer.close()
+            await server.stop()
+            return payload
+
+        payload = _run_loop(_run)
+        assert b"404" in payload.split(b"\r\n", 1)[0]
+
 
 # ---------------------------------------------------------------------------
 # Device sessions
@@ -730,6 +788,331 @@ class TestDeviceSession:
         device.handle_auth_error(RuntimeError("invalid psk"))
         assert device.state is DeviceState.AUTH_REQUIRED
         assert "invalid psk" in device.last_error
+
+
+@pytest.mark.unit
+class TestEgressBranches:
+    """``SPEAKER`` means raw PCM, every other flag set means an HTTP TTS URL."""
+
+    def test_speaker_device_streams_raw_pcm(self, monkeypatch):
+        client = FakeClient()
+        caps = build_snapshot(
+            SimpleNamespace(
+                voice_assistant_feature_flags=(
+                    FEATURE_VOICE_ASSISTANT | FEATURE_SPEAKER | FEATURE_API_AUDIO
+                )
+            ),
+            [],
+        )
+        device = _device(client, caps)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 512,
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Four two one.")
+            for _ in range(3):
+                await asyncio.sleep(0.02)
+
+        _run_loop(_run, device)
+        sent = [event for event, _ in client.events]
+        assert 98 in sent and 8 not in sent
+        assert len(client.audio) >= 1
+        assert client.audio[0] == b"\x01\x02" * 512
+
+    def test_flags_61_uses_the_http_tts_url(self, monkeypatch):
+        client = FakeClient()
+        device = _no_speaker_device(client)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 8,
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Four two one.")
+            for _ in range(3):
+                await asyncio.sleep(0.02)
+            if device._http is not None:
+                await device._http.stop()
+
+        _run_loop(_run, device)
+        sent = [event for event, _ in client.events]
+        assert 98 not in sent
+        assert sent[-2:] == [8, 2]  # TTS_END, RUN_END
+        url = dict(client.events[sent.index(8)][1])["url"]
+        assert url.startswith("http://") and url.count(":") >= 2
+        assert client.audio == []
+        assert device.session_state is SessionState.IDLE
+        # the same URL is handed to the media player as its playable media id
+        assert client.media and client.media[0][1]["media_url"] == url
+
+    def test_url_served_by_the_transport_is_fetchable(self, monkeypatch):
+        client = FakeClient()
+        device = _no_speaker_device(client)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x0a\x0b\x0c\x0d",
+        )
+
+        async def _run():
+            url = await device.tts_media_url("Fetched.")
+            reader, writer = await asyncio.open_connection(
+                url.split("//")[1].split(":")[0], int(url.rsplit(":", 1)[1].split("/")[0])
+            )
+            writer.write(f"GET /{url.rsplit('/', 1)[1]} HTTP/1.1\r\n\r\n".encode())
+            await writer.drain()
+            payload = await reader.read(4096)
+            writer.close()
+            if device._http is not None:
+                await device._http.stop()
+            return url, payload
+
+        url, payload = _run_loop(_run, device)
+        assert url.startswith("http://")
+        assert payload.endswith(b"\x0a\x0b\x0c\x0d")
+
+    def test_question_closes_the_run_before_start_conversation(self, monkeypatch):
+        client = _AnnounceClient()
+        device = _no_speaker_device(client)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 8,
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Which room?")
+            for _ in range(4):
+                await asyncio.sleep(0.02)
+            state = device.session_state
+            if device._http is not None:
+                await device._http.stop()
+            return state
+
+        state = _run_loop(_run, device)
+        sent = [event for event, _ in client.events]
+        assert sent[-1] == 2 and sent.count(2) == 1  # one RUN_END, replying closed
+        assert state is SessionState.CONTINUE_PENDING
+        assert client.announcements[0]["start_conversation"] is True
+        assert client.announcements[0]["text"] == "Which room?"
+
+    def test_statement_closes_the_run_without_a_follow_up(self, monkeypatch):
+        client = _AnnounceClient()
+        device = _no_speaker_device(client)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 8,
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Done.")
+            for _ in range(4):
+                await asyncio.sleep(0.02)
+            state = device.session_state
+            if device._http is not None:
+                await device._http.stop()
+            return state
+
+        state = _run_loop(_run, device)
+        assert [event for event, _ in client.events][-1] == 2
+        assert client.announcements == []
+        assert state is SessionState.IDLE
+
+    def test_without_the_flag_a_question_still_closes_the_run(self, monkeypatch):
+        client = _AnnounceClient()
+        caps = build_snapshot(
+            SimpleNamespace(
+                voice_assistant_feature_flags=(
+                    FEATURE_VOICE_ASSISTANT | FEATURE_SPEAKER | FEATURE_API_AUDIO
+                )
+            ),
+            [],
+        )
+        device = _device(client, caps)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 512,
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Which room?")
+            for _ in range(3):
+                await asyncio.sleep(0.02)
+            return device.session_state
+
+        state = _run_loop(_run, device)
+        sent = [event for event, _ in client.events]
+        assert sent[-2:] == [99, 2]  # TTS_STREAM_END, RUN_END
+        assert client.announcements == []
+        assert state is SessionState.CONTINUE_PENDING
+
+    def test_failed_synthesis_still_closes_the_run(self, monkeypatch):
+        client = FakeClient()
+        device = _no_speaker_device(client)
+
+        def _boom(engine, text):
+            raise RuntimeError("no model")
+
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm", _boom
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Anything.")
+            for _ in range(3):
+                await asyncio.sleep(0.02)
+            return device.session_state
+
+        state = _run_loop(_run, device)
+        assert [event for event, _ in client.events][-1] == 2
+        assert state is SessionState.IDLE
+        assert "no model" in device.last_error
+
+
+# ---------------------------------------------------------------------------
+# Capability-sync fail-fast
+# ---------------------------------------------------------------------------
+
+class _AnnounceClient(FakeClient):
+    """Adds the announcement RPC whose reply closes a continued conversation."""
+
+    def __init__(self):
+        super().__init__()
+        self.announcements = []
+
+    async def send_voice_assistant_announcement_await_response(
+        self, media_id, timeout, text="", preannounce_media_id="", start_conversation=False
+    ):
+        self.announcements.append(
+            {"media_id": media_id, "text": text, "start_conversation": start_conversation}
+        )
+        return SimpleNamespace(success=True)
+
+
+class _SyncClient(FakeClient):
+    """The whole ``_on_connect`` surface, one entity per published kind."""
+
+    def __init__(self, entities=None, error=None, no_unsub=False):
+        super().__init__()
+        self._entities = (
+            list(entities)
+            if entities is not None
+            else [MediaPlayerInfo("external_media_player", 11, "Media Player")]
+        )
+        self._error = error
+        self.no_unsub = no_unsub
+        self.subscribed = []
+        self.disconnects = []
+
+    async def connect(self, on_stop=None, login=False, log_errors=True):
+        return None
+
+    async def device_info(self):
+        return SimpleNamespace(
+            mac_address="aa:bb:cc:dd:ee:ff",
+            name="home-assistant-voice-aabbcc",
+            friendly_name="Voice PE",
+            project_name="esphome/home-assistant-voice-pe",
+            project_version="1.0.0",
+            model="ESP32-S3",
+            manufacturer="Nabu Casa",
+            esphome_version="2026.1.0",
+            suggested_area="Kitchen",
+            voice_assistant_feature_flags=FLAGS_NO_SPEAKER,
+            api_encryption_supported=True,
+            api_encryption_provisionable=False,
+        )
+
+    async def list_entities_services(self):
+        if self._error is not None:
+            raise self._error
+        return list(self._entities), []
+
+    async def device_capabilities_compat(self, info):
+        return None
+
+    async def device_capabilities(self):
+        return None
+
+    def subscribe_states(self, callback):
+        self.subscribed.append("states")
+
+    def subscribe_voice_assistant(self, **kwargs):
+        self.subscribed.append("voice_assistant")
+        return 0 if self.no_unsub else (lambda: None)
+
+    async def get_voice_assistant_configuration(self, timeout):
+        return SimpleNamespace(
+            available_wake_words=[], active_wake_words=[], max_active_wake_words=1
+        )
+
+    async def set_voice_assistant_configuration(self, active_wake_words):
+        return None
+
+    async def disconnect(self, force=False):
+        self.disconnects.append(bool(force))
+
+
+@pytest.mark.unit
+class TestCapabilitySyncFailFast:
+    def _device(self, client, tmp_path, monkeypatch):
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(tmp_path / "config.json"))
+        return _device(client)
+
+    def test_full_sync_reaches_ready(self, tmp_path, monkeypatch):
+        client = _SyncClient()
+        device = self._device(client, tmp_path, monkeypatch)
+        _run_loop(lambda: device._on_connect(), device)
+        assert device.state is DeviceState.READY
+        assert client.subscribed == ["states", "voice_assistant"]
+        assert device.capabilities.feature_flags == FLAGS_NO_SPEAKER
+        # the decoded snapshot is the base of both egress branches
+        assert device.capabilities.api_audio is True
+        assert device.capabilities.speaker is False
+        assert device.capabilities.uses_api_audio is False
+        assert device.capabilities.has_media_player is True
+
+    def test_entity_list_error_reraises_and_closes(self, tmp_path, monkeypatch):
+        client = _SyncClient(error=RuntimeError("EOF"))
+        device = self._device(client, tmp_path, monkeypatch)
+        with pytest.raises(RuntimeError):
+            _run_loop(lambda: device._on_connect(), device)
+        assert device.state is DeviceState.ERROR
+        assert device.connection_generation == 1
+        assert client.disconnects == [True]
+        assert "list_entities" in device.last_error
+
+    def test_empty_entity_list_reraises(self, tmp_path, monkeypatch):
+        client = _SyncClient(entities=[])
+        device = self._device(client, tmp_path, monkeypatch)
+        with pytest.raises(RuntimeError):
+            _run_loop(lambda: device._on_connect(), device)
+        assert device.state is DeviceState.ERROR
+        assert "empty entity list" in device.last_error
+
+    def test_missing_subscription_handle_is_fatal(self, tmp_path, monkeypatch):
+        client = _SyncClient(no_unsub=True)
+        device = self._device(client, tmp_path, monkeypatch)
+        with pytest.raises(RuntimeError):
+            _run_loop(lambda: device._on_connect(), device)
+        assert device.state is DeviceState.ERROR
+        assert "subscribe_voice_assistant" in device.last_error
+
+    def test_reconnect_replaces_the_single_subscription(self, tmp_path, monkeypatch):
+        client = _SyncClient()
+        device = self._device(client, tmp_path, monkeypatch)
+        _run_loop(lambda: device._on_connect(), device)
+        first = device._unsub_voice_assistant
+        _run_loop(lambda: device._on_connect(), device)
+        # exactly one live handle, and the old one released.
+        assert device._unsub_voice_assistant is not first
+        assert device.connection_generation == 2
 
 
 @pytest.mark.unit

@@ -317,11 +317,19 @@ class VoicePEManager:
         return await discover(self.config)
 
     async def announce(self, key: str, text: str, *, start_conversation: bool = True) -> bool:
+        """Announce over the Voice Assistant RPC with a playable ``media_id``.
+
+        The satellite fetches ``media_id`` as a URL, so plain text is first
+        synthesized into a WAV and published on the LAN HTTP server; a text
+        that already is a URL is passed through unchanged.
+        """
         device = self.device(key)
         if device is None or device.media is None:
             return False
+        text = text or ""
+        media_id = text if "://" in text else await device.tts_media_url(text)
         return await device.media.announce(
-            text or "",
+            media_id or "",
             text=text,
             start_conversation=start_conversation
             and device.capabilities.start_conversation,

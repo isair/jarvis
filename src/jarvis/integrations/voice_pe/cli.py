@@ -171,7 +171,7 @@ def _pair(cfg: VoicePEConfig) -> int:
                 device_name=entry.get("node_name") or None,
             )
             try:
-                await client.connect()
+                await client.connect(login=True, log_errors=True)
                 info = await client.device_info()
                 if psk:
                     print("  ✅ Existing key accepted, no new key generated", flush=True)

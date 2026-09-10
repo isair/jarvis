@@ -22,7 +22,7 @@ the Jarvis-side glue on top of the existing pipeline.
 | `capabilities.py` | Feature-flag plus entity decoding into one per-generation snapshot |
 | `entities.py` | `object_id` based entity index (`led_ring`, `button_press_event`, media, mute) |
 | `voice_transport.py` | Bounded microphone queue, PCM to float32, UDP fallback receiver |
-| `tts_stream.py` | WAV/PCM normalisation, 512-sample paced streaming, engine synthesis |
+| `tts_stream.py` | WAV/PCM normalisation, 512-sample paced streaming, engine synthesis, LAN HTTP WAV server |
 | `media.py` | Media player and announcement control with volume-source tracking |
 | `events.py` | Pipeline events, LED phase table, button mapping and action runner |
 | `led.py` | Public `led_ring` colour, brightness, on/off |
@@ -72,8 +72,10 @@ and opens a fresh scope.
 
 `RUN_START`, `STT_START`, `STT_VAD_START`, `STT_VAD_END`, `STT_END {text}`,
 `INTENT_START`, `INTENT_END {conversation_id, continue_conversation, speech}`,
-`TTS_START {text}`, `TTS_STREAM_START`, `TTS_STREAM_END`, `RUN_END`. The same
-events drive the stock LED phases, so the ring needs no manual per-phase calls.
+`TTS_START {text}`, then either `TTS_STREAM_START` / `TTS_STREAM_END` (API PCM)
+or `TTS_END {url}` (HTTP WAV), finally `RUN_END`. The same events drive the
+stock LED phases, so the ring needs no manual per-phase calls. Every run closes
+with `RUN_END`, also a continued one.
 
 | Event | LED phase id |
 |---|---|
@@ -88,22 +90,52 @@ events drive the stock LED phases, so the ring needs no manual per-phase calls.
 
 Ingress: PCM16LE, 16 kHz, mono. Channel 0 is the enhanced XMOS speech audio,
 channel 1 the less processed one; `voice_pe_preferred_input_channel` selects
-the active one and falls back to 0 without `MULTI_CHANNEL_AUDIO`.
+the active one and falls back to 0 without `MULTI_CHANNEL_AUDIO`. The
+microphone rides the Native API whenever `API_AUDIO` is set, otherwise UDP.
 
-Egress: WAV container with a PCM payload, 16000 Hz, mono, signed PCM16 little
-endian, 512 samples per chunk (1024 bytes). Pacing keeps the fixed 512 ms
-device ring buffer near 384 ms:
+Egress has two branches, chosen from the decoded capability snapshot
+(`uses_api_audio` is `API_AUDIO && SPEAKER`):
 
-```
-seconds_per_chunk = 512 / 16000
-audio_duration_sent += seconds_per_chunk
-wait_s = (audio_duration_sent - 0.384) - elapsed
-if wait_s > 0: await asyncio.sleep(wait_s)
-```
+1. `API_AUDIO && SPEAKER` — raw PCM over the Native API: `TTS_START {text}`,
+   `TTS_STREAM_START`, WAV container with a PCM payload, 16000 Hz, mono, signed
+   PCM16 little endian, 512 samples per chunk (1024 bytes), `TTS_STREAM_END`.
+   Pacing keeps the fixed 512 ms device ring buffer near 384 ms:
+
+   ```
+   seconds_per_chunk = 512 / 16000
+   audio_duration_sent += seconds_per_chunk
+   wait_s = (audio_duration_sent - 0.384) - elapsed
+   if wait_s > 0: await asyncio.sleep(wait_s)
+   ```
+
+2. no `SPEAKER` (flags `61` = `VOICE_ASSISTANT|API_AUDIO|TIMERS|ANNOUNCE|
+   START_CONVERSATION`) — raw API frames carry no sample clock for the on-device
+   mixer, so the reply goes out as a WAV over LAN HTTP: `TTS_START {text}`,
+   `TTS_END {url}`, then `RUN_END`. The same URL is the `media_id` of the
+   announcement RPC and of the media-player command.
+
+The LAN HTTP server is a task on the manager loop with an ephemeral port, one
+instance per device, and it keeps the last four WAVs.
 
 Fallback order: Native API PCM, then announcement/media URL reachable from the
 LAN, then the media-player URL command, then local PC playback only when the
 device publishes no speaker or media player.
+
+## Connection and capability sync
+
+Every direct connection (`discovery.probe`, `voice-pe pair`, the PSK reconnect)
+uses `connect(login=True, log_errors=True)`; with the library default
+`login=False` the handshake stops after `Hello` and the full `ConnectRequest`
+is never answered. `ReconnectLogic` performs `finish_connection(login=True)` on
+its own, so the connect callback only synchronises state.
+
+That synchronisation is fail-fast in the contract order: `device_info`, entity
+and service enumeration, `subscribe_states`, `subscribe_voice_assistant`. An
+exception or an empty entity list closes the generation with a forced
+disconnect — never a `READY` state on top of an empty index — and the forced
+disconnect is what arms the next backed-off `ReconnectLogic` attempt. Exactly
+one Voice Assistant subscription per device stays live: the old handle is
+released before the fresh one is installed.
 
 ## Latence and backpressure
 
@@ -123,6 +155,12 @@ error and while muted. The same `conversation_id` stays valid until
 `voice_pe_conversation_timeout_s` passes. A server-initiated dialog uses the
 `START_CONVERSATION` feature through
 `send_voice_assistant_announcement_await_response(..., start_conversation=True)`.
+
+An open-ended reply closes its run first: `RUN_END` is sent, the session moves
+to `CONTINUE_PENDING`, and only then the follow-up is opened by that same
+`start_conversation` announcement RPC. The pipeline therefore never stays in
+the `replying` phase, and the announced reply finishing is what moves
+`CONTINUE_PENDING` to `IDLE`.
 
 ## Recovery
 

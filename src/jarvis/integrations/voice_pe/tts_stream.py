@@ -152,6 +152,27 @@ def pcm_from_wav(data: bytes) -> bytes:
     return bytes(buffer[:end])
 
 
+def wav_from_pcm(pcm: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """Wrap mono PCM16LE in a RIFF/WAVE container (form the satellite fetches)."""
+    pcm = bytes(pcm or b"")
+    data_size = len(pcm)
+    byte_rate = sample_rate * SAMPLE_CHANNELS * SAMPLE_WIDTH
+    header = (
+        b"RIFF"
+        + struct.pack("<I", 4 + 24 + 8 + data_size)
+        + b"WAVE"
+        + b"fmt "
+        + struct.pack("<I", 16)
+        + struct.pack(
+            "<HHIIHH", 1, SAMPLE_CHANNELS, sample_rate, byte_rate,
+            SAMPLE_CHANNELS * SAMPLE_WIDTH, SAMPLE_WIDTH * 8,
+        )
+        + b"data"
+        + struct.pack("<I", data_size)
+    )
+    return header + pcm
+
+
 # ---------------------------------------------------------------------------
 # PCM resampling
 # ---------------------------------------------------------------------------
@@ -287,3 +308,100 @@ async def stream_pcm_paced(
             await asyncio.sleep(wait_s)
 
     return sent_chunks
+
+
+# ---------------------------------------------------------------------------
+# LAN HTTP egress (firmware without the ``SPEAKER`` bit)
+# ---------------------------------------------------------------------------
+
+#: Number of WAV payloads kept for fetching; the satellite pulls one per run.
+HTTP_PAYLOAD_KEEP = 4
+
+
+class TtsHttpServer:
+    """Minimal HTTP/1.1 server for the synthesized TTS WAVs.
+
+    Used when ``API_AUDIO`` is set but ``SPEAKER`` is not: the reply is
+    synthesized here, published under ``/<key>`` and the satellite is handed the
+    LAN URL in ``VOICE_ASSISTANT_TTS_END``. One instance per device, living on
+    the manager loop; it never owns a thread of its own.
+    """
+
+    def __init__(self) -> None:
+        self._server: Optional[asyncio.AbstractServer] = None
+        self._payloads: "dict[str, bytes]" = {}
+        self.port = 0
+
+    async def start(self) -> int:
+        """Bind an ephemeral IPv4 port and return it.
+
+        ``0.0.0.0`` is spelled out because the dual-stack ``None`` form creates
+        one listening socket per family with different ports, and the URL in
+        ``TTS_END`` must carry the port of the socket that is actually bound.
+        """
+        if self._server is not None:
+            return self.port
+        self._server = await asyncio.start_server(self._handle, "0.0.0.0", 0)
+        sockets = getattr(self._server, "sockets", None) or []
+        if sockets:
+            self.port = int(sockets[0].getsockname()[1])
+        return self.port
+
+    async def stop(self) -> None:
+        server, self._server = self._server, None
+        self.port = 0
+        if server is None:
+            return
+        server.close()
+        try:
+            await server.wait_closed()
+        except Exception:  # pragma: no cover - closed already
+            pass
+
+    def put(self, key: str, pcm: bytes, sample_rate: int = SAMPLE_RATE) -> str:
+        """Store one payload and return the path it is served under."""
+        self._payloads[key] = wav_from_pcm(pcm, sample_rate)
+        while len(self._payloads) > HTTP_PAYLOAD_KEEP:
+            self._payloads.pop(next(iter(self._payloads)))
+        return f"/{key}"
+
+    async def _handle(self, reader, writer) -> None:
+        try:
+            request = await reader.readuntil(b"\r\n\r\n")
+        except Exception:
+            request = b""
+        parts = request.split()
+        path = ""
+        if len(parts) >= 2:
+            path = parts[1].decode("latin-1", "replace").lstrip("/")
+        body = self._payloads.get(path, b"")
+        head = (
+            f"HTTP/1.1 {200 if body else 404} OK\r\n"
+            f"Content-Type: audio/wav\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("latin-1")
+        try:
+            writer.write(head + body)
+            await writer.drain()
+        except Exception:  # pragma: no cover - peer vanished
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+
+def lan_ip_for(host: str, port: int) -> str:
+    """Local interface address facing the device, for the TTS base URL."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect((host, int(port)))
+        return str(sock.getsockname()[0])
+    except Exception:
+        return str(host)
+    finally:
+        sock.close()

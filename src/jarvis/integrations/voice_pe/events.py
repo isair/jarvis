@@ -50,6 +50,7 @@ EVENT_LED_PHASE = {
     "INTENT_END": "thinking",
     "INTENT_PROGRESS": "replying",
     "TTS_START": "replying",
+    "TTS_END": "replying",
     "TTS_STREAM_START": "replying",
     "TTS_STREAM_END": "replying",
     "RUN_END": "idle",
