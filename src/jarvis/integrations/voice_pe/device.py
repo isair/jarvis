@@ -199,6 +199,8 @@ class VoicePEDevice:
         self.connection_generation += 1
         if self.connection_generation > 1:
             self._count("reconnects")
+        # Per-generation pump counter, restart-nulled with the generation.
+        self.metrics["pump_tasks"] = 0
         self.state = DeviceState.CONNECTING
 
         # ``ReconnectLogic`` already ran the handshake including
@@ -315,18 +317,25 @@ class VoicePEDevice:
             await self._fail_connection("subscribe_voice_assistant: no handle")
             raise RuntimeError("voice_pe: subscribe_voice_assistant did not stick")
 
+        # One microphone pump per connection generation: it stays across the
+        # runs of this connection and is only torn down with the generation.
+        self._ensure_pump()
+
         if self.capabilities.voice_assistant:
             try:
                 await client.get_voice_assistant_configuration(VA_CONFIG_TIMEOUT_S)
             except Exception:
                 pass
             if self.config.disable_wake_words:
+                # Reading the configuration is optional, writing it is what the
+                # push-to-talk product mode depends on, so a failed write closes
+                # the generation and the reconnect re-syncs it.
                 try:
                     await client.set_voice_assistant_configuration([])
                     self.wake_words_disabled = True
                 except Exception as err:
-                    self.wake_words_disabled = False
-                    self.last_error = f"set_configuration: {err}"
+                    await self._fail_connection(f"set_configuration: {err}")
+                    raise
 
         try:
             sync_led_defaults(client, self.entities, self.config)
@@ -383,8 +392,12 @@ class VoicePEDevice:
         )
         await self._reconnect.start()
 
-    def _on_connection_stopped(self, *_args) -> None:
-        """Generation-scoped teardown; ``ReconnectLogic`` reconnects itself."""
+    async def _on_connection_stopped(self, *_args) -> None:
+        """Generation-scoped teardown; ``ReconnectLogic`` reconnects itself.
+
+        A coroutine because 46.x awaits the ``on_disconnect`` callback and wraps
+        the ``on_stop`` one into a background task.
+        """
         self._drop_voice_assistant_subscription()
         self._cancel_tts_task()
         if self._ingress is not None:
@@ -392,9 +405,13 @@ class VoicePEDevice:
         self._cancel_pump_task()
         self.session = None
         self.session_state = SessionState.IDLE
+        self.led_phase = "not_ready"
         if self.state is not DeviceState.ERROR:
             self.state = DeviceState.RECONNECTING
         self._mark_event("disconnected")
+        # The avatar follows the connection: ``not_ready`` is the asleep phase,
+        # an error keeps the error phase.
+        self._sync_face_state()
 
     def _drop_voice_assistant_subscription(self) -> None:
         """Release the single live Voice Assistant subscription handle."""
@@ -480,8 +497,9 @@ class VoicePEDevice:
         self.session_state = SessionState.LISTENING
         await self._event("STT_START", {})
 
-        if self._ingress is not None:
-            self._pump_task = asyncio.ensure_future(self._ingress.pump())
+        # The generation's pump is usually already running from ``_on_connect``;
+        # a restarted generation gets exactly one new one here.
+        self._ensure_pump()
 
         debug_log(
             _kvp({
@@ -512,8 +530,19 @@ class VoicePEDevice:
             self.led_phase = "idle"
             self._sync_face_state()
             self._mark_event("aborted")
-        # ``abort=False`` is the microphone end marker: the run stays open
-        # because the transcript and the reply of this generation still follow.
+            self._ensure_listener_queue_idle()
+            return
+        # ``abort=False`` is the microphone end marker: the buffered frames are
+        # the utterance, so they are kept and the VAD is closed by the silence
+        # tail instead of by the reset marker.
+        self._mark_event("microphone_end")
+        pad = getattr(self._listener, "pad_until_endpoint", None)
+        if callable(pad):
+            try:
+                pad()
+                return
+            except Exception:
+                pass
         self._ensure_listener_queue_idle()
 
     async def handle_audio(self, data: bytes, data2: Optional[bytes] = None) -> None:
@@ -547,6 +576,15 @@ class VoicePEDevice:
             and self.session_state is not SessionState.IDLE
         )
 
+    @property
+    def device_id(self) -> str:
+        """Stable id of this satellite for the audio lease: MAC, name, host."""
+        return str(
+            self.identity.get("mac_address")
+            or self.identity.get("node_name")
+            or self._host
+        )
+
     async def wait_until_ready(self, timeout_s: float = 10.0) -> bool:
         """Poll until the connection reached ``READY``/``VOICE_ACTIVE``."""
         deadline = 30
@@ -558,11 +596,43 @@ class VoicePEDevice:
             await asyncio.sleep(0.05)
         return self.state in (DeviceState.READY, DeviceState.VOICE_ACTIVE)
 
+    def _face_state_name(self) -> str:
+        """Avatar phase: the session first, the ring phase as the fallback.
+
+        ``RUN_END`` closes the pipeline run while the satellite is still playing,
+        so the media player state keeps ``speaking`` until the device reports the
+        announcement finished or its media player goes idle.
+        """
+        if self.media is not None and self.media.muted:
+            return "muted"
+        if self.state is DeviceState.ERROR:
+            return "error"
+        if self.state in (
+            DeviceState.DISABLED,
+            DeviceState.RECONNECTING,
+            DeviceState.AUTH_REQUIRED,
+        ):
+            return "asleep"
+        if self.session_state in (
+            SessionState.SPEAKING,
+            SessionState.CONTINUE_PENDING,
+        ):
+            return "speaking"
+        if self.session_state in (
+            SessionState.BUTTON_TRIGGERED,
+            SessionState.LISTENING,
+            SessionState.RECORDING,
+        ):
+            return "listening"
+        if self.session_state in (SessionState.TRANSCRIBING, SessionState.THINKING):
+            return "thinking"
+        if self.media is not None and self.media.is_active():
+            return "speaking"
+        return LED_PHASE_JARVIS_STATE.get(self.led_phase, "idle")
+
     def _sync_face_state(self) -> None:
-        """One shared bridge: the satellite LED phase drives the toaster face."""
-        name = LED_PHASE_JARVIS_STATE.get(self.led_phase)
-        if not name:
-            return
+        """One shared bridge: session, media and ring phase drive the avatar."""
+        name = self._face_state_name()
         try:
             from desktop_app.face_widget import JarvisState, get_jarvis_state
 
@@ -613,6 +683,9 @@ class VoicePEDevice:
             update = self.media.update_state(state)
             if update:
                 self._mark_event("media_state")
+                # ``playing``/``announcing`` keeps the avatar at ``speaking``,
+                # the move to ``idle`` is what releases it.
+                self._sync_face_state()
                 debug_log(
                     _kvp({
                         "component": "voice_pe",
@@ -648,8 +721,11 @@ class VoicePEDevice:
         self._cancel_tts_task()
         self.session_state = SessionState.IDLE
         self.session = None
+        self.led_phase = "idle"
         self._ensure_listener_queue_idle()
         self._mark_event("muted")
+        # Mute is its own avatar phase, not the plain idle one.
+        self._sync_face_state()
 
     def _handle_button_event(self, event_value: str) -> None:
         action = pe_events.resolve_action(event_value, self.config.button_actions)
@@ -690,12 +766,15 @@ class VoicePEDevice:
             return
         started = time.monotonic()
         await self._event("STT_END", {"text": text})
+        self._bump_metric("stt_end")
         self.session_state = SessionState.THINKING
         await self._event("INTENT_START", {})
         self._record_latency("stt_end_ms", started)
 
     async def _on_reply_async(self, reply: str) -> None:
-        if self._client is None:
+        # Only the device that owns the run speaks; a device without an open
+        # session leaves the reply to the local microphone.
+        if self._client is None or self.session is None:
             return
         self.session_state = SessionState.SPEAKING
         continue_conversation = self._should_continue(reply)
@@ -816,13 +895,18 @@ class VoicePEDevice:
         # calls the start callback again - no extra RPC is needed and sending
         # one would only restart the already playing reply.
         await self._event("RUN_END", {})
+        self._bump_metric("run_end")
         if self._should_continue(reply):
             self.session_state = SessionState.CONTINUE_PENDING
             self._mark_event("continue_pending")
+            self._sync_face_state()
             return
         self.session_state = SessionState.IDLE
         self.session = None
         self._mark_event("run_end")
+        # The media player can still be ``playing`` here; the sync maps that to
+        # ``speaking`` and the next media or announce event closes it.
+        self._sync_face_state()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -872,6 +956,15 @@ class VoicePEDevice:
         if self._tts_task is not None:
             self._tts_task.cancel()
             self._tts_task = None
+
+    def _ensure_pump(self) -> None:
+        """Keep exactly one microphone pump per connection generation."""
+        if self._ingress is None:
+            return
+        if self._pump_task is not None and not self._pump_task.done():
+            return
+        self._pump_task = asyncio.ensure_future(self._ingress.pump())
+        self.metrics["pump_tasks"] = int(self.metrics.get("pump_tasks", 0)) + 1
 
     def _cancel_pump_task(self) -> None:
         if self._pump_task is not None:

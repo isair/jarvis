@@ -63,6 +63,7 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
             "jarvis voice-pe resume <device>",
             "jarvis voice-pe volume <device> 0.66",
             "jarvis voice-pe mute <device> on|off",
+            "jarvis voice-pe media-state <device>",
             "jarvis voice-pe stop <device>",
             "jarvis voice-pe forget <device>",
         ):
@@ -171,6 +172,17 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
             if manager
             else 1
         )
+
+    if command == "media-state":
+        key = rest[0] if rest else ""
+        state = manager.media_state(key) if manager else {}
+        if not state:
+            print("🛰️ No attached device with a media player", flush=True)
+            return 1
+        print("🎵 Media player", flush=True)
+        for name, value in state.items():
+            print(f"   ▫️ {name}: {value}", flush=True)
+        return 0
 
     if command == "stop":
         key = rest[0] if rest else ""

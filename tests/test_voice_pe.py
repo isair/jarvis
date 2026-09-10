@@ -1272,6 +1272,176 @@ class TestPairingPersists:
 
 
 @pytest.mark.unit
+class TestLeaseAndBridges:
+    """The lease routes milestones; the bridges drive phase and pump."""
+
+    def test_lease_names_the_single_owner(self):
+        from jarvis.integrations.voice_pe.manager import ActiveAudioLease
+
+        first = _no_speaker_device(FakeClient())
+        second = _no_speaker_device(FakeClient())
+        second.entities = first.entities
+        fan = _Fanout([first, second])
+        assert fan.lease() is None
+
+        async def _run():
+            await first.handle_pipeline_start("conv", 0, SimpleNamespace(), None)
+
+        _run_loop(_run, first)
+        lease = fan.lease()
+        assert isinstance(lease, ActiveAudioLease)
+        assert lease.source_id == "voice_pe"
+        assert lease.device_id == first.device_id
+        assert lease.session_generation == first.session_generation
+
+    def test_milestones_reach_only_the_owner(self, monkeypatch):
+        owner = _no_speaker_device(_AnnounceClient())
+        other = _no_speaker_device(_AnnounceClient())
+        fan = _Fanout([owner, other])
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.device.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 8,
+        )
+
+        async def _run():
+            await owner.handle_pipeline_start("c", 0, SimpleNamespace(), None)
+            fan.on_reply("Four two one.")
+            for _ in range(4):
+                await asyncio.sleep(0.02)
+            if owner._http is not None:
+                await owner._http.stop()
+
+        _run_loop(_run, owner)
+        # The owner emitted TTS_END plus RUN_END; the idle device emitted noth=
+        # ing because the lease names one owner.
+        owner_events = [event for event, _ in owner._client.events]
+        other_events = [event for event, _ in other._client.events]
+        assert 8 in owner_events and 2 in owner_events
+        # The idle device emitted nothing at all: the lease names one owner.
+        assert other_events == []
+
+    def test_error_reaches_the_single_device(self):
+        device = _no_speaker_device(FakeClient())
+        fan = _Fanout([device])
+
+        async def _run():
+            fan.on_error("stt", "empty")
+            for _ in range(2):
+                await asyncio.sleep(0.02)
+            return [event for event, _ in device._client.events]
+
+        assert _run_loop(_run, device) == [0]
+
+    def test_per_source_containers_are_separate(self):
+        from jarvis.integrations.voice_pe.models import (
+            AUDIO_SOURCE_LOCAL,
+            AUDIO_SOURCE_VOICE_PE,
+        )
+
+        listener = _bare_listener()
+        listener._pre_rolls[AUDIO_SOURCE_LOCAL] = listener._pre_roll
+        listener._pre_rolls[AUDIO_SOURCE_VOICE_PE] = __import__("collections").deque()
+        listener._remaining_samples[AUDIO_SOURCE_LOCAL] = "local-tail"
+        listener._remaining_samples[AUDIO_SOURCE_VOICE_PE] = "pe-tail"
+        assert listener._pre_rolls[AUDIO_SOURCE_LOCAL] is not (
+            listener._pre_rolls[AUDIO_SOURCE_VOICE_PE]
+        )
+        listener._clear_audio_buffers()
+        assert listener._remaining_samples == {}
+
+    def test_pump_is_created_once_per_connection_generation(self):
+        client = _SyncClient()
+        device = _device(client)
+        device.entities = EntityIndex()
+
+        async def _run():
+            device.loop = asyncio.get_running_loop()
+            await device._on_connect()
+            await device.handle_pipeline_start("a", 0, SimpleNamespace(), None)
+            await device.handle_pipeline_start("b", 0, SimpleNamespace(), None)
+            return device.metrics.get("pump_tasks")
+
+        pumps = _run_loop(_run, device)
+        assert pumps == 1
+
+    def test_avatar_keeps_speaking_until_media_releases(self):
+        device = _no_speaker_device(FakeClient())
+        device.state = DeviceState.READY
+        device.session_state = SessionState.SPEAKING
+        assert device._face_state_name() == "speaking"
+        device.session_state = SessionState.CONTINUE_PENDING
+        assert device._face_state_name() == "speaking"
+        # The media player still playing keeps the avatar at ``speaking``.
+        device.session_state = SessionState.IDLE
+        device.session = None
+        device.led_phase = "idle"
+        device.media.state = "playing"
+        assert device._face_state_name() == "speaking"
+        device.media.state = "idle"
+        assert device._face_state_name() == "idle"
+        device.media.muted = True
+        assert device._face_state_name() == "muted"
+        device.media.muted = False
+        device.state = DeviceState.ERROR
+        assert device._face_state_name() == "error"
+
+    def test_double_and_triple_press_get_builtin_handlers(self):
+        from jarvis.integrations.voice_pe.manager import VoicePEManager
+
+        manager = VoicePEManager(
+            SimpleNamespace(voice_pe_enabled=True, voice_pe_host="10.0.0.9"), None, None
+        )
+        device = _device(FakeClient())
+        manager._register_builtin_actions(device)
+        assert device.actions.run("toggle_overlay").startswith("ok")
+        assert device.actions.run("open_command_palette").startswith("ok")
+        assert device.actions.run("ignore") == "ok:ignore"
+
+    def test_cli_media_state_subcommand_exists(self, monkeypatch):
+        from jarvis.integrations.voice_pe import cli
+        from jarvis.integrations.voice_pe.manager import VoicePEManager
+
+        manager = VoicePEManager(
+            SimpleNamespace(voice_pe_enabled=True, voice_pe_host="10.0.0.9"), None, None
+        )
+        manager._devices = [_device(FakeClient())]
+
+        captured: list[str] = []
+        monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(" ".join(str(x) for x in a)))
+        assert "media-state" in " ".join(captured) or True
+        cli.handle([], SimpleNamespace(), None)  # usage block
+        assert any("media-state" in line for line in captured)
+        assert cli.handle(["media-state", ""], SimpleNamespace(), manager) == 0
+        assert any("Media player" in line for line in captured)
+
+
+def _bare_listener():
+    from jarvis.listening.listener import VoiceListener
+
+    cfg = SimpleNamespace(
+        sample_rate=16000,
+        vad_enabled=False,
+        voice_debug=False,
+        tune_enabled=False,
+        hot_window_seconds=3.0,
+        echo_tolerance=0.3,
+        echo_energy_threshold=2.0,
+        voice_collect_seconds=2.0,
+        voice_max_collect_seconds=60.0,
+    )
+    return VoiceListener(SimpleNamespace(), cfg, None, SimpleNamespace())
+
+
+class _Fanout:
+    """Alias to the manager router so the lease tests stay readable."""
+
+    def __new__(cls, devices):
+        from jarvis.integrations.voice_pe.manager import SinkFanout
+
+        return SinkFanout(list(devices))
+
+
+@pytest.mark.unit
 class TestMediaController:
     def test_volume_from_device_is_authoritative(self):
         client = FakeClient()

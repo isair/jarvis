@@ -436,11 +436,14 @@ class VoiceListener(threading.Thread):
         self._silence_frames = 0
         self._utterance_frames: list = []
         self._frame_samples = 0
-        # Continuity between queued blocks: a satellite sends 512-sample blocks
-        # while the VAD frame is 320 samples, so the block remainder is kept in
-        # ``_remaining_samples`` instead of being dropped at the block boundary.
-        self._remaining_samples: Any = None
+        # Continuity between queued blocks, per source: a satellite sends
+        # 512-sample blocks while the VAD frame is 320 samples, so the block
+        # remainder is kept per microphone instead of being dropped at the
+        # block boundary. Each source also keeps its own pre-roll.
+        self._remaining_samples: dict = {}
+        self._pre_rolls: dict = {}
         self._audio_source: Optional[str] = None
+        self._turn_source: Optional[str] = None
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
         self._vad: Optional = None
 
@@ -639,6 +642,11 @@ class VoiceListener(threading.Thread):
 
         text_lower = text.strip().lower()
 
+        # The microphone that produced this text owns the whole turn: it is the
+        # one that gets the reply, and it is the only engagement signal.
+        turn_source = source or self._audio_source or AUDIO_SOURCE_LOCAL
+        self._turn_source = turn_source
+
         # Satellite milestone: the STT stage produced text (STT_END).
         self._voice_pe_event("transcript", text_lower)
 
@@ -651,9 +659,9 @@ class VoiceListener(threading.Thread):
 
         # A satellite run was opened by the centre button (or by the device's
         # own continued conversation), and that press already is the engagement
-        # signal. The wake-word gate of the local pipeline must not reject the
-        # transcript: the stock firmware does not repeat a wake word there.
-        if (source or self._audio_source) == AUDIO_SOURCE_VOICE_PE or self._sink_holds_session():
+        # signal. Only the satellite's own transcript skips the wake-word gate;
+        # local text keeps the normal checks.
+        if turn_source == AUDIO_SOURCE_VOICE_PE:
             self._accept_satellite_transcript(text_lower)
             return
 
@@ -1368,7 +1376,7 @@ class VoiceListener(threading.Thread):
         # device delivers the audio itself (API PCM or the ``TTS_END`` WAV URL),
         # so the local playback below only runs when no satellite holds the run.
         self._voice_pe_event("reply", reply or "")
-        satellite_reply = self._sink_holds_session()
+        satellite_reply = self._turn_source == AUDIO_SOURCE_VOICE_PE
 
         # Handle TTS with proper callbacks
         if reply and satellite_reply:
@@ -1471,8 +1479,10 @@ class VoiceListener(threading.Thread):
         self.is_speech_active = False
         self._silence_frames = 0
 
-        # The block remainder belongs to the dropped audio as well.
-        self._remaining_samples = None
+        # The block remainders belong to the dropped audio as well.
+        for roll in self._pre_rolls.values():
+            roll.clear()
+        self._remaining_samples.clear()
 
         # Clear wake detection state
         self._wake_timestamp = None
@@ -1529,6 +1539,25 @@ class VoiceListener(threading.Thread):
         # next block.
         remaining = None if offset >= total else mono[offset:]
         return frames, remaining
+
+    def _active_audio_source(self) -> str:
+        """The microphone that owns audio right now.
+
+        An in-flight utterance keeps the source that started it; otherwise the
+        open pipeline lease decides - the satellite while it holds a session,
+        the local microphone otherwise. Ownership is therefore derived from the
+        lease, not from whichever block happened to arrive first.
+        """
+        if self.is_speech_active and self._audio_source:
+            return self._audio_source
+        sink = self._voice_pe_sink
+        if sink is not None:
+            try:
+                if sink.holds_session():
+                    return AUDIO_SOURCE_VOICE_PE
+            except Exception:
+                pass
+        return AUDIO_SOURCE_LOCAL
 
     def _whisper_language_code(self) -> Optional[str]:
         """Configured ASR language code, or ``None`` for auto-detection.
@@ -1742,11 +1771,45 @@ class VoiceListener(threading.Thread):
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
-                self._audio_q.put_nowait((AUDIO_SOURCE_LOCAL, chunk))
+                self._audio_q.put_nowait(self.push_local_chunk(chunk))
             except Exception:
                 pass
         except Exception:
             return
+
+    def push_local_chunk(self, chunk):
+        """Tag one local-microphone block for the shared queue.
+
+        The tag is what lets the VAD loop keep one microphone per utterance;
+        ``("local", buffer)`` is the shape every consumer reads.
+        """
+        return (AUDIO_SOURCE_LOCAL, chunk)
+
+    def pad_until_endpoint(self) -> int:
+        """Close an in-flight utterance with the configured silence tail.
+
+        The satellite closes its microphone as soon as the last frame is sent,
+        so no further frames would arrive to trip the VAD endpoint. The same
+        number of silent frames the loop would count is pushed with the source
+        of the in-flight utterance, which finalizes it in order.
+        """
+        if np is None:
+            return 0
+        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        endpoint_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
+        frames = max(1, int(endpoint_ms / max(1, frame_ms)))
+        samples = int(getattr(self, "_frame_samples", 0) or 0)
+        if samples <= 0:
+            return 0
+        source = self._audio_source or AUDIO_SOURCE_LOCAL
+        for _ in range(frames):
+            try:
+                self._audio_q.put_nowait(
+                    (source, np.zeros(samples, dtype=np.float32))
+                )
+            except Exception:
+                break
+        return frames
 
     def _determine_whisper_backend(self) -> str:
         """Determine which Whisper backend to use based on config and availability."""
@@ -2611,7 +2674,7 @@ class VoiceListener(threading.Thread):
                     self._silence_frames = 0
                     self._utterance_frames = []
                     self._pre_roll.clear()
-                    self._remaining_samples = None
+                    self._remaining_samples.clear()
                     self._audio_source = None
                     continue
 
@@ -2619,22 +2682,30 @@ class VoiceListener(threading.Thread):
                     continue
 
                 # Tagged item ``("local" | "voice_pe", buffer)``; a bare buffer
-                # is the local microphone. Only one microphone owns an
-                # utterance, so a block of the other source is skipped while an
-                # utterance is in flight instead of being interleaved into it.
+                # is the local microphone. Only the owning microphone feeds the
+                # frame grid, the other one is skipped without disturbing it.
                 source, buf = self._tagged_audio(item)
-                if self._audio_source and source != self._audio_source:
+                if source not in self._pre_rolls:
+                    self._pre_rolls[source] = deque()
+                owner = self._active_audio_source()
+                if source != owner:
                     continue
                 self._audio_source = source
+                # The owning source keeps its own pre-roll across switches.
+                self._pre_roll = self._pre_rolls[source]
 
                 mono = self._mono_audio(buf)
 
                 # Satellite blocks are 512 samples while a VAD frame is 320, so
-                # the frame grid continues across the block boundary.
-                carry = self._remaining_samples
-                frames, self._remaining_samples = self._frame_grid(
-                    mono, carry, self._frame_samples
+                # the frame grid continues across the block boundary. The
+                # remainder is the only continuation - the grid sees it once.
+                frames, carry = self._frame_grid(
+                    mono, self._remaining_samples.get(source), self._frame_samples
                 )
+                if carry is None:
+                    self._remaining_samples.pop(source, None)
+                else:
+                    self._remaining_samples[source] = carry
 
                 for frame in frames:
                     # VAD decision
@@ -2682,18 +2753,9 @@ class VoiceListener(threading.Thread):
                     # Check for query timeouts
                     self._check_query_timeout()
 
-                # Seed the pre-roll with the block remainder too, so a speech
-                # onset right at a block boundary keeps its first samples. The
-                # same remainder is the head of the next block's frame grid.
-                if self._remaining_samples is not None:
-                    tail = self._remaining_samples
-                    if getattr(tail, "size", 0) > 0:
-                        self._pre_roll.append(tail.copy())
-                        while len(self._pre_roll) > pre_roll_max_frames:
-                            try:
-                                self._pre_roll.popleft()
-                            except Exception:
-                                break
+                # The block remainder lives only in ``_remaining_samples`` and
+                # becomes the head of the next grid; the pre-roll is fed by the
+                # processed frames above, so nothing is counted twice.
 
     def _finalize_utterance(self) -> None:
         """Process completed utterance through speech recognition."""
@@ -2705,7 +2767,7 @@ class VoiceListener(threading.Thread):
             self.is_speech_active = False
             self._silence_frames = 0
             self._utterance_frames = []
-            self._remaining_samples = None
+            self._remaining_samples.pop(utterance_source or AUDIO_SOURCE_LOCAL, None)
             return
 
         # Track when utterance ends - but don't overwrite global timing yet

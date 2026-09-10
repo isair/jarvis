@@ -331,6 +331,8 @@ class TtsHttpServer:
         self._server: Optional[asyncio.AbstractServer] = None
         self._payloads: "dict[str, bytes]" = {}
         self.port = 0
+        #: Number of answered GETs, for ``(server, device)`` health checks.
+        self.requests = 0
 
     async def start(self) -> int:
         """Bind an ephemeral IPv4 port and return it.
@@ -375,6 +377,7 @@ class TtsHttpServer:
         if len(parts) >= 2:
             path = parts[1].decode("latin-1", "replace").lstrip("/")
         body = self._payloads.get(path, b"")
+        self.requests += 1
         head = (
             f"HTTP/1.1 {200 if body else 404} OK\r\n"
             f"Content-Type: audio/wav\r\n"

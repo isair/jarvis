@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from . import config as pe_config
 from .device import VoicePEDevice
 from .discovery import discover
-from .models import DeviceState, VoicePEConfig
+from .models import AUDIO_SOURCE_VOICE_PE, DeviceState, VoicePEConfig
 
 try:  # pragma: no cover - trivial import shim
     from jarvis.debug import debug_log
@@ -35,39 +36,83 @@ def _kv(pairs: dict) -> str:
     )
 
 
-class SinkFanout:
-    """Fan the listener's pipeline milestones out to every attached device.
+@dataclass(frozen=True)
+class ActiveAudioLease:
+    """Which microphone currently owns the one pipeline run.
 
-    Only the device holding the open session has ``session`` set, so the
-    others drop each milestone without sending events.
+    ``source_id`` is the ``local``/``voice_pe`` tag the listener queue uses, so
+    a milestone reaches exactly the microphone that produced its transcript.
+    """
+
+    source_id: str
+    device_id: str
+    session_generation: int
+
+
+class SinkFanout:
+    """Fan the listener's pipeline milestones out to the owning device only.
+
+    Only the device holding the open session has ``session`` set; the router
+    passes to that one and lets the others drop each milestone without sending
+    events. With no lease at all (a local-microphone turn) every device drops
+    it and the local TTS answers.
     """
 
     def __init__(self, devices: list[VoicePEDevice]) -> None:
         self._devices = list(devices)
 
-    def on_vad_start(self) -> None:
-        for device in self._devices:
-            device.on_vad_start()
+    # -- lease ------------------------------------------------------------
 
-    def on_vad_end(self) -> None:
+    def lease(self) -> Optional[ActiveAudioLease]:
+        """The single device holding the run, or ``None`` for a local turn."""
         for device in self._devices:
-            device.on_vad_end()
-
-    def on_transcript(self, text: str) -> None:
-        for device in self._devices:
-            device.on_transcript(text)
-
-    def on_reply(self, reply: str) -> None:
-        for device in self._devices:
-            device.on_reply(reply)
-
-    def on_error(self, code: str, message: str) -> None:
-        for device in self._devices:
-            device.on_error(code, message)
+            if device.holds_session():
+                return ActiveAudioLease(
+                    source_id=AUDIO_SOURCE_VOICE_PE,
+                    device_id=device.device_id,
+                    session_generation=device.session_generation,
+                )
+        return None
 
     def holds_session(self) -> bool:
         """True while exactly one attached satellite owns the open run."""
-        return any(device.holds_session() for device in self._devices)
+        return self.lease() is not None
+
+    def _owner(self) -> Optional[VoicePEDevice]:
+        for device in self._devices:
+            if device.holds_session():
+                return device
+        return None
+
+    # -- milestones -------------------------------------------------------
+
+    def on_vad_start(self) -> None:
+        device = self._owner()
+        if device is not None:
+            device.on_vad_start()
+
+    def on_vad_end(self) -> None:
+        device = self._owner()
+        if device is not None:
+            device.on_vad_end()
+
+    def on_transcript(self, text: str) -> None:
+        device = self._owner()
+        if device is not None:
+            device.on_transcript(text)
+
+    def on_reply(self, reply: str) -> None:
+        device = self._owner()
+        if device is not None:
+            device.on_reply(reply)
+
+    def on_error(self, code: str, message: str) -> None:
+        device = self._owner()
+        target = device if device is not None else (
+            self._devices[0] if len(self._devices) == 1 else None
+        )
+        if target is not None:
+            target.on_error(code, message)
 
 
 class VoicePEManager:
@@ -82,6 +127,8 @@ class VoicePEManager:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._metrics: dict = {}
+        #: Set once ``_astart`` finished, so ``start()`` is not a half-answer.
+        self._start_done = threading.Event()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -91,16 +138,24 @@ class VoicePEManager:
     def enabled(self) -> bool:
         return bool(self.config.enabled)
 
-    def start(self) -> bool:
-        """Start the loop thread. Returns False when disabled."""
+    def start(self, timeout_s: float = 12.0) -> bool:
+        """Start the loop thread and wait for the device list.
+
+        Returns ``False`` when disabled. The wait is what makes ``devices``,
+        ``health()`` and ``metrics()`` correct on the very first call: the
+        handshake and the capability sync already ran.
+        """
         if not self.enabled:
             return False
         if self._thread is not None:
+            self._start_done.wait(timeout_s)
             return True
+        self._start_done.clear()
         self._thread = threading.Thread(
             target=self._run_loop, name="voice_pe", daemon=True
         )
         self._thread.start()
+        self._start_done.wait(timeout_s)
         return True
 
     def _run_loop(self) -> None:
@@ -108,7 +163,12 @@ class VoicePEManager:
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._astart())
+            try:
+                loop.run_until_complete(self._astart())
+            finally:
+                # Set on both paths so a waiting ``start()`` never blocks on a
+                # half-built device list.
+                self._start_done.set()
             loop.run_forever()
         finally:
             try:
@@ -196,14 +256,14 @@ class VoicePEManager:
                     f"component=voice_pe host={host} error={err}",
                     "voice",
                 )
-        # One shared VAD/STT path, N satellites: the fan-out hands each
-        # milestone to every device and the one holding the open session
-        # answers, the others ignore it.
+        # One shared VAD/STT path, N satellites: the router hands each milestone
+        # to the device holding the open session, the others ignore it.
         if self._listener is not None and self._devices:
             try:
                 self._listener._voice_pe_sink = SinkFanout(self._devices)
             except Exception:
                 pass
+        self._start_done.set()
         debug_log(
             f"component=voice_pe event=manager_start devices={len(self._devices)}",
             "voice",
@@ -224,6 +284,7 @@ class VoicePEManager:
 
     def stop(self) -> None:
         """Stop devices and the loop thread."""
+        self._start_done.clear()
         loop = self._loop
         if loop is not None:
             try:
@@ -285,6 +346,12 @@ class VoicePEManager:
     def _register_builtin_actions(self, device: VoicePEDevice) -> None:
         device.actions.register("cancel_current_agent_run", _cancel_agent_run)
         device.actions.register("toaster_easter_egg", _easter_egg)
+        # Every event type the stock device publishes gets a handler, so a
+        # mapped press never reports ``unhandled:``. The desktop app can still
+        # replace any of them through ``register_action``.
+        device.actions.register("toggle_overlay", _toggle_overlay)
+        device.actions.register("open_command_palette", _open_command_palette)
+        device.actions.register("ignore", _ignore_action)
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -454,3 +521,24 @@ def _easter_egg() -> None:
         get_jarvis_state().set_state(JarvisState.SUCCESS, label="voice_pe")
     except Exception:
         pass
+
+
+def _toggle_overlay() -> None:
+    """Re-emit the shared state so the visible overlay refreshes its phase."""
+    try:
+        from desktop_app.face_widget import get_jarvis_state
+
+        state = get_jarvis_state()
+        state.set_state(state.state, level=state.level, label=state.label or None)
+    except Exception:
+        pass
+
+
+def _open_command_palette() -> None:
+    """Palette nudge: the chat window follows the same shared state."""
+    _toggle_overlay()
+
+
+def _ignore_action() -> None:
+    """Explicit no-op for an unmapped button event."""
+    return None

@@ -167,45 +167,80 @@ accepted without a wake word again.
 ## Microphone ingress and source ownership
 
 Every item on the shared listener queue is tagged with its source,
-`AUDIO_SOURCE_LOCAL` or `AUDIO_SOURCE_VOICE_PE`, so exactly one microphone owns
-an utterance: while an utterance is in flight, a block of the other source is
-skipped instead of being interleaved. A bare (untagged) buffer still reads as
-the local microphone.
+`AUDIO_SOURCE_LOCAL` or `AUDIO_SOURCE_VOICE_PE`. The owner of the audio is
+derived, not first-come: an in-flight utterance keeps the source that started
+it, otherwise the lease holder owns it (`voice_pe` while a satellite holds a
+session, `local` otherwise). A block of the non-owning source is skipped without
+disturbing the owner. A bare (untagged) buffer reads as the local microphone.
 
 The satellite pushes 512-sample blocks while a VAD frame is 320 samples at
-16 kHz. The 192-sample remainder of a block continues the next block instead of
-being dropped, which keeps the frame grid contiguous over the whole stream.
+16 kHz. The block remainder is kept **per source**, together with that source's
+own pre-roll, so a switch between microphones never mixes two grids. The
+remainder is the only continuation: it becomes the head of the next block's
+frame grid and is not also pushed into the pre-roll, so no sample is counted
+twice at the speech boundary.
 
-A source-tagged transcript (or a sink holding a session) skips the wake-word
-check and the intent judge: the centre-button press already is the engagement
-signal and the transcript is the query. The local PC TTS stays silent for a
-satellite reply, because the satellite played it already over the API or from
-the WAV URL.
+A source-tagged transcript skips the wake-word check and the intent judge: the
+centre-button press already is the engagement signal and the transcript is the
+query. The turn keeps that tag, and it alone decides the TTS surface: a
+satellite turn plays on the satellite (API PCM or the `TTS_END` WAV URL), a
+local turn plays on the PC — never both.
+
+## One microphone pump per connection generation
+
+`AudioIngress.pump()` is created once per connection generation by `_on_connect`
+and reused by every run of that generation (`_ensure_pump()` starts one only when
+the task is missing or already finished). The generation counter
+`metrics["pump_tasks"]` is nulled with the generation, so two runs in one
+generation keep exactly one live pump.
 
 ## LED ring and toaster avatar
 
-One bridge, `LED_PHASE_JARVIS_STATE`, maps the phase the last Voice Assistant
-event left the ring in onto the desktop avatar: `waiting_for_command` and
-`listening_for_command` to `listening`, `thinking` to `thinking`, `replying` to
-`speaking`, `idle` to `idle`, `not_ready` to `asleep`, `error` to `error`. Both
-surfaces therefore follow the same event stream; per-pixel effects stay inside
-the firmware, whose `voice_assistant_leds` light is `internal: true`.
+One bridge, `LED_PHASE_JARVIS_STATE`, maps the phase onto the desktop avatar:
+`waiting_for_command` and `listening_for_command` to `listening`, `thinking` to
+`thinking`, `replying` to `speaking`, `idle` to `idle`, `not_ready` to `asleep`,
+`error` to `error`, and the mute switch to `muted`. The session state is
+consulted first: `SPEAKING` and `CONTINUE_PENDING` both map to `speaking`, so
+`RUN_END` — which closes the pipeline while the satellite is still playing —
+does not drop the avatar to `idle`. The device's own `AnnounceFinished`, or a
+media-player push going to `idle`, is what releases it. A disabled, reconnecting
+or auth-required connection shows `asleep`. Both surfaces therefore follow one
+stream; per-pixel effects stay inside the firmware, whose `voice_assistant_leds`
+light is `internal: true`.
 
 ## Startup, pairing and commands
 
-`voice_pe_enabled` starts off; `jarvis voice-pe pair` writes it together with
-the node metadata, so a paired unit is also started. Pairing stores metadata
-for every matched node - Noise-keyed and plaintext units alike - including the
-addresses, port and decoded feature flags. `VoicePEManager._astart` waits
-(bounded) for the generation to reach `READY`, and the `list` and `status`
-subcommands report the device state plus the decoded feature list.
+`voice_pe_enabled` starts off; `jarvis voice-pe pair` writes it together with the
+node metadata, so a paired unit is also started. Pairing stores metadata for
+every matched node — Noise-keyed and plaintext units alike — including the
+addresses, port, MAC and decoded feature flags. `VoicePEManager.start()` waits
+(bounded) for the loop's `_astart`, so after it return `devices`, `health()` and
+`metrics()` are already filled and the generation reached `READY`; `list` and
+`status` report that state plus the decoded feature list.
 
-Commands beyond `play`/`stop`: `pause`, `resume`, `volume <0..1>`, `mute
-on|off`, matching the media controller one-to-one. With a single attached
-satellite an unnamed target resolves to it. `pair` and `forget` both write the
-same key. The hardware smoke test is `scripts/_voice_pe_smoke.py`: eight checks
-against a real unit (handshake, enumeration, flag decode, subscription, WAV
-fetch, announcement, configuration) with the failed-check count as exit code.
+`ActiveAudioLease(source_id, device_id, session_generation)` names the one owner
+of the current run. `SinkFanout` resolves the lease and hands each milestone to
+that device alone; with no lease every device drops it and the local
+microphone answers. The same table gives every published event a built-in
+handler: `single_press` and `long_press` → `cancel_current_agent_run`,
+`double_press` → `toggle_overlay`, `triple_press` → `open_command_palette`, the
+easter-egg value → `toaster_easter_egg`, an unmapped value → `ignore`.
+
+Commands beyond `play`/`stop`: `pause`, `resume`, `volume <0..1>`, `mute on|off`
+and `media-state <device>` for the published media snapshot, matching the media
+controller one-to-one. With a single attached satellite an unnamed target
+resolves to it. `pair` and `forget` both write the same key.
+
+The hardware smoke test is `scripts/_voice_pe_smoke.py`: it boots the real stack
+(`Database`, `Settings`, Piper TTS, `VoiceListener` with WebRTC VAD and Whisper,
+`VoicePEManager`, one `VoicePEDevice`) and walks one conversation — boot to
+`READY`, decoded flags, enumeration, wake-word mode, run opened by the centre
+button or by `start_conversation`, the lease, API audio chunks, one pump per
+generation, VAD+Whisper transcript, `TTS_END` URL on a still-open server, the
+device GET of that URL, `AnnounceFinished`, the second run, the media snapshot
+and the closing metrics. The TTS HTTP server stays open for the whole run, so
+the fetched URL is the one the device got. Exit code = number of failed
+checkpoints, 0 on the retail unit with one spoken sentence in the window.
 
 ## Firmware baseline
 
@@ -269,6 +304,7 @@ jarvis voice-pe pause <device>
 jarvis voice-pe resume <device>
 jarvis voice-pe volume <device> 0.66
 jarvis voice-pe mute <device> on|off
+jarvis voice-pe media-state <device>
 jarvis voice-pe stop <device>
 jarvis voice-pe forget <device>
 ```

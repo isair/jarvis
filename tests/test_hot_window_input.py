@@ -1682,14 +1682,37 @@ class TestSatelliteSessionInput:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_held_session_is_enough_without_a_tag(self, _print):
+    def test_untagged_input_under_a_held_session_is_not_bypassed(self, _print):
+        """The frame tag is authoritative for the wake-word bypass."""
         listener, _ = _create_listener()
         sink = MagicMock()
         sink.holds_session.return_value = True
         listener._voice_pe_sink = sink
 
         listener._process_transcript("and tomorrow", utterance_energy=0.01)
+        assert _accepted_query(listener) == ""
+        # The same text with the satellite tag is accepted.
+        listener._process_transcript(
+            "and tomorrow", utterance_energy=0.01, source="voice_pe"
+        )
         assert _accepted_query(listener) == "and tomorrow"
+        listener.state_manager.stop()
+
+    def test_frame_owner_follows_the_lease(self):
+        """Frames come from the lease holder, not from whoever arrived first."""
+        from jarvis.integrations.voice_pe.models import (
+            AUDIO_SOURCE_LOCAL,
+            AUDIO_SOURCE_VOICE_PE,
+        )
+
+        listener, _ = _create_listener()
+        sink = MagicMock()
+        sink.holds_session.return_value = False
+        listener._voice_pe_sink = sink
+        assert listener._active_audio_source() == AUDIO_SOURCE_LOCAL
+
+        sink.holds_session.return_value = True
+        assert listener._active_audio_source() == AUDIO_SOURCE_VOICE_PE
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -1699,8 +1722,13 @@ class TestSatelliteSessionInput:
         sink.holds_session.return_value = True
         listener._voice_pe_sink = sink
 
+        from jarvis.integrations.voice_pe.models import AUDIO_SOURCE_VOICE_PE
+
         with patch("jarvis.reply.engine.run_reply_engine", return_value="Sunny tomorrow."), \
              patch("jarvis.daemon.query_lock"):
+            listener._process_transcript(
+                "weather", utterance_energy=0.01, source=AUDIO_SOURCE_VOICE_PE
+            )
             listener._dispatch_query("weather")
 
         sink.on_reply.assert_called_once_with("Sunny tomorrow.")
@@ -1716,7 +1744,9 @@ class TestSatelliteSessionInput:
 
         with patch("jarvis.reply.engine.run_reply_engine", return_value="Sunny tomorrow."), \
              patch("jarvis.daemon.query_lock"):
+            listener._process_transcript("weather", utterance_energy=0.01)
             listener._dispatch_query("weather")
 
         assert mock_tts.speak.called is True
         listener.state_manager.stop()
+
