@@ -13,6 +13,7 @@ Both are PCM16LE, 16 kHz, mono.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Optional
 
 from .models import AUDIO_SOURCE_VOICE_PE, SAMPLE_RATE, VoicePEConfig
@@ -24,6 +25,18 @@ except ImportError:  # pragma: no cover - numpy is a hard requirement
 
 #: 16 kHz mono 16-bit: one millisecond is 16 samples.
 SAMPLES_PER_MS = SAMPLE_RATE / 1000.0
+
+
+@dataclass(frozen=True)
+class EndOfStream:
+    """In-queue marker: this source's PCM for ``generation`` is complete.
+
+    It travels in the same FIFO as the PCM blocks, so the pump can only see it
+    after every block of the run has been handed to the listener queue.
+    """
+
+    source: str
+    generation: int
 
 
 def pcm16_to_float32(payload: bytes):
@@ -75,6 +88,9 @@ class AudioIngress:
                 oldest = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            # Only PCM blocks carry samples; the EOS marker is weightless.
+            if isinstance(oldest, EndOfStream):
+                continue
             self._pending_samples -= len(oldest) // 2
             self._metrics["audio_dropped_chunks"] = (
                 int(self._metrics.get("audio_dropped_chunks", 0)) + 1
@@ -94,6 +110,17 @@ class AudioIngress:
 
     # -- consumer side (pump task) --------------------------------------
 
+    def mark_end_of_stream(self, source: str, generation: int) -> None:
+        """Append the EOS marker of this run behind the queued PCM blocks."""
+        if self._closed:
+            return
+        try:
+            self._queue.put_nowait(EndOfStream(source, int(generation)))
+        except asyncio.QueueFull:  # pragma: no cover - markers are weightless
+            self._metrics["audio_dropped_chunks"] = (
+                int(self._metrics.get("audio_dropped_chunks", 0)) + 1
+            )
+
     async def pump(self) -> None:
         """Feed the shared listener queue until the session closes."""
         while not self._closed:
@@ -101,6 +128,11 @@ class AudioIngress:
                 payload = await self._queue.get()
             except asyncio.CancelledError:  # pragma: no cover
                 raise
+            if isinstance(payload, EndOfStream):
+                # FIFO: every PCM block of this run is already on the listener
+                # queue, so this source's stream is closed in order here.
+                self._close_stream(payload)
+                continue
             self._pending_samples = max(
                 0, self._pending_samples - len(payload) // 2
             )
@@ -118,6 +150,17 @@ class AudioIngress:
                 self._metrics["audio_dropped_chunks"] = (
                     int(self._metrics.get("audio_dropped_chunks", 0)) + 1
                 )
+
+    def _close_stream(self, marker: "EndOfStream") -> None:
+        """State the end of this source's stream on the shared listener queue."""
+        self._metrics["microphone_queue_depth_ms"] = self.depth_ms()
+        close = getattr(self._listener, "pad_until_endpoint", None)
+        if not callable(close):
+            return
+        try:
+            close(marker.source, marker.generation)
+        except Exception:
+            pass
 
     def reset(self) -> None:
         """Drop stale audio for a new generation / cancel."""

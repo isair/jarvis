@@ -444,6 +444,8 @@ class VoiceListener(threading.Thread):
         self._pre_rolls: dict = {}
         self._audio_source: Optional[str] = None
         self._turn_source: Optional[str] = None
+        #: Lease snapshot of the turn in flight, passed with every milestone.
+        self._turn_token: Optional[Any] = None
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
         self._vad: Optional = None
 
@@ -495,25 +497,42 @@ class VoiceListener(threading.Thread):
         # the device. ``None`` keeps the plain local-microphone behaviour.
         self._voice_pe_sink: Optional[Any] = None
 
-    def _voice_pe_event(self, marker: str, payload: Optional[str] = None) -> None:
-        """Forward one pipeline milestone to the attached satellite, if any."""
+    def _voice_pe_event(
+        self, marker: str, payload: Optional[str] = None, token: Optional[Any] = None
+    ) -> None:
+        """Forward one pipeline milestone to the attached satellite, if any.
+
+        The token of the turn travels with it, so a milestone of an older
+        generation is dropped at the entry of the stage it belongs to.
+        """
         sink = self._voice_pe_sink
         if sink is None:
             return
+        token = token if token is not None else self._turn_token
         try:
             if marker == "vad_start":
-                sink.on_vad_start()
+                sink.on_vad_start(token)
             elif marker == "vad_end":
-                sink.on_vad_end()
+                sink.on_vad_end(token)
             elif marker == "transcript":
-                sink.on_transcript(payload or "")
+                sink.on_transcript(payload or "", token)
             elif marker == "reply":
-                sink.on_reply(payload or "")
+                sink.on_reply(payload or "", token)
             elif marker == "error":
                 code, _, message = (payload or "").partition("|")
-                sink.on_error(code, message)
+                sink.on_error(code, message, token)
         except Exception as e:
             debug_log(f"voice_pe sink note failed ({marker}): {e}", "voice")
+
+    def _sink_lease(self) -> Optional[Any]:
+        """Snapshot the current audio lease as the token of this turn."""
+        sink = self._voice_pe_sink
+        if sink is None:
+            return None
+        try:
+            return sink.lease()
+        except Exception:
+            return None
 
     def _sink_holds_session(self) -> bool:
         """True while one attached satellite holds an open pipeline run."""
@@ -646,6 +665,8 @@ class VoiceListener(threading.Thread):
         # one that gets the reply, and it is the only engagement signal.
         turn_source = source or self._audio_source or AUDIO_SOURCE_LOCAL
         self._turn_source = turn_source
+        if turn_source == AUDIO_SOURCE_VOICE_PE and self._turn_token is None:
+            self._turn_token = self._sink_lease()
 
         # Satellite milestone: the STT stage produced text (STT_END).
         self._voice_pe_event("transcript", text_lower)
@@ -1366,9 +1387,15 @@ class VoiceListener(threading.Thread):
             debug_log(f"reply engine exception: {e}", "voice")
             self._voice_pe_event("error", f"reply_engine|{e}")
             self._stop_thinking_tune()
-            # Provide user feedback via TTS
-            if self.tts and self.tts.enabled:
+            # Provide user feedback via TTS, but only where the local speaker is
+            # the output of this turn: the satellite got ERROR + RUN_END above.
+            if (
+                self.tts
+                and self.tts.enabled
+                and self._turn_source != AUDIO_SOURCE_VOICE_PE
+            ):
                 self.tts.speak("Sorry, I encountered an error processing your request.")
+            self._turn_token = None
             self._flash_face_error()
             return
 
@@ -1483,6 +1510,7 @@ class VoiceListener(threading.Thread):
         for roll in self._pre_rolls.values():
             roll.clear()
         self._remaining_samples.clear()
+        self._turn_token = None
 
         # Clear wake detection state
         self._wake_timestamp = None
@@ -1785,23 +1813,33 @@ class VoiceListener(threading.Thread):
         """
         return (AUDIO_SOURCE_LOCAL, chunk)
 
-    def pad_until_endpoint(self) -> int:
+    def pad_until_endpoint(
+        self, source: str = AUDIO_SOURCE_LOCAL, generation: Optional[int] = None
+    ) -> int:
         """Close an in-flight utterance with the configured silence tail.
 
         The satellite closes its microphone as soon as the last frame is sent,
         so no further frames would arrive to trip the VAD endpoint. The same
-        number of silent frames the loop would count is pushed with the source
-        of the in-flight utterance, which finalizes it in order.
+        number of silent frames the loop would count is pushed behind the last
+        delivered block, in order on the same queue, and carries the source of
+        that stream so the owner does not change under the utterance.
+
+        ``source`` and ``generation`` come from the producer's own EOS marker;
+        they are not guessed from the loop state, which can still be behind the
+        queue.
         """
         if np is None:
             return 0
+        if source == AUDIO_SOURCE_VOICE_PE and self._turn_token is None:
+            # Stamp the token of the closed stream for the milestone that
+            # follows on this same queue.
+            self._turn_token = self._sink_lease()
         frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
         endpoint_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
         frames = max(1, int(endpoint_ms / max(1, frame_ms)))
         samples = int(getattr(self, "_frame_samples", 0) or 0)
         if samples <= 0:
             return 0
-        source = self._audio_source or AUDIO_SOURCE_LOCAL
         for _ in range(frames):
             try:
                 self._audio_q.put_nowait(
@@ -2714,6 +2752,10 @@ class VoiceListener(threading.Thread):
                     if not self.is_speech_active:
                         if is_voice:
                             self.is_speech_active = True
+                            # The lease of this utterance is fixed here and
+                            # travels with vad_end, transcript and reply.
+                            if source == AUDIO_SOURCE_VOICE_PE:
+                                self._turn_token = self._sink_lease()
                             self._voice_pe_event("vad_start")
 
                             # Backdate start time by pre-roll duration — the

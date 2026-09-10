@@ -21,8 +21,8 @@ the Jarvis-side glue on top of the existing pipeline.
 | `provisioning.py` | Improv BLE Wi-Fi onboarding, runtime Noise PSK provisioning |
 | `capabilities.py` | Feature-flag plus entity decoding into one per-generation snapshot |
 | `entities.py` | `object_id` based entity index (`led_ring`, `button_press_event`, media, mute) |
-| `voice_transport.py` | Bounded microphone queue, PCM to float32, UDP fallback receiver |
-| `tts_stream.py` | WAV/PCM normalisation, 512-sample paced streaming, engine synthesis, LAN HTTP WAV server |
+| `voice_transport.py` | Bounded microphone queue with an in-queue `EndOfStream` marker, PCM to float32, UDP fallback receiver |
+| `tts_stream.py` | WAV/PCM normalisation, 512-sample paced and per-sentence streaming on a dedicated executor, LAN HTTP WAV server with per-key hit counts |
 | `media.py` | Media player and announcement control with volume-source tracking |
 | `events.py` | Pipeline events, LED phase table, button mapping and action runner |
 | `led.py` | Public `led_ring` colour, brightness, on/off |
@@ -180,6 +180,31 @@ remainder is the only continuation: it becomes the head of the next block's
 frame grid and is not also pushed into the pre-roll, so no sample is counted
 twice at the speech boundary.
 
+The microphone end is an in-queue `EndOfStream(source, generation)` marker on
+the same FIFO as the PCM blocks. The pump delivers every block of the run first
+and only then states the stream end, so the last audio is never dropped by a
+reset. `abort=True` still drops the queued audio, because that is a cancel.
+
+## Turn token, non-blocking synthesis, one close per run
+
+`ActiveAudioLease(source_id, device_id, session_generation)` is the token of one
+turn. It is taken when the utterance starts and travels with `vad_start`,
+`vad_end`, `transcript`, `reply` and `error`. Every stage checks the token at
+its entry, so a late reply of a cancelled question cannot land in the run the
+next button press opened. The check is at the STT and reply entries, not only
+inside the TTS transport.
+
+Synthesis runs on its own single worker (`_TTS_EXECUTOR`), never on the ESPHome
+event loop, which also carries keepalive, button, mute, media-state and
+reconnect callbacks. The raw-PCM branch synthesizes sentence by sentence, so
+the first chunk is on the wire while the rest of the answer is still made.
+
+`abort_run(generation, reason)` is the single close of a run: it cancels the TTS
+task, clears both audio queues, stops an active media player, sends `ERROR` and
+`RUN_END`, and releases session, lease and playback latch together. A long press
+and a reply-engine error both go through it. With a satellite turn the local PC
+speaker stays silent, also on the error path.
+
 A source-tagged transcript skips the wake-word check and the intent judge: the
 centre-button press already is the engagement signal and the transcript is the
 query. The turn keeps that tag, and it alone decides the TTS surface: a
@@ -202,11 +227,13 @@ One bridge, `LED_PHASE_JARVIS_STATE`, maps the phase onto the desktop avatar:
 `error` to `error`, and the mute switch to `muted`. The session state is
 consulted first: `SPEAKING` and `CONTINUE_PENDING` both map to `speaking`, so
 `RUN_END` — which closes the pipeline while the satellite is still playing —
-does not drop the avatar to `idle`. The device's own `AnnounceFinished`, or a
-media-player push going to `idle`, is what releases it. A disabled, reconnecting
-or auth-required connection shows `asleep`. Both surfaces therefore follow one
-stream; per-pixel effects stay inside the firmware, whose `voice_assistant_leds`
-light is `internal: true`.
+does not drop the avatar to `idle`. A **playback latch** holds that phase:
+`RUN_END` latches the generation that just closed, and only the
+`AnnounceFinished` of that generation or a media-player push going to `idle`
+releases it; the latch of an older generation never holds a newer run. A
+disabled, reconnecting or auth-required connection shows `asleep`. Both surfaces
+therefore follow one stream; per-pixel effects stay inside the firmware, whose
+`voice_assistant_leds` light is `internal: true`.
 
 ## Startup, pairing and commands
 
@@ -219,12 +246,16 @@ addresses, port, MAC and decoded feature flags. `VoicePEManager.start()` waits
 `status` report that state plus the decoded feature list.
 
 `ActiveAudioLease(source_id, device_id, session_generation)` names the one owner
-of the current run. `SinkFanout` resolves the lease and hands each milestone to
-that device alone; with no lease every device drops it and the local
-microphone answers. The same table gives every published event a built-in
-handler: `single_press` and `long_press` → `cancel_current_agent_run`,
-`double_press` → `toggle_overlay`, `triple_press` → `open_command_palette`, the
-easter-egg value → `toaster_easter_egg`, an unmapped value → `ignore`.
+of the current run. `SinkFanout` resolves it and hands each milestone to that
+device alone, together with the token of the turn; with no lease every device
+drops it and the local microphone answers. Wake words are confirmed by a
+read-back of the assistant configuration after the write:
+`wake_words_disabled` is the device's own answer, and a non-empty active list
+closes the generation instead of reporting a ready push-to-talk device. The same
+table gives every published event a built-in handler: `single_press` and
+`long_press` → `cancel_current_agent_run`, `double_press` → `toggle_overlay`,
+`triple_press` → `open_command_palette`, the easter-egg value →
+`toaster_easter_egg`, an unmapped value → `ignore`.
 
 Commands beyond `play`/`stop`: `pause`, `resume`, `volume <0..1>`, `mute on|off`
 and `media-state <device>` for the published media snapshot, matching the media
@@ -233,14 +264,19 @@ resolves to it. `pair` and `forget` both write the same key.
 
 The hardware smoke test is `scripts/_voice_pe_smoke.py`: it boots the real stack
 (`Database`, `Settings`, Piper TTS, `VoiceListener` with WebRTC VAD and Whisper,
-`VoicePEManager`, one `VoicePEDevice`) and walks one conversation — boot to
-`READY`, decoded flags, enumeration, wake-word mode, run opened by the centre
-button or by `start_conversation`, the lease, API audio chunks, one pump per
-generation, VAD+Whisper transcript, `TTS_END` URL on a still-open server, the
-device GET of that URL, `AnnounceFinished`, the second run, the media snapshot
-and the closing metrics. The TTS HTTP server stays open for the whole run, so
-the fetched URL is the one the device got. Exit code = number of failed
-checkpoints, 0 on the retail unit with one spoken sentence in the window.
+`VoicePEManager`, one `VoicePEDevice`) and walks one conversation over 16
+checkpoints: boot to `READY`, decoded flags, enumeration, wake-word read-back,
+run opened by the centre button or by `start_conversation`, the lease, API audio
+chunks, one pump per generation, VAD+Whisper transcript, `TTS_END` URL on a
+still-open server, the device GET of that exact WAV key, a successful
+`AnnounceFinished` of the same generation, the ring and avatar phase series
+(`thinking` → `replying` → `idle`), the second run, the media command round-trip
+and the closing metrics. Each checkpoint compares a baseline read just before it
+with the value after it, so an older counter cannot satisfy a later step, and the
+HTTP server counts per payload key with the misses separate. The TTS server stays
+open for the whole run, so the fetched URL is the one the device got. Exit code =
+number of failed checkpoints, 0 on the retail unit with one spoken sentence in
+the window.
 
 ## Firmware baseline
 

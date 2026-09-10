@@ -1731,7 +1731,8 @@ class TestSatelliteSessionInput:
             )
             listener._dispatch_query("weather")
 
-        sink.on_reply.assert_called_once_with("Sunny tomorrow.")
+        sink.on_reply.assert_called_once()
+        assert sink.on_reply.call_args[0][0] == "Sunny tomorrow."
         mock_tts.speak.assert_not_called()
         listener.state_manager.stop()
 

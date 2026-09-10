@@ -26,6 +26,7 @@ from .entities import EntityIndex, describe as describe_entities
 from .led import STOCK_LED_BRIGHTNESS, sync_defaults as sync_led_defaults
 from .media import VoicePEMediaController
 from .models import (
+    AUDIO_SOURCE_VOICE_PE,
     ANNOUNCEMENT_TIMEOUT_S,
     COMMAND_FLAG_USE_WAKE_WORD,
     LED_PHASE_JARVIS_STATE,
@@ -39,7 +40,14 @@ from .models import (
     make_client,
 )
 from .provisioning import is_provisionable, provision_noise_key
-from .tts_stream import TtsHttpServer, lan_ip_for, synthesize_pcm
+from .tts_stream import (
+    TtsHttpServer,
+    lan_ip_for,
+    split_sentences,
+    synthesize_pcm,
+    synthesize_pcm_async,
+    synthesize_sentences_async,
+)
 from .voice_transport import AudioIngress, UdpAudioServer
 
 try:  # pragma: no cover - trivial import shim
@@ -117,6 +125,11 @@ class VoicePEDevice:
         self._http: Optional[TtsHttpServer] = None
         self._lan_ip = ""
         self._tts_media_id = ""
+        #: Generation whose playback is still running after ``RUN_END``.
+        self._playback_latch: int = 0
+        #: Last ``AnnounceFinished`` report, bound to the generation it closed.
+        self.last_announce_success: Optional[bool] = None
+        self.last_finished_generation: int = 0
         self._conversation_id = ""
         self._conversation_started = 0.0
         self._active_channel = int(config.preferred_input_channel or 0)
@@ -332,9 +345,25 @@ class VoicePEDevice:
                 # the generation and the reconnect re-syncs it.
                 try:
                     await client.set_voice_assistant_configuration([])
-                    self.wake_words_disabled = True
                 except Exception as err:
                     await self._fail_connection(f"set_configuration: {err}")
+                    raise
+                # The flag is the device's own answer, not the write request:
+                # read the configuration back and judge that.
+                try:
+                    readback = await client.get_voice_assistant_configuration(
+                        VA_CONFIG_TIMEOUT_S
+                    )
+                    active = list(getattr(readback, "active_wake_words", None) or [])
+                    self.wake_words_disabled = not active
+                    self.metrics["wake_words_active"] = len(active)
+                    if active:
+                        await self._fail_connection(
+                            f"set_configuration: {len(active)} wake words still active"
+                        )
+                        raise RuntimeError("voice_pe: wake words still active")
+                except Exception as err:
+                    await self._fail_connection(f"get_configuration: {err}")
                     raise
 
         try:
@@ -403,8 +432,7 @@ class VoicePEDevice:
         if self._ingress is not None:
             self._ingress.reset()
         self._cancel_pump_task()
-        self.session = None
-        self.session_state = SessionState.IDLE
+        self._release_local_state()
         self.led_phase = "not_ready"
         if self.state is not DeviceState.ERROR:
             self.state = DeviceState.RECONNECTING
@@ -470,6 +498,8 @@ class VoicePEDevice:
         """Open one wake-free Jarvis session for a device-triggered run."""
         self.session_generation += 1
         self._bump_metric("sessions")
+        # A new run replaces the playback of the previous one.
+        self._playback_latch = 0
 
         if self._ingress is not None:
             self._ingress.reset()
@@ -521,29 +551,60 @@ class VoicePEDevice:
 
     async def handle_pipeline_stop(self, abort: bool) -> None:
         """Close or abort the current run without replaying old audio."""
+        if abort:
+            await self.abort_run(self.session_generation, "aborted")
+            return
+        # ``abort=False`` is the microphone end marker. The EOS marker is queued
+        # behind the PCM blocks of this run, so the pump delivers every block
+        # first and only then states the stream end on the shared queue - the
+        # buffered audio is what the VAD finalizes, nothing is dropped here.
+        self._mark_event("microphone_end")
+        if self._ingress is not None:
+            self._ingress.mark_end_of_stream(
+                AUDIO_SOURCE_VOICE_PE, self.session_generation
+            )
+
+    async def abort_run(self, generation: int, reason: str) -> None:
+        """One close for one run: tasks, both queues, events, lease, avatar."""
+        # Released first and idempotently, so a caller that already dropped the
+        # session sees the same state immediately.
+        self._release_local_state()
+        self._cancel_tts_task()
         if self._ingress is not None:
             self._ingress.reset()
-        self._cancel_tts_task()
-        if abort:
-            self.session_state = SessionState.IDLE
-            self.session = None
-            self.led_phase = "idle"
-            self._sync_face_state()
-            self._mark_event("aborted")
-            self._ensure_listener_queue_idle()
-            return
-        # ``abort=False`` is the microphone end marker: the buffered frames are
-        # the utterance, so they are kept and the VAD is closed by the silence
-        # tail instead of by the reset marker.
-        self._mark_event("microphone_end")
-        pad = getattr(self._listener, "pad_until_endpoint", None)
-        if callable(pad):
-            try:
-                pad()
-                return
-            except Exception:
-                pass
         self._ensure_listener_queue_idle()
+        try:
+            if self.media is not None and self.media.is_active():
+                self.media.stop()
+        except Exception:
+            pass
+        if self._client is not None:
+            await self._event(
+                "ERROR", {"code": reason or "aborted", "message": reason or ""}
+            )
+            await self._event("RUN_END", {})
+            self._bump_metric("run_end")
+        self._mark_event("aborted" if not reason else f"abort:{reason}")
+        self._sync_face_state()
+
+    def _release_local_state(self) -> None:
+        """Session, lease and playback latch, released as one unit."""
+        self.session = None
+        self.session_state = SessionState.IDLE
+        self._playback_latch = 0
+        self.led_phase = "idle"
+
+    def _token_is_current(self, token: Any) -> bool:
+        """Drop a milestone of an older run at the entry of every stage."""
+        if token is None:
+            return True
+        device_id = getattr(token, "device_id", None)
+        if device_id is not None and device_id != self.device_id:
+            return False
+        generation = getattr(token, "session_generation", None)
+        if generation is not None and int(generation) != int(self.session_generation):
+            return False
+        return True
 
     async def handle_audio(self, data: bytes, data2: Optional[bytes] = None) -> None:
         """Non-blocking microphone ingress into the bounded queue."""
@@ -558,13 +619,19 @@ class VoicePEDevice:
         """Announcement (and streamed TTS) completion reported by the device."""
         self._bump_metric("announcements_finished")
         success = bool(getattr(finished, "success", False))
+        # Bound to the generation that is open now, so a late callback of an
+        # older run cannot move a newer one.
+        self.last_announce_success = success
+        self.last_finished_generation = self.session_generation
         if self.session_state is SessionState.SPEAKING and success:
             if self.config.continued_conversation:
                 self.session_state = SessionState.CONTINUE_PENDING
             else:
                 self.session_state = SessionState.IDLE
+                self.session = None
         elif self.session_state is SessionState.CONTINUE_PENDING:
             self.session_state = SessionState.IDLE
+        self._playback_latch = 0
         self.led_phase = "idle"
         self._mark_event("announcement_finished")
         self._sync_face_state()
@@ -626,6 +693,10 @@ class VoicePEDevice:
             return "listening"
         if self.session_state in (SessionState.TRANSCRIBING, SessionState.THINKING):
             return "thinking"
+        # Playback latch: the run is closed but the satellite is still playing
+        # it, so the avatar holds ``speaking`` until the device reports the end.
+        if self._playback_latch and self._playback_latch == self.session_generation:
+            return "speaking"
         if self.media is not None and self.media.is_active():
             return "speaking"
         return LED_PHASE_JARVIS_STATE.get(self.led_phase, "idle")
@@ -644,22 +715,36 @@ class VoicePEDevice:
     # Sink callbacks, invoked from the voice listener thread
     # ------------------------------------------------------------------
 
-    def on_vad_start(self) -> None:
+    def on_vad_start(self, token: Any = None) -> None:
+        if not self._token_is_current(token):
+            return
         self._submit(self._event("STT_VAD_START", {}))
 
-    def on_vad_end(self) -> None:
+    def on_vad_end(self, token: Any = None) -> None:
+        if not self._token_is_current(token):
+            return
         if self.session_state is SessionState.RECORDING:
             self.session_state = SessionState.TRANSCRIBING
         self._submit(self._event("STT_VAD_END", {}))
 
-    def on_transcript(self, text: str) -> None:
-        self._submit(self._on_transcript_async(text or ""))
+    def on_transcript(self, text: str, token: Any = None) -> None:
+        if not self._token_is_current(token):
+            return
+        self._submit(self._on_transcript_async(text or "", token))
 
-    def on_reply(self, reply: str) -> None:
-        self._submit(self._on_reply_async(reply or ""))
+    def on_reply(self, reply: str, token: Any = None) -> None:
+        if not self._token_is_current(token):
+            return
+        self._submit(self._on_reply_async(reply or "", token))
 
-    def on_error(self, code: str, message: str) -> None:
-        self._submit(self._event("ERROR", {"code": code, "message": message}))
+    def on_error(self, code: str, message: str, token: Any = None) -> None:
+        if not self._token_is_current(token):
+            return
+        self._submit(self._on_error_async(code, message))
+
+    async def _on_error_async(self, code: str, message: str) -> None:
+        """One close for a failed turn: ERROR, RUN_END and the released lease."""
+        await self.abort_run(self.session_generation, str(code or "error"))
 
     # ------------------------------------------------------------------
     # Entity state handling
@@ -683,8 +768,10 @@ class VoicePEDevice:
             update = self.media.update_state(state)
             if update:
                 self._mark_event("media_state")
-                # ``playing``/``announcing`` keeps the avatar at ``speaking``,
-                # the move to ``idle`` is what releases it.
+                # ``playing``/``announcing`` keeps the avatar at ``speaking``;
+                # the move to ``idle`` is what releases the playback latch.
+                if not self.media.is_active():
+                    self._playback_latch = 0
                 self._sync_face_state()
                 debug_log(
                     _kvp({
@@ -732,19 +819,22 @@ class VoicePEDevice:
         self._bump_metric(f"button_{event_value}")
         result = self.actions.run(action)
         if action == "cancel_current_agent_run" and not result.startswith("error"):
-            if self._ingress is not None:
-                self._ingress.reset()
-            self.session_state = SessionState.IDLE
+            # Release inline so a caller sees the closed run right away, then
+            # let the one close emit the events and clear the audio queues.
+            self._release_local_state()
+            self._submit(self.abort_run(self.session_generation, "button_cancel"))
         debug_log(
             _kvp({
                 "component": "voice_pe",
                 "device_name": self.identity.get("node_name"),
                 "event_type": event_value or "unknown",
+                "action": action,
                 "error_code": None if result.startswith("ok") else result,
             }),
             "voice",
         )
         self._mark_event(f"button:{action}")
+        self._sync_face_state()
 
     # ------------------------------------------------------------------
     # Async internals
@@ -761,8 +851,10 @@ class VoicePEDevice:
         except Exception as err:
             self.last_error = f"{name}: {err}"
 
-    async def _on_transcript_async(self, text: str) -> None:
-        if self.session is None:
+    async def _on_transcript_async(self, text: str, token: Any = None) -> None:
+        # Generation is checked at the STT entry, not only in the TTS transport:
+        # a transcript of an older run must not open a new thinking phase.
+        if not self._token_is_current(token) or self.session is None:
             return
         started = time.monotonic()
         await self._event("STT_END", {"text": text})
@@ -771,11 +863,15 @@ class VoicePEDevice:
         await self._event("INTENT_START", {})
         self._record_latency("stt_end_ms", started)
 
-    async def _on_reply_async(self, reply: str) -> None:
+    async def _on_reply_async(self, reply: str, token: Any = None) -> None:
         # Only the device that owns the run speaks; a device without an open
-        # session leaves the reply to the local microphone.
+        # session leaves the reply to the local microphone. The token of the
+        # turn is what ties a late reply to the run it belongs to.
+        if not self._token_is_current(token):
+            return
         if self._client is None or self.session is None:
             return
+        generation = self.session_generation
         self.session_state = SessionState.SPEAKING
         continue_conversation = self._should_continue(reply)
         await self._event(
@@ -792,61 +888,76 @@ class VoicePEDevice:
         if self.capabilities.uses_api_audio:
             # ``API_AUDIO && SPEAKER``: raw PCM frames over the Native API.
             await self._event("TTS_STREAM_START", {})
-            self._tts_task = asyncio.ensure_future(self._stream_reply(reply))
+            self._tts_task = asyncio.ensure_future(self._stream_reply(reply, generation))
         else:
             # Everything else (e.g. flags ``61``: API_AUDIO, TIMERS, ANNOUNCE,
             # START_CONVERSATION, no SPEAKER): a WAV the satellite fetches.
-            self._tts_task = asyncio.ensure_future(self._deliver_tts_by_url(reply))
+            self._tts_task = asyncio.ensure_future(
+                self._deliver_tts_by_url(reply, generation)
+            )
         await asyncio.sleep(0)
         self._record_latency("tts_first_chunk_ms", started)
 
-    async def _stream_reply(self, reply: str) -> None:
-        """Paced 512-sample PCM stream: 384 ms of stock ring buffer by design."""
-        generation = self.session_generation
-        try:
-            pcm = synthesize_pcm(self._tts, reply) or b""
-        except Exception as err:
-            self.last_error = f"tts: {err}"
-            await self._close_stream(generation, reply)
-            return
+    async def _stream_reply(self, reply: str, generation: Optional[int] = None) -> None:
+        """Paced 512-sample PCM stream: 384 ms of stock ring buffer by design.
 
-        if not pcm:
-            await self._close_stream(generation, reply)
-            return
-
-        self._tts_media_id = ""
+        Synthesis runs per sentence on the dedicated executor, so the first
+        chunk is on the wire while the rest of the reply is still being made.
+        """
+        generation = (
+            self.session_generation if generation is None else int(generation)
+        )
         loop = asyncio.get_running_loop()
         seconds_in_chunk = 512 / 16000
         start_time = loop.time()
         audio_duration_sent = 0.0
-        for payload in _iter_payloads(pcm):
-            if self.session_generation != generation or self._client is None:
-                return
-            self._client.send_voice_assistant_audio(payload)
-            audio_duration_sent += seconds_in_chunk
-            wait_s = (audio_duration_sent - 0.384) - (loop.time() - start_time)
-            if wait_s > 0:
-                await asyncio.sleep(wait_s)
-
-        if self.session_generation != generation or self._client is None:
-            return
-        await self._event("TTS_STREAM_END", {})
-        await self._end_run(reply)
-
-    async def _close_stream(self, generation: int, reply: str = "") -> None:
-        if self.session_generation != generation or self._client is None:
-            return
-        await self._event("TTS_STREAM_END", {})
-        await self._end_run(reply)
-
-    async def _deliver_tts_by_url(self, reply: str) -> None:
-        """Non-speaker egress: WAV served over LAN HTTP, referenced by ``TTS_END``."""
-        generation = self.session_generation
         try:
-            pcm = synthesize_pcm(self._tts, reply) or b""
+            fragments = await synthesize_sentences_async(self._tts, reply)
         except Exception as err:
             self.last_error = f"tts: {err}"
-            await self._end_run("")
+            await self._close_stream(generation, reply)
+            return
+
+        if not fragments:
+            await self._close_stream(generation, reply)
+            return
+
+        for pcm in fragments:
+            for payload in _iter_payloads(pcm):
+                if self.session_generation != generation or self._client is None:
+                    return
+                self._client.send_voice_assistant_audio(payload)
+                audio_duration_sent += seconds_in_chunk
+                wait_s = (audio_duration_sent - 0.384) - (loop.time() - start_time)
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+
+        if self.session_generation != generation or self._client is None:
+            return
+        await self._event("TTS_STREAM_END", {})
+        await self._end_run(reply, generation)
+
+    async def _close_stream(
+        self, generation: int, reply: str = "", *, stream: bool = True
+    ) -> None:
+        if self.session_generation != generation or self._client is None:
+            return
+        if stream:
+            await self._event("TTS_STREAM_END", {})
+        await self._end_run(reply, generation)
+
+    async def _deliver_tts_by_url(
+        self, reply: str, generation: Optional[int] = None
+    ) -> None:
+        """Non-speaker egress: WAV served over LAN HTTP, referenced by ``TTS_END``."""
+        generation = (
+            self.session_generation if generation is None else int(generation)
+        )
+        try:
+            pcm = await synthesize_pcm_async(self._tts, reply) or b""
+        except Exception as err:
+            self.last_error = f"tts: {err}"
+            await self._end_run("", generation, stream=False)
             return
 
         url = ""
@@ -860,7 +971,10 @@ class VoicePEDevice:
         if url:
             await self._event("TTS_END", {"url": url})
             self._bump_metric("tts_url_deliveries")
-        await self._end_run(reply)
+            # The satellite fetches and plays the WAV itself; the playback is
+            # what keeps the avatar at ``speaking`` until it is finished.
+            self._playback_latch = generation
+        await self._end_run(reply, generation, stream=False)
 
     async def _serve_wav(self, pcm: bytes) -> str:
         """Publish one PCM payload on the LAN HTTP server, return its URL."""
@@ -877,7 +991,7 @@ class VoicePEDevice:
     async def tts_media_url(self, text: str) -> str:
         """Public synthesis helper: LAN URL of ``text``, ``""`` when unavailable."""
         try:
-            pcm = synthesize_pcm(self._tts, text) or b""
+            pcm = await synthesize_pcm_async(self._tts, text) or b""
         except Exception as err:
             self.last_error = f"tts: {err}"
             return ""
@@ -885,10 +999,15 @@ class VoicePEDevice:
             return ""
         return await self._serve_wav(pcm)
 
-    async def _end_run(self, reply: str) -> None:
+    async def _end_run(
+        self, reply: str, generation: Optional[int] = None, *, stream: bool = True
+    ) -> None:
         """Close the run; the firmware carries an open follow-up itself."""
         if self._client is None:
             return
+        generation = (
+            self.session_generation if generation is None else int(generation)
+        )
         # ``RUN_END`` is always the last event of a run, so the ring leaves
         # ``replying`` in both cases. With ``continue_conversation`` set in
         # ``INTENT_END`` the stock firmware reopens the microphone itself and
@@ -896,16 +1015,19 @@ class VoicePEDevice:
         # one would only restart the already playing reply.
         await self._event("RUN_END", {})
         self._bump_metric("run_end")
+        # The playback latch is what keeps the avatar steady between ``RUN_END``
+        # and the device's own report: the media push to ``idle`` or the
+        # ``AnnounceFinished`` of this generation releases it.
+        if reply:
+            self._playback_latch = generation
         if self._should_continue(reply):
             self.session_state = SessionState.CONTINUE_PENDING
             self._mark_event("continue_pending")
             self._sync_face_state()
             return
-        self.session_state = SessionState.IDLE
         self.session = None
+        self.session_state = SessionState.IDLE
         self._mark_event("run_end")
-        # The media player can still be ``playing`` here; the sync maps that to
-        # ``speaking`` and the next media or announce event closes it.
         self._sync_face_state()
 
     # ------------------------------------------------------------------

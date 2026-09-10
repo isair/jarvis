@@ -78,41 +78,58 @@ class SinkFanout:
         """True while exactly one attached satellite owns the open run."""
         return self.lease() is not None
 
-    def _owner(self) -> Optional[VoicePEDevice]:
+    def _owner(self, token: Optional[ActiveAudioLease] = None) -> Optional[VoicePEDevice]:
+        """Device of the token if it still holds its run, else current owner."""
+        if token is not None:
+            for device in self._devices:
+                if device.device_id == token.device_id and device.holds_session():
+                    return device
+            return None
         for device in self._devices:
             if device.holds_session():
                 return device
         return None
 
     # -- milestones -------------------------------------------------------
+    #
+    # Every milestone carries the token of the turn it belongs to, so a callback
+    # of an older generation is dropped at the entry of the stage instead of
+    # landing in a newer run.
 
-    def on_vad_start(self) -> None:
-        device = self._owner()
+    def on_vad_start(self, token: Optional[ActiveAudioLease] = None) -> None:
+        token = token or self.lease()
+        device = self._owner(token)
         if device is not None:
-            device.on_vad_start()
+            device.on_vad_start(token)
 
-    def on_vad_end(self) -> None:
-        device = self._owner()
+    def on_vad_end(self, token: Optional[ActiveAudioLease] = None) -> None:
+        token = token or self.lease()
+        device = self._owner(token)
         if device is not None:
-            device.on_vad_end()
+            device.on_vad_end(token)
 
-    def on_transcript(self, text: str) -> None:
-        device = self._owner()
+    def on_transcript(self, text: str, token: Optional[ActiveAudioLease] = None) -> None:
+        token = token or self.lease()
+        device = self._owner(token)
         if device is not None:
-            device.on_transcript(text)
+            device.on_transcript(text, token)
 
-    def on_reply(self, reply: str) -> None:
-        device = self._owner()
+    def on_reply(self, reply: str, token: Optional[ActiveAudioLease] = None) -> None:
+        token = token or self.lease()
+        device = self._owner(token)
         if device is not None:
-            device.on_reply(reply)
+            device.on_reply(reply, token)
 
-    def on_error(self, code: str, message: str) -> None:
-        device = self._owner()
+    def on_error(
+        self, code: str, message: str, token: Optional[ActiveAudioLease] = None
+    ) -> None:
+        token = token or self.lease()
+        device = self._owner(token)
         target = device if device is not None else (
             self._devices[0] if len(self._devices) == 1 else None
         )
         if target is not None:
-            target.on_error(code, message)
+            target.on_error(code, message, token)
 
 
 class VoicePEManager:

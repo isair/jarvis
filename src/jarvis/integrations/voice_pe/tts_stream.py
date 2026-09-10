@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Optional
 
 from .models import (
@@ -274,6 +275,44 @@ def synthesize_pcm(engine, text: str) -> Optional[bytes]:
 # Paced streaming
 # ---------------------------------------------------------------------------
 
+#: One worker for the whole stack: synthesis is CPU-bound, ordered and must not
+#: occupy the ESPHome event loop, which also carries keepalive, button events,
+#: mute and media-state callbacks.
+_TTS_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice_pe_tts")
+
+
+async def synthesize_pcm_async(engine, text: str) -> Optional[bytes]:
+    """``synthesize_pcm`` off the event loop, on the dedicated executor."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_TTS_EXECUTOR, synthesize_pcm, engine, text)
+
+
+def split_sentences(text: str) -> list:
+    """Sentence-sized pieces of one reply, for lower first-chunk latency."""
+    if not text:
+        return []
+    parts: list = []
+    current = ""
+    for char in text:
+        current += char
+        if char in ".?!":
+            parts.append(current.strip())
+            current = ""
+    if current.strip():
+        parts.append(current.strip())
+    return [part for part in parts if part]
+
+
+async def synthesize_sentences_async(engine, text: str) -> list:
+    """Per-sentence PCM fragments in order; empty ones are dropped."""
+    fragments: list = []
+    for sentence in split_sentences(text):
+        pcm = await synthesize_pcm_async(engine, sentence)
+        if pcm:
+            fragments.append(pcm)
+    return fragments
+
+
 async def stream_pcm_paced(
     client, pcm: bytes, *, is_active=None
 ) -> int:
@@ -333,6 +372,9 @@ class TtsHttpServer:
         self.port = 0
         #: Number of answered GETs, for ``(server, device)`` health checks.
         self.requests = 0
+        #: Answered GETs per payload key, and the count of missing keys.
+        self.hits: "dict[str, int]" = {}
+        self.missing = 0
 
     async def start(self) -> int:
         """Bind an ephemeral IPv4 port and return it.
@@ -367,6 +409,10 @@ class TtsHttpServer:
             self._payloads.pop(next(iter(self._payloads)))
         return f"/{key}"
 
+    def hit_count(self, key: str) -> int:
+        """Number of answered GETs for exactly this payload key."""
+        return int(self.hits.get(key, 0))
+
     async def _handle(self, reader, writer) -> None:
         try:
             request = await reader.readuntil(b"\r\n\r\n")
@@ -377,7 +423,13 @@ class TtsHttpServer:
         if len(parts) >= 2:
             path = parts[1].decode("latin-1", "replace").lstrip("/")
         body = self._payloads.get(path, b"")
+        # Per-key accounting: an unrelated or missing path must not be able to
+        # satisfy the check for a specific media key.
         self.requests += 1
+        if body:
+            self.hits[path] = int(self.hits.get(path, 0)) + 1
+        else:
+            self.missing += 1
         head = (
             f"HTTP/1.1 {200 if body else 404} OK\r\n"
             f"Content-Type: audio/wav\r\n"
