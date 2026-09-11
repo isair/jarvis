@@ -474,7 +474,14 @@ class Settings:
     whisper_min_confidence: float
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
+    #: Continuous waveform kept after the last voiced frame. The endpoint wait is
+    #: counted silence, so only this slice stays in the clip; the rest is dropped.
+    whisper_post_roll_ms: int
     whisper_min_word_length: int
+    #: Satellite-only ASR preprocessor: one linear gain toward -25 dBFS RMS on a
+    #: copy of the decoder input, capped at +20 dB, then a peak limiter at 0.95.
+    #: Off by default; a campaign config turns it on.
+    satellite_stt_auto_gain: bool
     # Language selector for the ASR stage. A three-letter code is handed to
     # Whisper as the forced language; "auto" keeps auto-detection.
     whisper_language: str
@@ -631,6 +638,9 @@ class Settings:
     # ``button_press_event`` value -> Jarvis action name (single click stays
     # on the device and is not mapped).
     voice_pe_button_actions: Dict[str, Any]
+    #: Upper bound for one hardware round trip in the smoke and diagnostic runs:
+    #: the wait is event-driven up to this point, not a fixed sleep.
+    voice_pe_hardware_timeout_s: float
 
     # Centralized identity / recording profile (Talkie Toaster)
     assistant_display_name: str = BRANDING["display_name"]
@@ -1048,7 +1058,12 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
+        # 10 grid frames of 20 ms: enough trailing context for the final plosive
+        # without carrying the whole endpoint wait into the clip.
+        "whisper_post_roll_ms": 200,
         "whisper_min_word_length": 1,
+        # The preprocessor is opt-in: the campaign config sets it to true.
+        "satellite_stt_auto_gain": False,
         # Selector values: "auto" plus the four supported ISO-639-1 codes.
         "whisper_language": "auto",
         "speech_spellcheck_enabled": True,
@@ -1185,6 +1200,8 @@ def get_default_config() -> Dict[str, Any]:
             "long_press": "cancel_current_agent_run",
             "easter_egg_press": "toaster_easter_egg",
         },
+        # One hardware round trip may take a full CPU decode plus a TTS fetch.
+        "voice_pe_hardware_timeout_s": 180.0,
     }
 
 
@@ -1468,6 +1485,10 @@ def load_settings() -> Settings:
     # the settings UI writes.
     from .integrations.voice_pe.config import fold_button_actions
     voice_pe_button_actions = fold_button_actions(merged.get("voice_pe_button_actions"))
+    voice_pe_hardware_timeout_s = min(
+        900.0,
+        max(5.0, _voice_pe_float(merged.get("voice_pe_hardware_timeout_s"), 180.0)),
+    )
 
     # Centralized identity / recording profile
     assistant_display_name = str(
@@ -1515,7 +1536,9 @@ def load_settings() -> Settings:
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.3))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.15))
+    whisper_post_roll_ms = int(merged.get("whisper_post_roll_ms", 200))
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 1))
+    satellite_stt_auto_gain = bool(merged.get("satellite_stt_auto_gain", False))
     # Language selector. A supported code is handed to Whisper as the forced
     # language; every other value (including "auto") keeps auto-detection.
     whisper_language = str(merged.get("whisper_language", "auto") or "auto").strip().lower()
@@ -1612,7 +1635,9 @@ def load_settings() -> Settings:
         whisper_min_confidence=whisper_min_confidence,
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
+        whisper_post_roll_ms=whisper_post_roll_ms,
         whisper_min_word_length=whisper_min_word_length,
+        satellite_stt_auto_gain=satellite_stt_auto_gain,
         whisper_language=whisper_language,
         speech_spellcheck_enabled=speech_spellcheck_enabled,
         speech_spellcheck_languages=speech_spellcheck_languages,
@@ -1699,6 +1724,7 @@ def load_settings() -> Settings:
         voice_pe_led_rgb=voice_pe_led_rgb,
         voice_pe_devices=voice_pe_devices,
         voice_pe_button_actions=voice_pe_button_actions,
+        voice_pe_hardware_timeout_s=voice_pe_hardware_timeout_s,
 
         # Centralized identity / recording profile (Talkie Toaster)
         assistant_display_name=assistant_display_name,

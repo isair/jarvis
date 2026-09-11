@@ -16,6 +16,7 @@ import asyncio
 import socket
 import time
 import uuid
+from collections import deque as _deque
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -31,10 +32,12 @@ from .models import (
     COMMAND_FLAG_USE_WAKE_WORD,
     LED_PHASE_JARVIS_STATE,
     LED_PHASES,
+    LOCAL_STREAM,
     VA_CONFIG_TIMEOUT_S,
     DeviceState,
     PendingPlayback,
     SessionState,
+    StreamId,
     TurnContext,
     VoiceInputSession,
     VoicePEConfig,
@@ -130,8 +133,9 @@ class VoicePEDevice:
         self._playback_latch: int = 0
         #: Generation whose active media state the device already reported.
         self._playback_seen: int = 0
-        #: Delivery the next ``AnnounceFinished`` closes, first-in-first-out.
-        self._pending_playback: Optional[PendingPlayback] = None
+        #: Delivered replies awaiting the device's own end-of-playback report,
+        #: in first-in-first-out order like the finished callbacks arrive.
+        self._pending_playback: "OrderedDeque" = _deque()
         #: Sent Voice Assistant events as ``(session_generation, name)``.
         self.event_ledger: list = []
         #: Last light-entity push of the public ``led_ring``, for the ring check.
@@ -442,6 +446,8 @@ class VoicePEDevice:
             self._ingress.reset()
         self._cancel_pump_task()
         self._release_local_state()
+        # The connection ended, so any query of this device's stream is gone too.
+        self._clear_listener_audio(None, cancel_pending=True)
         self.led_phase = "not_ready"
         if self.state is not DeviceState.ERROR:
             self.state = DeviceState.RECONNECTING
@@ -512,6 +518,7 @@ class VoicePEDevice:
 
         if self._ingress is not None:
             self._ingress.reset()
+            self._ingress.set_stream(self._stream())
         self._cancel_tts_task()
 
         self._active_channel = int(self.config.preferred_input_channel or 0)
@@ -534,7 +541,14 @@ class VoicePEDevice:
         self._mark_event("run_start")
         await self._event("RUN_START", {})
         self.session_state = SessionState.LISTENING
+        # The STT stage of this run starts here; its single terminal is either
+        # ``STT_END`` (text) or the ``ERROR`` of a skipped/filtered stage.
+        self._bump_metric("stt_start")
         await self._event("STT_START", {})
+        # A single click is resolved on the device and reaches Jarvis as this
+        # pipeline start, so it is traced too: every press has a structured
+        # ``accepted`` row, none disappears without a reason.
+        self._trace_press("pipeline_start", True, "")
 
         # The generation's pump is usually already running from ``_on_connect``;
         # a restarted generation gets exactly one new one here.
@@ -569,9 +583,8 @@ class VoicePEDevice:
         # buffered audio is what the VAD finalizes, nothing is dropped here.
         self._mark_event("microphone_end")
         if self._ingress is not None:
-            self._ingress.mark_end_of_stream(
-                AUDIO_SOURCE_VOICE_PE, self.session_generation
-            )
+            stream = getattr(self._ingress, "stream", None) or self._stream()
+            self._ingress.mark_end_of_stream(stream, AUDIO_SOURCE_VOICE_PE)
 
     async def abort_run(
         self, generation: int, reason: str, context: Optional[TurnContext] = None
@@ -582,7 +595,12 @@ class VoicePEDevice:
         cancelled run cannot touch the one that replaced it.
         """
         if context is not None:
-            if not is_current_turn(context, self.device_id, self.session_generation):
+            if not is_current_turn(
+                context,
+                self.device_id,
+                self.connection_generation,
+                self.session_generation,
+            ):
                 return
         elif int(generation) != int(self.session_generation):
             return
@@ -607,31 +625,70 @@ class VoicePEDevice:
         self._mark_event("aborted" if not reason else f"abort:{reason}")
         self._sync_face_state()
 
-    def _clear_listener_audio(self) -> None:
-        """Drain and reset the shared listener queue, not just append a marker."""
+    def _clear_listener_audio(
+        self, context: Optional[TurnContext] = None, cancel_pending: bool = True
+    ) -> None:
+        """Drain and reset the shared listener queue and this turn's query."""
         clear = getattr(self._listener, "_clear_audio_buffers", None)
         if callable(clear):
             try:
                 clear()
-                return
             except Exception:
                 pass
-        self._ensure_listener_queue_idle()
+        else:
+            self._ensure_listener_queue_idle()
+        if not cancel_pending:
+            return
+        state_manager = getattr(self._listener, "state_manager", None)
+        cancel = getattr(state_manager, "cancel_pending", None)
+        if callable(cancel):
+            try:
+                cancel(context)
+            except Exception:
+                pass
 
     def _release_local_state(self) -> None:
-        """Session, lease and playback latch, released as one unit."""
+        """Session, lease, pending deliveries and latch, released as one unit."""
         self.session = None
         self.session_state = SessionState.IDLE
         self._playback_latch = 0
         self._playback_seen = 0
-        self._pending_playback = None
+        self._pending_playback.clear()
         self.led_phase = "idle"
 
+    def _stream(self) -> StreamId:
+        """Full identity of this device's microphone stream right now."""
+        return StreamId(
+            self.device_id,
+            int(self.connection_generation),
+            int(self.session_generation),
+        )
+
+    def turn_context(self) -> TurnContext:
+        """The immutable identity of the open turn, for the listener to carry."""
+        return TurnContext(
+            source=AUDIO_SOURCE_VOICE_PE,
+            device_id=self.device_id,
+            connection_generation=int(self.connection_generation),
+            session_generation=int(self.session_generation),
+        )
+
     def _token_is_current(self, token: Any) -> bool:
-        """Drop a milestone of an older run at the entry of every stage."""
+        """Drop a milestone of an older run at the entry of every stage.
+
+        Every field is compared; a missing identity is a stale one, so only the
+        explicitly contextless local case is answered by this device itself.
+        """
         if token is None:
-            return True
-        return is_current_turn(token, self.device_id, self.session_generation)
+            # Local-microphone turn: this device only answers for its own run.
+            return self.session is not None
+        return is_current_turn(
+            token,
+            self.device_id,
+            self.connection_generation,
+            self.session_generation,
+            getattr(token, "source", None),
+        )
 
     async def handle_audio(self, data: bytes, data2: Optional[bytes] = None) -> None:
         """Non-blocking microphone ingress into the bounded queue."""
@@ -639,22 +696,24 @@ class VoicePEDevice:
         if self.session_state is SessionState.LISTENING:
             self.session_state = SessionState.RECORDING
         if self._ingress is not None:
-            self._ingress.put(data, data2, self.session_generation)
+            self._ingress.put(data, data2, self._stream())
         self._record_latency("audio_callback_ms", started)
 
     async def handle_announcement_finished(self, finished: Any) -> None:
         """Announcement (and streamed TTS) completion reported by the device."""
-        if self._pending_playback is None:
-            # A finished callback with no pending playback: it belongs to the
-            # pre-announce of the current run, not to a reply.
-            self.last_announce_success = bool(getattr(finished, "success", False))
-            self.last_finished_generation = self.session_generation
+        success = bool(getattr(finished, "success", False))
+        if not self._pending_playback:
+            # A finished callback with no pending entry belongs to a pre-announce
+            # or to a run that is already closed: only the flag moves, the
+            # generation of the last delivery stays as it was.
+            self.last_announce_success = success
             self._mark_event("announcement_finished")
             return
-        pending = self._pending_playback
-        self._pending_playback = None
+        # Announcements complete in order on the device: the oldest delivery is
+        # the one this callback closes.
+        pending = self._pending_playback.popleft()
         self._bump_metric("announcements_finished")
-        success = bool(getattr(finished, "success", False))
+        self._stamp("announcement_finished")
         self.last_announce_success = success
         # The generation of the delivered reply, not of this instant.
         self.last_finished_generation = int(pending.session_generation)
@@ -784,6 +843,11 @@ class VoicePEDevice:
         self, code: str, message: str, token: Any = None
     ) -> None:
         """One close for a failed turn: ERROR, RUN_END and the released lease."""
+        # The close below is this run's single terminal: the STT stage answered
+        # through the error code, so its counters move here and not later.
+        if self.session is not None:
+            self._bump_metric("stt_end")
+            self._bump_metric(f"stt_end_{code}")
         await self.abort_run(self.session_generation, str(code or "error"), token)
 
     # ------------------------------------------------------------------
@@ -850,24 +914,28 @@ class VoicePEDevice:
         if key and key == self.entities.mute_key():
             self.media.muted = bool(getattr(state, "state", False))
             if self.media.muted:
-                self._handle_muted()
+                self._handle_muted(self.turn_context())
             return
 
         info = self.entities.info_for(key) if key else None
         if info is not None and str(getattr(info, "name", "")).lower().startswith("mute"):
             self.media.muted = bool(getattr(state, "state", False))
             if self.media.muted:
-                self._handle_muted()
+                self._handle_muted(self.turn_context())
 
 
-    def _handle_muted(self) -> None:
+    def _handle_muted(self, context: Optional[TurnContext] = None) -> None:
         """Hardware and soft mute win over every other source."""
-        # The same guarded close as every other end of a turn, then the mute
-        # phase on the avatar.
-        self._submit(self._muted_close())
+        # The identity is captured here, synchronously, so the close that runs
+        # later is guarded by the turn that was open at the mute.
+        self._submit(self._muted_close(context or self.turn_context()))
 
-    async def _muted_close(self) -> None:
-        await self.abort_run(self.session_generation, "muted")
+    async def _muted_close(self, context: Optional[TurnContext] = None) -> None:
+        await self.abort_run(
+            getattr(context, "session_generation", self.session_generation),
+            "muted",
+            context,
+        )
         self._mark_event("muted")
         self._sync_face_state()
 
@@ -875,7 +943,23 @@ class VoicePEDevice:
         action = pe_events.resolve_action(event_value, self.config.button_actions)
         self._bump_metric(f"button_{event_value}")
         result = self.actions.run(action)
-        if action == "cancel_current_agent_run" and not result.startswith("error"):
+        # Every press leaves a structured trace: accepted, or a named reason.
+        # ``ok:`` and ``unhandled:`` both mean the press was consumed without an
+        # error; only ``error:`` is a real rejection of the handler.
+        accepted = not result.startswith("error")
+        rejected_reason = ""
+        if not accepted:
+            rejected_reason = f"handler_error:{result.split(':', 2)[-1]}"
+        elif result.startswith("unhandled"):
+            rejected_reason = (
+                "unmapped_event" if action == "ignore" else "no_handler_registered"
+            )
+        if self._client is None:
+            rejected_reason = rejected_reason or "no_subscription"
+        if (
+            action == "cancel_current_agent_run"
+            and accepted
+        ):
             # One guarded close: the identity of the run is captured here, so a
             # later generation is left alone by this late callback.
             context = TurnContext(
@@ -887,13 +971,32 @@ class VoicePEDevice:
             self._submit(
                 self.abort_run(context.session_generation, "button_cancel", context)
             )
+            rejected_reason = rejected_reason or "accepted_with_close"
+        trace = {
+            "event": event_value or "unknown",
+            "action": action,
+            "result": result,
+            "accepted": bool(accepted),
+            "rejected_reason": rejected_reason,
+        }
+        self._trace_press(
+            trace["event"],
+            bool(accepted),
+            rejected_reason,
+            extra={"action": action, "result": result},
+        )
+        self.metrics["button_last"] = {**self.metrics.get("button_last", {}), **trace}
         debug_log(
             _kvp({
                 "component": "voice_pe",
                 "device_name": self.identity.get("node_name"),
                 "event_type": event_value or "unknown",
                 "action": action,
-                "error_code": None if result.startswith("ok") else result,
+                "accepted": trace["accepted"],
+                "rejected_reason": trace["rejected_reason"] or None,
+                "connection_generation": int(self.connection_generation),
+                "session_generation": int(self.session_generation),
+                "error_code": None if accepted else result,
             }),
             "voice",
         )
@@ -912,6 +1015,7 @@ class VoicePEDevice:
         # can name the generation an event belongs to instead of the moment.
         self.event_ledger.append((int(self.session_generation), name))
         del self.event_ledger[:-16]
+        self._stamp(name)
         self._mark_event(name)
         self._sync_face_state()
         try:
@@ -919,14 +1023,91 @@ class VoicePEDevice:
         except Exception as err:
             self.last_error = f"{name}: {err}"
 
+    def _trace_press(
+        self,
+        event: str,
+        accepted: bool,
+        rejected_reason: str = "",
+        extra: Optional[dict] = None,
+    ):
+        """Append one structured press record: accepted, or a named reason."""
+        row = {
+            "event": str(event),
+            "accepted": bool(accepted),
+            "rejected_reason": str(rejected_reason or ""),
+            "device_id": self.device_id,
+            "connection_generation": int(self.connection_generation),
+            "session_generation": int(self.session_generation),
+            "state": self.session_state.value,
+            "at": time.time(),
+        }
+        if extra:
+            row.update(extra)
+        previous = self.metrics.get("button_last")
+        self.metrics["button_last"] = row if previous is None else {
+            **row,
+            **{k: v for k, v in (extra or {}).items()},
+        }
+        self.metrics["button_trace"] = (
+            [row] + list(self.metrics.get("button_trace") or [])
+        )[:8]
+        return row
+
+    def _stamp(self, name: str) -> None:
+        """Monotonic time of one lifecycle event, kept per generation.
+
+        The timeline is what lets a latency be named instead of guessed: LLM
+        time is ``INTENT_END - INTENT_START``, synthesis is
+        ``TTS_END - TTS_START``, playback is ``announcement_finished - TTS_END``.
+        """
+        timeline = self.metrics.get("timeline")
+        if not isinstance(timeline, list):
+            timeline = []
+            self.metrics["timeline"] = timeline
+        timeline.append(
+            {
+                "generation": int(self.session_generation),
+                "event": str(name),
+                "at": round(time.monotonic(), 4),
+            }
+        )
+        del timeline[:-24]
+
+    def timeline_for(self, generation: int) -> list:
+        """The stamped lifecycle events of one generation, in arrival order."""
+        timeline = self.metrics.get("timeline") or []
+        return [row for row in timeline if int(row.get("generation", -1)) == int(generation)]
+
+    def latency_summary(self, generation: int) -> dict:
+        """Derived latencies of one generation, from the stamped timeline."""
+        moments = {
+            str(row.get("event")): float(row.get("at") or 0.0)
+            for row in self.timeline_for(generation)
+        }
+        summary = {"generation": int(generation)}
+        for base, first, last in (
+            ("stt_ms", "STT_START", "STT_END"),
+            ("llm_ms", "INTENT_START", "INTENT_END"),
+            ("tts_ms", "TTS_START", "TTS_END"),
+            ("run_ms", "RUN_START", "RUN_END"),
+            ("playback_ms", "TTS_END", "announcement_finished"),
+        ):
+            if first in moments and last in moments:
+                summary[base] = round((moments[last] - moments[first]) * 1000.0, 2)
+        return summary
+
     async def _on_transcript_async(self, text: str, token: Any = None) -> None:
         # Generation is checked at the STT entry, not only in the TTS transport:
         # a transcript of an older run must not open a new thinking phase.
         if not self._token_is_current(token) or self.session is None:
             return
         started = time.monotonic()
-        await self._event("STT_END", {"text": text})
+        # This turn's STT closes with a text: the only status the transcript
+        # entry can carry is ``success``, one-to-one with the ``stt_start`` of
+        # this run. A skipped or filtered stage answers through ``on_error``.
+        await self._event("STT_END", {"text": text, "status": "success"})
         self._bump_metric("stt_end")
+        self._bump_metric("stt_end_success")
         self.session_state = SessionState.THINKING
         await self._event("INTENT_START", {})
         self._record_latency("stt_end_ms", started)
@@ -939,6 +1120,19 @@ class VoicePEDevice:
             return
         if self._client is None or self.session is None:
             return
+        # Which stage produced this text: the LLM or the env-gated diagnostic
+        # reply. Both travel with the same events, so the ledger alone cannot
+        # tell them apart and the source is named explicitly.
+        reply_source = "llm"
+        for source in (
+            getattr(self._listener, "metrics", None),
+            getattr(self._listener, "state_manager", None),
+        ):
+            values = source if isinstance(source, dict) else None
+            if values and values.get("last_reply_source"):
+                reply_source = str(values["last_reply_source"])
+                break
+        self.metrics["reply_source"] = reply_source
         generation = self.session_generation
         self.session_state = SessionState.SPEAKING
         continue_conversation = self._should_continue(reply)
@@ -984,12 +1178,12 @@ class VoicePEDevice:
         if not sentences:
             await self._close_stream(generation, reply)
             return
-        self._pending_playback = PendingPlayback(
+        self._pending_playback.append(PendingPlayback(
             generation=int(self.connection_generation),
             session_generation=generation,
             media_id="",
             egress="pcm",
-        )
+        ))
 
         for sentence in sentences:
             try:
@@ -1054,12 +1248,12 @@ class VoicePEDevice:
             self._bump_metric("tts_url_deliveries")
             # The satellite fetches and plays the WAV itself; this is the entry
             # the next ``AnnounceFinished`` of the same generation closes.
-            self._pending_playback = PendingPlayback(
+            self._pending_playback.append(PendingPlayback(
                 generation=int(self.connection_generation),
                 session_generation=generation,
                 media_id=self._tts_media_id,
                 egress="url",
-            )
+            ))
         await self._end_run(reply, generation, stream=False)
 
     async def _serve_wav(self, pcm: bytes) -> str:
@@ -1072,7 +1266,26 @@ class VoicePEDevice:
         key = f"{self.connection_generation}-{self.session_generation}"
         path = self._http.put(key, pcm)
         self._tts_media_id = key
+        # The payload itself is counted per generation, so a checkpoint can tell
+        # "a URL was made" from "a non-empty WAV was published".
+        self.metrics[f"wav_bytes_{key}"] = int(self._http.payload_bytes(key))
         return f"http://{self._lan_ip or self._host}:{self._http.port}{path}"
+
+    def media_delivery(self) -> dict:
+        """Delivery trail of the current media key, straight from the server."""
+        key = str(self._tts_media_id or "")
+        info = {"key": key, "stored_bytes": 0, "hits": 0, "status": None,
+                "served_bytes": 0, "content_type": "", "port": 0}
+        if self._http is not None and key:
+            info.update(self._http.delivery_for(key))
+        info["wav_bytes_metric"] = int(self.metrics.get(f"wav_bytes_{key}", 0) or 0)
+        info["deliveries"] = int(self.metrics.get("tts_url_deliveries", 0) or 0)
+        info["announcements_finished"] = int(
+            self.metrics.get("announcements_finished", 0) or 0
+        )
+        info["last_announce_success"] = self.last_announce_success
+        info["last_finished_generation"] = int(self.last_finished_generation)
+        return info
 
     async def tts_media_url(self, text: str) -> str:
         """Public synthesis helper: LAN URL of ``text``, ``""`` when unavailable."""
@@ -1104,8 +1317,8 @@ class VoicePEDevice:
         # The playback latch is what keeps the avatar steady between ``RUN_END``
         # and the device's own report: a media push to ``idle`` after an active
         # state, or the ``AnnounceFinished`` that closes this very delivery.
-        if self._pending_playback is not None:
-            self._playback_latch = int(self._pending_playback.session_generation)
+        if self._pending_playback:
+            self._playback_latch = int(self._pending_playback[-1].session_generation)
         elif reply:
             self._playback_latch = generation
         if self._should_continue(reply):
@@ -1149,9 +1362,7 @@ class VoicePEDevice:
         sock.setblocking(False)
         sock.bind(("", 0))
         _transport, protocol = await asyncio.get_running_loop().create_datagram_endpoint(
-            lambda: UdpAudioServer(
-                self._ingress.queue(), self.session_generation
-            ),
+            lambda: UdpAudioServer(self._ingress),
             sock=sock,
         )
         self._udp_server = protocol  # type: ignore[assignment]

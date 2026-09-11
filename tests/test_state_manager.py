@@ -493,3 +493,78 @@ class TestThreadSafety:
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
         sm.stop()
+
+
+@pytest.mark.unit
+class TestPendingPairIdentity:
+    """Text and turn identity live in one locked location and move together."""
+
+    def test_start_collection_stores_text_and_context_together(self):
+        from jarvis.integrations.voice_pe.models import TurnContext
+
+        sm = StateManager()
+        ctx = TurnContext("voice_pe", "mac-a", 1, 3)
+        sm.start_collection("weather", context=ctx)
+        # One read gives both halves of the pair, in the order they were written.
+        assert sm.get_pending() == ("weather", ctx)
+        sm.stop()
+
+    def test_clear_pending_takes_the_pair_in_one_read(self):
+        from jarvis.integrations.voice_pe.models import TurnContext
+
+        sm = StateManager()
+        ctx = TurnContext("voice_pe", "mac-a", 1, 3)
+        sm.start_collection("weather", context=ctx)
+        query, context = sm.clear_pending()
+        assert query == "weather"
+        assert context is ctx
+        # The pair is gone as a unit, and the collection released.
+        assert sm.get_pending() == ("", None)
+        assert sm.get_state() == ListeningState.WAKE_WORD
+        sm.stop()
+
+    def test_add_to_collection_keeps_the_first_context(self):
+        from jarvis.integrations.voice_pe.models import TurnContext
+
+        sm = StateManager()
+        first = TurnContext("voice_pe", "mac-a", 1, 3)
+        second = TurnContext("voice_pe", "mac-a", 1, 4)
+        sm.start_collection("one", context=first)
+        sm.add_to_collection("two")
+        # A later fragment extends the text but cannot re-title the turn.
+        assert sm.get_pending() == ("one two", first)
+        assert sm.get_pending()[1] is not second
+        sm.stop()
+
+    def test_cancel_pending_matches_every_identity_field(self):
+        from jarvis.integrations.voice_pe.models import TurnContext
+
+        sm = StateManager()
+        ctx = TurnContext("voice_pe", "mac-a", 1, 3)
+        sm.start_collection("x", context=ctx)
+        # Another satellite, another connection, another run: all not this turn.
+        assert sm.cancel_pending(TurnContext("voice_pe", "mac-b", 1, 3)) is False
+        assert sm.cancel_pending(TurnContext("voice_pe", "mac-a", 2, 3)) is False
+        assert sm.cancel_pending(TurnContext("voice_pe", "mac-a", 1, 4)) is False
+        assert sm.get_pending() == ("x", ctx)
+        # The named turn itself is released.
+        assert sm.cancel_pending(ctx) is True
+        assert sm.get_pending() == ("", None)
+        sm.stop()
+
+    def test_two_satellites_with_the_same_run_number_are_distinct(self):
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            TurnContext,
+            is_current_stream,
+        )
+
+        first = TurnContext("voice_pe", "mac-a", 1, 1)
+        second = TurnContext("voice_pe", "mac-b", 1, 1)
+        # Both number their first run 1; the device id keeps them apart.
+        assert first.stream != second.stream
+        assert is_current_stream(first.stream, first) is True
+        assert is_current_stream(second.stream, first) is False
+        # The local microphone has no satellite numbering and is always current.
+        assert is_current_stream(LOCAL_STREAM, None) is True
+        assert is_current_stream(None, first) is False

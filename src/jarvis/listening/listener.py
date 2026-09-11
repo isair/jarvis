@@ -29,14 +29,25 @@ try:  # pragma: no cover - trivial import shim
     from ..integrations.voice_pe.models import (
         AUDIO_SOURCE_LOCAL,
         AUDIO_SOURCE_VOICE_PE,
+        LOCAL_STREAM,
         AudioFrame,
+        is_current_stream,
     )
 except ImportError:  # pragma: no cover
     from collections import namedtuple as _namedtuple
 
     AUDIO_SOURCE_LOCAL = "local"  # type: ignore[assignment]
     AUDIO_SOURCE_VOICE_PE = "voice_pe"  # type: ignore[assignment]
-    AudioFrame = _namedtuple("AudioFrame", "source generation samples")  # type: ignore[assignment]
+    _StreamId = _namedtuple("StreamId", "device_id connection_generation session_generation")
+    LOCAL_STREAM = _StreamId("", 0, 0)  # type: ignore[assignment]
+    AudioFrame = _namedtuple("AudioFrame", "stream source samples")  # type: ignore[assignment]
+
+    def is_current_stream(stream, context):  # type: ignore[misc]
+        if stream is None:
+            return False
+        if str(stream.device_id or "") == "" and int(stream.session_generation) == 0:
+            return True
+        return context is not None and stream == context.stream
 from .transcript_postprocessor import (
     correct_transcript,
     format_correction_event,
@@ -124,6 +135,223 @@ def _resample(audio, src_rate: int, dst_rate: int):
     n_out = int(len(audio) * ratio)
     indices = np.arange(n_out) / ratio
     return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+
+
+#: Level the satellite ASR copy is brought to, in dBFS.
+SATELLITE_TARGET_RMS_DBFS = -25.0
+#: Upper bound of the correction, in dB.
+SATELLITE_MAX_GAIN_DB = 20.0
+#: Ceiling of the peak limiter, in full-scale units.
+SATELLITE_PEAK_LIMIT = 0.95
+#: Minimum gap between voiced and silent RMS, in dB.
+SATELLITE_MIN_SNR_DB = 6.0
+#: A grid frame at or below this RMS is digital silence for both microphones.
+_SILENCE_FLOOR = 1e-4
+
+
+def _stats_of(vec):
+    """Min, max, RMS and peak of a float array, empty when there is none."""
+    if np is None or vec is None or not len(vec):
+        return {}
+    values = np.asarray(vec).flatten().astype(np.float64)
+    if values.size == 0:
+        return {}
+    return {
+        "min": round(float(np.min(values)), 8),
+        "max": round(float(np.max(values)), 8),
+        "rms": round(float(np.sqrt(np.mean(np.square(values)))), 8),
+        "peak": round(float(np.max(np.abs(values))), 8),
+    }
+
+
+def _dbfs_of(stats: dict, key: str):
+    """The same level in dBFS, ``None`` when the value is zero."""
+    value = float((stats or {}).get(key) or 0.0)
+    if value <= 0.0:
+        return None
+    return round(20.0 * float(np.log10(value)), 3)
+
+
+def _clip_levels(audio, frame_samples: int, state: dict) -> dict:
+    """Levels of one clip in both representations, plus voiced/silent split.
+
+    ``int16`` is the same array as whole-code counts (``value * 32768``), so the
+    ratio ``int16 rms / float rms`` is exactly 32768.0 when PCM16 was divided by
+    32768 once and nothing else scaled it. Voiced frames are those inside the
+    speech span the state machine recorded; silent ones are the padded endpoint
+    wait around that span.
+    """
+    levels: dict = {}
+    if np is None or audio is None or not len(audio):
+        return levels
+    values = np.asarray(audio).flatten().astype(np.float64)
+    frame_samples = int(frame_samples or 0)
+    float_stats = _stats_of(values)
+    int16_stats = _stats_of(np.rint(np.clip(values, -1.0, 1.0) * 32768.0))
+    levels["float32"] = float_stats
+    levels["int16"] = int16_stats
+    levels["dbfs_rms"] = _dbfs_of(float_stats, "rms")
+    levels["dbfs_peak"] = _dbfs_of(float_stats, "peak")
+    levels["scale_ratio_int16_over_float32"] = (
+        None
+        if not float_stats.get("rms")
+        else round(float(int16_stats.get("rms") or 0.0) / float(float_stats["rms"]), 2)
+    )
+    if frame_samples <= 0 or values.size < frame_samples:
+        return levels
+    frame_count = int(values.size) // frame_samples
+
+    def _frame(index):
+        return values[index * frame_samples: (index + 1) * frame_samples]
+
+    frame_levels = [
+        float(np.sqrt(np.mean(np.square(_frame(index))))) for index in range(frame_count)
+    ]
+
+    def _rms(parts):
+        joined = [part for part in parts if part.size]
+        if not joined:
+            return 0.0
+        stacked = np.concatenate(joined)
+        return float(np.sqrt(np.mean(np.square(stacked))))
+
+    leading = 0
+    for index in range(frame_count):
+        if _rms([_frame(index)]) == 0.0:
+            leading += 1
+        else:
+            break
+    trailing = 0
+    for index in range(frame_count - 1, -1, -1):
+        if _rms([_frame(index)]) == 0.0:
+            trailing += 1
+        else:
+            break
+    first = (state or {}).get("first_voiced_offset")
+    last = (state or {}).get("last_voiced_offset")
+    first_index = 0 if first is None else max(0, int(first))
+    last_index = first_index if last is None else min(frame_count - 1, int(last))
+    voiced_rms = _rms(
+        [_frame(index) for index in range(first_index, min(last_index + 1, frame_count))]
+    )
+    levels["total_frames"] = frame_count
+    levels["leading_silence_frames"] = leading
+    levels["trailing_silence_frames"] = trailing
+    # The noise floor is the truly silent grid frames (the endpoint padding),
+    # not the low-level blocks between words: 1e-4 in these units is digital
+    # silence for both microphone sources.
+    floor_frames = [level for level in frame_levels if level <= _SILENCE_FLOOR]
+    floor = (
+        0.0
+        if not floor_frames
+        else float(np.sqrt(np.mean(np.square(np.array(floor_frames)))))
+    )
+    levels["silent_frames"] = len(floor_frames)
+    levels["voiced_rms"] = round(voiced_rms, 8)
+    levels["silent_rms"] = round(floor, 8)
+    levels["snr_db"] = (
+        None
+        if voiced_rms <= 0.0 or floor <= 0.0
+        else round(20.0 * float(np.log10(voiced_rms / floor)), 3)
+    )
+    return levels
+
+
+def _satellite_preprocess(audio, frame_samples: int, state: dict):
+    """Prepare one satellite copy for the ASR stage.
+
+    Returns ``(copy, meta)``. The raw array keeps its own identity so the
+    diagnostic can show both. The correction is a single linear gain toward the
+    target RMS, capped at :data:`SATELLITE_MAX_GAIN_DB` and never below 1,
+    followed by one peak-limit pass at :data:`SATELLITE_PEAK_LIMIT`. Voiced and
+    silent RMS are measured on the corrected copy over the same speech-span
+    boundaries the state machine recorded, and ``insufficient_snr`` is set when
+    they are closer than :data:`SATELLITE_MIN_SNR_DB`.
+    """
+    meta: dict = {
+        "enabled": True,
+        "target_rms_dbfs": SATELLITE_TARGET_RMS_DBFS,
+        "max_gain_db": SATELLITE_MAX_GAIN_DB,
+        "peak_limit": SATELLITE_PEAK_LIMIT,
+        "min_snr_db": SATELLITE_MIN_SNR_DB,
+        "applied_gain_db": 0.0,
+        "limiter_hits": 0,
+    }
+    if np is None or audio is None or not len(audio):
+        meta["applied_gain_db"] = 0.0
+        return audio, meta
+    frame = float(np.asarray(audio).flatten()[0]) if False else None  # noqa: F841
+    values = np.asarray(audio).flatten().astype(np.float64)
+    rms_before = float(np.sqrt(np.mean(np.square(values))))
+    peak_before = float(np.max(np.abs(values))) if values.size else 0.0
+    meta["rms_before"] = round(rms_before, 8)
+    meta["peak_before"] = round(peak_before, 8)
+    target = 10.0 ** (SATELLITE_TARGET_RMS_DBFS / 20.0)
+    ceiling = 10.0 ** (SATELLITE_MAX_GAIN_DB / 20.0)
+    gain = 1.0
+    if rms_before > 0.0:
+        gain = min(max(target / rms_before, 1.0), ceiling)
+    corrected = (values * gain).astype(np.float32)
+    # One limiter pass: a single scale that puts the loudest sample on the
+    # ceiling, which keeps the relative shape of the waveform.
+    peak_after_pre = float(np.max(np.abs(corrected))) if corrected.size else 0.0
+    hits = int(np.count_nonzero(np.abs(corrected) > SATELLITE_PEAK_LIMIT))
+    if peak_after_pre > SATELLITE_PEAK_LIMIT and peak_after_pre > 0.0:
+        corrected = (corrected * (SATELLITE_PEAK_LIMIT / peak_after_pre)).astype(
+            np.float32
+        )
+    rms_after = float(np.sqrt(np.mean(np.square(corrected.astype(np.float64)))))
+    peak_after = float(np.max(np.abs(corrected))) if corrected.size else 0.0
+    meta["applied_gain_db"] = (
+        0.0 if gain <= 0.0 else round(20.0 * float(np.log10(gain)), 3)
+    )
+    meta["limiter_hits"] = hits
+    meta["rms_after_pre_limiter"] = round(peak_after_pre, 8)
+    meta["rms_after"] = round(rms_after, 8)
+    meta["peak_after"] = round(peak_after, 8)
+    meta["rms_after_pre_limiter"] = round(
+        float(
+            np.sqrt(
+                np.mean(
+                    np.square(
+                        (values * gain).astype(np.float64)
+                    )
+                )
+            )
+        ),
+        8,
+    )
+    # Voiced against silent, measured on the raw clip: one linear gain scales
+    # both by the same factor, so the ratio is the same either way and the
+    # digital-silence floor keeps its meaning on the un-scaled numbers. The
+    # corrected copy's own levels are reported alongside.
+    frame_samples = int(frame_samples or 0)
+    raw_levels = _clip_levels(values.astype(np.float32), frame_samples, state)
+    fixed_levels = _clip_levels(corrected, frame_samples, state)
+    snr_db = raw_levels.get("snr_db")
+    meta["voiced_rms"] = raw_levels.get("voiced_rms")
+    meta["silent_rms"] = raw_levels.get("silent_rms")
+    meta["silent_frames"] = raw_levels.get("silent_frames")
+    meta["voiced_rms_after"] = fixed_levels.get("voiced_rms")
+    meta["silent_rms_after"] = fixed_levels.get("silent_rms")
+    meta["snr_db"] = snr_db
+    meta["insufficient_snr"] = bool(
+        snr_db is not None and snr_db < SATELLITE_MIN_SNR_DB
+    )
+    return corrected, meta
+
+
+#: Counter keys the clip diagnostic copies from the attached satellite.
+_DIAGNOSTIC_COUNTERS = ("audio_chunks", "audio_bytes", "stt_end", "run_end", "sessions")
+
+
+def _sink_counters(sink: Optional[Any]) -> dict:
+    """Pipeline counters of the device that owns the attached satellite sink."""
+    for device in list(getattr(sink, "_devices", None) or []):
+        metrics = getattr(device, "metrics", None)
+        if isinstance(metrics, dict):
+            return {key: metrics.get(key) for key in _DIAGNOSTIC_COUNTERS}
+    return {}
 
 
 def _setup_nvidia_dll_path() -> None:
@@ -296,6 +524,88 @@ def _is_faster_whisper_turbo_supported() -> bool:
         return False
 
 
+#: The decode options the pipeline wants: the clip is already VAD-trimmed by the
+#: outer grid, each utterance is self-contained, and only ``text`` /
+#: ``avg_logprob`` / ``no_speech_prob`` are read out of the segments.
+#: ``suppress_nospeech_text`` exists only on the MLX entry point, so it is
+#: resolved per backend rather than passed blindly.
+PREFERRED_TRANSCRIBE_KWARGS = {
+    "vad_filter": False,
+    "condition_on_previous_text": False,
+    "without_timestamps": True,
+    "suppress_nospeech_text": True,
+}
+
+
+def _resolve_transcribe_kwargs(entry_point, preferred: dict) -> tuple[dict, list]:
+    """Keep only the ``preferred`` keys the installed entry point accepts.
+
+    Resolved once at model-init time from the live signature, so the decode calls
+    carry the complete compatible set without a per-call ``TypeError`` retry.
+    Returns ``(accepted, rejected)``.
+    """
+    accepted: dict = {}
+    rejected: list = []
+    try:
+        import inspect
+
+        params = inspect.signature(entry_point).parameters
+        accepts_extra = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+    except Exception:  # pragma: no cover - signature introspection unavailable
+        params = {}
+        accepts_extra = True
+    for key, value in preferred.items():
+        if accepts_extra or key in params:
+            accepted[key] = value
+        else:
+            rejected.append(key)
+    return accepted, rejected
+
+
+def _asr_backend_version(backend: str) -> str:
+    """Version of the selected ASR backend, empty when it cannot be read."""
+    try:
+        if backend == "mlx":
+            import mlx_whisper
+
+            return str(getattr(mlx_whisper, "__version__", ""))
+        import faster_whisper
+
+        return str(getattr(faster_whisper, "__version__", ""))
+    except Exception:
+        return ""
+
+
+#: One deterministic reply for the env-gated hardware diagnostic.
+DIAGNOSTIC_REPLY_TEXT = "Rozumím. Toust je téměř připraven."
+#: Reply-source labels written to ``metrics["last_reply_source"]``.
+REPLY_SOURCE_LLM = "llm"
+REPLY_SOURCE_DIAGNOSTIC = "diagnostic"
+
+
+#: Cached value behind :func:`_e2e_diagnostic_mode`: ``[None]`` until first read.
+_E2E_DIAGNOSTIC_CACHE: list = [None]
+
+
+def _read_e2e_diagnostic_flag() -> bool:
+    """Read the diagnostic flag; unset env means the production path."""
+    return str(os.environ.get("JARVIS_VOICE_PE_E2E_DIAGNOSTIC", "")).strip() in (
+        "1",
+        "true",
+        "True",
+        "yes",
+    )
+
+
+def _e2e_diagnostic_mode() -> bool:
+    """The diagnostic flag, read live so a later env change is followed."""
+    live = _read_e2e_diagnostic_flag()
+    _E2E_DIAGNOSTIC_CACHE[0] = live
+    return live
+
+
 def _get_mlx_model_repo(model_name: str) -> str:
     """Get the MLX Community HuggingFace repo for a Whisper model."""
     # Map standard model names to MLX Community repos
@@ -451,6 +761,33 @@ class VoiceListener(threading.Thread):
         #: ``TurnContext`` of the turn in flight, carried to its terminal event.
         self._turn_context: Optional[Any] = None
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
+        #: Supported ``transcribe()`` keywords, resolved once for this backend.
+        self._transcribe_kwargs: dict = {}
+        #: Version string of the ASR backend, for the one-line init log.
+        self._asr_version: str = ""
+        #: Frame bookkeeping of the in-flight utterance (state machine).
+        self._frame_state: dict = {
+            "first_voiced_offset": None,
+            "last_voiced_offset": None,
+            "voiced_frame_count": 0,
+            "total_frame_count": 0,
+            "trailing_silence_frames": 0,
+            "post_roll_frames": 0,
+        }
+        #: Pipeline counters and the last segment's metadata. Both survive the
+        #: call, so a health view or the diagnostic dump can read them later
+        #: instead of relying on function-local variables.
+        self.metrics: dict = {
+            "stt_start": 0,
+            "stt_end": 0,
+            "stt_end_success": 0,
+            "stt_end_skipped_too_short": 0,
+            "stt_end_filtered": 0,
+            "stt_end_cancelled": 0,
+            "stt_end_stale": 0,
+            "stt_end_decoder_error": 0,
+            "last_segment": {},
+        }
         self._vad: Optional = None
 
         # Initialise VAD if available
@@ -515,6 +852,20 @@ class VoiceListener(threading.Thread):
         if sink is None:
             return
         context = token if token is not None else self._turn_context
+        # The four identity names, spelled out, so a log line alone tells which
+        # satellite, connection and run a milestone belongs to.
+        stream_id = getattr(context, "stream", None)
+        debug_log(
+            f"voice_pe milestone {marker} "
+            f"source={getattr(context, 'source', None)} "
+            f"device_id={getattr(context, 'device_id', None)} "
+            f"connection_generation={getattr(context, 'connection_generation', None)} "
+            f"session_generation={getattr(context, 'session_generation', None)} "
+            f"stream_id=(device_id={getattr(stream_id, 'device_id', None)}, "
+            f"connection_generation={getattr(stream_id, 'connection_generation', None)}, "
+            f"session_generation={getattr(stream_id, 'session_generation', None)})",
+            "voice",
+        )
         try:
             if marker == "vad_start":
                 sink.on_vad_start(context)
@@ -575,7 +926,7 @@ class VoiceListener(threading.Thread):
         self.state_manager.cancel_hot_window_activation()
         self._transcript_buffer.mark_segment_processed(text_lower)
         self._clear_audio_buffers()
-        self.state_manager.start_collection(text_lower)
+        self.state_manager.start_collection(text_lower, context=self._turn_context)
         self._start_thinking_tune()
         try:
             print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}", flush=True)
@@ -673,9 +1024,9 @@ class VoiceListener(threading.Thread):
         if not text or not text.strip():
             # Check for timeouts
             if self.state_manager.check_collection_timeout():
-                query = self.state_manager.clear_collection()
+                query, turn_context = self.state_manager.clear_pending()
                 if query.strip():
-                    self._dispatch_query(query)
+                    self._dispatch_query(query, turn_context)
 
             # Check hot window expiry
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
@@ -976,7 +1327,9 @@ class VoiceListener(threading.Thread):
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
-                        self.state_manager.start_collection(text_lower)
+                        self.state_manager.start_collection(
+                            text_lower, context=self._turn_context
+                        )
                         self._start_thinking_tune()
                         try:
                             print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1014,7 +1367,9 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(intent_judgment.query)
+                            self.state_manager.start_collection(
+                                intent_judgment.query, context=self._turn_context
+                            )
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1077,7 +1432,9 @@ class VoiceListener(threading.Thread):
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
 
-                        self.state_manager.start_collection(hot_query)
+                        self.state_manager.start_collection(
+                            hot_query, context=self._turn_context
+                        )
 
                         # Start thinking tune and show processing message
                         self._start_thinking_tune()
@@ -1111,7 +1468,9 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self.state_manager.start_collection(
+                            text_lower, context=self._turn_context
+                        )
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1141,7 +1500,9 @@ class VoiceListener(threading.Thread):
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
-                        self.state_manager.start_collection(text_lower)
+                        self.state_manager.start_collection(
+                            text_lower, context=self._turn_context
+                        )
                         self._start_thinking_tune()
                         try:
                             print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1183,7 +1544,9 @@ class VoiceListener(threading.Thread):
                             self._transcript_buffer.mark_segment_processed(text_lower)
 
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self.state_manager.start_collection(
+                            text_lower, context=self._turn_context
+                        )
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1224,7 +1587,9 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self.state_manager.start_collection(
+                            text_lower, context=self._turn_context
+                        )
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1272,7 +1637,9 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self.state_manager.start_collection(
+                            text_lower, context=self._turn_context
+                        )
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1324,7 +1691,9 @@ class VoiceListener(threading.Thread):
             self._clear_audio_buffers()
 
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
-            self.state_manager.start_collection(query_fragment)
+            self.state_manager.start_collection(
+                query_fragment, context=self._turn_context
+            )
 
             # Momentary WAKE pulse, then LISTENING (carrying utterance level).
             self._set_face_state_wake()
@@ -1368,14 +1737,18 @@ class VoiceListener(threading.Thread):
         else:
             debug_log(f"input ignored (no wake word{intent_info}): {text_lower}", "voice")
 
-    def _dispatch_query(self, query: str) -> None:
+    def _dispatch_query(self, query: str, turn_context: Optional[object] = None) -> None:
         """
         Dispatch a complete query to the reply engine.
 
         Args:
             query: Complete user query to process
+            turn_context: Identity of the turn this text came from, taken from
+                the collection in one atomic read; ``None`` re-reads the live one
         """
         debug_log(f"dispatching query: '{query}'", "voice")
+        # The query of the most recent dispatch, for the STT record's trail.
+        self.metrics["last_dispatched_query"] = query
 
         # Clear audio buffers to prevent stale audio from next query
         self._clear_audio_buffers()
@@ -1400,13 +1773,30 @@ class VoiceListener(threading.Thread):
         # rather than being dropped (see daemon.query_lock).
         # The context of this turn is snapshotted before the engine runs, so the
         # terminal events below cannot be re-stamped by a newer lease.
-        turn_context = self._turn_context
+        turn_context = (
+            turn_context if turn_context is not None else self._turn_context
+        )
         try:
-            with query_lock():
-                reply = run_reply_engine(
-                    self.db, self.cfg, None, query, self.dialogue_memory,
-                    language=self._last_detected_language,
+            if _e2e_diagnostic_mode():
+                # Env-gated hardware diagnostic. The microphone, the VAD state
+                # machine and Whisper all ran for real above; only the LLM step
+                # is replaced here, by one fixed text, so the transport leg can
+                # be measured without the model's own latency. The reply still
+                # goes through the real TTS, the real WAV server and the real
+                # playback on the satellite.
+                reply = DIAGNOSTIC_REPLY_TEXT
+                self.metrics["last_reply_source"] = REPLY_SOURCE_DIAGNOSTIC
+                debug_log(
+                    f"diagnostic reply_source=diagnostic for query='{query}'",
+                    "voice",
                 )
+            else:
+                with query_lock():
+                    reply = run_reply_engine(
+                        self.db, self.cfg, None, query, self.dialogue_memory,
+                        language=self._last_detected_language,
+                    )
+                self.metrics["last_reply_source"] = REPLY_SOURCE_LLM
         except Exception as e:
             # Log the error visibly - this should never happen silently
             print(f"\n  âŒŒ Reply engine error: {e}", flush=True)
@@ -1556,31 +1946,30 @@ class VoiceListener(threading.Thread):
 
     @staticmethod
     def _tagged_audio(item):
-        """Split one queue item into ``(source, generation, buffer)``.
+        """Split one queue item into ``(stream_id, source, buffer)``.
 
         ``AudioFrame`` is the stamped shape; a bare buffer or a two-tuple is read
-        as a local block of the open turn, so no producer shape is lost.
+        as a local block, so no producer shape is lost.
         """
         if isinstance(item, AudioFrame):
-            return str(item.source), int(item.generation), item.samples
+            return item.stream, str(item.source), item.samples
         if isinstance(item, tuple) and len(item) == 2:
-            return str(item[0]), 0, item[1]
-        return AUDIO_SOURCE_LOCAL, 0, item
+            return LOCAL_STREAM, str(item[0]), item[1]
+        return LOCAL_STREAM, AUDIO_SOURCE_LOCAL, item
 
-    def _is_current_frame(self, source: str, generation: int) -> bool:
-        """Whether this block still belongs to the open turn."""
+    def _is_current_frame(self, stream, source: str) -> bool:
+        """Whether this block still belongs to the open turn, fail-closed."""
         if source != AUDIO_SOURCE_VOICE_PE:
             return True
         sink = self._voice_pe_sink
         if sink is None:
-            return True
+            # No satellite attached: only the local microphone can be current.
+            return False
         try:
-            current = sink.current_session_generation()
+            context = sink.current_context()
         except Exception:
-            return True
-        if current is None:
-            return True
-        return int(generation) == int(current)
+            return False
+        return is_current_stream(stream, context)
 
     @staticmethod
     def _mono_audio(buf):
@@ -1830,9 +2219,11 @@ class VoiceListener(threading.Thread):
     def _check_query_timeout(self) -> None:
         """Check if there's a pending query that has timed out, and check hot window expiry."""
         if self.state_manager.check_collection_timeout():
-            query = self.state_manager.clear_collection()
+            # One locked write takes the text and the turn identity together, so
+            # the dispatch cannot pair a text with another turn's token.
+            query, turn_context = self.state_manager.clear_pending()
             if query.strip():
-                self._dispatch_query(query)
+                self._dispatch_query(query, turn_context)
 
         # Also check hot window expiry - this ensures the timeout is enforced
         # even when there's no audio being processed
@@ -1855,25 +2246,24 @@ class VoiceListener(threading.Thread):
     def push_local_chunk(self, chunk):
         """Tag one local-microphone block for the shared queue.
 
-        The tag is what lets the VAD loop keep one microphone per utterance;
-        ``AudioFrame("local", 0, buffer)`` is the shape every consumer reads.
+        The stamp is what lets the VAD loop keep one microphone per utterance;
+        ``AudioFrame(LOCAL_STREAM, "local", buffer)`` is the shape consumers read.
         """
-        return AudioFrame(AUDIO_SOURCE_LOCAL, 0, chunk)
+        return AudioFrame(LOCAL_STREAM, AUDIO_SOURCE_LOCAL, chunk)
 
     def pad_until_endpoint(
-        self, source: str = AUDIO_SOURCE_LOCAL, generation: Optional[int] = None
+        self, stream=LOCAL_STREAM, source: str = AUDIO_SOURCE_LOCAL
     ) -> int:
         """Close an in-flight utterance with the configured silence tail.
 
         The satellite closes its microphone as soon as the last frame is sent,
         so no further frames would arrive to trip the VAD endpoint. The same
         number of silent frames the loop would count is pushed behind the last
-        delivered block, in order on the same queue, and carries the source of
-        that stream so the owner does not change under the utterance.
+        delivered block, in order on the same queue, stamped with the very
+        stream that ended so the owner cannot change under the utterance.
 
-        ``source`` and ``generation`` come from the producer's own EOS marker;
-        they are not guessed from the loop state, which can still be behind the
-        queue.
+        ``stream`` and ``source`` come from the producer's own EOS marker; they
+        are not guessed from the loop state, which can still be behind the queue.
         """
         if np is None:
             return 0
@@ -1893,8 +2283,8 @@ class VoiceListener(threading.Thread):
                 # the grid stays on one turn and a stale tail cannot slip in.
                 self._audio_q.put_nowait(
                     AudioFrame(
+                        stream,
                         source,
-                        int(generation or 0),
                         np.zeros(samples, dtype=np.float32),
                     )
                 )
@@ -1939,6 +2329,21 @@ class VoiceListener(threading.Thread):
             "voice",
         )
         self._whisper_device = resolved_device
+
+        # Resolve the decode options once for the installed backend, so the
+        # per-call `transcribe()` gets the complete compatible set and no
+        # TypeError retry can silently narrow the semantics. No audio content is
+        # logged: only the backend, version and the keyword names.
+        self._transcribe_kwargs, rejected = _resolve_transcribe_kwargs(
+            getattr(WhisperModel, "transcribe", None), PREFERRED_TRANSCRIBE_KWARGS
+        )
+        self._asr_version = _asr_backend_version("faster-whisper")
+        debug_log(
+            f"faster-whisper decode options: version={self._asr_version or '-'}, "
+            f"kwargs_active={sorted(self._transcribe_kwargs)}, "
+            f"kwargs_rejected={rejected}",
+            "voice",
+        )
 
         if try_device != device and device in ("auto", "cuda"):
             print("     âš ï¸  CUDA not available, using CPU (this may be slower)", flush=True)
@@ -2266,6 +2671,17 @@ class VoiceListener(threading.Thread):
 
             self._mlx_model_repo = _get_mlx_model_repo(model_name)
             print(f"     🎤 Loading MLX Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
+            # Decode options resolved once for the installed entry point.
+            self._transcribe_kwargs, rejected_mlx = _resolve_transcribe_kwargs(
+                getattr(mlx_whisper, "transcribe", None), PREFERRED_TRANSCRIBE_KWARGS
+            )
+            self._asr_version = _asr_backend_version("mlx")
+            debug_log(
+                f"mlx-whisper decode options: version={self._asr_version or '-'}, "
+                f"kwargs_active={sorted(self._transcribe_kwargs)}, "
+                f"kwargs_rejected={rejected_mlx}",
+                "voice",
+            )
 
             max_retries = 4
             for attempt in range(max_retries + 1):
@@ -2772,21 +3188,27 @@ class VoiceListener(threading.Thread):
                 if np is None:
                     continue
 
-                # Every item names its source and the turn it belongs to. Only
-                # the owning microphone feeds the frame grid, and a block of an
-                # older generation is dropped instead of widening a new one.
-                source, generation, buf = self._tagged_audio(item)
-                if source not in self._pre_rolls:
-                    self._pre_rolls[source] = deque()
-                owner = self._active_audio_source()
-                if source != owner:
-                    continue
-                if not self._is_current_frame(source, generation):
+                # Every item names its full stream. A block of a stream that is
+                # no longer the open one is dropped instead of widening a newer
+                # utterance, and grid continuity is keyed by that whole stream.
+                stream, source, buf = self._tagged_audio(item)
+                key = (
+                    str(stream.device_id),
+                    int(stream.connection_generation),
+                    int(stream.session_generation),
+                )
+                if key not in self._pre_rolls:
+                    self._pre_rolls[key] = deque()
+                if not self._is_current_frame(stream, source):
                     self._stale_frames = int(getattr(self, "_stale_frames", 0)) + 1
                     continue
+                if source == AUDIO_SOURCE_LOCAL and self._active_audio_source() != AUDIO_SOURCE_LOCAL:
+                    # A satellite run holds the microphone: local blocks wait.
+                    continue
                 self._audio_source = source
-                # The owning source keeps its own pre-roll across switches.
-                self._pre_roll = self._pre_rolls[source]
+                self._audio_stream = key
+                # The owning stream keeps its own pre-roll across switches.
+                self._pre_roll = self._pre_rolls[key]
 
                 mono = self._mono_audio(buf)
 
@@ -2794,12 +3216,12 @@ class VoiceListener(threading.Thread):
                 # the frame grid continues across the block boundary. The
                 # remainder is the only continuation - the grid sees it once.
                 frames, carry = self._frame_grid(
-                    mono, self._remaining_samples.get(source), self._frame_samples
+                    mono, self._remaining_samples.get(key), self._frame_samples
                 )
                 if carry is None:
-                    self._remaining_samples.pop(source, None)
+                    self._remaining_samples.pop(key, None)
                 else:
-                    self._remaining_samples[source] = carry
+                    self._remaining_samples[key] = carry
 
                 for frame in frames:
                     # VAD decision
@@ -2822,10 +3244,27 @@ class VoiceListener(threading.Thread):
                             # Track utterance timing for echo detection
                             self.echo_detector.track_utterance_timing(utterance_start_time, 0.0)
 
-                            # Seed with pre-roll
+                            # Seed with pre-roll, then the frame that triggered.
+                            self._utterance_frames = []
                             if self._pre_roll:
                                 self._utterance_frames.extend(list(self._pre_roll))
                             self._utterance_frames.append(frame.copy())
+                            first_index = len(self._utterance_frames) - 1
+                            # Offsets are grid indices into the stored list: the
+                            # speech span is measured between the first and last
+                            # voiced frame, so the pre-roll and the endpoint wait
+                            # never inflate it.
+                            self._frame_state = {
+                                "first_voiced_offset": first_index,
+                                "last_voiced_offset": first_index,
+                                "voiced_frame_count": 1,
+                                "total_frame_count": len(self._utterance_frames),
+                                "trailing_silence_frames": 0,
+                                "post_roll_frames": 0,
+                            }
+                            self.metrics["stt_start"] = int(
+                                self.metrics.get("stt_start", 0)
+                            ) + 1
                             self._silence_frames = 0
                         else:
                             # Maintain pre-roll buffer
@@ -2836,17 +3275,59 @@ class VoiceListener(threading.Thread):
                                 except Exception:
                                     break
                     else:
+                        # Speech has started: every frame of the open stream is
+                        # stored exactly once, voiced or silence, so the clip is
+                        # one continuous waveform with its phoneme timing intact.
+                        self._utterance_frames.append(frame.copy())
+                        state = self._frame_state
+                        last_index = len(self._utterance_frames) - 1
+                        state["total_frame_count"] = last_index + 1
                         if is_voice:
-                            self._utterance_frames.append(frame.copy())
+                            state["last_voiced_offset"] = last_index
+                            state["voiced_frame_count"] = int(
+                                state.get("voiced_frame_count", 0)
+                            ) + 1
+                            state["trailing_silence_frames"] = 0
                             self._silence_frames = 0
                         else:
+                            # Silence is used only to count toward the endpoint,
+                            # never to skip storage.
+                            state["trailing_silence_frames"] = int(
+                                state.get("trailing_silence_frames", 0)
+                            ) + 1
                             self._silence_frames += 1
-                            # Use shorter timeout during TTS for quick stop command detection
-                            current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
-                            if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
-                                self._voice_pe_event("vad_end")
-                                self._finalize_utterance()
-                                self._pre_roll.clear()
+
+                        # Use shorter timeout during TTS for quick stop command detection
+                        current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
+                        if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
+                            # Keep the continuous run up to the last voiced frame
+                            # plus the configured post-roll; the remaining
+                            # endpoint wait is dropped, not stored.
+                            post_roll_frames = max(
+                                0,
+                                int(
+                                    round(
+                                        int(getattr(self.cfg, "whisper_post_roll_ms", 200))
+                                        / max(1, frame_ms)
+                                    )
+                                ),
+                            )
+                            state = self._frame_state
+                            keep_to = int(state.get("last_voiced_offset") or 0) + 1
+                            keep = keep_to + post_roll_frames
+                            if 0 < keep < len(self._utterance_frames):
+                                self._utterance_frames = self._utterance_frames[:keep]
+                            state["post_roll_frames"] = max(
+                                0, len(self._utterance_frames) - keep_to
+                            )
+                            state["total_frame_count"] = len(self._utterance_frames)
+                            # The pads that ``pad_until_endpoint`` still pushes
+                            # belong to the closed endpoint wait: they must not
+                            # widen the finished clip.
+                            self._silence_frames = 0
+                            self._voice_pe_event("vad_end")
+                            self._finalize_utterance()
+                            self._pre_roll.clear()
 
                     # Check for query timeouts
                     self._check_query_timeout()
@@ -2855,18 +3336,369 @@ class VoiceListener(threading.Thread):
                 # becomes the head of the next grid; the pre-roll is fed by the
                 # processed frames above, so nothing is counted twice.
 
+    def _dump_clip_diagnostic(
+        self,
+        audio,
+        source,
+        stream,
+        started_at: float,
+        ended_at: float,
+        segments,
+        text: str,
+        note: str = "",
+        state: Optional[dict] = None,
+        raw: Optional[Any] = None,
+        pre: Optional[dict] = None,
+    ) -> None:
+        """Optional one-shot dump of the exact clip the decoder received.
+
+        Enabled by ``JARVIS_VOICE_DIAG_WAV=<path prefix>``. ``audio`` is the
+        post-resample, pre-decode array, so the WAV and the numbers are the
+        decoder's own input rather than a re-reading of the queue. ``raw`` is the
+        same clip before the satellite preprocessor and ``pre`` its applied
+        settings, so the two scale stages can be told apart by their own numbers.
+        Raw segment values are kept unfiltered next to the filtered text, so a
+        dropped row is visible as a decision and not as a missing line.
+        """
+        prefix = (os.environ.get("JARVIS_VOICE_DIAG_WAV") or "").strip()
+        if not prefix or np is None or audio is None:
+            return
+        try:
+            import json as _json
+            import wave as _wave
+
+            flat = np.asarray(audio).flatten()
+            count = int(flat.size)
+            if count == 0:
+                return
+            doubles = flat.astype(np.float64)
+            frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+            frame_samples = int(
+                getattr(self, "_frame_samples", 0)
+                or round(self._samplerate * frame_ms / 1000.0)
+            )
+            # Trailing all-zero grid frames are the endpoint padding that
+            # ``pad_until_endpoint`` queued behind the last delivered block.
+            padding_frames = 0
+            for offset in range(count - frame_samples, -1, -frame_samples):
+                window = doubles[offset: offset + frame_samples]
+                if window.size and float(np.max(np.abs(window))) == 0.0:
+                    padding_frames += 1
+                else:
+                    break
+            rows = []
+            for seg in segments or []:
+                if isinstance(seg, dict):
+                    rows.append(
+                        {
+                            "text": (seg.get("text") or "").strip(),
+                            "avg_logprob": seg.get("avg_logprob"),
+                            "no_speech_prob": seg.get("no_speech_prob"),
+                        }
+                    )
+                else:
+                    rows.append(
+                        {
+                            "text": (getattr(seg, "text", "") or "").strip(),
+                            "avg_logprob": getattr(seg, "avg_logprob", None),
+                            "no_speech_prob": getattr(seg, "no_speech_prob", None),
+                        }
+                    )
+            # Which grid frames actually carried energy: the voiced boundaries
+            # the endpoint produced, straight from the decoder's own input.
+            voiced_first = None
+            voiced_last = None
+            if frame_samples > 0:
+                limit = max(1e-4, 0.1 * float(np.max(np.abs(doubles))))
+                for frame_index, offset in enumerate(
+                    range(0, count - frame_samples + 1, frame_samples)
+                ):
+                    level = float(
+                        np.sqrt(
+                            np.mean(np.square(doubles[offset: offset + frame_samples]))
+                        )
+                    )
+                    if level >= limit:
+                        if voiced_first is None:
+                            voiced_first = frame_index
+                        voiced_last = frame_index
+            # Same numbers as everywhere else: one call to ``_clip_levels`` for
+            # the decoder input, plus the pre-preprocess array beside it.
+            raw_vec = np.asarray(
+                raw if raw is not None else audio
+            ).flatten().astype(np.float64)
+            own_levels = _clip_levels(
+                doubles.astype(np.float32), frame_samples, state or {}
+            )
+            own_levels["raw_float32"] = _stats_of(raw_vec)
+            own_levels["raw_int16"] = _stats_of(
+                np.rint(np.clip(raw_vec, -1.0, 1.0) * 32768.0)
+            )
+            own_levels["dbfs_rms_raw"] = _dbfs_of(own_levels["raw_float32"], "rms")
+            own_levels["dbfs_peak_raw"] = _dbfs_of(own_levels["raw_float32"], "peak")
+            own_levels["raw_scale_ratio_int16_over_float32"] = (
+                None
+                if not own_levels["raw_float32"].get("rms")
+                else round(
+                    float(own_levels["raw_int16"].get("rms") or 0.0)
+                    / float(own_levels["raw_float32"]["rms"]),
+                    2,
+                )
+            )
+            token = self._turn_context
+            # ``state`` is the caller's snapshot: by the time the dump runs,
+            # ``_finalize_utterance`` has already put a fresh state in place.
+            assembly = dict(
+                state if state is not None else (getattr(self, "_frame_state", {}) or {})
+            )
+            speech_first = assembly.get("first_voiced_offset")
+            speech_last = assembly.get("last_voiced_offset")
+            speech_span_s = (
+                None
+                if speech_first is None or speech_last is None
+                else round(
+                    (int(speech_last) - int(speech_first) + 1) * frame_ms / 1000.0, 4
+                )
+            )
+            index = len(getattr(self, "_diag_count", []))
+            numbers = {
+                "index": index,
+                "note": note,
+                "source": source,
+                "stream": None if stream is None else tuple(stream),
+                "turn_context": None
+                if token is None
+                else {
+                    "source": getattr(token, "source", None),
+                    "device_id": getattr(token, "device_id", None),
+                    "connection_generation": getattr(
+                        token, "connection_generation", None
+                    ),
+                    "session_generation": getattr(token, "session_generation", None),
+                },
+                "sample_rate": int(self._samplerate),
+                "channels": 1,
+                "sample_width_bytes": 2,
+                "samples": count,
+                "duration_s": round(count / float(self._samplerate), 4),
+                "rms": round(float(np.sqrt(np.mean(np.square(doubles)))), 8),
+                "peak": round(float(np.max(np.abs(doubles))), 8),
+                "dc_offset": round(float(np.mean(doubles)), 8),
+                "clipped_ratio": round(
+                    float(np.count_nonzero(np.abs(doubles) >= 0.999)) / count, 6
+                ),
+                # Levels of the clip the decoder received, and of the same clip
+                # before the satellite preprocessor: int16 rms equals float rms
+                # times 32768 when PCM16 was divided by 32768 exactly once.
+                "audio_level": {
+                    **own_levels,
+                    "trailing_silence_frames": padding_frames,
+                },
+                "preprocessor": dict(pre or {}),
+                "vad_start_epoch": started_at,
+                "vad_end_epoch": ended_at,
+                "vad_span_s": round(
+                    (ended_at - started_at) if started_at and ended_at else 0.0, 4
+                ),
+                "trailing_padding_frames": padding_frames,
+                "trailing_padding_ms": round(
+                    padding_frames * frame_ms, 1
+                ),
+                "grid_frame_samples": frame_samples,
+                "voiced_first_frame": voiced_first,
+                "voiced_last_frame": voiced_last,
+                "voiced_first_frame_ms": None
+                if voiced_first is None
+                else round(voiced_first * frame_ms, 1),
+                "voiced_last_frame_ms": None
+                if voiced_last is None
+                else round((voiced_last + 1) * frame_ms, 1),
+                "endpoint_silence_ms": int(
+                    getattr(self.cfg, "endpoint_silence_ms", 800)
+                ),
+                "min_audio_duration_s": float(
+                    getattr(self.cfg, "whisper_min_audio_duration", 0.15)
+                ),
+                "min_confidence": float(
+                    getattr(self.cfg, "whisper_min_confidence", 0.3)
+                ),
+                "no_speech_threshold": float(
+                    getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
+                ),
+                "whisper_model": str(getattr(self.cfg, "whisper_model", "")),
+                "whisper_language": self._whisper_language_code(),
+                "last_detected_language": self._last_detected_language,
+                "raw_segments": rows,
+                "filtered_text": text,
+                "callback_count": int(getattr(self, "_callback_count", 0) or 0),
+                "queue_size": int(self._audio_q.qsize()),
+                "device_metrics": _sink_counters(self._voice_pe_sink),
+                # Assembly bookkeeping of this very clip, straight from the state
+                # machine, plus the decoder options this backend actually takes.
+                # Assembly bookkeeping of this very clip, straight from the state
+                # machine, plus the decoder options this backend actually takes.
+                "frame_state": assembly,
+                "speech_span_s": speech_span_s,
+                "asr_backend": self._whisper_backend or "",
+                "asr_version": self._asr_version,
+                "transcribe_kwargs": dict(self._transcribe_kwargs),
+            }
+            if not hasattr(self, "_diag_count"):
+                self._diag_count = []
+            self._diag_count.append(index)
+            wav_path = f"{prefix}-{index}.wav"
+            with _wave.open(wav_path, "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(int(self._samplerate))
+                handle.writeframes(
+                    (np.clip(doubles, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                )
+            with open(f"{prefix}-{index}.json", "w", encoding="utf-8") as handle:
+                _json.dump(numbers, handle, indent=2)
+            debug_log(
+                f"clip diagnostic: {wav_path} samples={count} "
+                f"rms={numbers['rms']} peak={numbers['peak']} "
+                f"dc={numbers['dc_offset']} pad_ms={numbers['trailing_padding_ms']} "
+                f"raw={len(rows)} filtered='{text[:60]}'",
+                "voice",
+            )
+        except Exception as e:
+            debug_log(f"clip diagnostic failed: {e}", "voice")
+
     def _finalize_utterance(self) -> None:
-        """Process completed utterance through speech recognition."""
+        """Close one utterance with exactly one terminal STT outcome.
+
+        The frame list is already the continuous waveform of this utterance
+        (pre-roll, every frame after the trigger, clipped at the last voiced
+        frame plus the post-roll). The stage itself returns a status and the
+        segment metadata; whichever way it leaves - transcript, skip, filter,
+        cancel, stale or decoder failure - the counters and the last-segment
+        record are written once, in the ``finally``.
+        """
         # Whichever microphone fed this utterance, it is complete now: the tag
         # is taken off here so the next block can come from either source.
         utterance_source = self._audio_source
+        utterance_stream = getattr(self, "_audio_stream", None)
+        utterance_state = dict(getattr(self, "_frame_state", {}) or {})
         self._audio_source = None
+        self._frame_state = {
+            "first_voiced_offset": None,
+            "last_voiced_offset": None,
+            "voiced_frame_count": 0,
+            "total_frame_count": 0,
+            "trailing_silence_frames": 0,
+            "post_roll_frames": 0,
+        }
+        stt_status = "filtered"
+        segment: dict = {}
+        try:
+            stt_status, segment = self._transcribe_utterance(
+                utterance_source, utterance_stream, utterance_state
+            )
+        finally:
+            self._record_stt_end(
+                stt_status, utterance_source, utterance_stream, utterance_state, segment
+            )
+
+    def _record_stt_end(
+        self,
+        status: str,
+        source,
+        stream,
+        state: dict,
+        segment: dict,
+    ) -> None:
+        """Write the one terminal STT record of the utterance that just closed."""
+        token = self._turn_context
+        known = (
+            "success",
+            "skipped_too_short",
+            "filtered",
+            "cancelled",
+            "stale",
+            "decoder_error",
+        )
+        resolved = status if status in known else "filtered"
+        if resolved == "success" and token is not None:
+            # The turn identity is gone from the sink when the run was replaced.
+            if self._sink_holds_session() and self._sink_generation() != int(
+                getattr(token, "session_generation", -1)
+            ):
+                resolved = "stale"
+        elif resolved == "success" and (self._should_stop or self._dictation_active):
+            resolved = "cancelled"
+
+        self.metrics["stt_end"] = int(self.metrics.get("stt_end", 0)) + 1
+        key = f"stt_end_{resolved}"
+        self.metrics[key] = int(self.metrics.get(key, 0)) + 1
+
+        record = dict(segment or {})
+        record["status"] = resolved
+        record["source"] = source
+        record["stream"] = None if stream is None else tuple(stream)
+        record["first_voiced_offset"] = state.get("first_voiced_offset")
+        record["last_voiced_offset"] = state.get("last_voiced_offset")
+        record["voiced_frame_count"] = int(state.get("voiced_frame_count") or 0)
+        record["total_frame_count"] = int(state.get("total_frame_count") or 0)
+        record["trailing_silence_frames"] = int(
+            state.get("trailing_silence_frames") or 0
+        )
+        record["post_roll_frames"] = int(state.get("post_roll_frames") or 0)
+        record["asr_backend"] = self._whisper_backend or ""
+        record["asr_version"] = self._asr_version
+        record["transcribe_kwargs"] = dict(self._transcribe_kwargs)
+        self.metrics["last_segment"] = record
+        if str(source) == AUDIO_SOURCE_VOICE_PE:
+            # This turn belongs to a satellite, so its whole trail - status,
+            # text, stream - is also kept under a name the satellite's own
+            # checkpoints can read without mixing in local-microphone turns.
+            self.metrics["last_satellite_segment"] = record
+
+        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        debug_log(
+            f"stt_end status={resolved} source={source} "
+            f"stream={None if stream is None else tuple(stream)} "
+            f"first_voiced={record['first_voiced_offset']} "
+            f"last_voiced={record['last_voiced_offset']} "
+            f"voiced_frames={record['voiced_frame_count']} "
+            f"total_frames={record['total_frame_count']} "
+            f"trailing_silence={record['trailing_silence_frames']} "
+            f"post_roll_ms={record['post_roll_frames'] * frame_ms} "
+            f"rows={record.get('row_count')} "
+            f"avg_logprob={record.get('avg_logprob')} "
+            f"no_speech_prob={record.get('no_speech_prob')}",
+            "voice",
+        )
+        if resolved != "success":
+            # Exactly one terminal milestone per started run: the success path
+            # already sent ``transcript`` inside ``_process_transcript``.
+            reason = str(record.get("reason") or record.get("raw_transcript") or "")
+            self._voice_pe_event("error", f"{resolved}|{reason}")
+
+    def _transcribe_utterance(
+        self, utterance_source, utterance_stream, utterance_state
+    ) -> tuple:
+        """Run speech recognition on the finished clip and report its outcome."""
         if np is None or not self._utterance_frames:
             self.is_speech_active = False
             self._silence_frames = 0
             self._utterance_frames = []
-            self._remaining_samples.pop(utterance_source or AUDIO_SOURCE_LOCAL, None)
-            return
+            if utterance_stream is not None:
+                self._remaining_samples.pop(utterance_stream, None)
+            token = self._turn_context
+            debug_log(
+                "utterance has no grid frames: "
+                f"source={utterance_source} stream={None if utterance_stream is None else tuple(utterance_stream)} "
+                f"source_field={getattr(token, 'source', None)} "
+                f"device_id={getattr(token, 'device_id', None)} "
+                f"connection_generation={getattr(token, 'connection_generation', None)} "
+                f"session_generation={getattr(token, 'session_generation', None)} "
+                f"queue={self._audio_q.qsize()} "
+                f"remainders={ {str(k): int(v.size) for k, v in self._remaining_samples.items()} }",
+                "voice",
+            )
+            return ("skipped_too_short", {"reason": "no_grid_frames"})
 
         # Track when utterance ends - but don't overwrite global timing yet
         utterance_end_time = time.time()
@@ -2893,22 +3725,161 @@ class VoiceListener(threading.Thread):
         self._utterance_frames = []
 
         if audio is None or audio.size == 0:
-            return
+            self._dump_clip_diagnostic(
+                np.zeros(1, dtype=np.float32) if np is not None else None,
+                utterance_source,
+                utterance_stream,
+                utterance_start_time,
+                utterance_end_time,
+                None,
+                "",
+                note="empty_concatenation",
+                state=utterance_state,
+            )
+            return ("skipped_too_short", {"reason": "empty_concatenation"})
 
         # Resample to Whisper's expected rate if the stream ran at a different rate
         stream_rate = getattr(self, "_stream_samplerate", self._samplerate)
         if stream_rate != self._samplerate:
             audio = _resample(audio, stream_rate, self._samplerate)
 
-        # Filter short audio
+        # ``raw_audio`` is what the microphone delivered (PCM16 became float32 by
+        # one division by 32768, in the transport); ``audio`` is what the decoder
+        # will be handed, a corrected copy for the satellite when the opt-in
+        # preprocessor is on. Levels are measured on both.
+        raw_audio = audio
+        frame_count_samples = int(getattr(self, "_frame_samples", 0) or 0)
+        pre_meta: dict = {"enabled": False}
+        levels = _clip_levels(audio, frame_count_samples, utterance_state)
+        levels["raw_float32"] = _stats_of(np.asarray(raw_audio).flatten())
+        levels["raw_int16"] = _stats_of(
+            np.rint(np.clip(np.asarray(raw_audio).flatten(), -1.0, 1.0) * 32768.0)
+        )
+        levels["dbfs_rms_raw"] = _dbfs_of(levels["raw_float32"], "rms")
+        levels["dbfs_peak_raw"] = _dbfs_of(levels["raw_float32"], "peak")
+        levels["raw_scale_ratio_int16_over_float32"] = (
+            None
+            if not levels["raw_float32"].get("rms")
+            else round(
+                float(levels["raw_int16"].get("rms") or 0.0)
+                / float(levels["raw_float32"]["rms"]),
+                2,
+            )
+        )
+        if str(utterance_source) == AUDIO_SOURCE_VOICE_PE and bool(
+            getattr(self.cfg, "satellite_stt_auto_gain", False)
+        ):
+            audio, pre_meta = _satellite_preprocess(
+                audio, frame_count_samples, utterance_state
+            )
+            corrected = _clip_levels(audio, frame_count_samples, utterance_state)
+            corrected.update(
+                {
+                    key: levels[key]
+                    for key in (
+                        "raw_float32",
+                        "raw_int16",
+                        "dbfs_rms_raw",
+                        "dbfs_peak_raw",
+                        "raw_scale_ratio_int16_over_float32",
+                    )
+                    if key in levels
+                }
+            )
+            levels = corrected
+
+        # The real speech span, in seconds: first voiced frame to last voiced
+        # frame, both from the state machine. The pre-roll head and the endpoint
+        # wait are not part of it, so the minimum length is judged on speech.
+        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        first_voiced = utterance_state.get("first_voiced_offset")
+        last_voiced = utterance_state.get("last_voiced_offset")
+        if first_voiced is None or last_voiced is None:
+            speech_span_s = len(audio) / float(self._samplerate)
+        else:
+            speech_span_s = (int(last_voiced) - int(first_voiced) + 1) * frame_ms / 1000.0
+
+        # Filter short audio on the speech span, not on the stored clip length.
         audio_duration = len(audio) / self._samplerate
         min_duration = getattr(self.cfg, "whisper_min_audio_duration", 0.15)
-        if audio_duration < min_duration:
-            debug_log(f"audio too short ({audio_duration:.2f}s < {min_duration}s), ignoring", "voice")
+        if speech_span_s < min_duration:
+            debug_log(
+                f"speech span too short ({speech_span_s:.3f}s < {min_duration}s), "
+                f"clip {audio_duration:.3f}s, ignoring",
+                "voice",
+            )
+            self._dump_clip_diagnostic(
+                audio,
+                utterance_source,
+                utterance_stream,
+                utterance_start_time,
+                utterance_end_time,
+                None,
+                "",
+                note=f"too_short:{speech_span_s:.3f}",
+                state=utterance_state,
+                raw=raw_audio,
+                pre=pre_meta,
+            )
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
-            return
+            return (
+                "skipped_too_short",
+                {
+                    "reason": "speech_span_below_minimum",
+                    "speech_span_s": round(speech_span_s, 4),
+                    "clip_duration_s": round(audio_duration, 4),
+                    "min_audio_duration_s": float(min_duration),
+                    "audio_level": levels,
+                    "preprocessor": pre_meta,
+                },
+            )
+
+        # A satellite clip whose speech is barely above its own silence is a
+        # noise floor, not a sentence: reported as filtered, never sent to the
+        # decoder as if it were speech.
+        snr_db = levels.get("snr_db")
+        if (
+            str(utterance_source) == AUDIO_SOURCE_VOICE_PE
+            and snr_db is not None
+            and float(snr_db) < SATELLITE_MIN_SNR_DB
+        ):
+            debug_log(
+                f"satellite clip below the SNR gate: voiced={levels.get('voiced_rms')} "
+                f"silent={levels.get('silent_rms')} snr={snr_db} dB "
+                f"< {SATELLITE_MIN_SNR_DB} dB",
+                "voice",
+            )
+            self._dump_clip_diagnostic(
+                audio,
+                utterance_source,
+                utterance_stream,
+                utterance_start_time,
+                utterance_end_time,
+                None,
+                "",
+                note=f"insufficient_snr:{snr_db}",
+                state=utterance_state,
+                raw=raw_audio,
+                pre=pre_meta,
+            )
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return (
+                "filtered",
+                {
+                    "reason": "insufficient_snr",
+                    "snr_db": snr_db,
+                    "min_snr_db": SATELLITE_MIN_SNR_DB,
+                    "voiced_rms": levels.get("voiced_rms"),
+                    "silent_rms": levels.get("silent_rms"),
+                    "speech_span_s": round(speech_span_s, 4),
+                    "audio_level": levels,
+                    "preprocessor": pre_meta,
+                },
+            )
 
         # Speech recognition with appropriate backend
+        # ``raw_rows`` keeps the unfiltered decoder rows for the recorded status.
+        raw_rows: list = []
         try:
             if self._whisper_backend == "mlx":
                 # MLX Whisper transcription — same decode contract as the
@@ -2971,32 +3942,30 @@ class VoiceListener(threading.Thread):
                 else:
                     # Fallback to full text if no segments
                     text = result.get("text", "").strip()
+                raw_rows = list(segments)
+                self._dump_clip_diagnostic(
+                    audio,
+                    utterance_source,
+                    utterance_stream,
+                    utterance_start_time,
+                    utterance_end_time,
+                    segments,
+                    text,
+                    note="mlx",
+                    state=utterance_state,
+                    raw=raw_audio,
+                    pre=pre_meta,
+                )
             else:
-                # faster-whisper transcription
-                # Endpointing is entirely the outer webrtcvad/RMS path, so the
-                # model's own Silero pass stays off (`vad_filter=False`) and the
-                # clip it receives is already trimmed.
-                # Per-utterance clips are short and self-contained, so
-                # `condition_on_previous_text=False`: the previous segment's
-                # text is what makes the decoder emit its boilerplate
-                # (`Thank you.`, `If so....`) on the next near-empty clip. All
-                # the context the decision needs rides in the transcript
-                # buffer instead. `without_timestamps=True` is free speed: only
-                # `text`, `avg_logprob` and `no_speech_prob` are read here, and
-                # buffer timings come from the VAD, not from the decoder.
-                # `suppress_nospeech_text=True` drops the non-speech marker
-                # tokens so bare `(mrmusic)`-style rows cannot reach the judge.
+                # faster-whisper transcription. The decode options were resolved
+                # once for this installed backend at model-init time, so the
+                # complete compatible set goes in one call and no per-call retry
+                # can narrow the semantics. `language` is the per-clip value.
                 with self.transcribe_lock:
                     _language = self._whisper_language_code()
-                    try:
-                        segments, _info = self.model.transcribe(
-                            audio, language=_language, vad_filter=False,
-                            condition_on_previous_text=False,
-                            without_timestamps=True,
-                            suppress_nospeech_text=True,
-                        )
-                    except TypeError:
-                        segments, _info = self.model.transcribe(audio, language=_language)
+                    segments, _info = self.model.transcribe(
+                        audio, language=_language, **self._transcribe_kwargs
+                    )
                     segments_list = list(segments)
                 # Capture the detected language (faster-whisper exposes it
                 # on the info object). Guard against older API variants
@@ -3009,15 +3978,81 @@ class VoiceListener(threading.Thread):
                     self._last_detected_language = _language
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
+                raw_rows = list(segments_list)
+                self._dump_clip_diagnostic(
+                    audio,
+                    utterance_source,
+                    utterance_stream,
+                    utterance_start_time,
+                    utterance_end_time,
+                    segments_list,
+                    text,
+                    note=(
+                        "faster-whisper"
+                        if filtered_segments
+                        else "faster-whisper:all_segments_filtered"
+                    ),
+                    state=utterance_state,
+                    raw=raw_audio,
+                    pre=pre_meta,
+                )
+        except TypeError as e:
+            # A genuine signature mismatch is a structured failure: the decode
+            # options were resolved from this very install, so a TypeError here
+            # means the model object is not the one that was probed. No retry
+            # with different semantics.
+            debug_log(f"transcribe TypeError (decoder_error): {e}", "voice")
+            if sys.platform == 'win32':
+                print(f"  ❌ Whisper signature error: {e}", flush=True)
+            return ("decoder_error", {"reason": f"type_error: {e}"})
         except Exception as e:
             debug_log(f"transcription error: {e}", "voice")
             if sys.platform == 'win32':
                 print(f"  âŒ Whisper error: {e}", flush=True)
             text = ""
 
+        # Keep the raw decoder output and the first row's own statistics, so the
+        # status below is a recorded decision and not just a printed line.
+        decoder_text = text
+        segment: dict = {
+            "raw_transcript": decoder_text,
+            "row_count": len(raw_rows),
+            "audio_level": levels,
+            "preprocessor": pre_meta,
+        }
+        for row in raw_rows:
+            value = (
+                row.get("avg_logprob")
+                if isinstance(row, dict)
+                else getattr(row, "avg_logprob", None)
+            )
+            if value is not None:
+                segment["avg_logprob"] = value
+                break
+        for row in raw_rows:
+            value = (
+                row.get("no_speech_prob")
+                if isinstance(row, dict)
+                else getattr(row, "no_speech_prob", None)
+            )
+            if value is not None:
+                segment["no_speech_prob"] = value
+                break
+
         if not text or not text.strip():
+            # No usable text: either the decoder returned nothing at all or the
+            # confidence filter dropped every row it did return.
+            reason = (
+                "no_decoder_rows"
+                if not raw_rows
+                else "all_rows_below_confidence"
+            )
+            segment["reason"] = reason
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
-            return
+            return (
+                "filtered" if raw_rows else "skipped_too_short",
+                segment,
+            )
 
         # Offline Hunspell repair of the FINAL transcript only — partial
         # in-progress text never reaches this point. Both values survive: the
@@ -3060,8 +4095,9 @@ class VoiceListener(threading.Thread):
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):
             debug_log(f"rejected repetitive hallucination: '{text[:80]}...'", "voice")
+            segment["reason"] = "repetitive_hallucination"
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
-            return
+            return ("filtered", segment)
 
         # Add to transcript buffer for context-aware processing
         # Mark as "during TTS" if utterance STARTED during TTS (not just if TTS is still speaking now)
@@ -3088,3 +4124,28 @@ class VoiceListener(threading.Thread):
             utterance_end_time,
             utterance_source,
         )
+        # The record of this turn: what the decoder said, what survived the
+        # filter, what was emitted for dispatch, and the clip's own timeline.
+        segment["raw_transcript"] = whisper_transcript
+        segment["filtered_text"] = text
+        speech_span_s = None
+        if (
+            utterance_state.get("first_voiced_offset") is not None
+            and utterance_state.get("last_voiced_offset") is not None
+        ):
+            speech_span_s = round(
+                (
+                    int(utterance_state["last_voiced_offset"])
+                    - int(utterance_state["first_voiced_offset"])
+                    + 1
+                )
+                * int(getattr(self.cfg, "vad_frame_ms", 20))
+                / 1000.0,
+                4,
+            )
+        segment["speech_span_s"] = speech_span_s
+        segment["clip_duration_s"] = round(
+            len(audio) / float(self._samplerate), 4
+        )
+        segment["query"] = self.metrics.get("last_dispatched_query", "")
+        return ("success", segment)

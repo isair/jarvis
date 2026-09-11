@@ -375,6 +375,14 @@ class TtsHttpServer:
         #: Answered GETs per payload key, and the count of missing keys.
         self.hits: "dict[str, int]" = {}
         self.missing = 0
+        #: Status code seen per key, bytes handed out per key, and the one
+        #: content type this server answers with. Together with ``hits`` these
+        #: let one generation be traced end to end: served, fetched, complete.
+        self.status_codes: "dict[str, int]" = {}
+        self.served_bytes: "dict[str, int]" = {}
+        #: Stored WAV size per key, so a non-empty payload can be proven.
+        self.sizes: "dict[str, int]" = {}
+        self.content_type = "audio/wav"
 
     async def start(self) -> int:
         """Bind an ephemeral IPv4 port and return it.
@@ -405,13 +413,32 @@ class TtsHttpServer:
     def put(self, key: str, pcm: bytes, sample_rate: int = SAMPLE_RATE) -> str:
         """Store one payload and return the path it is served under."""
         self._payloads[key] = wav_from_pcm(pcm, sample_rate)
+        self.sizes[key] = len(self._payloads[key])
         while len(self._payloads) > HTTP_PAYLOAD_KEEP:
-            self._payloads.pop(next(iter(self._payloads)))
+            oldest = next(iter(self._payloads))
+            self._payloads.pop(oldest)
+            self.sizes.pop(oldest, None)
         return f"/{key}"
 
     def hit_count(self, key: str) -> int:
         """Number of answered GETs for exactly this payload key."""
         return int(self.hits.get(key, 0))
+
+    def payload_bytes(self, key: str) -> int:
+        """Size of the stored WAV for one key, 0 when nothing is stored."""
+        return int(self.sizes.get(key, 0))
+
+    def delivery_for(self, key: str) -> dict:
+        """Everything answered for one key: hits, status, bytes, content type."""
+        return {
+            "key": str(key),
+            "stored_bytes": int(self.sizes.get(key, 0)),
+            "hits": int(self.hits.get(key, 0)),
+            "status": self.status_codes.get(key),
+            "served_bytes": int(self.served_bytes.get(key, 0)),
+            "content_type": self.content_type,
+            "port": int(self.port),
+        }
 
     async def _handle(self, reader, writer) -> None:
         try:
@@ -426,13 +453,17 @@ class TtsHttpServer:
         # Per-key accounting: an unrelated or missing path must not be able to
         # satisfy the check for a specific media key.
         self.requests += 1
+        status = 200 if body else 404
         if body:
             self.hits[path] = int(self.hits.get(path, 0)) + 1
+            self.served_bytes[path] = int(self.served_bytes.get(path, 0)) + len(body)
         else:
             self.missing += 1
+        if path:
+            self.status_codes[path] = int(status)
         head = (
-            f"HTTP/1.1 {200 if body else 404} OK\r\n"
-            f"Content-Type: audio/wav\r\n"
+            f"HTTP/1.1 {status} {'OK' if body else 'Not Found'}\r\n"
+            f"Content-Type: {self.content_type}\r\n"
             f"Content-Length: {len(body)}\r\n"
             "Connection: close\r\n\r\n"
         ).encode("latin-1")

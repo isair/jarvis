@@ -113,10 +113,18 @@ AUDIO_SOURCE_LOCAL = "local"
 AUDIO_SOURCE_VOICE_PE = "voice_pe"
 
 
-#: One microphone block with the identity of the turn it belongs to. The
-#: listener drops a frame whose generation is no longer the open one, so audio of
-#: a cancelled run cannot be appended to a newer utterance.
-AudioFrame = namedtuple("AudioFrame", "source generation samples")
+#: Full identity of one microphone stream: which satellite, which connection of
+#: it, and which run inside that connection. Two satellites that both number
+#: their first run ``1`` stay distinguishable through ``device_id``.
+StreamId = namedtuple("StreamId", "device_id connection_generation session_generation")
+
+#: Identity of the local microphone, which has no satellite numbering at all.
+LOCAL_STREAM = StreamId("", 0, 0)
+
+#: One microphone block with the identity of the stream it belongs to. The
+#: listener drops a frame whose stream is no longer the open one, so audio of a
+#: cancelled run or of another satellite cannot widen a newer utterance.
+AudioFrame = namedtuple("AudioFrame", "stream source samples")
 
 
 @dataclass(frozen=True)
@@ -132,6 +140,13 @@ class TurnContext:
     device_id: str
     connection_generation: int
     session_generation: int
+
+    @property
+    def stream(self) -> "StreamId":
+        """The microphone-stream identity this turn owns."""
+        return StreamId(
+            str(self.device_id), int(self.connection_generation), int(self.session_generation)
+        )
 
 
 @dataclass
@@ -150,14 +165,39 @@ class PendingPlayback:
 
 
 def is_current_turn(
-    context: Optional[TurnContext], device_id: str, session_generation: int
+    context: Optional[TurnContext],
+    device_id: str,
+    connection_generation: int,
+    session_generation: int,
+    source: Optional[str] = None,
 ) -> bool:
-    """Whether ``context`` still names the open run of ``device_id``."""
+    """Whether ``context`` still names the open run, every field compared.
+
+    Fail-closed: no context, a missing field or a mismatch is a stale identity.
+    """
     if context is None:
         return False
-    return str(context.device_id) == str(device_id) and int(
-        context.session_generation
-    ) == int(session_generation)
+    if source is not None and str(context.source) != str(source):
+        return False
+    if str(context.device_id) != str(device_id):
+        return False
+    if int(context.connection_generation) != int(connection_generation):
+        return False
+    return int(context.session_generation) == int(session_generation)
+
+
+def is_current_stream(
+    stream: "StreamId", context: Optional[TurnContext]
+) -> bool:
+    """Whether ``stream`` is the one the given turn owns; local always is."""
+    if stream is None:
+        return False
+    if str(stream.device_id or "") == "" and int(stream.session_generation) == 0:
+        return True
+    if context is None:
+        return False
+    return stream == context.stream
+
 
 
 

@@ -39,8 +39,10 @@ class StateManager:
         self._state = ListeningState.WAKE_WORD
         self._state_lock = threading.Lock()
 
-        # Collection state
+        # Collection state. Text and turn identity are one atomic pair, so a
+        # milestone always carries the identity of the turn that produced it.
         self._pending_query: str = ""
+        self._pending_context: Optional[object] = None
         self._last_voice_time: float = 0.0
         self._collect_start_time: float = 0.0
 
@@ -71,16 +73,19 @@ class StateManager:
         """Check if hot window is currently active."""
         return self.get_state() == ListeningState.HOT_WINDOW
 
-    def start_collection(self, initial_text: str = "") -> None:
+    def start_collection(self, initial_text: str = "", context: Optional[object] = None) -> None:
         """
         Start query collection mode.
 
         Args:
             initial_text: Optional initial text to seed the collection
+            context: Identity of the turn that produced this text, stored with
+                it in the same locked write
         """
         with self._state_lock:
             self._state = ListeningState.COLLECTING
             self._pending_query = initial_text.strip()
+            self._pending_context = context
             self._last_voice_time = time.time()
             self._collect_start_time = self._last_voice_time
 
@@ -110,6 +115,8 @@ class StateManager:
 
         with self._state_lock:
             self._pending_query = (self._pending_query + " " + text).strip()
+            # The identity stays with the collection; a later fragment of the
+            # same turn must not replace it.
             self._last_voice_time = time.time()
 
         debug_log(f"added to collection: '{text}' -> '{self._pending_query}'", "state")
@@ -119,6 +126,56 @@ class StateManager:
         with self._state_lock:
             return self._pending_query
 
+    def get_pending(self) -> tuple:
+        """The atomic pair ``(text, turn_context)`` of the collection."""
+        with self._state_lock:
+            return self._pending_query, self._pending_context
+
+    def clear_pending(self) -> tuple:
+        """Take ``(text, turn_context)`` out of the collection in one write."""
+        with self._state_lock:
+            query = self._pending_query
+            context = self._pending_context
+            self._pending_query = ""
+            self._pending_context = None
+            collect_start_time = self._collect_start_time
+            if self._state == ListeningState.COLLECTING:
+                self._state = ListeningState.WAKE_WORD
+
+        if query and collect_start_time > 0:
+            duration = time.time() - collect_start_time
+            debug_log(f"collection cleared: '{query}' (duration: {duration:.2f}s)", "state")
+        return query, context
+
+    def cancel_pending(self, context: Optional[object] = None) -> bool:
+        """Drop a pending query: the named turn, or any with ``context=None``.
+
+        Returns whether the collection was released by this call.
+        """
+        with self._state_lock:
+            if context is None or self._pending_context is None:
+                released = bool(self._pending_query)
+                self._pending_query = ""
+                self._pending_context = None
+                if self._state == ListeningState.COLLECTING:
+                    self._state = ListeningState.WAKE_WORD
+                return released
+            same = (
+                getattr(self._pending_context, "device_id", None)
+                == getattr(context, "device_id", None)
+                and getattr(self._pending_context, "connection_generation", None)
+                == getattr(context, "connection_generation", None)
+                and getattr(self._pending_context, "session_generation", None)
+                == getattr(context, "session_generation", None)
+            )
+            if not same:
+                return False
+            self._pending_query = ""
+            self._pending_context = None
+            if self._state == ListeningState.COLLECTING:
+                self._state = ListeningState.WAKE_WORD
+            return True
+
     def clear_collection(self) -> str:
         """
         Clear and return the current pending query.
@@ -126,24 +183,7 @@ class StateManager:
         Returns:
             The query that was being collected
         """
-        with self._state_lock:
-            query = self._pending_query
-            collect_start_time = self._collect_start_time
-            self._pending_query = ""
-            if self._state == ListeningState.COLLECTING:
-                self._state = ListeningState.WAKE_WORD
-
-        if query and collect_start_time > 0:
-            end_time = time.time()
-            duration = end_time - collect_start_time
-            start_time_str = datetime.fromtimestamp(collect_start_time).strftime('%H:%M:%S.%f')[:-3]
-            end_time_str = datetime.fromtimestamp(end_time).strftime('%H:%M:%S.%f')[:-3]
-            debug_log(f"collection cleared: '{query}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
-        else:
-            debug_log(f"collection cleared: '{query}'", "state")
-
-        # Note: Don't set face state here - it will be set to THINKING or ASLEEP by caller
-
+        query, _context = self.clear_pending()
         return query
 
     def check_collection_timeout(self) -> bool:

@@ -6,6 +6,7 @@ not how the stubs were called. No network, no live device.
 
 import asyncio
 import queue
+from collections import deque as _Deque
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,7 @@ from jarvis.integrations.voice_pe.models import (
     FEATURE_VOICE_ASSISTANT,
     DeviceState,
     SessionState,
+    StreamId,
     VoicePEConfig,
 )
 from jarvis.integrations.voice_pe.tts_stream import (
@@ -434,10 +436,10 @@ class TestAudioIngress:
         metrics = {}
         ingress = AudioIngress(FakeListener(), _config(preferred_input_channel=1), metrics)
         ingress.put(b"\x01\x01", b"\x02\x02", 7)
-        item = ingress._queue.get_nowait()
-        # Every queued block carries the turn it belongs to.
+        item = ingress.items()[0]
+        # Every queued block carries the stream it belongs to.
         assert item.samples == b"\x02\x02"
-        assert item.generation == 7
+        assert item.stream == 7
         assert item.source == "voice_pe"
 
 
@@ -596,40 +598,93 @@ class TestFrameGrid:
     def test_tagged_bare_and_stamped_items_agree(self):
         import numpy as np
 
-        from jarvis.integrations.voice_pe.models import AudioFrame
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            AudioFrame,
+            StreamId,
+        )
         from jarvis.listening.listener import VoiceListener
 
         buf = np.zeros(512, dtype=np.float32)
-        stamped = VoiceListener._tagged_audio(AudioFrame("voice_pe", 3, buf))
+        stamped = VoiceListener._tagged_audio(
+            AudioFrame(StreamId("pe", 1, 3), "voice_pe", buf)
+        )
         legacy = VoiceListener._tagged_audio(("voice_pe", buf))
         bare = VoiceListener._tagged_audio(buf)
-        assert stamped[0] == "voice_pe" and stamped[1] == 3
-        assert legacy[0] == "voice_pe" and legacy[1] == 0
-        assert bare[0] == "local"
+        # The full stream identity travels with the block and the source with it.
+        assert stamped[0] == StreamId("pe", 1, 3) and stamped[1] == "voice_pe"
+        # A two-tuple and a bare buffer are the local microphone's shape.
+        assert legacy[0] == LOCAL_STREAM and legacy[1] == "voice_pe"
+        assert bare[0] == LOCAL_STREAM and bare[1] == "local"
         assert stamped[2] is buf and legacy[2] is buf and bare[2] is buf
 
     def test_stale_generation_frame_is_dropped(self):
-        from jarvis.integrations.voice_pe.models import AudioFrame
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            AudioFrame,
+            StreamId,
+            TurnContext,
+        )
         from jarvis.listening.listener import VoiceListener
 
         listener = _bare_listener()
+        open_stream = StreamId("pe", 1, 2)
 
         class _Sink:
-            def __init__(self):
-                self.generation = 2
-
             def holds_session(self):
                 return True
 
-            def current_session_generation(self):
-                return self.generation
+            def current_context(self):
+                return TurnContext("voice_pe", "pe", 1, 2)
 
-        sink = _Sink()
-        listener._voice_pe_sink = sink
-        assert listener._is_current_frame("voice_pe", 2) is True
-        assert listener._is_current_frame("voice_pe", 1) is False
-        # A local block has no satellite generation to be stale against.
-        assert listener._is_current_frame("local", 0) is True
+        listener._voice_pe_sink = _Sink()
+        # The identity of the open stream matches, everything else is stale.
+        assert listener._is_current_frame(open_stream, "voice_pe") is True
+        assert listener._is_current_frame(StreamId("pe", 1, 1), "voice_pe") is False
+        # A different satellite with the same numbering is stale too.
+        assert listener._is_current_frame(StreamId("other", 1, 2), "voice_pe") is False
+        # No satellite attached means no satellite frame is current.
+        listener._voice_pe_sink = None
+        assert listener._is_current_frame(open_stream, "voice_pe") is False
+        # Local blocks are current against the local stream and the bare shapes.
+        assert listener._is_current_frame(LOCAL_STREAM, "local") is True
+        assert listener._is_current_frame(
+            AudioFrame(LOCAL_STREAM, "local", None)[0], "local"
+        ) is True
+        listener.state_manager.stop()
+
+    def test_grid_containers_are_keyed_by_the_whole_stream(self):
+        import numpy as np
+        from collections import deque
+
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            AudioFrame,
+            StreamId,
+        )
+        from jarvis.listening.listener import VoiceListener
+
+        listener = _bare_listener()
+        buf = np.zeros(320, dtype=np.float32)
+        keys = []
+        for stream in (StreamId("a", 1, 1), StreamId("b", 1, 1), LOCAL_STREAM):
+            tagged = VoiceListener._tagged_audio(AudioFrame(stream, "voice_pe", buf))
+            key = (
+                str(tagged[0].device_id),
+                int(tagged[0].connection_generation),
+                int(tagged[0].session_generation),
+            )
+            keys.append(key)
+            listener._pre_rolls[key] = deque()
+            listener._remaining_samples[key] = buf
+        # Two satellites that both number their first run 1 keep separate grid
+        # continuity, and the local microphone is a third container.
+        assert len(set(keys)) == 3
+        assert len(listener._pre_rolls) == 3
+        assert len(listener._remaining_samples) == 3
+        listener._clear_audio_buffers()
+        assert listener._remaining_samples == {}
+        assert all(len(roll) == 0 for roll in listener._pre_rolls.values())
         listener.state_manager.stop()
 
 
@@ -785,14 +840,15 @@ class TestDeviceSession:
         async def _run():
             await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
             await device.handle_audio(b"\x01\x01", b"\x02\x02")
-            frame = device._ingress._queue.get_nowait()
-            return device.session.enhanced, frame.samples, frame.generation
+            frame = device._ingress.items()[0]
+            return device.session.enhanced, frame.samples, frame.stream
 
         enhanced, payload, generation = _run_loop(_run, device)
         assert enhanced is False
         assert payload == b"\x02\x02"
-        # Ingested blocks carry the generation of the run that opened them.
-        assert generation == 1
+        # Ingested blocks carry the whole stream of the run that opened them.
+        assert generation == StreamId("192.168.1.50", 0, 1)
+        assert generation.session_generation == 1
 
     def test_single_channel_firmware_falls_back_to_channel_zero(self):
         device = _device(
@@ -862,9 +918,10 @@ class TestDeviceSession:
 
         device = self._api_device()
         device.session_state = SessionState.SPEAKING
-        device._pending_playback = PendingPlayback(
+        device._pending_playback = _Deque()
+        device._pending_playback.append(PendingPlayback(
             generation=1, session_generation=1, media_id="1-1", egress="url"
-        )
+        ))
         _run_loop(
             lambda: device.handle_announcement_finished(SimpleNamespace(success=True)),
             device,
@@ -872,9 +929,9 @@ class TestDeviceSession:
         # continued_conversation is on: the next turn needs no wake word.
         assert device.session_state is SessionState.CONTINUE_PENDING
         assert device.last_finished_generation == 1
-        device._pending_playback = PendingPlayback(
+        device._pending_playback.append(PendingPlayback(
             generation=1, session_generation=1, media_id="1-2", egress="url"
-        )
+        ))
         _run_loop(
             lambda: device.handle_announcement_finished(SimpleNamespace(success=True)),
             device,
@@ -891,9 +948,9 @@ class TestDeviceSession:
             # Pre-announce finished: nothing was delivered yet.
             await device.handle_announcement_finished(SimpleNamespace(success=True))
             state_after_pre = device.session_state
-            device._pending_playback = PendingPlayback(
+            device._pending_playback = _Deque([PendingPlayback(
                 generation=1, session_generation=1, media_id="1-1", egress="url"
-            )
+            )])
             await device.handle_announcement_finished(SimpleNamespace(success=True))
             return state_after_pre, device.session_state
 
@@ -1432,13 +1489,15 @@ class TestLeaseAndBridges:
         fan = _Fanout([device])
 
         async def _run():
+            # An open run is what makes a contextless milestone attributable.
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
             fan.on_error("stt", "empty")
             for _ in range(2):
                 await asyncio.sleep(0.02)
             return [event for event, _ in device._client.events]
 
-        # One close: ERROR and the RUN_END that belongs to it.
-        assert _run_loop(_run, device) == [0, 2]
+        # One close: ERROR and the RUN_END that belongs to it, on this run.
+        assert _run_loop(_run, device) == [1, 3, 0, 2]
 
     def test_per_source_containers_are_separate(self):
         from jarvis.integrations.voice_pe.models import (
@@ -1837,14 +1896,12 @@ class TestStreamEndAndTokens:
             _audio_q = None
 
         ingress = AudioIngress(_Listener(), _config(audio_queue_ms=60), {})
-        ingress.mark_end_of_stream(AUDIO_SOURCE_VOICE_PE, 1)
+        ingress.mark_end_of_stream(1, AUDIO_SOURCE_VOICE_PE)
         ingress.put(b"\x01\x02")
-        items = []
-        while not ingress._queue.empty():
-            items.append(ingress._queue.get_nowait())
+        items = ingress.items()
         # The marker stayed in front and only the PCM block counted as samples.
         assert items[0].source == AUDIO_SOURCE_VOICE_PE
-        assert items[0].generation == 1
+        assert items[0].stream == 1
         assert items[1].samples == b"\x01\x02"
         # One sample of 16 kHz is 0.0625 ms, rounded to one decimal.
         assert ingress.depth_ms() == 0.1
@@ -1860,13 +1917,12 @@ class TestStreamEndAndTokens:
             _audio_q = None
 
         ingress = AudioIngress(_Listener(), _config(audio_queue_ms=60), {})
-        ingress.mark_end_of_stream(AUDIO_SOURCE_VOICE_PE, 4)
+        ingress.mark_end_of_stream(4, AUDIO_SOURCE_VOICE_PE)
         for index in range(40):
             ingress.put(bytes([index % 251 + 1]) * 512, None, 4)
         kinds = []
-        while not ingress._queue.empty():
-            item = ingress._queue.get_nowait()
-            kinds.append("eos" if isinstance(item, EndOfStream) else item.generation)
+        for item in ingress.items():
+            kinds.append("eos" if isinstance(item, EndOfStream) else item.stream)
         # The marker survived the overflow and every kept block is stamped.
         assert "eos" in kinds
         assert kinds.count("eos") == 1
@@ -1881,7 +1937,7 @@ class TestStreamEndAndTokens:
 
         ingress = AudioIngress(_Listener(), _config(audio_queue_ms=60), {})
         ingress.put(b"\x01\x02" * 8, None, 2)
-        ingress.mark_end_of_stream(AUDIO_SOURCE_VOICE_PE, 2)
+        ingress.mark_end_of_stream(2, AUDIO_SOURCE_VOICE_PE)
         ingress.reset()
         assert ingress.depth_ms() == 0.0
         assert ingress.is_empty()
@@ -1949,12 +2005,12 @@ class TestStreamEndAndTokens:
         device = _no_speaker_device(FakeClient())
         device.session_state = SessionState.SPEAKING
         device._playback_latch = device.session_generation
-        device._pending_playback = PendingPlayback(
+        device._pending_playback = _Deque([PendingPlayback(
             generation=1,
             session_generation=device.session_generation,
             media_id="1-1",
             egress="url",
-        )
+        )])
 
         async def _run():
             await device.handle_announcement_finished(SimpleNamespace(success=True))
@@ -1963,7 +2019,8 @@ class TestStreamEndAndTokens:
         assert device.last_announce_success is True
         assert device.last_finished_generation == device.session_generation
         assert device._playback_latch == 0
-        assert device._pending_playback is None
+        # The delivery queue is a FIFO; the closed entry left it empty.
+        assert not device._pending_playback
 
     def test_wake_word_readback_decides_the_flag(self, tmp_path, monkeypatch):
         monkeypatch.setenv("JARVIS_CONFIG_PATH", str(tmp_path / "config.json"))
@@ -2020,28 +2077,490 @@ class TestStreamEndAndTokens:
     def test_pad_frames_carry_the_markers_generation(self):
         import numpy as np
 
-        from jarvis.integrations.voice_pe.models import AudioFrame
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            AudioFrame,
+            StreamId,
+            TurnContext,
+        )
         from jarvis.listening.listener import VoiceListener
 
         listener = _bare_listener()
         listener._frame_samples = 320
+        open_stream = StreamId("pe", 1, 7)
 
         class _Sink:
             def holds_session(self):
                 return True
 
-            def current_session_generation(self):
-                return 7
-
             def current_context(self):
-                return ("ctx", 7)
+                return TurnContext("voice_pe", "pe", 1, 7)
 
         listener._voice_pe_sink = _Sink()
-        pushed = listener.pad_until_endpoint("voice_pe", 7)
+        pushed = listener.pad_until_endpoint(open_stream, "voice_pe")
         assert pushed >= 1
         first = listener._audio_q.get_nowait()
         assert isinstance(first, AudioFrame)
-        assert first.source == "voice_pe" and first.generation == 7
+        # Every pad frame is stamped with the very stream that ended.
+        assert first.stream == open_stream and first.source == "voice_pe"
         assert first.samples.size == 320
+        # A local tail keeps the local identity.
+        pushed_local = listener.pad_until_endpoint(LOCAL_STREAM, "local")
+        assert pushed_local >= 1
+        local_frame = None
+        while local_frame is None:
+            item = listener._audio_q.get_nowait()
+            if item.stream == LOCAL_STREAM:
+                local_frame = item
+        assert local_frame.source == "local"
         listener.state_manager.stop()
+
+
+# ---------------------------------------------------------------------------
+# Delayed callbacks across generations and across a stream reset
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestDelayedFramesAcrossGenerations:
+    """Late PCM of an older stream must never reach pre-roll, VAD or ASR."""
+
+    def test_each_old_generation_is_dropped_after_a_reconnect(self):
+        from jarvis.integrations.voice_pe.models import (
+            StreamId,
+            TurnContext,
+            is_current_stream,
+        )
+        from jarvis.listening.listener import VoiceListener
+
+        device = _no_speaker_device(FakeClient())
+
+        async def _run():
+            # First voice session on the first connection.
+            await device.handle_pipeline_start("c1", 0, SimpleNamespace(), None)
+            old = (
+                StreamId(device.device_id, device.connection_generation,
+                         device.session_generation),
+                device.turn_context(),
+            )
+            # A reconnect: a new connection generation and a new voice session.
+            device.connection_generation += 1
+            await device.handle_pipeline_start("c2", 0, SimpleNamespace(), None)
+            second = (
+                StreamId(device.device_id, device.connection_generation,
+                         device.session_generation),
+                device.turn_context(),
+            )
+            # A third session inside the same connection.
+            await device.handle_pipeline_start("c3", 0, SimpleNamespace(), None)
+            newest = (
+                StreamId(device.device_id, device.connection_generation,
+                         device.session_generation),
+                device.turn_context(),
+            )
+            return old, second, newest
+
+        old, second, newest = _run_loop(_run, device)
+        open_context = newest[1]
+        # The newest stream is the only current one; both older streams and both
+        # older turn contexts are stale for good.
+        assert is_current_stream(newest[0], open_context) is True
+        assert is_current_stream(old[0], open_context) is False
+        assert is_current_stream(second[0], open_context) is False
+        assert old[0] != second[0] != newest[0]
+        # The same four fields decide it on the listener side, which is the gate
+        # in front of pre-roll, VAD and ASR: the tag helper keeps the identity
+        # and samples of each block apart from the drop decision.
+        listener = _bare_listener()
+
+        class _Sink:
+            def holds_session(self):
+                return True
+
+            def current_context(self):
+                return open_context
+
+        listener._voice_pe_sink = _Sink()
+        assert listener._is_current_frame(newest[0], "voice_pe") is True
+        assert listener._is_current_frame(old[0], "voice_pe") is False
+        assert listener._is_current_frame(second[0], "voice_pe") is False
+        # Tagging is loss-free for both shapes, so the gate above is the only
+        # thing that decided the drop.
+        tagged_new = VoiceListener._tagged_audio(
+            __import__("jarvis.integrations.voice_pe.models", fromlist=["AudioFrame"])
+            .AudioFrame(newest[0], "voice_pe", b"\x01\x02")
+        )
+        assert tagged_new[0] == newest[0] and tagged_new[1] == "voice_pe"
+        # Containers are keyed by whole streams; the open one starts empty.
+        key = (
+            str(newest[0].device_id),
+            int(newest[0].connection_generation),
+            int(newest[0].session_generation),
+        )
+        assert key not in listener._pre_rolls or len(listener._pre_rolls[key]) == 0
+        listener.state_manager.stop()
+
+    def test_reset_leaves_only_the_new_stream_stamped(self):
+        from jarvis.integrations.voice_pe.models import (
+            AUDIO_SOURCE_VOICE_PE,
+            LOCAL_STREAM,
+            StreamId,
+        )
+        from jarvis.integrations.voice_pe.voice_transport import AudioIngress
+
+        class _Listener:
+            _audio_q = None
+
+        ingress = AudioIngress(_Listener(), _config(), {})
+        # Before any satellite binds the queue, the default is the local stream.
+        assert ingress.stream == LOCAL_STREAM
+        first = StreamId("pe", 1, 1)
+        ingress.set_stream(first)
+        ingress.put(b"\x01\x02" * 8, None, first)
+        assert [item.stream for item in ingress.items()] == [first]
+        # A new run: the reset drops the old PCM, and the blocks that arrive
+        # after it belong to the new stream only.
+        second = StreamId("pe", 1, 2)
+        ingress.reset()
+        ingress.set_stream(second)
+        ingress.put(b"\x03\x04" * 8, None, second)
+        streams = [item.stream for item in ingress.items()]
+        assert streams == [second]
+        assert ingress.depth_ms() > 0.0
+
+    def test_a_push_without_a_stream_takes_the_current_binding(self):
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            StreamId,
+        )
+        from jarvis.integrations.voice_pe.voice_transport import AudioIngress
+
+        class _Listener:
+            _audio_q = None
+
+        ingress = AudioIngress(_Listener(), _config(), {})
+        ingress.put(b"\x01\x02")
+        assert ingress.items()[0].stream == LOCAL_STREAM
+        bound = StreamId("pe", 2, 5)
+        ingress.set_stream(bound)
+        ingress.put(b"\x03\x04")
+        # The un-numbered push inherits the binding that is current now, so a
+        # late callback cannot be mis-stamped with the very first stream.
+        assert ingress.items()[-1].stream == bound
+        assert ingress.items()[-1].source != LOCAL_STREAM.device_id
+
+    def test_local_stream_is_never_stale_and_satellite_ids_stay_apart(self):
+        from jarvis.integrations.voice_pe.models import (
+            LOCAL_STREAM,
+            StreamId,
+            TurnContext,
+            is_current_stream,
+        )
+
+        pe = TurnContext("voice_pe", "pe", 3, 4)
+        # The local microphone carries no satellite numbering and is always the
+        # open one; two satellites that both number a run 4 are distinguishable.
+        assert is_current_stream(LOCAL_STREAM, None) is True
+        assert is_current_stream(LOCAL_STREAM, pe) is True
+        assert is_current_stream(StreamId("pe", 3, 4), pe) is True
+        assert is_current_stream(StreamId("pe", 3, 3), pe) is False
+        assert is_current_stream(StreamId("pe", 2, 4), pe) is False
+        assert is_current_stream(StreamId("ox", 3, 4), pe) is False
+        assert is_current_stream(None, pe) is False
+
+
+# ---------------------------------------------------------------------------
+# Clip levels, the satellite preprocessor and the STT lifecycle
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestClipLevelsAndPreprocessor:
+    """One scale by 32768, levels in both shapes, and the opt-in correction."""
+
+    def test_levels_report_both_shapes_with_one_scale(self):
+        import numpy as np
+
+        from jarvis.listening.listener import _clip_levels
+
+        codes = np.array([0, 1000, -2000, 30000, -30000, 800], dtype=np.int16)
+        values = codes.astype(np.float64) / 32768.0
+        levels = _clip_levels(values.astype(np.float32), 2, {})
+        # The int16 shape is the same signal in whole codes: one division only.
+        assert levels["int16"]["rms"] == pytest.approx(32768.0 * levels["float32"]["rms"], rel=1e-6)
+        assert levels["scale_ratio_int16_over_float32"] == pytest.approx(32768.0, abs=0.01)
+        assert levels["float32"]["min"] == pytest.approx(float(codes.min()) / 32768.0)
+        assert levels["float32"]["max"] == pytest.approx(30000.0 / 32768.0)
+        assert levels["dbfs_peak"] == pytest.approx(20.0 * np.log10(30000.0 / 32768.0), abs=0.01)
+
+    def test_full_scale_peak_is_zero_dbfs(self):
+        import numpy as np
+
+        from jarvis.listening.listener import _clip_levels
+
+        values = np.array([1.0, -1.0, 1.0, -1.0], dtype=np.float32)
+        levels = _clip_levels(values, 2, {})
+        # A full-scale square wave: peak and RMS both sit at 0 dBFS.
+        assert levels["dbfs_peak"] == pytest.approx(0.0, abs=1e-6)
+        assert levels["dbfs_rms"] == pytest.approx(0.0, abs=1e-6)
+        half = np.array([0.5, -0.5, 0.5, -0.5], dtype=np.float32)
+        assert _clip_levels(half, 2, {})["dbfs_rms"] == pytest.approx(-6.02, abs=0.02)
+
+    def test_silence_runs_and_snr_are_measured_apart(self):
+        import numpy as np
+
+        from jarvis.listening.listener import _clip_levels
+
+        frames = [
+            np.zeros(2, dtype=np.float32),
+            np.array([0.5, -0.5], dtype=np.float32),
+            np.array([0.4, -0.4], dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
+        ]
+        clip = np.concatenate(frames)
+        levels = _clip_levels(
+            clip, 2, {"first_voiced_offset": 1, "last_voiced_offset": 2}
+        )
+        assert levels["total_frames"] == 4
+        assert levels["leading_silence_frames"] == 1
+        assert levels["trailing_silence_frames"] == 1
+        assert levels["voiced_rms"] > levels["silent_rms"]
+        # One frame of 0.5 against pure zeros: no silent energy to divide by.
+        assert levels["silent_rms"] == 0.0
+        assert levels["snr_db"] is None
+
+    def test_preprocessor_moves_toward_the_target_and_never_attenuates(self):
+        import numpy as np
+
+        from jarvis.listening.listener import (
+            SATELLITE_MAX_GAIN_DB,
+            SATELLITE_TARGET_RMS_DBFS,
+            _clip_levels,
+            _satellite_preprocess,
+        )
+
+        values = (np.arange(320, dtype=np.float64) % 7 - 3) / 32768.0 * 4
+        copy, meta = _satellite_preprocess(
+            values.astype(np.float32), 320, {"first_voiced_offset": 0}
+        )
+        assert meta["enabled"] is True
+        assert meta["target_rms_dbfs"] == SATELLITE_TARGET_RMS_DBFS
+        assert meta["max_gain_db"] == SATELLITE_MAX_GAIN_DB
+        assert meta["applied_gain_db"] <= SATELLITE_MAX_GAIN_DB + 1e-6
+        assert meta["applied_gain_db"] >= 0.0
+        # The corrected copy is louder than the raw one, up to the cap.
+        raw = _clip_levels(values.astype(np.float32), 320, {})
+        fixed = _clip_levels(copy, 320, {})
+        assert fixed["float32"]["rms"] >= raw["float32"]["rms"]
+        # The raw array itself is untouched: same length, same numbers.
+        assert len(values) == 320 and float(values[3]) == pytest.approx(
+            float((np.arange(320, dtype=np.float64) % 7 - 3)[3] / 32768.0 * 4)
+        )
+
+    def test_preprocessor_caps_gain_at_twenty_decibels(self):
+        import numpy as np
+
+        from jarvis.listening.listener import _satellite_preprocess
+
+        # A very quiet clip wants more than the cap: the answer stops at 20 dB.
+        values = np.full(640, 0.001, dtype=np.float32)
+        _copy, meta = _satellite_preprocess(values, 320, {})
+        assert meta["applied_gain_db"] == pytest.approx(20.0, abs=0.01)
+
+    def test_peak_limiter_holds_the_ceiling_and_counts_hits(self):
+        import numpy as np
+
+        from jarvis.listening.listener import SATELLITE_PEAK_LIMIT, _satellite_preprocess
+
+        values = np.array([0.98, 0.98, 0.98, 0.98], dtype=np.float32)
+        copy, meta = _satellite_preprocess(values, 2, {})
+        assert meta["limiter_hits"] == 4
+        assert float(np.max(np.abs(copy))) == pytest.approx(SATELLITE_PEAK_LIMIT, abs=1e-6)
+
+    def test_snr_flag_is_set_when_speech_barely_clears_the_noise_floor(self):
+        import numpy as np
+
+        from jarvis.listening.listener import (
+            SATELLITE_MIN_SNR_DB,
+            _satellite_preprocess,
+        )
+
+        def _clip(voiced, floor):
+            return np.concatenate(
+                [
+                    np.full(4, voiced, dtype=np.float32),
+                    np.full(4, floor, dtype=np.float32),
+                ]
+            )
+
+        state = {"first_voiced_offset": 0, "last_voiced_offset": 1}
+        # Exact digital silence gives no measurable floor: the gate stays aside.
+        _copy, meta = _satellite_preprocess(_clip(0.010, 0.0), 2, state)
+        assert meta["snr_db"] is None
+        assert meta["insufficient_snr"] is False
+
+        # A 5e-5 floor under 0.010 speech: 46 dB of gap, the gate is satisfied.
+        _copy, wide = _satellite_preprocess(_clip(0.010, 0.00005), 2, state)
+        assert wide["silent_rms"] == pytest.approx(0.00005, abs=1e-8)
+        assert wide["snr_db"] == pytest.approx(46.02, abs=0.1)
+        assert wide["insufficient_snr"] is False
+
+        # 1.5e-4 speech over a 1e-4 floor: about 3.5 dB, below the 6 dB gate.
+        _copy, low = _satellite_preprocess(_clip(0.00015, 0.0001), 2, state)
+        assert low["snr_db"] == pytest.approx(20.0 * np.log10(1.5), abs=0.1)
+        assert low["insufficient_snr"] is True
+        assert float(low["snr_db"]) < SATELLITE_MIN_SNR_DB
+
+    def test_kwargs_resolution_is_per_backend_and_drops_the_unsupported_one(self):
+        from jarvis.listening.listener import (
+            PREFERRED_TRANSCRIBE_KWARGS,
+            _asr_backend_version,
+            _resolve_transcribe_kwargs,
+        )
+
+        try:
+            from faster_whisper import WhisperModel as _Model
+        except Exception:  # pragma: no cover - backend absent
+            _Model = None
+        if _Model is None:  # pragma: no cover
+            return
+        accepted, rejected = _resolve_transcribe_kwargs(
+            _Model.transcribe, PREFERRED_TRANSCRIBE_KWARGS
+        )
+        # Every accepted keyword is really in the installed signature.
+        import inspect
+
+        names = set(inspect.signature(_Model.transcribe).parameters)
+        assert set(accepted).issubset(names)
+        for key, value in accepted.items():
+            assert value == PREFERRED_TRANSCRIBE_KWARGS[key]
+        # A name the signature lacks is reported as rejected, not passed along.
+        for key in rejected:
+            assert key not in names
+        assert _asr_backend_version("faster-whisper") != ""
+
+
+@pytest.mark.unit
+class TestSttLifecycleAndDiagnosticMode:
+    """One terminal per start, statuses from one list, env-gated reply text."""
+
+    STATUSES = (
+        "success",
+        "skipped_too_short",
+        "filtered",
+        "cancelled",
+        "stale",
+        "decoder_error",
+    )
+
+    def _frames(self, count: int):
+        import numpy as np
+
+        return [
+            np.full(320, 0.01 * (index + 1), dtype=np.float32)
+            for index in range(count)
+        ]
+
+    def test_each_start_gets_exactly_one_terminal(self):
+        listener = _bare_listener()
+        listener.metrics["stt_start"] = 1
+        listener._utterance_frames = self._frames(3)
+        listener._audio_source = "voice_pe"
+        listener._audio_stream = ("pe", 1, 1)
+        listener._frame_state = {
+            "first_voiced_offset": 0,
+            "last_voiced_offset": 1,
+            "voiced_frame_count": 2,
+            "total_frame_count": 3,
+            "trailing_silence_frames": 1,
+            "post_roll_frames": 1,
+        }
+        before = int(listener.metrics.get("stt_end", 0))
+        listener._finalize_utterance()
+        record = listener.metrics.get("last_segment") or {}
+        assert int(listener.metrics.get("stt_end", 0)) == before + 1
+        assert str(record.get("status")) in self.STATUSES
+        # The per-status counter moved exactly once, together with the total.
+        moved = sum(
+            int(listener.metrics.get(f"stt_end_{name}", 0) or 0)
+            for name in self.STATUSES
+        )
+        assert moved == int(listener.metrics.get("stt_end", 0))
+        # The buffers are released for the next turn.
+        assert listener._utterance_frames == []
+        assert listener._audio_source is None
+        listener.state_manager.stop()
+
+    def test_record_keeps_the_stream_and_the_frame_bookkeeping(self):
+        listener = _bare_listener()
+        listener._utterance_frames = self._frames(10)
+        listener._audio_source = "voice_pe"
+        listener._audio_stream = ("pe", 2, 7)
+        listener._frame_state = {
+            "first_voiced_offset": 1,
+            "last_voiced_offset": 9,
+            "voiced_frame_count": 9,
+            "total_frame_count": 10,
+            "trailing_silence_frames": 3,
+            "post_roll_frames": 10,
+        }
+        listener._finalize_utterance()
+        record = listener.metrics.get("last_segment") or {}
+        assert tuple(record.get("stream") or ()) == ("pe", 2, 7)
+        assert record.get("voiced_frame_count") == 9
+        assert record.get("total_frame_count") == 10
+        assert record.get("post_roll_frames") == 10
+        assert record.get("asr_backend") in ("faster-whisper", "mlx", "")
+        listener.state_manager.stop()
+
+    def test_satellite_record_is_kept_under_its_own_name(self):
+        listener = _bare_listener()
+        listener._utterance_frames = self._frames(4)
+        listener._audio_source = "voice_pe"
+        listener._audio_stream = ("pe", 1, 3)
+        listener._frame_state = {
+            "first_voiced_offset": 0,
+            "last_voiced_offset": 3,
+            "voiced_frame_count": 4,
+            "total_frame_count": 4,
+            "trailing_silence_frames": 0,
+            "post_roll_frames": 10,
+        }
+        listener._finalize_utterance()
+        satellite = listener.metrics.get("last_satellite_segment") or {}
+        assert tuple(satellite.get("stream") or ()) == ("pe", 1, 3)
+        assert str(satellite.get("status")) in self.STATUSES
+        listener.state_manager.stop()
+
+    def test_diagnostic_mode_is_off_without_the_env_flag(self, monkeypatch):
+        from jarvis.listening import listener as listener_module
+
+        monkeypatch.delenv("JARVIS_VOICE_PE_E2E_DIAGNOSTIC", raising=False)
+        listener_module._E2E_DIAGNOSTIC_CACHE[0] = None
+        assert listener_module._e2e_diagnostic_mode() is False
+        assert listener_module._read_e2e_diagnostic_flag() is False
+
+    def test_diagnostic_mode_turns_on_with_the_env_flag_and_fixed_text(
+        self, monkeypatch
+    ):
+        from jarvis.listening import listener as listener_module
+
+        monkeypatch.setenv("JARVIS_VOICE_PE_E2E_DIAGNOSTIC", "1")
+        listener_module._E2E_DIAGNOSTIC_CACHE[0] = None
+        assert listener_module._e2e_diagnostic_mode() is True
+        assert listener_module.DIAGNOSTIC_REPLY_TEXT == (
+            "Rozumím. Toust je téměř připraven."
+        )
+        assert listener_module.REPLY_SOURCE_DIAGNOSTIC == "diagnostic"
+        assert listener_module.REPLY_SOURCE_LLM == "llm"
+        # The cache follows the live value, so a later unset is seen again.
+        monkeypatch.delenv("JARVIS_VOICE_PE_E2E_DIAGNOSTIC", raising=False)
+        assert listener_module._e2e_diagnostic_mode() is False
+
+    def test_preprocessor_is_off_by_default_in_the_settings_object(self):
+        from jarvis.config import get_default_config
+
+        defaults = get_default_config()
+        assert defaults["satellite_stt_auto_gain"] is False
+        assert defaults["whisper_post_roll_ms"] == 200
+        assert defaults["whisper_min_audio_duration"] == 0.15
+        assert defaults["voice_pe_hardware_timeout_s"] == 180.0
 
