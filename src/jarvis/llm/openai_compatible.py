@@ -115,6 +115,23 @@ class OpenAICompatibleBackend(LLMBackend):
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
+    def _resolved_model(self, model: str, timeout_sec: float = 3.0) -> str:
+        """The id the server actually serves, from ``GET /models``.
+
+        llama.cpp and LM Studio advertise the one loaded model by its
+        instance id (``qwen/qwen3-8b`` style), while ``llm_chat_model`` may
+        hold the raw GGUF path. The first advertised id is the authority
+        for ``/chat/completions`` and ``/embeddings``; an exact match wins
+        first. If the server lists nothing, the configured name is used.
+        """
+        names = self.list_models(timeout_sec=timeout_sec)
+        want = str(model or "")
+        if not names:
+            return want
+        if want in names:
+            return want
+        return names[0]
+
     # ── chat ───────────────────────────────────────────────────────────
 
     def direct(
@@ -138,7 +155,7 @@ class OpenAICompatibleBackend(LLMBackend):
             {"role": "user", "content": user_content},
         ]
         payload: Dict[str, Any] = {
-            "model": chat_model,
+            "model": self._resolved_model(chat_model),
             "messages": messages,
             "stream": False,
         }
@@ -193,7 +210,7 @@ class OpenAICompatibleBackend(LLMBackend):
             {"role": "user", "content": user_content},
         ]
         payload: Dict[str, Any] = {
-            "model": chat_model,
+            "model": self._resolved_model(chat_model),
             "messages": messages,
             "stream": True,
         }
@@ -229,7 +246,12 @@ class OpenAICompatibleBackend(LLMBackend):
                     delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
                     if not isinstance(delta, dict):
                         continue
+                    # Reasoning-first servers (Qwen3-style llama.cpp builds)
+                    # stream ``delta.reasoning_content`` before ``content``
+                    # is ever non-null; both are text of this turn.
                     content = delta.get("content")
+                    if not isinstance(content, str) or not content:
+                        content = delta.get("reasoning_content")
                     if isinstance(content, str) and content:
                         full_response.append(content)
                         if on_token:
@@ -280,7 +302,7 @@ class OpenAICompatibleBackend(LLMBackend):
         sanitised = strip_nonstandard_message_fields(messages)
         sanitised = self._encode_tool_call_arguments(sanitised)
         payload: Dict[str, Any] = {
-            "model": chat_model,
+            "model": self._resolved_model(chat_model),
             "messages": sanitised,
             "stream": False,
         }
@@ -354,10 +376,11 @@ class OpenAICompatibleBackend(LLMBackend):
         model: str,
         timeout_sec: float = 15.0,
     ) -> Optional[List[float]]:
+        served = self._resolved_model(model)
         try:
             resp = requests.post(
                 f"{self._base_url}/embeddings",
-                json={"model": model, "input": text},
+                json={"model": served, "input": text},
                 headers=self._headers(),
                 timeout=timeout_sec,
             )
@@ -366,7 +389,7 @@ class OpenAICompatibleBackend(LLMBackend):
                 # retrieval service) only accept `input` as a list.
                 resp = requests.post(
                     f"{self._base_url}/embeddings",
-                    json={"model": model, "input": [text]},
+                    json={"model": served, "input": [text]},
                     headers=self._headers(),
                     timeout=timeout_sec,
                 )
@@ -401,16 +424,14 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return []
 
-    def _gpu_layers_offloaded(self, model: str) -> int:
-        """How many layers the server put on the GPU for ``model``, as an int.
+    def _gpu_layers_offloaded(self, model: str):
+        """Number of layers the server put on the GPU for ``model``.
 
-        LM Studio's ``/api/v0/models`` lists ``meta.n_gpu_layers``; the plain
-        OpenAI-compatible ``/v1/models`` response may carry either
-        ``meta.n_gpu_layers`` or a per-model ``loaded_instances[0]`` shape. A
-        value of ``0`` means CPU-only; ``-1`` means "the server gave no GPU
-        hint". The first non-zero one wins.
+        Returns ``int`` >= 0 for a real value and ``None`` for no hint at all.
+        ``0`` is a real ``cpu_confirmed``, ``None`` is ``accelerator_unknown``;
+        there is no ``-1`` sentinel.
         """
-        names: List[str] = []
+        # 1. LM Studio's native shape, most reliable for ``n_gpu_layers``.
         try:
             resp = requests.get(
                 f"{self._base_url}/api/v0/models",
@@ -418,30 +439,22 @@ class OpenAICompatibleBackend(LLMBackend):
                 timeout=2.0,
             )
             resp.raise_for_status()
-            arr = resp.json().get("data") or []
-            for entry in arr:
-                if not isinstance(entry, dict):
+            for entry in (resp.json().get("data") or []):
+                if not isinstance(entry, dict) or str(entry.get("id", "")) != str(model):
                     continue
-                if str(entry.get("id", "")) != str(model):
-                    continue
-                meta = entry.get("meta") or {}
-                n = meta.get("n_gpu_layers")
-                if isinstance(n, int):
-                    return n
-                # Older LM Studio builds keep the number on the model itself.
-                n = entry.get("n_gpu_layers")
-                if isinstance(n, int):
-                    return n
-                loaded = entry.get("loaded_instances") or []
-                if loaded and isinstance(loaded[0], dict):
-                    n = loaded[0].get("n_gpu_layers")
-                    if isinstance(n, int):
-                        return n
-                names = ["api/v0"]
+                for source in (
+                    (entry.get("meta") or {}).get("n_gpu_layers"),
+                    entry.get("n_gpu_layers"),
+                    (entry.get("loaded_instances") or [{}])[0].get("n_gpu_layers")
+                    if entry.get("loaded_instances")
+                    else None,
+                ):
+                    if isinstance(source, int):
+                        return source
                 break
         except Exception:
-            names = ["api/v0:mismatch"]
-        # Fallback: the plain OpenAI shape, same idea.
+            pass
+        # 2. The plain OpenAI-compatible shape of the same number.
         try:
             resp = requests.get(
                 f"{self._base_url}/models",
@@ -449,28 +462,23 @@ class OpenAICompatibleBackend(LLMBackend):
                 timeout=2.0,
             )
             resp.raise_for_status()
-            arr = resp.json().get("data", []) or []
-            for entry in arr:
-                if not isinstance(entry, dict):
-                    continue
-                if str(entry.get("id", "")) != str(model):
+            for entry in (resp.json().get("data") or []):
+                if not isinstance(entry, dict) or str(entry.get("id", "")) != str(model):
                     continue
                 meta = entry.get("meta") or {}
-                n = meta.get("n_gpu_layers")
-                if isinstance(n, int):
-                    return n
-                n = entry.get("n_gpu_layers")
-                if isinstance(n, int):
-                    return n
-                loaded = entry.get("loaded_instances") or []
-                if loaded and isinstance(loaded[0], dict):
-                    n = loaded[0].get("n_gpu_layers")
-                    if isinstance(n, int):
-                        return n
+                for source in (
+                    meta.get("n_gpu_layers"),
+                    entry.get("n_gpu_layers"),
+                    (entry.get("loaded_instances") or [{}])[0].get("n_gpu_layers")
+                    if entry.get("loaded_instances")
+                    else None,
+                ):
+                    if isinstance(source, int):
+                        return source
                 break
         except Exception:
-            names.append("v1:mismatch")
-        return -1
+            pass
+        return None
 
     def warm_up(
         self,
@@ -478,76 +486,116 @@ class OpenAICompatibleBackend(LLMBackend):
         timeout_sec: float = 60.0,
         keep_alive: str = "30m",
     ) -> bool:
-        """Warm up the model and record real-inference metrics on this backend.
+        """Load the model with a real, *streamed* completion and report timing.
 
-        Phase 1 (reachability check): ``GET /models`` must succeed quickly.
-        Phase 2 (real inference): one 2-token chat completion is sent so the
-        model is on the GPU (or CPU) by the time ``Listening!`` is announced.
-        The first-token latency is stamped from the response's own ``ttft`` or
-        timing; ``tokens/s`` is from ``usage`` over the whole duration. The
-        record lands on ``self.last_warmup_metrics``: ``model``, ``ok``,
-        ``load_time`` (seconds), ``first_token_latency`` (seconds),
-        ``tokens_per_s``, ``backend`` and ``gpu_layers`` — the last one drives
-        ``llm_backend_not_campaign_ready``. A failed warm-up leaves ``ok`` at
-        ``False`` and is never treated as ready.
+        The first content-bearing SSE chunk is the true time-to-first-token;
+        the total elapsed time and ``usage.completion_tokens`` give tokens/s.
+        ``stream=false`` could only answer with a single end latency, so the
+        field is named ``first_token_latency`` only when it really comes from
+        the stream, otherwise the metric is labelled ``completion_latency``.
+
+        Statuses of the same request drive ``last_warmup_metrics['accelerator']``:
+        ``gpu_confirmed`` for ``n_gpu_layers >= 1``, ``cpu_confirmed`` for
+        ``n_gpu_layers == 0``, ``accelerator_unknown`` when the server gives no
+        hint (``None``). An unknown accelerator on its own is *not* a campaign
+        miss; the real first-token latency and the ``tokens/s`` are the second
+        half of that decision. ``keep_alive`` is Ollama's knob and is ignored
+        for the OpenAI-compatible servers, which manage residency at load.
         """
-        self.last_warmup_metrics: dict = {
+        model = self._resolved_model(model, timeout_sec=max(3.0, timeout_sec * 0.05))
+        self.last_warmup_metrics = {
             "model": model,
             "ok": False,
             "load_time": 0.0,
-            "first_token_latency": 0.0,
+            "first_token_latency": None,
+            "completion_latency": 0.0,
             "tokens_per_s": 0.0,
             "backend": type(self).__name__,
-            "gpu_layers": 0,
+            "gpu_layers": None,
+            "accelerator": "accelerator_unknown",
         }
         if not self._base_url or not model:
             return False
 
-        # Phase 1: reachability probe.
+        # 1. Fast reachability probe.
         list_to = min(max(timeout_sec * 0.25, 1.0), 5.0)
         if not self.list_models(timeout_sec=list_to):
             return False
 
-        # Phase 2: real inference, two tokens so ``usage`` has something to say.
+        # 2. Streamed completion.
         remaining = max(0.1, timeout_sec - list_to)
+        # A reasoning model needs headroom beyond the first delta: two
+        # tokens fit inside the role-only opening frame and nothing else.
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 2,
-            "stream": False,
+            "max_tokens": 8,
+            "stream": True,
         }
         started = time.time()
-        first_token = 0.0
+        first_token: Optional[float] = None
         try:
             with requests.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
+                stream=True,
                 headers=self._headers(),
                 timeout=remaining,
             ) as resp:
-                elapsed = time.time() - started
                 if not resp.ok:
                     return False
-                try:
-                    body = resp.json()
-                except Exception:
-                    body = {}
-                usage = body.get("usage") or {}
-                completion_tokens = max(1, int(usage.get("completion_tokens", 1) or 1))
-                # ``ttft`` is an LM Studio extension and is already a number of
-                # seconds; the rest of the field name spellings are best-effort.
-                ttft = body.get("ttft") or body.get("timings", {}).get("ttft") if isinstance(body.get("timings"), dict) else body.get("ttft")
-                first_token = float(ttft) if isinstance(ttft, (int, float)) else elapsed * 0.5
+                completion_tokens = 0
+                for raw in resp.iter_lines(decode_unicode=True):
+                    now = time.time()
+                    if not raw or not raw.startswith("data:"):
+                        continue
+                    body = raw[5:].strip()
+                    if body in ("", "[DONE]"):
+                        continue
+                    try:
+                        chunk = json.loads(body)
+                    except Exception:
+                        continue
+                    completion_tokens += sum(
+                        1
+                        for choice in (chunk.get("choices") or [])
+                        if isinstance(choice, dict)
+                        and (
+                            choice.get("content")
+                            or (choice.get("delta") or {}).get("content")
+                            or (choice.get("delta") or {}).get("reasoning_content")
+                        )
+                    )
+                    if completion_tokens and first_token is None:
+                        first_token = now - started
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        done = usage.get("completion_tokens")
+                        if isinstance(done, int) and done > 0:
+                            completion_tokens = max(completion_tokens, done)
+                finished = time.time() - started
+                tokens_per_s = (
+                    round(max(1, completion_tokens) / finished, 3) if finished > 0 else 0.0
+                )
+                layers = self._gpu_layers_offloaded(model)
+                accel = (
+                    "gpu_confirmed"
+                    if isinstance(layers, int) and layers >= 1
+                    else ("cpu_confirmed" if layers == 0 else "accelerator_unknown")
+                )
+                ok = first_token is not None and completion_tokens >= 1
                 self.last_warmup_metrics = {
                     "model": model,
-                    "ok": True,
-                    "load_time": round(elapsed, 4),
-                    "first_token_latency": round(first_token, 4),
-                    "tokens_per_s": round(completion_tokens / max(0.001, elapsed), 3) if elapsed > 0 else 0.0,
+                    "ok": ok,
+                    "load_time": round(finished, 4),
+                    "first_token_latency": round(first_token, 4) if first_token else None,
+                    "completion_latency": round(finished, 4),
+                    "tokens_per_s": tokens_per_s,
                     "backend": type(self).__name__,
-                    "gpu_layers": self._gpu_layers_offloaded(model),
+                    "gpu_layers": layers,
+                    "accelerator": accel,
                 }
-                return True
+                return ok
         except Exception:
             return False
 

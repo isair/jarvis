@@ -656,6 +656,9 @@ class Settings:
     #: Upper bound for one hardware round trip in the smoke and diagnostic runs:
     #: the wait is event-driven up to this point, not a fixed sleep.
     voice_pe_hardware_timeout_s: float
+    #: Explicit minimal throughput from a real streamed warm-up. An unknown
+    #: accelerator is only a miss when the latency also fails this limit.
+    voice_pe_llm_min_tokens_per_s: float
 
     # Centralized identity / recording profile (Talkie Toaster)
     assistant_display_name: str = BRANDING["display_name"]
@@ -1223,6 +1226,9 @@ def get_default_config() -> Dict[str, Any]:
         },
         # One hardware round trip may take a full CPU decode plus a TTS fetch.
         "voice_pe_hardware_timeout_s": 180.0,
+        # Throughput the real streamed warm-up must exceed for that model to
+        # count in a campaign. Explicit and configurable per profile.
+        "voice_pe_llm_min_tokens_per_s": 5.0,
     }
 
 
@@ -1525,6 +1531,11 @@ def load_settings() -> Settings:
     raw_led_rgb = merged.get("voice_pe_led_rgb")
     voice_pe_led_rgb = _voice_pe_rgb(raw_led_rgb)
     voice_pe_devices = _ensure_dict(merged.get("voice_pe_devices"))
+    #: Throughput from the streamed warm-up that the campaign demands. An
+    #: unknown accelerator passes if the latency is actually good.
+    voice_pe_llm_min_tokens_per_s = max(
+        0.1, _voice_pe_float(merged.get("voice_pe_llm_min_tokens_per_s"), 5.0)
+    )
     # Button mapping accepts the dict form and the "event=action" list form
     # the settings UI writes.
     from .integrations.voice_pe.config import fold_button_actions
@@ -1789,6 +1800,7 @@ def load_settings() -> Settings:
         voice_pe_devices=voice_pe_devices,
         voice_pe_button_actions=voice_pe_button_actions,
         voice_pe_hardware_timeout_s=voice_pe_hardware_timeout_s,
+        voice_pe_llm_min_tokens_per_s=voice_pe_llm_min_tokens_per_s,
 
         # Centralized identity / recording profile (Talkie Toaster)
         assistant_display_name=assistant_display_name,

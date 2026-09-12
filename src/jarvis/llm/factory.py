@@ -38,10 +38,21 @@ def _str_attr(settings: Any, name: str, default: str = "") -> str:
     return val if isinstance(val, str) and val else default
 
 
+#: One instance per ``(provider, base_url, api_key)``: ``last_warmup_metrics``
+#: and the resolved model id stay visible to the next ``get_llm_backend`` call.
+_BACKENDS: dict = {}
+
+
 def _build(provider: str, base_url: str, api_key: Optional[str]) -> LLMBackend:
-    if provider == _OPENAI_COMPATIBLE:
-        return OpenAICompatibleBackend(base_url, api_key=api_key)
-    return OllamaBackend(base_url)
+    key = (provider, base_url, api_key)
+    backend = _BACKENDS.get(key)
+    if backend is None:
+        if provider == _OPENAI_COMPATIBLE:
+            backend = OpenAICompatibleBackend(base_url, api_key=api_key)
+        else:
+            backend = OllamaBackend(base_url)
+        _BACKENDS[key] = backend
+    return backend
 
 
 def get_llm_backend(settings: Any) -> LLMBackend:

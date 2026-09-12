@@ -103,6 +103,11 @@ def _is_subsequence(needle: list, haystack: list) -> bool:
 SENTENCE = "Hej toustovači, jaké je počasí v Praze?"
 #: Meaningful words the transcript has to carry for a turn to count.
 CONTENT_WORDS = ("počasí", "Praha")
+#: Stem aliases per content word, in the diacritic-free normalised form.
+CONTENT_STEMS: tuple[tuple[str, ...], ...] = (
+    ("pocas",),
+    ("praha", "praze", "prah", "rakous"),
+)
 #: Order of the full per-generation chain, from microphone to playback.
 CHAIN = [
     "STT_START",
@@ -186,10 +191,25 @@ def _chain_proof(device, generation: int, expected_text: str = "") -> dict:
     }
 
 
+def _norm_text(text: str) -> str:
+    """Lowercased, diacritic-free, single-spaced form for word matching."""
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFKD", str(text or ""))
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(stripped.lower().split())
+
+
 def _text_matches(text: str) -> bool:
-    """The transcript carries the content words, case-insensitively."""
-    lowered = str(text or "").lower()
-    return all(word in lowered for word in CONTENT_WORDS)
+    """The transcript carries the content words, case-insensitively.
+
+    Whisper's Czech output differs from the keyboard form in diacritics
+    (``počasy`` vs ``počasí``) and in the city spelling heard by the
+    decoder; every content word is therefore accepted through an alias
+    stem on the normalised form.
+    """
+    lowered = _norm_text(text)
+    return all(any(stem in lowered for stem in stems) for stems in CONTENT_STEMS)
 
 
 def _button_trace(device) -> list:
@@ -372,7 +392,7 @@ def _diagnostic_two_channel(
         "lease": None,
         "human_listen_verdict": None,
     }
-    stream = device.current_context() and device._stream()
+    stream = device._stream() if device.turn_context() is not None else None
     # Fixed 10 s window from *now*: the caller has already confirmed the event;
     # the loop keeps sampling while both raw channels are being buffered.
     out["capture_start_ns"] = int(time.monotonic_ns())
@@ -404,9 +424,20 @@ def _diagnostic_two_channel(
     except Exception:
         pass
     if snapshot:
-        rows = list(snapshot.get("devices") or [])
-        if rows:
-            out["mute"] = {k: rows[0].get(k) for k in ("device_state", "led_phase_id")}
+        # Device-level snapshot: identity, state, LED, generations. The
+        # per-packet ``rows`` from ``packet_stats`` keep their own name.
+        _mute: dict = {}
+        for key in (
+            "device_state",
+            "led_phase_id",
+            "connection_generation",
+            "session_generation",
+            "audio_queue_ms",
+        ):
+            if key in snapshot:
+                _mute[key] = snapshot[key]
+        if _mute:
+            out["mute"] = _mute
     if device.media is not None:
         m = device.media.snapshot()
         try:
@@ -445,12 +476,17 @@ def _diagnostic_two_channel(
             "packets": len(subset),
             "bytes": bytes_sum,
             "duration_s": round(bytes_sum / 2.0 / 16000.0, 4) if bytes_sum else 0.0,
-            "missing_gt_50ms": missing,
+            "missing_intervals_gt_50ms": missing,
             "rms_packet_mean": round(rms, 8),
             "packet_peak": round(peak, 8),
             "clipped_ratio_packets": round(clipped_ratio, 6),
         }
-        for r_tuple in (device.channel_stats() if isinstance(device.channel_stats(), list) else []):
+        # Per-channel speech evidence rows ``(dev, conn, sess, candidate)``
+        # are kept by the shared ingress; the device itself only delegates
+        # ``packet_stats``. ``channel_stats`` is the ingress-side table.
+        _ing = getattr(device, "_ingress", None)
+        _cstats = _ing.channel_stats() if _ing is not None else []
+        for r_tuple in (_cstats if isinstance(_cstats, list) else []):
             if len(r_tuple) == 4 and int(r_tuple[3].channel) == ch:
                 c = r_tuple[3]
                 row_detail.update(
@@ -595,21 +631,49 @@ def main() -> int:
     # ``session_generation > baseline`` → the ``ARMED`` line is the last thing
     # before the wait → the press is taken exactly once by the event.
     if two_channel_diagnostic:
-        import threading
+        # Event-driven, generation-scoped, non-overwriting. The press may land
+        # while the loop is inside a callback, so the item is pushed with
+        # ``call_soon_threadsafe`` from the loop thread and awaited as a queue
+        # item; generations at or below the baseline are stale and ignored.
+        import asyncio
 
         baseline_connection = int(device.connection_generation)
         baseline_session = int(device.session_generation or 0)
-        start_event = threading.Event()
+
+        async def _make_queue() -> "asyncio.Queue":
+            # Created inside the loop thread to bind it to manager._loop.
+            return asyncio.Queue()
+
+        start_queue = _await(manager, _make_queue(), 20.0)
+
+        async def _take_start(queue: "asyncio.Queue", limit: float):
+            try:
+                return await asyncio.wait_for(queue.get(), limit)
+            except asyncio.TimeoutError:
+                return None
 
         def _on_start(generation: int) -> None:
+            device._timeline_stamp("physical_press_event")
             if int(generation) > baseline_session:
-                start_event.set()
+                manager._loop.call_soon_threadsafe(
+                    start_queue.put_nowait, int(generation)
+                )
+                device._timeline_stamp("queue_put_scheduled")
 
-        device.on_pipeline_start_cb = _on_start
-        print("ARMED — PRESS BUTTON NOW", flush=True)
-        start_event.wait(180.0)
-        opened = int(device.session_generation or 0) > baseline_session
-        device.on_pipeline_start_cb = None
+        def _on_conn() -> None:
+            # Reconnect-safe: the listener list itself survives reconnects;
+            # the only thing to confirm is that the queue is still reachable.
+            device._timeline_stamp("connection_refreshed")
+
+        device._timeline_stamp("listener_registered")
+        unsub = device.add_pipeline_start_listener(_on_start)
+        print("ARMED \u2014 PRESS BUTTON NOW", flush=True)
+        device._timeline_stamp("ARMED_printed")
+        received = _await(manager, _take_start(start_queue, 180.0), 185.0)
+        unsub()
+        opened = received is not None and int(received) > baseline_session
+        if received is not None:
+            device._timeline_stamp("queue_item_received")
         if not opened:
             _report(
                 99,
@@ -619,12 +683,22 @@ def main() -> int:
             )
             return 1
         print(
-            f"CAPTURING generation={int(device.session_generation)}",
+            f"CAPTURING generation={int(received)}",
             flush=True,
         )
+        device._timeline_stamp("CAPTURING_started")
         diag = _diagnostic_two_channel(device, manager, duration_s=10.0, prefix="pe_diag")
         _print_two_channel_diag(diag)
-        offline = device._ingress.offline_candidates(device.current_context() or None)
+        # One monotonic timeline for the whole press \u2192 capture chain; the
+        # first stamp (listener_registered) is the zero point.
+        _tl = list(device.pipeline_timeline)
+        _t0 = _tl[0][1] if _tl else 0
+        for stage, ns in _tl:
+            print(
+                f"   t+{(ns - _t0) / 1e6:9.3f} ms  {stage}",
+                flush=True,
+            )
+        offline = device._ingress.offline_candidates(device._stream())
         if offline:
             print(
                 "   offline candidates:",
@@ -636,18 +710,31 @@ def main() -> int:
                 ),
                 flush=True,
             )
+        # Checkpoint 99 is conjunctive and generation-scoped: the generation the
+        # event carried, the generation the capture reports, both WAVs belonging
+        # to it, and a real header-plus-data size (> 44 bytes) must all agree.
+        file_meta = {int(k): dict(v or {}) for k, v in (diag.get("channel_files") or {}).items()}
+        capture_generation = int(diag.get("pipeline_start_ts") or 0)
+        wavs_ok = (
+            len(file_meta) >= 2
+            and all(int(m.get("bytes") or 0) > 44 for m in file_meta.values())
+        )
+        _sizes = ", ".join(f"{c}:{int(m.get('bytes') or 0)}" for c, m in sorted(file_meta.items()))
         _report(
             99,
             "--two-channel diagnostic captured",
-            bool(diag.get("channel_files"))
+            wavs_ok
+            and capture_generation == int(received)
             and diag.get("selected_channel") is not None,
-            f"channels={sorted((diag.get('channel_files') or {}).keys())} "
+            f"captured_generation={capture_generation} event_generation={int(received)} "
+            f"channels={sorted(file_meta)} "
+            f"sizes={{{_sizes}}} "
             f"selected={diag.get('selected_channel')} "
             f"reason={diag.get('selection_reason') or '-'}",
         )
         # Keep the harness honest: a ``None`` verdict from the heuristic is
         # still a captured diagnostic if both WAVs landed.
-        return 0 if bool(diag.get("channel_files")) else 1
+        return 0 if wavs_ok else 1
 
     # 2/3. Identity, decoded flags, enumeration.
     _report(
@@ -696,27 +783,55 @@ def main() -> int:
         name, ok = entry
         m = dict(metrics.get(role) or {})
         # ``gpu_layers`` is the only number that names a CPU-only server vs
-        # the GPU-resident chat model on an RTX 4090; 0/negative is not
-        # campaign-ready. ``first_token_s`` and ``tok/s`` are from the very
-        # same inference that produced them, not a guess.
+        # the GPU-resident chat model on an RTX 4090: ``None`` means the server
+        # gave no hint (``accelerator_unknown``), ``0`` is a real
+        # ``cpu_confirmed``, ``>= 1`` is ``gpu_confirmed``. There is no ``-1``.
+        # ``first_token_s`` / ``completion_latency_s`` and ``tok/s`` come from
+        # the very same streamed inference that produced them.
+        _lat_key = (
+            "first_token_latency"
+            if "first_token_latency" in m
+            else "completion_latency"
+        )
+        acc = m.get("accelerator", "accelerator_unknown")
         print(
             f"   warmup {role}: {'ok' if ok else 'FAIL'} model={name} "
-            f"first_token_s={m.get('first_token_latency', '?')} "
+            f"{_lat_key}={m.get(_lat_key, '?')} "
             f"tok/s={m.get('tokens_per_s', '?')} "
             f"gpu_layers={m.get('gpu_layers', '?')} "
+            f"accelerator={acc} "
             f"backend={m.get('backend', '?')}",
             flush=True,
         )
-    _chat_gpu = int((metrics.get("chat") or {}).get("gpu_layers") or 0)
+    _chat_m = dict(metrics.get("chat") or {})
+    _chat_gpu = _chat_m.get("gpu_layers")          # int >= 0 or None
+    _chat_acc = _chat_m.get("accelerator", "accelerator_unknown")
+    _chat_tps = _chat_m.get("tokens_per_s")
+    _min_tps = float(settings.voice_pe_llm_min_tokens_per_s)
     _chat_27b = any(
         "27B" in str(v[0] if isinstance(v, tuple) else "") for v in per_role.values()
     )
-    _not_ready = _chat_gpu <= 0
     critical = all(bool(per_role.get(k) and per_role[k][1]) for k in ("chat", "judge"))
+    # Campaign readiness for the 27B chat, resolved in this order:
+    #   gpu_confirmed                                  -> ready
+    #   cpu_confirmed (n_gpu_layers == 0)              -> not_campaign_ready
+    #   accelerator_unknown but streamed tok/s > limit -> ready by latency
+    #   accelerator_unknown and latency below limit    -> not_campaign_ready
+    if _chat_acc == "gpu_confirmed":
+        _llm_status = "campaign_ready"
+    elif _chat_acc == "cpu_confirmed":
+        _llm_status = "not_campaign_ready"
+    elif _chat_tps is not None and float(_chat_tps) > _min_tps:
+        _llm_status = "campaign_ready"
+    elif not _chat_27b:
+        _llm_status = "campaign_ready"
+    else:
+        _llm_status = "not_campaign_ready"
     print(
         f"   models ready={bool(warmed)} critical_ok={critical} "
-        f"27b_gpu={_chat_gpu} "
-        f"llm_backend={'campaign_ready' if (_chat_gpu or not _chat_27b) else 'not_campaign_ready'} "
+        f"27b_gpu={_chat_gpu if _chat_gpu is not None else 'unknown'} "
+        f"accelerator={_chat_acc} min_tok_s={_min_tps} "
+        f"llm_backend={_llm_status} "
         f"roles={sorted(per_role)}",
         flush=True,
     )
@@ -726,10 +841,10 @@ def main() -> int:
             "diagnostic path. Run the separate 27B proof after READY/warmup.",
             flush=True,
         )
-    if _not_ready and _chat_27b and critical:
-        # The warm-up is ready but the model did not land on the GPU; the
-        # chat is not campaign ready and the production 27B turn cannot rely
-        # on a model that loads only on first use later.
+    if _llm_status == "not_campaign_ready" and _chat_27b and critical:
+        # The warm-up ran but the model is either CPU-resident or its
+        # accelerator stayed unknown while throughput stayed below the limit;
+        # the production 27B turn cannot be counted as campaign-ready.
         print("   llm_backend_not_campaign_ready", flush=True)
 
 

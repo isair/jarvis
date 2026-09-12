@@ -258,10 +258,46 @@ class VoicePEDevice:
         self._active_channel = int(config.preferred_input_channel or 0)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.actions = pe_events.ActionRunner()
+        #: Ordered listeners for `handle_pipeline_start`: `add_...` returns a
+        #: per-call unsubscribe so a harness drops only its own listener; the
+        #: production wiring and the reconnect logic are never clobbered.
+        self._pipeline_start_listeners: list = []
+        #: `(stage, monotonic_ns)` of the harness, naming the layer a press
+        #: died on: listener_registered / ARNED_printed / physical_press_event /
+        #: handle_pipeline_start_enter / queue_put_scheduled /
+        #: queue_item_received / CAPTURING_started.
+        self.pipeline_timeline: list = []
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def add_pipeline_start_listener(self, callback):
+        """Register `callback(session_generation)`, return the unsubscribe.
+
+        The unsubscribe is a plain callable: calling it removes this exact
+        listener. Production callbacks registered earlier stay, reconnect stays,
+        and a raising listener does not stop the rest.
+        """
+        self._pipeline_start_listeners.append(callback)
+
+        def _unsubscribe():
+            try:
+                self._pipeline_start_listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return _unsubscribe
+
+    def _timeline_stamp(self, stage: str) -> None:
+        self.pipeline_timeline.append((str(stage), int(time.monotonic_ns())))
+
+    def _dispatch_pipeline_start(self, generation: int) -> None:
+        for cb in tuple(self._pipeline_start_listeners):
+            try:
+                cb(int(generation))
+            except Exception as err:  # noqa: BLE001 - per-listener isolation
+                debug_log(f"pipeline_start listener failed: {err}", "voice")
 
     async def start(self) -> None:
         """Connect through ``ReconnectLogic`` (backoff, jitter, mDNS wake)."""
@@ -629,6 +665,7 @@ class VoicePEDevice:
         wake_word_phrase: Optional[str],
     ) -> Optional[int]:
         """Open one wake-free Jarvis session for a device-triggered run."""
+        self._timeline_stamp("handle_pipeline_start_enter")
         self.session_generation += 1
         self._bump_metric("sessions")
         # A new run replaces the playback of the previous one.
@@ -667,16 +704,10 @@ class VoicePEDevice:
         # pipeline start, so it is traced too: every press has a structured
         # ``accepted`` row, none disappears without a reason.
         self._trace_press("pipeline_start", True, "")
-        # One-shot notification: the smoke/diag harness sets a ``threading.Event``
-        # through this hook so ``ARMED — PRESS BUTTON NOW`` is never raced by
-        # a callback the loop runs between ``_poll`` iterations.
-        cb = getattr(self, "on_pipeline_start_cb", None)
-        if callable(cb):
-            try:
-                cb(self.session_generation)
-            except Exception:
-                pass
-
+        # Fan out to every ``add_pipeline_start_listener`` callback; the
+        # harness drops its own in ``finally``, one listener raising does not
+        # block the rest, and the production callbacks stay in place.
+        self._dispatch_pipeline_start(self.session_generation)
         # The generation's pump is usually already running from ``_on_connect``;
         # a restarted generation gets exactly one new one here.
         self._ensure_pump()
@@ -1112,6 +1143,7 @@ class VoicePEDevice:
         self._sync_face_state()
 
     def _handle_button_event(self, event_value: str) -> None:
+        self._timeline_stamp("physical_press_event")
         action = pe_events.resolve_action(event_value, self.config.button_actions)
         self._bump_metric(f"button_{event_value}")
         result = self.actions.run(action)

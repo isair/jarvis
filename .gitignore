@@ -36,3 +36,7 @@ infra/openvino-npu/cache/
 infra/openvino-npu/cache-verification/npu_profiling_data
 infra/openvino-npu/models/Qwen3-Embedding-0.6B-int4-cw-ov/1/openvino_model.bin
 infra/openvino-npu/models/Qwen3-Reranker-0.6B-int8-ov/1/openvino_model.bin
+
+# Voice PE smoke two-channel WAV dumps (regenerated on every run)
+pe_diag-channel-*.wav
+probe-channel-*.wav

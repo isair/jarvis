@@ -86,7 +86,7 @@ from .intent_judge import (
     warm_up_chat_model,
 )
 from ..debug import debug_log
-from ..llm import get_embedding_backend
+from ..llm import get_embedding_backend, get_llm_backend
 from ..utils.location import is_location_available
 
 if TYPE_CHECKING:
