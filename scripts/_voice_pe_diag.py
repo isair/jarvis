@@ -15,6 +15,7 @@ No Home Assistant server, no mocks, no writes besides stdout.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import wave
@@ -88,7 +89,7 @@ def _decode(wav_path: str, model_name: str, language: str | None):
                 "avg_logprob": round(float(seg.avg_logprob), 4),
                 "no_speech_prob": round(float(seg.no_speech_prob), 4),
                 "confidence": round(
-                    min(1.0, max(0.0, float(seg.avg_logprob) + 1.0)), 4
+                    min(1.0, max(0.0, math.exp(float(seg.avg_logprob)))), 4
                 ),
             }
             for seg in segments
@@ -98,6 +99,72 @@ def _decode(wav_path: str, model_name: str, language: str | None):
             "detected": str(getattr(info, "language", "") or ""),
         }
     return out
+
+
+def _matrix(wav_path: str, model_name: str, language: str | None) -> dict:
+    """Same bytes decoded under each plausible sample-rate / endianness.
+
+    The listener writes PCM16LE at 16000 Hz mono. The matrix reads what the
+    decoder would see under 8k/16k/22.05k/44.1k/48k and under both endianness
+    tags, so a wrong rate or a swapped byte-order becomes visible as a
+    duration + text change against the intended cell, and only that cell.
+    """
+    with wave.open(wav_path, "rb") as handle:
+        data = handle.readframes(handle.getnframes())
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    keyed: dict = {}
+    if language:
+        keyed["language"] = language
+    rates = (8000, 16000, 22050, 44100, 48000)
+    variants: dict = {}
+
+    def _one(dtype: str, rate: int):
+        import numpy as np
+
+        raw = np.frombuffer(data, dtype=dtype).astype(np.float64)
+        vals = raw / 32768.0
+        with wave.open(wav_path + ".m.wav", "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(rate)
+            handle.writeframes(
+                (np.clip(vals, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            )
+        rms = float(np.sqrt(np.mean(np.square(vals)))) if vals.size else 0.0
+        try:
+            segs, _info = model.transcribe(
+                wav_path + ".m.wav",
+                vad_filter=False,
+                condition_on_previous_text=False,
+                **keyed,
+            )
+            rows = [
+                {
+                    "text": (s.text or "").strip(),
+                    "avg_logprob": round(float(s.avg_logprob), 4),
+                    "no_speech_prob": round(float(s.no_speech_prob), 4),
+                    "confidence": round(
+                        min(1.0, max(0.0, math.exp(float(s.avg_logprob)))), 4
+                    ),
+                }
+                for s in segs
+            ]
+        except Exception as err:
+            rows = [{"error": str(err)}]
+        with wave.open(wav_path + ".m.wav", "rb") as handle:
+            n = int(handle.getnframes())
+        return {
+            "rms": round(rms, 8),
+            "duration_s": round(n / float(rate), 4),
+            "rows": rows,
+        }
+
+    for rate in rates:
+        variants[f"LE@{rate}"] = _one("<i2", rate)
+    variants[">i2@16000"] = _one(">i2", 16000)
+    return variants
 
 
 def _listen(prefix: str, seconds: float) -> int:
@@ -149,10 +216,10 @@ def main() -> int:
     model_override = None
     if "--model" in args:
         model_override = args[args.index("--model") + 1]
-    return _read(args[0], model_override)
+    return _read(args[0], model_override, show_matrix="--matrix" in args)
 
 
-def _read(prefix: str, model_override: str | None) -> int:
+def _read(prefix: str, model_override: str | None, show_matrix: bool = False) -> int:
 
     base = Path(prefix).parent if Path(prefix).is_absolute() else Path.cwd()
     stem = Path(prefix).name
@@ -213,6 +280,32 @@ def _read(prefix: str, model_override: str | None) -> int:
             f"source={recorded.get('source')} stream={recorded.get('stream')} "
             f"turn={recorded.get('turn_context')}"
         )
+        # Audio format source and device identity, straight from the dump.
+        info_fields = recorded.get("device_info_fields") or {}
+        if info_fields:
+            print(
+                "device_info   : "
+                + json.dumps(info_fields, sort_keys=True)
+            )
+        src = recorded.get("audio_format_source") or "-"
+        print(
+            "audio_format  : "
+            f"source={src} "
+            + (
+                f"wav={rate}Hz/{channels}ch/{width}B"
+                if src == "configured_wav_header"
+                else f"assumed={recorded.get('sample_rate')}Hz/"
+                f"{recorded.get('channels')}ch/{recorded.get('sample_width_bytes')}B"
+            )
+        )
+        ev = (recorded.get("speech_evidence")
+              or dict(recorded.get("preprocessor") or {}).get("speech_evidence")
+              or {})
+        if ev:
+            print(
+                "speech_evidence : "
+                + json.dumps(ev, sort_keys=True)
+            )
         print(
             "language      : "
             f"config={recorded.get('whisper_language') or 'auto'} "
@@ -325,6 +418,29 @@ def _read(prefix: str, model_override: str | None) -> int:
                     f"no_speech_prob={row['no_speech_prob']} "
                     f"confidence={row['confidence']} text={row['text']!r}"
                 )
+        # Sample-rate / endianness matrix on the very same bytes, so a wrong
+        # header in the pipeline shows up as a different rms + duration cell.
+        if show_matrix or model_override == "__matrix__":
+            try:
+                matrix = _matrix(wav_path, model_name, recorded.get("whisper_language") or None)
+            except Exception as err:  # pragma: no cover
+                print(f"matrix failed: {err}")
+            else:
+                for label, block in matrix.items():
+                    print(
+                        f"matrix {label:<10}: rms={block['rms']} "
+                        f"dur={block['duration_s']}s rows={len(block['rows'])}"
+                    )
+                    for row in block["rows"]:
+                        if "error" in row:
+                            print(f"   1. error={row['error']}")
+                            continue
+                        print(
+                            "   "
+                            f"avg_logprob={row['avg_logprob']} "
+                            f"no_speech_prob={row['no_speech_prob']} "
+                            f"confidence={row['confidence']} text={row['text']!r}"
+                        )
     return 0
 
 

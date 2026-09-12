@@ -79,6 +79,111 @@ def _iter_payloads(pcm: bytes, chunk_bytes: int = 1024):
         yield pcm[offset: offset + chunk_bytes]
 
 
+# The library pins ``MAXIMUM_BACKOFF`` and drives the backoff ladder through
+# ``ReconnectLogic._tries``; the two helpers below touch those private names.
+# Version is pinned in ``requirements.txt`` and hard-checked here so a drift
+# fails at start rather than silently falling back to library defaults.
+_EXPECTED_AIOESPHOMEAPI = "46.3.0"
+
+
+def _installed_aioesphomeapi_version() -> str:
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return str(_pkg_version("aioesphomeapi"))
+    except Exception:
+        try:
+            import aioesphomeapi as _ap
+
+            return str(getattr(_ap, "__version__", "?"))
+        except Exception:
+            return "?"
+
+
+def _reconnect_logic_compat_check(logic: Any) -> None:
+    """Fail-fast when the pinned private attributes are not as-expected.
+
+    Raises ``RuntimeError`` with the installed version on drift so the
+    caller can surface it in ``health_snapshot`` / the CLI last-error line.
+    """
+    installed = _installed_aioesphomeapi_version()
+    try:
+        import aioesphomeapi.reconnect_logic as _rl
+    except Exception as err:  # pragma: no cover - defensive
+        raise RuntimeError(
+            f"voice_pe: aioesphomeapi.reconnect_logic not importable "
+            f"({_EXPECTED_AIOESPHOMEAPI} expected, got {installed!r}): {err}"
+        ) from err
+    if logic is None:
+        return
+    if not hasattr(logic, "_tries") or not isinstance(
+        getattr(logic, "_tries", None), int
+    ):
+        raise RuntimeError(
+            f"voice_pe: ReconnectLogic._tries missing or non-int "
+            f"(expected aioesphomeapi {_EXPECTED_AIOESPHOMEAPI}, "
+            f"installed {installed!r})"
+        )
+    max_backoff = getattr(_rl, "MAXIMUM_BACKOFF", None)
+    if max_backoff is None or not isinstance(max_backoff, float):
+        raise RuntimeError(
+            f"voice_pe: aioesphomeapi.reconnect_logic.MAXIMUM_BACKOFF "
+            f"missing or non-float (expected {_EXPECTED_AIOESPHOMEAPI}, "
+            f"installed {installed!r})"
+        )
+
+
+def _wire_reconnect_backoff(logic: Any, cfg: Any) -> None:
+    """Bind ``voice_pe_reconnect_max_s`` onto the library backoff cap.
+
+    ``aioesphomeapi`` hard-codes ``MAXIMUM_BACKOFF = 60.0`` and applies
+    ``wait = round(min(1.8 ** tries, MAXIMUM_BACKOFF))``. Only the ceiling
+    is a real module constant, so write the configured ceiling there once
+    per construction; the module is shared across every voice_pe device
+    but their configs share a single flat ``voice_pe_*`` namespace.
+    """
+    _reconnect_logic_compat_check(logic)
+    try:
+        max_s = float(getattr(cfg, "reconnect_max_s", 0) or 0.0)
+    except (TypeError, ValueError):
+        max_s = 0.0
+    if max_s <= 0.0:
+        return
+    try:
+        import aioesphomeapi.reconnect_logic as _rl
+
+        _rl.MAXIMUM_BACKOFF = max_s
+    except Exception:
+        pass
+
+
+def _seed_reconnect_tries(logic: Any, cfg: Any) -> None:
+    """Nudge ``_tries`` so the first retry respects ``reconnect_min_s``.
+
+    ``_handle_connection_failure`` bumps ``_tries`` and the rescheduler uses
+    ``round(1.8 ** _tries)``, so setting ``_tries = n`` makes the next
+    failure wait ``round(1.8 ** (n + 1))``. Choose the smallest ``n`` whose
+    bump meets ``min_s``; ``_on_connect`` calls this again after every
+    success to counter the library's ``_tries = 0`` reset.
+    """
+    if logic is None:
+        return
+    _reconnect_logic_compat_check(logic)
+    try:
+        min_s = float(getattr(cfg, "reconnect_min_s", 0) or 0.0)
+    except (TypeError, ValueError):
+        return
+    if min_s <= 0.0:
+        return
+    tries = 0
+    while tries < 10 and round(1.8 ** (tries + 1)) < min_s:
+        tries += 1
+    try:
+        logic._tries = tries  # noqa: SLF001 - documented in the library
+    except Exception:
+        pass
+
+
 class VoicePEDevice:
     """Stock Voice PE satellite attached to the existing Jarvis pipeline."""
 
@@ -138,6 +243,11 @@ class VoicePEDevice:
         self._pending_playback: "OrderedDeque" = _deque()
         #: Sent Voice Assistant events as ``(session_generation, name)``.
         self.event_ledger: list = []
+        #: Per-``TurnContext`` terminal ledger of one-run close of
+        #: ``ERROR``+``RUN_END``. A second ``pipeline_stop`` or a duplicate
+        #: ``on_error`` is a no-op after this tuple is in here, so a run
+        #: never gets two lifecycle terminals.
+        self._closed_runs: set = set()
         #: Last light-entity push of the public ``led_ring``, for the ring check.
         self.last_light_push: Optional[dict] = None
         #: Last ``AnnounceFinished`` report, of the generation it closed.
@@ -176,6 +286,8 @@ class VoicePEDevice:
             on_disconnect=self._on_connection_stopped,
             name=self._device_name or self._host,
         )
+        _wire_reconnect_backoff(self._reconnect, self.config)
+        _seed_reconnect_tries(self._reconnect, self.config)
         await self._reconnect.start()
         self._count("connections")
 
@@ -225,6 +337,9 @@ class VoicePEDevice:
         self.connection_generation += 1
         if self.connection_generation > 1:
             self._count("reconnects")
+        # Re-seed so the *next* failure starts at the configured min_s,
+        # because ``ReconnectLogic`` nulls ``_tries`` on every success.
+        _seed_reconnect_tries(self._reconnect, self.config)
         # Per-generation pump counter, restart-nulled with the generation.
         self.metrics["pump_tasks"] = 0
         self.state = DeviceState.CONNECTING
@@ -397,6 +512,7 @@ class VoicePEDevice:
                 "room": self.config.room,
                 "connection_generation": self.connection_generation,
                 "voice_features": ",".join(self.capabilities.names()) or "none",
+                "psk_length": len(self._psk) if self._psk else 0,
                 "event_type": "connected",
             }),
             "voice",
@@ -432,6 +548,8 @@ class VoicePEDevice:
             on_disconnect=self._on_connection_stopped,
             name=self._device_name or self._host,
         )
+        _wire_reconnect_backoff(self._reconnect, self.config)
+        _seed_reconnect_tries(self._reconnect, self.config)
         await self._reconnect.start()
 
     async def _on_connection_stopped(self, *_args) -> None:
@@ -549,6 +667,15 @@ class VoicePEDevice:
         # pipeline start, so it is traced too: every press has a structured
         # ``accepted`` row, none disappears without a reason.
         self._trace_press("pipeline_start", True, "")
+        # One-shot notification: the smoke/diag harness sets a ``threading.Event``
+        # through this hook so ``ARMED — PRESS BUTTON NOW`` is never raced by
+        # a callback the loop runs between ``_poll`` iterations.
+        cb = getattr(self, "on_pipeline_start_cb", None)
+        if callable(cb):
+            try:
+                cb(self.session_generation)
+            except Exception:
+                pass
 
         # The generation's pump is usually already running from ``_on_connect``;
         # a restarted generation gets exactly one new one here.
@@ -591,8 +718,11 @@ class VoicePEDevice:
     ) -> None:
         """One close for one run: tasks, both queues, events, lease, avatar.
 
-        The generation is checked as the very first thing, so a late close of a
-        cancelled run cannot touch the one that replaced it.
+        The full ``TurnContext`` is the key; a second close of the same run
+        is a logged no-op so the ledger holds exactly one ``ERROR`` and one
+        ``RUN_END`` per run. The generation-only path also keys off the
+        current generation only, since a bare numeric close has no full
+        context to compare.
         """
         if context is not None:
             if not is_current_turn(
@@ -603,6 +733,21 @@ class VoicePEDevice:
             ):
                 return
         elif int(generation) != int(self.session_generation):
+            return
+        # Second callback for the very same run is ignored: only the first
+        # writes the ERROR/RUN_END pair.
+        close_key: tuple
+        if context is not None:
+            close_key = (
+                str(getattr(context, "source", "") or ""),
+                str(getattr(context, "device_id", "") or ""),
+                int(getattr(context, "connection_generation", 0) or 0),
+                int(getattr(context, "session_generation", 0) or 0),
+            )
+        else:
+            close_key = ("", self.device_id, int(self.connection_generation), int(generation))
+        if close_key in self._closed_runs:
+            self._mark_event(f"ignored_duplicate:{close_key[-1]}")
             return
         # Released first and idempotently, so a caller that already dropped the
         # session sees the same state immediately.
@@ -622,6 +767,11 @@ class VoicePEDevice:
             )
             await self._event("RUN_END", {})
             self._bump_metric("run_end")
+        self._closed_runs.add(close_key)
+        # Cap the set to the last 32 runs so a long-lived device never grows
+        # its dedup memory.
+        if len(self._closed_runs) > 32:
+            self._closed_runs = set(list(self._closed_runs)[-32:])
         self._mark_event("aborted" if not reason else f"abort:{reason}")
         self._sync_face_state()
 
@@ -738,6 +888,24 @@ class VoicePEDevice:
             and self.session_state is not SessionState.IDLE
         )
 
+    def selected_audio_channel(self, stream=None) -> Optional[int]:
+        """Locked audio channel for one stream, or ``None`` before the lock."""
+        if self._ingress is None:
+            return None
+        try:
+            return self._ingress.selected_audio_channel(stream)
+        except Exception:
+            return None
+
+    def packet_stats(self, stream=None, channel=None) -> list:
+        """Per-packet ``PacketStats`` rows of this device's own channel log."""
+        if self._ingress is None:
+            return []
+        try:
+            return self._ingress.packet_stats(stream, channel)
+        except Exception:
+            return []
+
     @property
     def device_id(self) -> str:
         """Stable id of this satellite for the audio lease: MAC, name, host."""
@@ -842,12 +1010,16 @@ class VoicePEDevice:
     async def _on_error_async(
         self, code: str, message: str, token: Any = None
     ) -> None:
-        """One close for a failed turn: ERROR, RUN_END and the released lease."""
-        # The close below is this run's single terminal: the STT stage answered
-        # through the error code, so its counters move here and not later.
+        """One close for a failed turn: STT_END, ERROR, RUN_END, released lease.
+
+        STT_START is always paired with an STT_END, also on a skipped or
+        filtered stage; the status is what tells the phases apart. The
+        ordering keeps ``RUN_END`` as the single last event of a run.
+        """
         if self.session is not None:
             self._bump_metric("stt_end")
             self._bump_metric(f"stt_end_{code}")
+            await self._event("STT_END", {"text": "", "status": str(code or "error")})
         await self.abort_run(self.session_generation, str(code or "error"), token)
 
     # ------------------------------------------------------------------

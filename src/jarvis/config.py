@@ -472,6 +472,15 @@ class Settings:
     whisper_compute_type: str
     whisper_vad: bool
     whisper_min_confidence: float
+    #: Canonical log-domain threshold. Segments with ``avg_logprob`` below
+    #: this value are dropped. ``-0.7`` is the exact equivalent of the
+    #: legacy ``whisper_min_confidence=0.3`` under the linear mapping
+    #: ``confidence = avg_logprob + 1`` (so ``0.3`` ⇒ ``-0.7``) and of the
+    #: exponential mapping where ``exp(-0.7)=0.496585`` (the exp form is
+    #: printed only). The threshold is never softened to ``-1.204``; the
+    #: migration below is exact and the same value is used for the
+    #: faster-whisper and MLX paths.
+    whisper_min_avg_logprob: float
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
     #: Continuous waveform kept after the last voiced frame. The endpoint wait is
@@ -623,7 +632,13 @@ class Settings:
     voice_pe_prefer_api_audio: bool
     # 0 = enhanced XMOS speech audio, 1 = less processed (needs the
     # multi-channel feature flag, otherwise it falls back to 0).
+    #: Legacy integer view of the same decision. Kept for on-disk
+    #: compatibility: 0 == ``enhanced``, 1 == ``raw``.
     voice_pe_preferred_input_channel: int
+    #: Explicit Voice PE channel selection: ``enhanced`` (``data``/channel 0),
+    #: ``raw`` (``data2``/channel 1) or ``auto``. Locked per ``StreamId`` once
+    #: chosen; ``auto`` only compares channels within the first 1000 ms.
+    voice_pe_audio_channel: str
     voice_pe_continued_conversation: bool
     voice_pe_conversation_timeout_s: float
     voice_pe_reconnect_min_s: float
@@ -1055,7 +1070,11 @@ def get_default_config() -> Dict[str, Any]:
         # (preflight host: D:\_MODELS; layout <root>/hub/models--org--name).
         "whisper_cache_dir": _detect_whisper_cache_dir(),
         "whisper_vad": True,
-        "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
+        "whisper_min_confidence": 0.3,  # Legacy linear view, ``logprob + 1.0``
+        # Canonical key in the log domain. Migration on read:
+        # ``min_avg_logprob = whisper_min_confidence - 1`` (0.3 ⇒ -0.7), and
+        # the exp-domain equivalent of ``-0.7`` is ``exp(-0.7)=0.496585``.
+        "whisper_min_avg_logprob": -0.7,
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
         # 10 grid frames of 20 ms: enough trailing context for the final plosive
@@ -1144,7 +1163,7 @@ def get_default_config() -> Dict[str, Any]:
         "planner_timeout_sec": 10.0,
 
         # Stop Commands
-        "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
+        "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up", "konec"],
         "stop_command_fuzzy_ratio": 0.8,
 
         # Location Services
@@ -1185,6 +1204,8 @@ def get_default_config() -> Dict[str, Any]:
         "voice_pe_disable_wake_words": True,
         "voice_pe_prefer_api_audio": True,
         "voice_pe_preferred_input_channel": 0,
+        # Explicit channel enum: ``enhanced`` (ch0) / ``raw`` (ch1) / ``auto``.
+        "voice_pe_audio_channel": "enhanced",
         "voice_pe_continued_conversation": True,
         "voice_pe_conversation_timeout_s": 300.0,
         "voice_pe_reconnect_min_s": 1.0,
@@ -1456,6 +1477,29 @@ def load_settings() -> Settings:
         )
     except (TypeError, ValueError):
         voice_pe_preferred_input_channel = 0
+    # Channel enum. Only an explicit key in the JSON file is a real choice.
+    # When only the legacy int is set (no key in the file → ``None``), the enum
+    # mirrors it: 0 → ``enhanced``, 1 → ``raw``. When both are set, the explicit
+    # enum wins and the int follows it.
+    _enum = str(
+        (cfg_json or {}).get("voice_pe_audio_channel") or ""
+    ).strip().lower()
+    if _enum not in ("enhanced", "raw", "auto"):
+        _enum = ""
+    if _enum:
+        voice_pe_audio_channel = _enum
+        if _enum == "enhanced":
+            voice_pe_preferred_input_channel = 0
+        elif _enum == "raw":
+            voice_pe_preferred_input_channel = 1
+        # ``auto`` leaves the integer alone; the auto pass decides per stream.
+    else:
+        # No explicit enum, the integer is not touched, and the enum mirrors it.
+        voice_pe_audio_channel = "raw" if voice_pe_preferred_input_channel == 1 else "enhanced"
+    # Also propagate the enum back into the merged dict so later reads see the
+    # same pair that ``Settings`` ends up with.
+    merged["voice_pe_audio_channel"] = voice_pe_audio_channel
+    merged["voice_pe_preferred_input_channel"] = voice_pe_preferred_input_channel
     voice_pe_continued_conversation = bool(
         merged.get("voice_pe_continued_conversation", True)
     )
@@ -1534,6 +1578,24 @@ def load_settings() -> Settings:
     # Parse fallbacks mirror `get_default_config()` exactly, so a config.json
     # missing a key resolves to the same value as a fresh install.
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.3))
+    # The canonical log-domain key wins; when only the legacy one is present,
+    # migrate it via the exact ``logprob = confidence - 1`` line so the same
+    # decision falls out for faster-whisper and MLX. Never softened.
+    if "whisper_min_avg_logprob" in merged and merged["whisper_min_avg_logprob"] is not None:
+        whisper_min_avg_logprob = float(merged["whisper_min_avg_logprob"])
+    else:
+        whisper_min_avg_logprob = whisper_min_confidence - 1.0
+    # Keep the two views of the same gate aligned for print/UI consumers.
+    if not isinstance(merged.get("whisper_min_confidence"), float):
+        whisper_min_confidence = min(1.0, max(0.0, 1.0 + whisper_min_avg_logprob))
+        # 0.496585 for the exp-domain equivalent of -0.7 in the UI panel;
+        # the linear legacy field stays at 0.3 so the migration is exact.
+        # Both fields describe the same decision; the log-domain one is
+        # the authority in code.
+    else:
+        # Align linear 0.3 <-> log -0.7 to keep parity.
+        if abs(whisper_min_avg_logprob - (whisper_min_confidence - 1.0)) > 1e-9:
+            whisper_min_avg_logprob = whisper_min_confidence - 1.0
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.15))
     whisper_post_roll_ms = int(merged.get("whisper_post_roll_ms", 200))
@@ -1633,6 +1695,7 @@ def load_settings() -> Settings:
         whisper_compute_type=whisper_compute_type,
         whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,
+        whisper_min_avg_logprob=whisper_min_avg_logprob,
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_post_roll_ms=whisper_post_roll_ms,
@@ -1715,6 +1778,7 @@ def load_settings() -> Settings:
         voice_pe_disable_wake_words=voice_pe_disable_wake_words,
         voice_pe_prefer_api_audio=voice_pe_prefer_api_audio,
         voice_pe_preferred_input_channel=voice_pe_preferred_input_channel,
+        voice_pe_audio_channel=voice_pe_audio_channel,
         voice_pe_continued_conversation=voice_pe_continued_conversation,
         voice_pe_conversation_timeout_s=voice_pe_conversation_timeout_s,
         voice_pe_reconnect_min_s=voice_pe_reconnect_min_s,

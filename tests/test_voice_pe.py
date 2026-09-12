@@ -562,14 +562,15 @@ class TestFrameGrid:
     def _walk(self, blocks, frame_samples=320):
         import numpy as np
 
-        from jarvis.integrations.voice_pe.models import AudioFrame
+        from jarvis.integrations.voice_pe.models import AudioFrame, StreamId
         from jarvis.listening.listener import VoiceListener
 
         frames = []
         remaining = None
+        stream = StreamId("voice_pe", 1, 0)
         for block in blocks:
-            _source, _generation, buf = VoiceListener._tagged_audio(
-                AudioFrame("voice_pe", 1, np.asarray(block, dtype=np.float32))
+            _stream, _source, buf, _channel = VoiceListener._tagged_audio(
+                AudioFrame(stream, "voice_pe", np.asarray(block, dtype=np.float32), 0)
             )
             mono = VoiceListener._mono_audio(buf)
             produced, remaining = VoiceListener._frame_grid(mono, remaining, frame_samples)
@@ -607,7 +608,7 @@ class TestFrameGrid:
 
         buf = np.zeros(512, dtype=np.float32)
         stamped = VoiceListener._tagged_audio(
-            AudioFrame(StreamId("pe", 1, 3), "voice_pe", buf)
+            AudioFrame(StreamId("pe", 1, 3), "voice_pe", buf, 0)
         )
         legacy = VoiceListener._tagged_audio(("voice_pe", buf))
         bare = VoiceListener._tagged_audio(buf)
@@ -649,7 +650,7 @@ class TestFrameGrid:
         # Local blocks are current against the local stream and the bare shapes.
         assert listener._is_current_frame(LOCAL_STREAM, "local") is True
         assert listener._is_current_frame(
-            AudioFrame(LOCAL_STREAM, "local", None)[0], "local"
+            AudioFrame(LOCAL_STREAM, "local", None, 0).stream, "local"
         ) is True
         listener.state_manager.stop()
 
@@ -668,7 +669,7 @@ class TestFrameGrid:
         buf = np.zeros(320, dtype=np.float32)
         keys = []
         for stream in (StreamId("a", 1, 1), StreamId("b", 1, 1), LOCAL_STREAM):
-            tagged = VoiceListener._tagged_audio(AudioFrame(stream, "voice_pe", buf))
+            tagged = VoiceListener._tagged_audio(AudioFrame(stream, "voice_pe", buf, 0))
             key = (
                 str(tagged[0].device_id),
                 int(tagged[0].connection_generation),
@@ -1496,8 +1497,10 @@ class TestLeaseAndBridges:
                 await asyncio.sleep(0.02)
             return [event for event, _ in device._client.events]
 
-        # One close: ERROR and the RUN_END that belongs to it, on this run.
-        assert _run_loop(_run, device) == [1, 3, 0, 2]
+        # One close: STT_END (filtered, from the error path) then ERROR and
+        # the RUN_END belonging to it, all on this run only. The STT stage
+        # answers through the error code but STT_END still precedes the pair.
+        assert _run_loop(_run, device) == [1, 3, 4, 0, 2]
 
     def test_per_source_containers_are_separate(self):
         from jarvis.integrations.voice_pe.models import (
@@ -2096,6 +2099,12 @@ class TestStreamEndAndTokens:
             def current_context(self):
                 return TurnContext("voice_pe", "pe", 1, 7)
 
+            # The pad must reuse the *already locked* channel, so a bare
+            # sink has to expose it the way ``VoicePEDevice`` does: enhanced (0)
+            # is the locked channel for this run.
+            def selected_audio_channel(self, stream=None):
+                return 0
+
         listener._voice_pe_sink = _Sink()
         pushed = listener.pad_until_endpoint(open_stream, "voice_pe")
         assert pushed >= 1
@@ -2103,6 +2112,7 @@ class TestStreamEndAndTokens:
         assert isinstance(first, AudioFrame)
         # Every pad frame is stamped with the very stream that ended.
         assert first.stream == open_stream and first.source == "voice_pe"
+        assert int(first.channel) == 0
         assert first.samples.size == 320
         # A local tail keeps the local identity.
         pushed_local = listener.pad_until_endpoint(LOCAL_STREAM, "local")
@@ -2187,7 +2197,7 @@ class TestDelayedFramesAcrossGenerations:
         # thing that decided the drop.
         tagged_new = VoiceListener._tagged_audio(
             __import__("jarvis.integrations.voice_pe.models", fromlist=["AudioFrame"])
-            .AudioFrame(newest[0], "voice_pe", b"\x01\x02")
+            .AudioFrame(newest[0], "voice_pe", b"\x01\x02", 0)
         )
         assert tagged_new[0] == newest[0] and tagged_new[1] == "voice_pe"
         # Containers are keyed by whole streams; the open one starts empty.

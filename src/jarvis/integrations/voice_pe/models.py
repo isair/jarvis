@@ -121,10 +121,104 @@ StreamId = namedtuple("StreamId", "device_id connection_generation session_gener
 #: Identity of the local microphone, which has no satellite numbering at all.
 LOCAL_STREAM = StreamId("", 0, 0)
 
-#: One microphone block with the identity of the stream it belongs to. The
-#: listener drops a frame whose stream is no longer the open one, so audio of a
-#: cancelled run or of another satellite cannot widen a newer utterance.
-AudioFrame = namedtuple("AudioFrame", "stream source samples")
+#: One satellite microphone block with the identity of the stream it belongs
+#: to. The listener drops a frame whose stream is no longer the open one, so
+#: audio of a cancelled run or of another satellite cannot widen a newer
+#: utterance.
+#: ``channel`` is 0 (``data``/enhanced) or 1 (``data2``/raw), always passed
+#: explicitly from the ``VoiceAssistantAudio`` callback. A missing channel is
+#: a ``TypeError`` from the dataclass itself (no default). The local microphone
+#: uses a different dataclass, ``LocalMicFrame``, so it cannot be confused
+#: with Voice PE channel 0.
+AUDIO_CHANNEL_ENHANCED = 0
+AUDIO_CHANNEL_RAW = 1
+
+
+@dataclass(frozen=True, slots=True)
+class SatelliteAudioFrame:
+    """One PCM block on the satellite side; every field is required."""
+
+    stream: StreamId
+    source: str
+    samples: bytes
+    channel: int  # 0 or 1; missing or out-of-range is a TypeError from the dataclass.
+
+
+@dataclass(frozen=True, slots=True)
+class LocalMicFrame:
+    """The local PC microphone's own frame type — never confused with channel 0."""
+
+    samples: bytes
+    source: str = AUDIO_SOURCE_LOCAL
+    stream: StreamId = LOCAL_STREAM
+
+
+#: Back-compatible aliases so the transport and the listener can import either
+#: name — the same dataclass instance keeps the ``isinstance`` check simple.
+AudioFrame = SatelliteAudioFrame
+
+
+#: Per-packet metadata of one ``VoiceAssistantAudio`` callback, kept per
+#: ``(StreamId, channel)`` so the two channels never mix inside one utterance.
+PacketStats = namedtuple(
+    "PacketStats",
+    "index channel timestamp_ns byte_length sha1 rms peak all_zero generation",
+)
+
+
+@dataclass(frozen=True)
+class SpeechEvidenceCandidate:
+    """Candidate view of one ``(StreamId, channel)`` inside the auto window.
+
+    The window is the same time range for both channels, and the numeric
+    fields feed the ``_rank`` step of ``AudioIngress._maybe_close_window``:
+    exactly one admissible wins; both admissible → higher SNR, then higher
+    voiced RMS, then channel 0. ``silent_rms_dbfs`` is the median of the
+    per-frame RMSs inside the window — the only noise floor available before
+    VAD has run — and ``admissible`` mirrors the hard ``SpeechEvidence`` gates
+    as far as they already hold: non-zero, ``speech_span_ms >= 200``,
+    ``voiced_frame_count >= 10`` and ``snr_db >= 6.0``.
+    """
+
+    channel: int
+    nonzero_samples: int
+    voiced_frame_count: int
+    speech_span_ms: int
+    voiced_rms_dbfs: Optional[float]
+    silent_rms_dbfs: Optional[float]
+    snr_db: Optional[float]
+    clipped_ratio: float
+    admissible: bool
+
+
+@dataclass(frozen=True)
+class SpeechEvidence:
+    """Hard acoustic gate for one ``(StreamId, channel)``.
+
+    ``admissible`` is true only when every numeric gate is satisfied:
+    PCM non-empty and not all-zero, ``speech_span_ms >= 200``,
+    ``voiced_frame_count >= 10`` on the 20 ms grid, no ``acoustic_silence``,
+    no ``acoustic_low_energy``, and SNR >= 6 dB when computable. Auto-gain
+    is applied after this evidence and cannot lift a rejected frame.
+    ``rejection_reason`` is one of: ``empty_pcm``, ``all_zero_pcm``,
+    ``speech_span_too_short``, ``voiced_frames_too_sparse``,
+    ``acoustic_silence``, ``acoustic_low_energy``, ``snr_below_threshold``,
+    ``no_audio_channel_with_speech``.
+    """
+
+    stream: "StreamId"
+    channel: int
+    total_samples: int
+    voiced_frame_count: int
+    speech_span_ms: int
+    rms_dbfs: Optional[float]
+    peak_dbfs: Optional[float]
+    vad_voiced_rms: float
+    vad_silent_rms: float
+    snr_db: Optional[float]
+    source_channel: Optional[int]
+    admissible: bool
+    rejection_reason: str
 
 
 @dataclass(frozen=True)
@@ -274,7 +368,11 @@ class VoicePEConfig:
     room: Optional[str] = None
     disable_wake_words: bool = True
     prefer_api_audio: bool = True
+    #: Legacy integer view of the same decision, kept for on-disk compatibility.
     preferred_input_channel: int = 0
+    #: Explicit channel selection: ``enhanced`` (``data``/ch0), ``raw``
+    #: (``data2``/ch1) or ``auto``. Locked per StreamId once chosen.
+    audio_channel: str = "enhanced"
     continued_conversation: bool = True
     conversation_timeout_s: float = 300.0
     reconnect_min_s: float = 1.0

@@ -6,6 +6,7 @@ Coordinates audio capture, speech recognition, echo detection, and state managem
 
 from __future__ import annotations
 import functools
+import math
 import os
 import threading
 import time
@@ -29,18 +30,44 @@ try:  # pragma: no cover - trivial import shim
     from ..integrations.voice_pe.models import (
         AUDIO_SOURCE_LOCAL,
         AUDIO_SOURCE_VOICE_PE,
+        AUDIO_CHANNEL_ENHANCED,
+        AUDIO_CHANNEL_RAW,
         LOCAL_STREAM,
         AudioFrame,
+        SatelliteAudioFrame,
+        LocalMicFrame,
         is_current_stream,
     )
 except ImportError:  # pragma: no cover
-    from collections import namedtuple as _namedtuple
+    from dataclasses import dataclass as _dataclass, field as _field
 
     AUDIO_SOURCE_LOCAL = "local"  # type: ignore[assignment]
     AUDIO_SOURCE_VOICE_PE = "voice_pe"  # type: ignore[assignment]
-    _StreamId = _namedtuple("StreamId", "device_id connection_generation session_generation")
+    AUDIO_CHANNEL_ENHANCED = 0  # type: ignore[assignment]
+    AUDIO_CHANNEL_RAW = 1  # type: ignore[assignment]
+
+    @_dataclass(frozen=True, slots=True)
+    class _StreamId:  # type: ignore[no-redef]
+        device_id: str = ""
+        connection_generation: int = 0
+        session_generation: int = 0
+
     LOCAL_STREAM = _StreamId("", 0, 0)  # type: ignore[assignment]
-    AudioFrame = _namedtuple("AudioFrame", "stream source samples")  # type: ignore[assignment]
+
+    @_dataclass(frozen=True, slots=True)
+    class SatelliteAudioFrame:  # type: ignore[no-redef]
+        stream: _StreamId
+        source: str
+        samples: bytes
+        channel: int
+
+    @_dataclass(frozen=True, slots=True)
+    class LocalMicFrame:  # type: ignore[no-redef]
+        samples: bytes
+        source: str = AUDIO_SOURCE_LOCAL
+        stream: _StreamId = LOCAL_STREAM
+
+    AudioFrame = SatelliteAudioFrame  # type: ignore[assignment]
 
     def is_current_stream(stream, context):  # type: ignore[misc]
         if stream is None:
@@ -77,6 +104,84 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
     both backends apply identical policy.
     """
     return no_speech_prob >= threshold
+
+
+#: Canonical multi-word boilerplate (prefixes matched longest-first).
+_WHISPER_BOILERPLATE: tuple = (
+    "pokračování příště",
+    "děkujeme za pozornost",
+    "děkuji za pozornost",
+    "titulky vytvořil",
+    "titulky připravil",
+    "продолжение следует",
+    "to be continued",
+    "мбц ньюс",
+    "mbc 뉴스",
+    "mbc news",
+    "감사합니다",
+    "kankasha mashimasho",
+)
+
+#: Single-token boilerplate (not ``konec``, which is a stop command).
+_WHISPER_BOILERPLATE_SHORT: tuple = ("titulky",)
+
+#: Single-token stop commands in the current ``stop_commands``.
+_WHISPER_STOP_WORDS: tuple = ("stop", "quiet", "shush", "silence", "enough", "konec")
+
+
+def _normalize_whisper_text(text: str) -> str:
+    """NFKD, casefold, whitespace collapsed, each token trimmed of ``.``/``,`.
+    so a repeated ``Konec. Konec.`` still folds to the same tokens as ``Konec``.
+    """
+    import unicodedata
+
+    norm = unicodedata.normalize("NFKD", str(text or ""))
+    norm = norm.casefold()
+    # NFKD already folds combining marks, but keep an explicit pass so the
+    # "i-withor-without-caron" forms match.
+    norm = "".join(c for c in norm if not unicodedata.combining(c))
+    norm = " ".join(norm.split())
+    parts = [p.strip(".,").strip() for p in norm.split(" ") if p.strip(".,")]
+    return " ".join(parts)
+
+
+def _is_whisper_boilerplate(text: str) -> bool:
+    """``True`` for outro / boilerplate Whisper strings, ``False`` otherwise.
+
+    Multi-word patterns match longest-first; lone short tokens in
+    ``_WHISPER_BOILERPLATE_SHORT`` are boilerplate too. A lone stop word
+    (``konec``) is **not** boilerplate, so a single ``Konec`` lands in the
+    regular stop command path, while its repetitions and short-prefix lines
+    do filter. A longer ordinary sentence keeps its tokens and is not flagged
+    (match is anchored at index ``0``).
+    """
+    norm = _normalize_whisper_text(text)
+    if not norm:
+        return True
+    for pattern in _WHISPER_BOILERPLATE:
+        key = _normalize_whisper_text(pattern)
+        if not key:
+            continue
+        if norm == key or norm.startswith(key + " "):
+            return True
+    parts = norm.split(" ")
+    if len(parts) == 1 and parts[0] in _WHISPER_BOILERPLATE_SHORT:
+        return True
+    # ≥2 tokens: all must fall inside the same short boilerplate short-list,
+    # e.g. "konec konec", "titulky titulky". The first token names the group.
+    if len(parts) >= 2:
+        short_keys = (
+            set(_WHISPER_BOILERPLATE_SHORT)
+            | {_normalize_whisper_text(p) for p in _WHISPER_BOILERPLATE if len(p.split()) == 1}
+        )
+        # A lone stop word is never a repeated-boilerplate hit.
+        if parts[0] in _WHISPER_STOP_WORDS:
+            stop_words = set(_WHISPER_STOP_WORDS)
+            if all(p in stop_words for p in parts):
+                return True
+        if short_keys and all(p in short_keys for p in parts):
+            return True
+    return False
 
 # Audio processing imports (optional)
 try:
@@ -731,6 +836,15 @@ class VoiceListener(threading.Thread):
         # `_dispatch_query` always matches the write from the Whisper
         # call that produced the transcript.
         self._last_detected_language: Optional[str] = None
+        # Four independent language/telemetry names. `decoder_language_argument`
+        # is what actually got to ``transcribe``; `reported_language` is what
+        # the response's own info says; for ``forced`` the argument is the
+        # source of truth and ``language_mismatch`` is not consulted against
+        # ``reported_language`` — only a separate second detection can set it.
+        self._decoder_language_argument: Optional[str] = None
+        self._reported_language: Optional[str] = None
+        self._language_source: Optional[str] = None       # "forced" | "auto"
+        self._independent_detection: Optional[str] = None  # 2nd pass only
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
@@ -1915,6 +2029,122 @@ class VoiceListener(threading.Thread):
         except Exception:
             return 0.0
 
+    def _preferred_channel_for(self, source: Optional[str], key: tuple) -> int:
+        """The locked channel, or the one from the config when no lock exists."""
+        if self._voice_pe_sink is None:
+            return 0
+        try:
+            stream = None
+            if key and len(key) >= 3:
+                from ..integrations.voice_pe.models import StreamId as _StreamId
+                stream = _StreamId(key[0], key[1], key[2])
+            selected = self._voice_pe_sink.selected_audio_channel(stream)
+        except Exception:
+            selected = None
+        if selected is None:
+            enum = getattr(self.cfg, "voice_pe_audio_channel", "enhanced") or "enhanced"
+            return 1 if str(enum).strip().lower() == "raw" else 0
+        return int(selected)
+
+    def _speech_evidence(
+        self,
+        audio,
+        utterance_source,
+        utterance_stream,
+        levels: dict,
+        utterance_state: dict,
+        channel,
+    ) -> Any:
+        """Build the hard gate: PCM + speech-span + voiced-density + SNR.
+
+        Never raises: a partial ``levels`` dict is accepted and the missing
+        numeric part becomes ``None`` in the evidence so the reason code stays
+        the first thing to fail. Called after any auto-gain; the numeric
+        evidence is unchanged because the preprocessor reports its own levels
+        as ``levels = corrected`` and the raw ones are kept under
+        ``raw_*`` keys.
+        """
+        from ..integrations.voice_pe.models import SpeechEvidence
+
+        # PCM side.
+        total = int(audio.size) if audio is not None and hasattr(audio, "size") else 0
+        all_zero = bool(total and np is not None and not np.any(np.asarray(audio)))
+        empty = not total
+
+        # Frame-grid side (20 ms).
+        frame_samples = int(getattr(self, "_frame_samples", 320) or 320) or 320
+        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20)) or 20
+        voiced = int(utterance_state.get("voiced_frame_count") or 0)
+        first_voiced = utterance_state.get("first_voiced_offset")
+        last_voiced = utterance_state.get("last_voiced_offset")
+        if first_voiced is None or last_voiced is None:
+            speech_span_ms = int(20 * (voiced if voiced else 1))
+        else:
+            speech_span_ms = (int(last_voiced) - int(first_voiced) + 1) * frame_ms
+
+        # Levels side.
+        rms_dbfs = levels.get("dbfs_rms")
+        peak_dbfs = levels.get("dbfs_peak")
+        vad_voiced_rms = float(levels.get("voiced_rms") or 0.0)
+        vad_silent_rms = float(levels.get("silent_rms") or 0.0)
+        snr_db = levels.get("snr_db")
+
+        stream = utterance_stream if utterance_stream is not None else LOCAL_STREAM
+        # ``source_channel`` comes from the locked selection; the raw 4-tuple key.
+        source_channel = None
+        if isinstance(stream, tuple) and len(stream) == 4 and stream[3] is not None:
+            source_channel = int(stream[3])
+        elif isinstance(stream, tuple) and len(stream) >= 3:
+            # The stream tuple is the 3-field ``StreamId``: fall back to the
+            # config channel that was chosen for this stream.
+            try:
+                key = (str(stream[0]), int(stream[1]), int(stream[2]), channel)
+            except (TypeError, ValueError):
+                key = ("", 0, 0, 0)
+            source_channel = self._preferred_channel_for(utterance_source, key)
+        if source_channel is None:
+            source_channel = int(channel) if channel is not None else 0
+
+        admissible = True
+        reason = ""
+        if empty:
+            admissible = False
+            reason = "empty_pcm"
+        elif all_zero:
+            admissible = False
+            reason = "all_zero_pcm"
+        elif speech_span_ms < 200:
+            admissible = False
+            reason = "speech_span_too_short"
+        elif voiced < 10:
+            admissible = False
+            reason = "voiced_frames_too_sparse"
+        elif rms_dbfs is not None and float(rms_dbfs) <= -60.0:
+            admissible = False
+            reason = "acoustic_silence"
+        elif rms_dbfs is not None and -60.0 < float(rms_dbfs) <= -50.0:
+            admissible = False
+            reason = "acoustic_low_energy"
+        elif snr_db is not None and float(snr_db) < 6.0:
+            admissible = False
+            reason = "snr_below_threshold"
+
+        return SpeechEvidence(
+            stream=stream,
+            channel=int(source_channel),
+            total_samples=total,
+            voiced_frame_count=voiced,
+            speech_span_ms=speech_span_ms,
+            rms_dbfs=rms_dbfs,
+            peak_dbfs=peak_dbfs,
+            vad_voiced_rms=vad_voiced_rms,
+            vad_silent_rms=vad_silent_rms,
+            snr_db=snr_db,
+            source_channel=source_channel,
+            admissible=admissible,
+            rejection_reason=reason,
+        )
+
     def _clear_audio_buffers(self) -> None:
         """Clear all audio buffers and reset speech state.
 
@@ -1946,16 +2176,34 @@ class VoiceListener(threading.Thread):
 
     @staticmethod
     def _tagged_audio(item):
-        """Split one queue item into ``(stream_id, source, buffer)``.
+        """Split one queue item into ``(stream_id, source, buffer, channel)``.
 
-        ``AudioFrame`` is the stamped shape; a bare buffer or a two-tuple is read
-        as a local block, so no producer shape is lost.
+        Satellite frames carry their ``data``/enhanced (``0``) or ``data2``/raw
+        (``1``) channel explicitly (the ``SatelliteAudioFrame`` dataclass has
+        no default, so a missing ``channel`` is already a ``TypeError``). The
+        local microphone uses ``LocalMicFrame``, so it never reports a Voice PE
+        channel. The old 2-field tuple shape of a local frame still resolves to
+        ``(LOCAL_STREAM, source, buf, None)``.
         """
-        if isinstance(item, AudioFrame):
-            return item.stream, str(item.source), item.samples
+        if isinstance(item, LocalMicFrame):
+            return LOCAL_STREAM, AUDIO_SOURCE_LOCAL, item.samples, None
+        if isinstance(item, SatelliteAudioFrame):
+            if int(item.channel) not in (0, 1):
+                raise ValueError(
+                    "voice_pe SatelliteAudioFrame needs channel 0 or 1, "
+                    f"got {item.channel!r}"
+                )
+            return item.stream, str(item.source), item.samples, int(item.channel)
+        if isinstance(item, AudioFrame):  # alias of ``SatelliteAudioFrame``
+            return (
+                item.stream,
+                str(item.source),
+                item.samples,
+                int(item.channel) if item.channel is not None else AUDIO_CHANNEL_ENHANCED,
+            )
         if isinstance(item, tuple) and len(item) == 2:
-            return LOCAL_STREAM, str(item[0]), item[1]
-        return LOCAL_STREAM, AUDIO_SOURCE_LOCAL, item
+            return LOCAL_STREAM, str(item[0]), item[1], None
+        return LOCAL_STREAM, AUDIO_SOURCE_LOCAL, item, None
 
     def _is_current_frame(self, stream, source: str) -> bool:
         """Whether this block still belongs to the open turn, fail-closed."""
@@ -2089,13 +2337,25 @@ class VoiceListener(threading.Thread):
             return False
 
     def _filter_noisy_segments(self, segments):
-        """Filter out low-confidence Whisper segments."""
-        min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
-        marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
-        # Threshold above which a segment is considered non-speech (hallucination during silence).
-        # Checked independently of avg_logprob because Whisper can be confident about a
-        # hallucinated phrase even when no real speech is present.
-        no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
+        """Filter out low-confidence Whisper segments in the log domain.
+
+        The canonical comparison is on the raw ``avg_logprob`` returned by the
+        decoder against ``whisper_min_avg_logprob`` (default ``-0.7``). The
+        legacy ``whisper_min_confidence`` remains as the linear 0..1 view of
+        the same gate (``logprob + 1``); the UI may print the exponential view
+        ``exp(logprob)`` whose 0.3-legacy equivalent is ``exp(-0.7)=0.496585``:
+        both are shown from the same single decision, never two gates. The
+        threshold itself never softens.
+        """
+        min_avg_logprob = float(
+            getattr(self.cfg, "whisper_min_avg_logprob", -0.7)
+        )
+        linear_view = min_avg_logprob + 1.0
+        exp_view = math.exp(min_avg_logprob)
+        marginal_logprob = min_avg_logprob - 0.1
+        no_speech_threshold = float(
+            getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
+        )
         filtered = []
 
         for seg in segments:
@@ -2107,19 +2367,36 @@ class VoiceListener(threading.Thread):
                 )
                 continue
 
-            confidence = None
-            if hasattr(seg, 'avg_logprob'):
-                confidence = min(1.0, max(0.0, (seg.avg_logprob + 1.0)))
-            elif hasattr(seg, 'no_speech_prob'):
-                confidence = 1.0 - seg.no_speech_prob
+            try:
+                logprob = float(seg.avg_logprob)
+            except (TypeError, ValueError, AttributeError):
+                logprob = None
 
-            if confidence is not None and confidence < min_confidence:
-                if confidence >= marginal_threshold:
-                    # Marginal confidence - show in log viewer (not debug)
-                    print(f"🔇 Low confidence ({confidence:.2f}): \"{seg.text.strip()[:50]}...\"", flush=True)
+            if logprob is None:
+                # No logprob at all; keep the segment so the caller can still
+                # apply its own no_speech_prob / repetitive filter.
+                filtered.append(seg)
+                continue
+
+            if logprob < min_avg_logprob:
+                # Same single decision; both views are printed for reference.
+                # The linear form (logprob + 1) and the exponential form
+                # (exp(logprob)) share the same cut because both are monotone
+                # in logprob and the corresponding threshold is derived.
+                linear_score = min(1.0, max(0.0, logprob + 1.0))
+                exp_score = min(1.0, max(0.0, math.exp(logprob)))
+                if logprob >= marginal_logprob:
+                    print(
+                        f"🔇 Low avg_logprob ({logprob:.4f}; linear={linear_score:.4f}, exp={exp_score:.4f}, linear_th={linear_view:.4f}, exp_th={exp_view:.4f}): \"{seg.text.strip()[:50]}...\"",
+                        flush=True,
+                    )
                 else:
-                    # Very low confidence - debug only
-                    debug_log(f"segment filtered (confidence={confidence:.2f}): '{seg.text}'", "voice")
+                    debug_log(
+                        f"segment filtered (avg_logprob={logprob:.4f} < {min_avg_logprob:.4f}; "
+                        f"linear={linear_score:.4f}/th={linear_view:.4f}; "
+                        f"exp={exp_score:.4f}/th={exp_view:.4f}): '{seg.text}'",
+                        "voice",
+                    )
                 continue
 
             filtered.append(seg)
@@ -2247,9 +2524,11 @@ class VoiceListener(threading.Thread):
         """Tag one local-microphone block for the shared queue.
 
         The stamp is what lets the VAD loop keep one microphone per utterance;
-        ``AudioFrame(LOCAL_STREAM, "local", buffer)`` is the shape consumers read.
+        ``LocalMicFrame(chunk)`` is the local microphone's own type, so a
+        legacy 3-field ``AudioFrame`` cannot be confused with a satellite's
+        ``data``/enhanced channel 0.
         """
-        return AudioFrame(LOCAL_STREAM, AUDIO_SOURCE_LOCAL, chunk)
+        return LocalMicFrame(chunk)
 
     def pad_until_endpoint(
         self, stream=LOCAL_STREAM, source: str = AUDIO_SOURCE_LOCAL
@@ -2263,10 +2542,21 @@ class VoiceListener(threading.Thread):
         stream that ended so the owner cannot change under the utterance.
 
         ``stream`` and ``source`` come from the producer's own EOS marker; they
-        are not guessed from the loop state, which can still be behind the queue.
+        are not guessed from the loop state, which can still be behind the
+        queue. For a satellite stream the channel *must* already be locked:
+        without a lock neither padding nor the VAD starts, so the tail is left
+        off and the run is allowed to reach its own terminal.
         """
         if np is None:
             return 0
+        # The lock check is done before any padding so a VAD cannot start on
+        # an unlocked channel: the main VAD only begins on the locked one.
+        channel_locked: Optional[int] = None
+        if source == AUDIO_SOURCE_VOICE_PE:
+            channel_locked = self._locked_channel_for(stream)
+            if channel_locked is None and self._voice_pe_sink is not None:
+                # No lock yet: skip padding, keep the open run as it is.
+                return 0
         if source == AUDIO_SOURCE_VOICE_PE and self._turn_context is None:
             # Stamp the identity of the closed stream for the milestone that
             # follows on this same queue.
@@ -2279,18 +2569,44 @@ class VoiceListener(threading.Thread):
             return 0
         for _ in range(frames):
             try:
-                # Stamped with the same generation as the audio it follows, so
-                # the grid stays on one turn and a stale tail cannot slip in.
-                self._audio_q.put_nowait(
-                    AudioFrame(
+                # Stamped with the same generation as the audio it follows.
+                if source == AUDIO_SOURCE_VOICE_PE:
+                    pad = SatelliteAudioFrame(
                         stream,
                         source,
                         np.zeros(samples, dtype=np.float32),
+                        int(channel_locked if channel_locked is not None
+                            else AUDIO_CHANNEL_ENHANCED),
                     )
-                )
+                else:
+                    pad = LocalMicFrame(np.zeros(samples, dtype=np.float32))
+                self._audio_q.put_nowait(pad)
             except Exception:
                 break
         return frames
+
+    def _locked_channel_for(self, stream) -> Optional[int]:
+        """The locked channel exactly for this stream; ``None`` if not locked."""
+        sink = self._voice_pe_sink
+        if sink is not None:
+            try:
+                selected = sink.selected_audio_channel(stream)
+                if selected is not None:
+                    return int(selected)
+            except Exception:
+                pass
+        key = getattr(self, "_audio_stream", None) or ()
+        if isinstance(key, tuple) and len(key) == 4:
+            try:
+                if key[:3] == (
+                    str(getattr(stream, "device_id", "")),
+                    int(getattr(stream, "connection_generation", 0)),
+                    int(getattr(stream, "session_generation", 0)),
+                ) and key[3] is not None:
+                    return int(key[3])
+            except (TypeError, ValueError):
+                pass
+        return None
 
     def _determine_whisper_backend(self) -> str:
         """Determine which Whisper backend to use based on config and availability."""
@@ -2372,6 +2688,10 @@ class VoiceListener(threading.Thread):
         announcing "Listening!" so the ready state actually means ready.
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
+        #: ``role -> {model, ok, load_time, first_token_latency,
+        #: tokens_per_s, backend, gpu_layers}`` from the inference in the
+        #: warm-up itself; the same shape the ``--two-channel`` diag reads.
+        self._llm_warmup_metrics: dict[str, dict] = {}
 
         if _is_low_power_mode_enabled(self.cfg):
             print("     🌱 Low power mode: LLM warmup skipped", flush=True)
@@ -2413,16 +2733,23 @@ class VoiceListener(threading.Thread):
             def _warm_chat() -> None:
                 ok = warm_up_chat_model(self.cfg, chat_model, timeout=chat_timeout)
                 self._llm_warmup_results["chat"] = (chat_model, ok)
-                # When chat and judge share a model, one warmup covers both.
+                # Real-inference metrics from the backend; ``gpu_layers`` then
+                # names whether the chat model is GPU-resident.
+                try:
+                    self._llm_warmup_metrics["chat"] = getattr(
+                        get_llm_backend(self.cfg), "last_warmup_metrics", {}
+                    ) or {}
+                except Exception:
+                    self._llm_warmup_metrics["chat"] = {}
                 if shared_judge:
                     self._llm_warmup_results["judge"] = (chat_model, ok)
-                # Router reusing chat_model is already covered.
+                    self._llm_warmup_metrics["judge"] = self._llm_warmup_metrics["chat"]
                 if router_model and router_model == chat_model:
                     self._llm_warmup_results["router"] = (chat_model, ok)
-                # When the embed model matches chat, the chat warmup already
-                # loaded the model into memory; no separate embed thread runs.
+                    self._llm_warmup_metrics["router"] = self._llm_warmup_metrics["chat"]
                 if shared_embed and embed_model == chat_model:
                     self._llm_warmup_results["embed"] = (chat_model, ok)
+                    self._llm_warmup_metrics["embed"] = self._llm_warmup_metrics["chat"]
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
@@ -2430,10 +2757,18 @@ class VoiceListener(threading.Thread):
             def _warm_judge() -> None:
                 ok = judge.warm_up()
                 self._llm_warmup_results["judge"] = (judge_model, ok)
+                try:
+                    self._llm_warmup_metrics["judge"] = getattr(
+                        get_llm_backend(self.cfg), "last_warmup_metrics", {}
+                    ) or {}
+                except Exception:
+                    self._llm_warmup_metrics["judge"] = {}
                 if router_model and router_model == judge_model:
                     self._llm_warmup_results["router"] = (judge_model, ok)
+                    self._llm_warmup_metrics["router"] = self._llm_warmup_metrics["judge"]
                 if shared_embed and embed_model == judge_model:
                     self._llm_warmup_results["embed"] = (judge_model, ok)
+                    self._llm_warmup_metrics["embed"] = self._llm_warmup_metrics["judge"]
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
 
@@ -2441,8 +2776,15 @@ class VoiceListener(threading.Thread):
             def _warm_router() -> None:
                 ok = warm_up_chat_model(self.cfg, router_model, timeout=chat_timeout)
                 self._llm_warmup_results["router"] = (router_model, ok)
+                try:
+                    self._llm_warmup_metrics["router"] = getattr(
+                        get_llm_backend(self.cfg), "last_warmup_metrics", {}
+                    ) or {}
+                except Exception:
+                    self._llm_warmup_metrics["router"] = {}
                 if shared_embed and embed_model == router_model:
                     self._llm_warmup_results["embed"] = (router_model, ok)
+                    self._llm_warmup_metrics["embed"] = self._llm_warmup_metrics["router"]
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
@@ -2460,9 +2802,20 @@ class VoiceListener(threading.Thread):
                     embed_timeout = min(chat_timeout, 15.0)
                     result = backend.embed("ping", embed_model, timeout_sec=embed_timeout)
                     ok = result is not None
+                    try:
+                        self._llm_warmup_metrics["embed"] = getattr(
+                            backend, "last_warmup_metrics", {}
+                        ) or {}
+                    except Exception:
+                        # The embedding backend may not stamp metrics; then the
+                        # chat model's ``n_gpu_layers`` is used as the closest
+                        # hint, because the embedding lives on the same
+                        # LM Studio / Ollama instance.
+                        self._llm_warmup_metrics["embed"] = {}
                 except Exception as exc:
                     debug_log(f"embed warmup failed: {exc}", "voice")
                     ok = False
+                    self._llm_warmup_metrics["embed"] = {}
                 self._llm_warmup_results["embed"] = (embed_model, ok)
 
             threads.append(threading.Thread(target=_warm_embed, daemon=True, name="warmup-embed"))
@@ -2933,21 +3286,33 @@ class VoiceListener(threading.Thread):
             still_warming = any(t.is_alive() for t in warmup_threads)
             results = getattr(self, "_llm_warmup_results", {})
 
-            # Trailing space after âš ï¸ intentional: the warning glyph renders
-            # narrower than 🧠/💬, so the pad keeps columns aligned.
+            # Trailing space after ï¸ is intentional: the warning glyph
+            # renders narrower than the others, so the pad keeps columns. The
+            # \'gpu_layers\' part is what names a CPU-only server vs the
+            # GPU-resident chat model the production 27B checkpoint expects.
+            metrics_all = getattr(self, "_llm_warmup_metrics", {}) or {}
+
             def _print_status(role_key: str, label: str, ok_icon: str) -> None:
                 entry = results.get(role_key)
                 if entry is None:
                     return
                 name, ok = entry
-                icon = ok_icon if ok else "âš ï¸ "
+                icon = ok_icon if ok else "ï¸ "
                 status = "ready" if ok else "warmup failed — will load on first use"
-                print(f"     {icon} {label} '{name}' {status}", flush=True)
+                m = dict(metrics_all.get(role_key) or {})
+                gpu = m.get("gpu_layers", "?")
+                toks = m.get("tokens_per_s", "?")
+                ftl = m.get("first_token_latency", "?")
+                print(
+                    f"     {icon}{label} \'{name}\' {status} "
+                    f"(gpu_layers={gpu} first_token_s={ftl} tok/s={toks})",
+                    flush=True,
+                )
 
-            _print_status("chat", "Chat model", "💬")
-            _print_status("judge", "Intent judge", "🧠")
-            _print_status("router", "Tool router", "🔧")
-            _print_status("embed", "Embed model", "ðŸ“")
+            _print_status("chat", "Chat model ", "💬 ")
+            _print_status("judge", "Intent judge ", "🧠 ")
+            _print_status("router", "Tool router ", "🔧 ")
+            _print_status("embed", "Embed model ", "📐 ")
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")
@@ -3188,14 +3553,18 @@ class VoiceListener(threading.Thread):
                 if np is None:
                     continue
 
-                # Every item names its full stream. A block of a stream that is
-                # no longer the open one is dropped instead of widening a newer
-                # utterance, and grid continuity is keyed by that whole stream.
-                stream, source, buf = self._tagged_audio(item)
+                # Every item names its full stream, and a satellite item names
+                # the channel inside it. A block of a stream that is no longer
+                # the open one is dropped instead of widening a newer utterance;
+                # grid continuity is keyed by that whole ``(stream, channel)``
+                # pair so the two channels keep their own pre-roll / grid /
+                # remainder.
+                stream, source, buf, channel = self._tagged_audio(item)
                 key = (
                     str(stream.device_id),
                     int(stream.connection_generation),
                     int(stream.session_generation),
+                    None if channel is None else int(channel),
                 )
                 if key not in self._pre_rolls:
                     self._pre_rolls[key] = deque()
@@ -3205,6 +3574,22 @@ class VoiceListener(threading.Thread):
                 if source == AUDIO_SOURCE_LOCAL and self._active_audio_source() != AUDIO_SOURCE_LOCAL:
                     # A satellite run holds the microphone: local blocks wait.
                     continue
+                # Deliver only the selected channel to this VAD instance; the
+                # other channel keeps its own key on the queue and its own WAV
+                # dump. ``selected_audio_channel`` is the locked choice.
+                if channel is not None:
+                    selected = None
+                    if self._voice_pe_sink is not None:
+                        try:
+                            selected = self._voice_pe_sink.selected_audio_channel(stream)
+                        except Exception:
+                            selected = None
+                    if selected is None:
+                        selected = self._preferred_channel_for(source, key)
+                    if int(selected) != int(channel):
+                        # Second channel of one utterance: stored under its own
+                        # key so it never mixes, but does not drive the VAD.
+                        continue
                 self._audio_source = source
                 self._audio_stream = key
                 # The owning stream keeps its own pre-roll across switches.
@@ -3479,6 +3864,21 @@ class VoiceListener(threading.Thread):
                 "sample_rate": int(self._samplerate),
                 "channels": 1,
                 "sample_width_bytes": 2,
+                # The WAV header was written by these same jarvis settings from
+                # `voice_pe_audio` + the listener's own `self._samplerate` —
+                # it is a self-readback, not an independent runtime witness.
+                # DeviceInfo identity fields do not carry a sample-rate field
+                # in 46.3.0, so they go in as identity only.
+                "audio_format_source": (
+                    "configured_wav_header"
+                    if prefix and os.path.exists(f"{prefix}-{index}.wav")
+                    else "configured_assumption"
+                ),
+                "device_info_fields": dict(
+                    (self._voice_pe_sink.identity or {})
+                    if getattr(self, "_voice_pe_sink", None) is not None
+                    else {}
+                ),
                 "samples": count,
                 "duration_s": round(count / float(self._samplerate), 4),
                 "rms": round(float(np.sqrt(np.mean(np.square(doubles)))), 8),
@@ -3799,6 +4199,67 @@ class VoiceListener(threading.Thread):
         else:
             speech_span_s = (int(last_voiced) - int(first_voiced) + 1) * frame_ms / 1000.0
 
+        # The hard acoustic gate runs before every downstream stage: wake
+        # extraction, stop commands, the tool router and the dispatch. A
+        # non-admissible clip never reaches the decoder as speech, never
+        # triggers ``stop``, and the raw row (if any) is diagnostic only.
+        channel_of_stream = (
+            utterance_stream[-1]
+            if isinstance(utterance_stream, tuple) and len(utterance_stream) == 4
+            else None
+        )
+        evidence = self._speech_evidence(
+            audio=audio,
+            utterance_source=utterance_source,
+            utterance_stream=utterance_stream,
+            levels=levels,
+            utterance_state=utterance_state,
+            channel=channel_of_stream,
+        )
+        pre_meta.setdefault("speech_evidence", {
+            "total_samples": evidence.total_samples,
+            "voiced_frame_count": evidence.voiced_frame_count,
+            "speech_span_ms": evidence.speech_span_ms,
+            "rms_dbfs": evidence.rms_dbfs,
+            "peak_dbfs": evidence.peak_dbfs,
+            "vad_voiced_rms": evidence.vad_voiced_rms,
+            "vad_silent_rms": evidence.vad_silent_rms,
+            "snr_db": evidence.snr_db,
+            "source_channel": evidence.source_channel,
+            "admissible": evidence.admissible,
+            "rejection_reason": evidence.rejection_reason,
+        })
+        self.metrics["last_speech_evidence"] = pre_meta["speech_evidence"]
+        if not evidence.admissible:
+            # A single short code names the reason and travels with the record.
+            self._dump_clip_diagnostic(
+                audio,
+                utterance_source,
+                utterance_stream,
+                utterance_start_time,
+                utterance_end_time,
+                None,
+                "",
+                note=f"no_speech_evidence:{evidence.rejection_reason}",
+                state=utterance_state,
+                raw=raw_audio,
+                pre=pre_meta,
+            )
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return (
+                "filtered" if evidence.total_samples > 0 else "skipped_too_short",
+                {
+                    "reason": "no_speech_evidence",
+                    "rejection_reason": evidence.rejection_reason,
+                    "speech_span_s": round(speech_span_s, 4),
+                    "speech_span_ms": evidence.speech_span_ms,
+                    "voiced_frame_count": evidence.voiced_frame_count,
+                    "audio_level": levels,
+                    "preprocessor": pre_meta,
+                    "speech_evidence": pre_meta["speech_evidence"],
+                },
+            )
+
         # Filter short audio on the speech span, not on the stored clip length.
         audio_duration = len(audio) / self._samplerate
         min_duration = getattr(self.cfg, "whisper_min_audio_duration", 0.15)
@@ -3898,45 +4359,69 @@ class VoiceListener(threading.Thread):
 
                 # Capture Whisper's auto-detected language (ISO-639-1) so
                 # downstream tools can pick locale-appropriate resources. A
-                # configured selector value wins over the per-clip detection.
-                detected = result.get("language")
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
+                # forced argument is the source of truth: the decoder's own
+                # info is recorded as reported, never as a second judgment.
+                reported = result.get("language")
                 forced_language = self._whisper_language_code()
+                self._reported_language = reported if isinstance(reported, str) and reported else None
+                self._decoder_language_argument = forced_language
                 if forced_language:
+                    self._language_source = "forced"
                     self._last_detected_language = forced_language
+                else:
+                    self._language_source = "auto"
+                    self._last_detected_language = self._reported_language
 
-                # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
-                min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
-                marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
-                no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
+                # Filter segments in the log domain — one and the same gate
+                # as the faster-whisper path, just on the MLX dict rows.
+                min_avg_logprob = float(
+                    getattr(self.cfg, "whisper_min_avg_logprob", -0.7)
+                )
+                linear_view = min_avg_logprob + 1.0
+                exp_view = math.exp(min_avg_logprob)
+                marginal_logprob = min_avg_logprob - 0.1
+                no_speech_threshold = float(
+                    getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
+                )
                 segments = result.get("segments", [])
 
                 if segments:
                     filtered_texts = []
                     for seg in segments:
-                        avg_logprob = seg.get("avg_logprob", 0)
+                        raw_lp = seg.get("avg_logprob", 0)
                         no_speech_prob = seg.get("no_speech_prob", 0)
-
-                        # Convert avg_logprob to confidence (typically -1 to 0, so add 1)
-                        confidence = min(1.0, max(0.0, avg_logprob + 1.0))
+                        try:
+                            logprob = float(raw_lp) if raw_lp is not None else None
+                        except (TypeError, ValueError):
+                            logprob = None
                         seg_text = seg.get("text", "").strip()
 
-                        # Hard filter: high no_speech_prob means no real speech regardless of logprob.
+                        # Hard filter: high no_speech_prob means no real speech
+                        # regardless of logprob — same gate, same result.
                         if is_whisper_hallucination(no_speech_prob, no_speech_threshold):
                             debug_log(f"MLX segment filtered (no_speech_prob={no_speech_prob:.2f}): '{seg_text[:50]}'", "voice")
                             continue
 
-                        if confidence < min_confidence:
-                            if confidence >= marginal_threshold:
-                                # Marginal confidence - show in log viewer (not debug)
-                                print(f"🔇 Low confidence ({confidence:.2f}): \"{seg_text[:50]}...\"", flush=True)
-                            else:
-                                # Very low confidence - debug only
-                                debug_log(f"MLX segment filtered (confidence={confidence:.2f}): '{seg_text[:50]}'", "voice")
+                        if logprob is None or logprob >= min_avg_logprob:
+                            filtered_texts.append(seg.get("text", ""))
                             continue
 
-                        filtered_texts.append(seg.get("text", ""))
+                        linear_score = min(1.0, max(0.0, logprob + 1.0))
+                        exp_score = min(1.0, max(0.0, math.exp(logprob)))
+                        if logprob >= marginal_logprob:
+                            print(
+                                f"🔇 Low avg_logprob ({logprob:.4f}; "
+                                f"linear={linear_score:.4f}/${linear_view:.4f}, "
+                                f"exp={exp_score:.4f}/${exp_view:.4f}): \"{seg_text[:50]}...\"",
+                                flush=True,
+                            )
+                        else:
+                            debug_log(
+                                f"MLX segment filtered (avg_logprob={logprob:.4f} < "
+                                f"{min_avg_logprob:.4f}; linear={linear_score:.4f}; "
+                                f"exp={exp_score:.4f}): '{seg_text}'",
+                                "voice",
+                            )
 
                     text = " ".join(filtered_texts).strip()
                 else:
@@ -3968,14 +4453,20 @@ class VoiceListener(threading.Thread):
                     )
                     segments_list = list(segments)
                 # Capture the detected language (faster-whisper exposes it
-                # on the info object). Guard against older API variants
-                # where the attribute may be absent. A configured selector
-                # value wins over the per-clip detection.
-                detected = getattr(_info, "language", None)
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
+                # on the info object), but as one of the four independent
+                # fields: ``_reported_language`` is the info's own value
+                # only; the forced argument is a separate field. The two are
+                # never collapsed, so a ``language_mismatch`` is not inferred
+                # from a forced value matching info.
+                _reported = getattr(_info, "language", None)
+                self._reported_language = _reported if isinstance(_reported, str) and _reported else None
+                self._decoder_language_argument = _language
                 if _language:
+                    self._language_source = "forced"
                     self._last_detected_language = _language
+                else:
+                    self._language_source = "auto"
+                    self._last_detected_language = self._reported_language
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
                 raw_rows = list(segments_list)
@@ -4040,19 +4531,81 @@ class VoiceListener(threading.Thread):
                 break
 
         if not text or not text.strip():
-            # No usable text: either the decoder returned nothing at all or the
-            # confidence filter dropped every row it did return.
+            # Four telemetry names, each from its own place. When the language
+            # was forced, ``_independent_detection`` stays ``None`` (only a
+            # separate detection pass fills it), so a same-value info line
+            # never re-triggers ``language_mismatch``.
+            seg_lang = {
+                "decoder_language_argument": self._decoder_language_argument,
+                "reported_language": self._reported_language,
+                "language_source": self._language_source,
+                "independent_detection": self._independent_detection,
+            }
+            segment.update(seg_lang)
             reason = (
-                "no_decoder_rows"
+                "empty_transcript"
                 if not raw_rows
-                else "all_rows_below_confidence"
+                else "all_rows_below_logprob"
             )
+            if raw_rows:
+                forced = self._decoder_language_argument
+                detected = str(self._language_source or "")
+                if detected == "auto" and forced and self._reported_language and forced.lower() != str(self._reported_language).lower():
+                    reason = "language_mismatch"
+                elif self._independent_detection:
+                    if (self._independent_detection or "").lower() != (self._decoder_language_argument or "").lower():
+                        reason = "language_mismatch"
             segment["reason"] = reason
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return (
                 "filtered" if raw_rows else "skipped_too_short",
                 segment,
             )
+
+        # The decoder's four independent language fields, so the forced
+        # argument, the reported info, the source of the decision and a real
+        # second pass each live on the record on their own. Mismatch is
+        # derived from the second pass only, or from the info vs a forced
+        # argument the decoder itself echoed back.
+        forced = self._decoder_language_argument
+        reported = self._reported_language
+        source = self._language_source
+        debug_log(
+            f"audio language telemetry: "
+            f"decoder_language_argument={forced or 'auto'} "
+            f"reported_language={reported or '-'} language_source={source or '-'}",
+            "voice",
+        )
+        segment["decoder_language_argument"] = forced or "auto"
+        segment["reported_language"] = reported or None
+        segment["language_source"] = source or None
+        segment["independent_detection"] = self._independent_detection
+        if source == "auto" and forced and reported and forced.lower() != reported.lower():
+            segment["reason"] = "language_mismatch"
+            segment["raw_transcript"] = text
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return ("filtered", segment)
+        if (
+            self._independent_detection
+            and forced
+            and (self._independent_detection or "").lower() != forced.lower()
+        ):
+            segment["reason"] = "language_mismatch"
+            segment["raw_transcript"] = text
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return ("filtered", segment)
+
+        # Normalized boilerplate check — the same short set the decoder emits
+        # across languages as a tail-of-clip artefact. Matched by lowercase
+        # prefix, so a truncated "..."/"…" still counts.
+        if _is_whisper_boilerplate(text):
+            segment["reason"] = "hallucination_boilerplate"
+            segment["raw_transcript"] = text
+            debug_log(
+                f"boilerplate filtered (whisper outro): {text!r}", "voice"
+            )
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return ("filtered", segment)
 
         # Offline Hunspell repair of the FINAL transcript only — partial
         # in-progress text never reaches this point. Both values survive: the

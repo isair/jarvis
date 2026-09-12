@@ -51,6 +51,28 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+#: Enum members of ``voice_pe_audio_channel``. Ordered, validated below.
+_AUDIO_CHANNEL_ENUM = ("enhanced", "raw", "auto")
+
+
+def _as_str(value: Any, default: str) -> str:
+    """String with a fallback; enum values are validated case-insensitively."""
+    if value is None:
+        return str(default).strip().lower()
+    return str(value).strip().lower() or str(default).strip().lower()
+
+
+def _as_audio_channel(value: Any, default: str = "enhanced") -> str:
+    text = _as_str(value, default)
+    return text if text in _AUDIO_CHANNEL_ENUM else str(default).strip().lower()
+
+
+def _audio_channel_from_int(value: Any) -> str:
+    """Map the legacy int (0/1) to the enum for one-way migration."""
+    n = _as_int(value, 0)
+    return "raw" if n == 1 else "enhanced"
+
+
 def _parse_rgb(value: Any, default: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """Parse a colour into three 0..1 floats.
 
@@ -129,6 +151,12 @@ def from_settings(settings: Any) -> VoicePEConfig:
         prefer_api_audio=bool(getattr(settings, "voice_pe_prefer_api_audio", True)),
         preferred_input_channel=_as_int(
             getattr(settings, "voice_pe_preferred_input_channel", 0), 0
+        ),
+        audio_channel=_as_audio_channel(
+            getattr(settings, "voice_pe_audio_channel", "") or _audio_channel_from_int(
+                getattr(settings, "voice_pe_preferred_input_channel", 0)
+            ),
+            "enhanced",
         ),
         continued_conversation=bool(
             getattr(settings, "voice_pe_continued_conversation", True)

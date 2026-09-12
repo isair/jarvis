@@ -87,6 +87,20 @@ class SinkFanout:
         """True while exactly one attached satellite owns the open run."""
         return self._holder() is not None
 
+    def selected_audio_channel(self, stream=None) -> Optional[int]:
+        """Locked audio channel of the current holder, or ``None``."""
+        device = self._holder()
+        if device is None:
+            return None
+        return device.selected_audio_channel(stream)
+
+    def packet_stats(self, stream=None, channel=None) -> list:
+        """Per-packet log of the current holder, for the diagnostic readback."""
+        device = self._holder()
+        if device is None:
+            return []
+        return device.packet_stats(stream, channel)
+
     def _owner(self, context: Optional[TurnContext]) -> Optional[VoicePEDevice]:
         """Device named by ``context``, only while its run is still open."""
         if context is None:
@@ -167,22 +181,21 @@ class VoicePEManager:
     def start(self, timeout_s: float = 12.0) -> bool:
         """Start the loop thread and wait for the device list.
 
-        Returns ``False`` when disabled. The wait is what makes ``devices``,
+        Returns ``False`` when disabled or when ``_astart`` did not finish
+        inside the bounded wait. The wait is what makes ``devices``,
         ``health()`` and ``metrics()`` correct on the very first call: the
         handshake and the capability sync already ran.
         """
         if not self.enabled:
             return False
         if self._thread is not None:
-            self._start_done.wait(timeout_s)
-            return True
+            return bool(self._start_done.wait(timeout_s))
         self._start_done.clear()
         self._thread = threading.Thread(
             target=self._run_loop, name="voice_pe", daemon=True
         )
         self._thread.start()
-        self._start_done.wait(timeout_s)
-        return True
+        return bool(self._start_done.wait(timeout_s))
 
     def _run_loop(self) -> None:
         loop = asyncio.new_event_loop()

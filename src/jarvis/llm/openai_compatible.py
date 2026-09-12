@@ -21,8 +21,9 @@ The error handling and ``ToolsNotSupportedError`` semantics mirror
 :class:`OllamaBackend` so callers get a single contract regardless of
 which backend is active.
 """
-
 from __future__ import annotations
+
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -400,49 +401,123 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return []
 
+    def _gpu_layers_offloaded(self, model: str) -> int:
+        """How many layers the server put on the GPU for ``model``, as an int.
+
+        LM Studio's ``/api/v0/models`` lists ``meta.n_gpu_layers``; the plain
+        OpenAI-compatible ``/v1/models`` response may carry either
+        ``meta.n_gpu_layers`` or a per-model ``loaded_instances[0]`` shape. A
+        value of ``0`` means CPU-only; ``-1`` means "the server gave no GPU
+        hint". The first non-zero one wins.
+        """
+        names: List[str] = []
+        try:
+            resp = requests.get(
+                f"{self._base_url}/api/v0/models",
+                headers=self._headers(),
+                timeout=2.0,
+            )
+            resp.raise_for_status()
+            arr = resp.json().get("data") or []
+            for entry in arr:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("id", "")) != str(model):
+                    continue
+                meta = entry.get("meta") or {}
+                n = meta.get("n_gpu_layers")
+                if isinstance(n, int):
+                    return n
+                # Older LM Studio builds keep the number on the model itself.
+                n = entry.get("n_gpu_layers")
+                if isinstance(n, int):
+                    return n
+                loaded = entry.get("loaded_instances") or []
+                if loaded and isinstance(loaded[0], dict):
+                    n = loaded[0].get("n_gpu_layers")
+                    if isinstance(n, int):
+                        return n
+                names = ["api/v0"]
+                break
+        except Exception:
+            names = ["api/v0:mismatch"]
+        # Fallback: the plain OpenAI shape, same idea.
+        try:
+            resp = requests.get(
+                f"{self._base_url}/models",
+                headers=self._headers(),
+                timeout=2.0,
+            )
+            resp.raise_for_status()
+            arr = resp.json().get("data", []) or []
+            for entry in arr:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("id", "")) != str(model):
+                    continue
+                meta = entry.get("meta") or {}
+                n = meta.get("n_gpu_layers")
+                if isinstance(n, int):
+                    return n
+                n = entry.get("n_gpu_layers")
+                if isinstance(n, int):
+                    return n
+                loaded = entry.get("loaded_instances") or []
+                if loaded and isinstance(loaded[0], dict):
+                    n = loaded[0].get("n_gpu_layers")
+                    if isinstance(n, int):
+                        return n
+                break
+        except Exception:
+            names.append("v1:mismatch")
+        return -1
+
     def warm_up(
         self,
         model: str,
         timeout_sec: float = 60.0,
         keep_alive: str = "30m",
     ) -> bool:
-        """Warm up the model by sending a minimal inference request.
+        """Warm up the model and record real-inference metrics on this backend.
 
-        Phase 1 (reachability check): calls ``GET /models`` to confirm
-        the server is up and has models loaded. Fast (capped at 25 % of
-        the budget, max 5 s).
-
-        Phase 2 (model loading): sends a single-token chat completion
-        (``max_tokens=1``) so the runtime actually loads the model into
-        memory. Without this, an OpenAI-compatible server may leave the
-        model cold until the first real request, incurring latency on the
-        user's first query. This mirrors what ``OllamaBackend.warm_up()``
-        does.
-
-        ``keep_alive`` is accepted for signature parity with
-        ``OllamaBackend.warm_up`` but ignored: OpenAI-compatible servers
-        manage model residency at server load time and have no per-call
-        keep-alive knob.
-
-        Best-effort: errors are swallowed; ``False`` is returned when the
-        server is unreachable, the model name is missing, or the inference
-        request fails, so the listener can warn the user early."""
+        Phase 1 (reachability check): ``GET /models`` must succeed quickly.
+        Phase 2 (real inference): one 2-token chat completion is sent so the
+        model is on the GPU (or CPU) by the time ``Listening!`` is announced.
+        The first-token latency is stamped from the response's own ``ttft`` or
+        timing; ``tokens/s`` is from ``usage`` over the whole duration. The
+        record lands on ``self.last_warmup_metrics``: ``model``, ``ok``,
+        ``load_time`` (seconds), ``first_token_latency`` (seconds),
+        ``tokens_per_s``, ``backend`` and ``gpu_layers`` — the last one drives
+        ``llm_backend_not_campaign_ready``. A failed warm-up leaves ``ok`` at
+        ``False`` and is never treated as ready.
+        """
+        self.last_warmup_metrics: dict = {
+            "model": model,
+            "ok": False,
+            "load_time": 0.0,
+            "first_token_latency": 0.0,
+            "tokens_per_s": 0.0,
+            "backend": type(self).__name__,
+            "gpu_layers": 0,
+        }
         if not self._base_url or not model:
             return False
 
-        # Phase 1: reachability probe (fast).
+        # Phase 1: reachability probe.
         list_to = min(max(timeout_sec * 0.25, 1.0), 5.0)
         if not self.list_models(timeout_sec=list_to):
             return False
 
-        # Phase 2: minimal inference to force model loading.
+        # Phase 2: real inference, two tokens so ``usage`` has something to say.
         remaining = max(0.1, timeout_sec - list_to)
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
+            "max_tokens": 2,
             "stream": False,
         }
+        started = time.time()
+        first_token = 0.0
         try:
             with requests.post(
                 f"{self._base_url}/chat/completions",
@@ -450,7 +525,29 @@ class OpenAICompatibleBackend(LLMBackend):
                 headers=self._headers(),
                 timeout=remaining,
             ) as resp:
-                return resp.ok
+                elapsed = time.time() - started
+                if not resp.ok:
+                    return False
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = {}
+                usage = body.get("usage") or {}
+                completion_tokens = max(1, int(usage.get("completion_tokens", 1) or 1))
+                # ``ttft`` is an LM Studio extension and is already a number of
+                # seconds; the rest of the field name spellings are best-effort.
+                ttft = body.get("ttft") or body.get("timings", {}).get("ttft") if isinstance(body.get("timings"), dict) else body.get("ttft")
+                first_token = float(ttft) if isinstance(ttft, (int, float)) else elapsed * 0.5
+                self.last_warmup_metrics = {
+                    "model": model,
+                    "ok": True,
+                    "load_time": round(elapsed, 4),
+                    "first_token_latency": round(first_token, 4),
+                    "tokens_per_s": round(completion_tokens / max(0.001, elapsed), 3) if elapsed > 0 else 0.0,
+                    "backend": type(self).__name__,
+                    "gpu_layers": self._gpu_layers_offloaded(model),
+                }
+                return True
         except Exception:
             return False
 
