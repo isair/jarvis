@@ -143,8 +143,19 @@ class TaskManager:
     def shutdown(self, wait: bool = True) -> None:
         with self._lock:
             for task_id, task in self._tasks.items():
-                if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                if task.status in {
+                    TaskStatus.QUEUED, TaskStatus.RUNNING,
+                    TaskStatus.PENDING_APPROVAL,
+                }:
                     self._cancel_events.setdefault(task_id, threading.Event()).set()
+                    task.status = TaskStatus.CANCELLED
+                    task.completed_at = time.time()
+                    self._persist(task)
+                    self._approval_decisions[task_id] = False
+                    condition = self._approval_conditions.get(task_id)
+                    if condition is not None:
+                        condition.notify_all()
+                    self._emit(task)
                     debug_log(f"task stop requested during shutdown: {task_id}", "tasks")
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
