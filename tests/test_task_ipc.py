@@ -1,5 +1,7 @@
 import json
 
+from types import SimpleNamespace
+
 from jarvis import daemon
 
 
