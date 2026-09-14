@@ -167,6 +167,49 @@ class TaskManager:
                     self._emit(task)
             debug_log(f"task failed: {task_id}: {exc}", "tasks")
 
+    def approve(self, task_id: str) -> bool:
+        return self._decide_approval(task_id, True)
+
+    def reject(self, task_id: str) -> bool:
+        return self._decide_approval(task_id, False)
+
+    def _decide_approval(self, task_id: str, decision: bool) -> bool:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            condition = self._approval_conditions.get(task_id)
+            if task is None or task.status is not TaskStatus.PENDING_APPROVAL or condition is None:
+                return False
+            self._approval_decisions[task_id] = decision
+            condition.notify_all()
+            debug_log(
+                f"task local action {'approved' if decision else 'rejected'}: {task_id}",
+                "tasks",
+            )
+            return True
+
+    def _request_approval(self, task_id: str, request: dict) -> bool:
+        with self._lock:
+            task = self._tasks[task_id]
+            if task.status is TaskStatus.CANCELLED:
+                return False
+            condition = threading.Condition(self._lock)
+            self._approval_conditions[task_id] = condition
+            self._approval_decisions[task_id] = None
+            task.status = TaskStatus.PENDING_APPROVAL
+            task.action_summary = str(request.get("summary", "Local action"))
+            task.action_risk = str(request.get("risk", "Local action may affect the device."))
+            task.action_reason = str(request.get("reason", ""))
+            self._emit(task)
+            debug_log(f"task awaiting local action approval: {task_id}", "tasks")
+            while self._approval_decisions[task_id] is None:
+                condition.wait()
+            decision = bool(self._approval_decisions.pop(task_id))
+            self._approval_conditions.pop(task_id, None)
+            if task.status is not TaskStatus.CANCELLED:
+                task.status = TaskStatus.RUNNING
+                self._emit(task)
+            return decision
+
     def _emit(self, task: Task) -> None:
         if self.event_callback is None:
             return
