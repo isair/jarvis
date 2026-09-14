@@ -67,6 +67,7 @@ CATEGORIES = [
     ("memory", "🧠 Memory & Dialogue"),
     ("location", "📍 Location"),
     ("features", "✨ Features"),
+    ("local_control", "🖥️ Local Computer Control"),
     ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
@@ -377,6 +378,20 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
       "features", "list")
+
+    # --- Permissioned local computer control ---
+    f("local_control_enabled", "Enable Local Control",
+      "Allow explicitly approved local application, URL, and file/folder opening actions",
+      "local_control", "bool")
+    f("local_control_require_approval", "Require Approval",
+      "Require the exact user approval phrase before any local control action",
+      "local_control", "bool")
+    f("local_control_allowed_applications", "Allowed Applications",
+      "Exact application commands or paths that localControl may launch",
+      "local_control", "list")
+    f("local_control_allowed_roots", "Allowed File Roots",
+      "Directories under which localControl may open existing files or folders",
+      "local_control", "list")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",
