@@ -160,8 +160,14 @@ def qapp():
 
     Qt requires exactly one QApplication per process.  Re-uses an existing
     instance when present so repeated test runs inside a single session
-    don't error.
+    don't error.  The offscreen platform is set as a default so headless CI
+    (no DISPLAY, no xvfb) can construct a real QApplication instead of
+    aborting; machines with a real display are unaffected because the
+    platform is only set when it is not already configured.
     """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance()
     if app is None:

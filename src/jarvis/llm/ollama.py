@@ -352,14 +352,22 @@ class OllamaBackend(LLMBackend):
         except Exception:
             return []
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Probe ``/api/version`` to verify the server is Ollama, then issue a
         minimal ``/api/chat`` request so it loads ``model`` into resident memory
-        with a 30-minute ``keep_alive``.  The chat-endpoint warmup exercises the
-        full inference pipeline (JIT compilation, KV-cache allocation) that an
-        empty ``/api/generate`` would not trigger, preventing a timeout on the
-        first real intent-judge or reply-engine call.  Best-effort: errors are
-        swallowed so callers never crash on warmup failure."""
+        for the requested ``keep_alive`` duration. The chat-endpoint warmup
+        exercises the full inference pipeline (JIT compilation, KV-cache
+        allocation) that an empty ``/api/generate`` would not trigger,
+        preventing a timeout on the first real intent-judge or reply-engine
+        call. ``keep_alive`` is caller-supplied so low power mode can ask for a
+        short residency instead of holding the model for half an hour.
+        Best-effort: errors are swallowed so callers never crash on warmup
+        failure."""
         if not self._base_url or not model:
             return False
         try:
@@ -381,7 +389,7 @@ class OllamaBackend(LLMBackend):
                         {"role": "user", "content": "ping"},
                     ],
                     "stream": False,
-                    "keep_alive": "30m",
+                    "keep_alive": keep_alive,
                     "options": {"num_predict": 1, "temperature": 0.0},
                 },
                 timeout=remaining,

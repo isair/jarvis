@@ -32,6 +32,7 @@ import traceback
 import atexit
 import webbrowser
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
+from desktop_app.qt_worker import KeepAliveWorker
 
 # Global lock file handle (must remain open for the lock to persist)
 _lock_file_handle = None
@@ -66,6 +68,318 @@ from desktop_app.face_widget import FaceWindow
 
 
 _LOG_SEPARATOR = "─" * 50
+
+
+@dataclass
+class OllamaRuntimeOwnership:
+    """Tracks whether this desktop session launched the local Ollama runtime."""
+
+    started_by_jarvis: bool = False
+    launch_method: str = ""
+    process: Optional[subprocess.Popen] = None
+    stopped: bool = False
+
+
+@dataclass(frozen=True)
+class RuntimeStatusSnapshot:
+    """Current desktop runtime state shown in the tray diagnostics dialog."""
+
+    daemon_state: str
+    daemon_mode: str
+    daemon_pid: Optional[int]
+    ollama_needed: bool
+    ollama_running: bool
+    ollama_version: Optional[str]
+    ollama_owner: str
+    ollama_launch_method: str
+    low_power_mode: bool
+    llm_provider: str
+    chat_model: str
+    embedding_provider: str
+    embedding_model: str
+    mcp_count: int
+
+
+class RuntimeStatusSignals(QObject):
+    """Carries a collected runtime snapshot back to the GUI thread."""
+
+    ready = pyqtSignal(object)
+
+
+def _should_emit_as_log(line: str) -> bool:
+    """Whether a daemon output line belongs in the general log viewer.
+
+    Chat IPC is carved out. Its ``complete`` event carries the whole
+    assistant reply, which can echo back whatever the user typed, and the
+    log window is not covered by the redaction invariant the chat path
+    maintains. Diary IPC stays: it carries progress and token deltas the
+    log window exists to show.
+    """
+    from jarvis.daemon import CHAT_IPC_PREFIX
+
+    return not line.startswith(CHAT_IPC_PREFIX)
+
+
+def _collect_runtime_status_snapshot(
+    *,
+    is_listening: bool,
+    is_bundled: bool,
+    daemon_process,
+    daemon_thread,
+    ollama_runtime_ownership: Optional[OllamaRuntimeOwnership],
+    settings_loader=None,
+    ollama_checker=None,
+) -> RuntimeStatusSnapshot:
+    """Collect runtime status without mutating desktop or daemon state."""
+    if settings_loader is None:
+        from jarvis.config import load_settings as settings_loader
+    if ollama_checker is None:
+        from desktop_app.setup_wizard import check_ollama_server as ollama_checker
+
+    cfg = None
+    try:
+        cfg = settings_loader()
+        ollama_needed, _chat_on_ollama = _ollama_runtime_flags(cfg)
+    except Exception as exc:
+        debug_log(f"runtime status config load failed: {exc}", "desktop")
+        ollama_needed = True
+
+    try:
+        ollama_running, ollama_version = ollama_checker()
+    except Exception as exc:
+        debug_log(f"runtime status Ollama check failed: {exc}", "desktop")
+        ollama_running, ollama_version = False, None
+
+    daemon_pid = None
+    if is_listening:
+        if daemon_process is not None:
+            daemon_pid = getattr(daemon_process, "pid", None)
+        elif is_bundled and daemon_thread is not None:
+            daemon_pid = os.getpid()
+
+    ownership = ollama_runtime_ownership or OllamaRuntimeOwnership()
+    if ownership.started_by_jarvis and not ownership.stopped:
+        ollama_owner = "Jarvis"
+    elif ollama_running:
+        ollama_owner = "External"
+    else:
+        ollama_owner = "None"
+
+    llm_provider = "unknown"
+    chat_model = "unknown"
+    embedding_provider = "unknown"
+    embedding_model = "unknown"
+    low_power_mode = False
+    mcp_count = 0
+    if cfg is not None:
+        llm_provider = str(getattr(cfg, "llm_provider", "") or "unknown")
+        chat_model = str(getattr(cfg, "llm_chat_model", "") or "unknown")
+        embedding_provider = str(
+            getattr(cfg, "embedding_provider", "") or llm_provider or "unknown"
+        )
+        embedding_model = str(getattr(cfg, "embedding_model", "") or "unknown")
+        low_power_mode = getattr(cfg, "low_power_mode", False) is True
+        mcps = getattr(cfg, "mcps", {}) or {}
+        mcp_count = len(mcps) if isinstance(mcps, dict) else 0
+
+    return RuntimeStatusSnapshot(
+        daemon_state="Listening" if is_listening else "Stopped",
+        daemon_mode="bundled" if is_bundled else "subprocess",
+        daemon_pid=daemon_pid,
+        ollama_needed=ollama_needed,
+        ollama_running=ollama_running,
+        ollama_version=ollama_version,
+        ollama_owner=ollama_owner,
+        ollama_launch_method=ownership.launch_method or "n/a",
+        low_power_mode=low_power_mode,
+        llm_provider=llm_provider,
+        chat_model=chat_model,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        mcp_count=mcp_count,
+    )
+
+
+def _runtime_status_rows(snapshot: RuntimeStatusSnapshot) -> list[tuple[str, str, str]]:
+    """Return ``(section, key, value)`` rows for the runtime status dialog.
+
+    Sections keep the emoji headers of the original text format so the
+    dialog and the (test-pinned) ``_format_runtime_status`` text stay in
+    sync from one source of truth.
+    """
+    pid = str(snapshot.daemon_pid) if snapshot.daemon_pid is not None else "n/a"
+    ollama_running = (
+        f"Yes ({snapshot.ollama_version})"
+        if snapshot.ollama_running and snapshot.ollama_version
+        else "Yes"
+        if snapshot.ollama_running
+        else "No"
+    )
+    return [
+        ("🎙️ Assistant", "State", snapshot.daemon_state),
+        ("🎙️ Assistant", "Mode", snapshot.daemon_mode),
+        ("🎙️ Assistant", "PID", pid),
+        ("🎙️ Assistant", "Low Power Mode", "On" if snapshot.low_power_mode else "Off"),
+        ("🦙 Ollama", "Needed", "Yes" if snapshot.ollama_needed else "No"),
+        ("🦙 Ollama", "Running", ollama_running),
+        ("🦙 Ollama", "Owner", snapshot.ollama_owner),
+        ("🦙 Ollama", "Launch method", snapshot.ollama_launch_method),
+        ("🧠 Models", "Provider", snapshot.llm_provider),
+        ("🧠 Models", "Chat", snapshot.chat_model),
+        (
+            "🧠 Models",
+            "Embeddings",
+            f"{snapshot.embedding_provider} / {snapshot.embedding_model}",
+        ),
+        ("🔌 MCP", "Configured servers", str(snapshot.mcp_count)),
+    ]
+
+
+def _format_runtime_status(snapshot: RuntimeStatusSnapshot) -> str:
+    """Format a runtime status snapshot for the tray diagnostics dialog."""
+    lines: list[str] = ["🩺 Runtime Status", ""]
+    current_section = None
+    for section, key, value in _runtime_status_rows(snapshot):
+        if section != current_section:
+            if current_section is not None:
+                lines.append("")
+            lines.append(section)
+            current_section = section
+        lines.append(f"  {key}: {value}")
+    return "\n".join(lines)
+
+
+class RuntimeStatusDialog(QDialog):
+    """Themed diagnostic summary of Jarvis' active runtime.
+
+    Renders the collected snapshot as a structured dialog: emoji section
+    headers, aligned key/value rows (secondary-colour keys, monospace
+    values), and a Close button. Snapshot collection stays on the worker
+    thread; this dialog only renders the data it is handed.
+    """
+
+    def __init__(self, snapshot: RuntimeStatusSnapshot, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Runtime Status")
+        self.setStyleSheet(JARVIS_THEME_STYLESHEET)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(4)
+
+        title = QLabel("🩺 Runtime Status")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        layout.addSpacing(6)
+
+        current_section = None
+        for section, key, value in _runtime_status_rows(snapshot):
+            if section != current_section:
+                if current_section is not None:
+                    layout.addSpacing(8)
+                header = QLabel(section)
+                header.setStyleSheet(
+                    "color: #fbbf24; font-weight: bold; font-size: 13px;"
+                )
+                layout.addWidget(header)
+                current_section = section
+            row = QHBoxLayout()
+            key_label = QLabel(key)
+            key_label.setStyleSheet("color: #a1a1aa; font-size: 13px;")
+            value_label = QLabel(value)
+            value_label.setStyleSheet(
+                "color: #f4f4f5; font-size: 13px;"
+                " font-family: 'SF Mono', 'Menlo', monospace;"
+            )
+            value_label.setWordWrap(True)
+            row.addWidget(key_label)
+            row.addStretch(1)
+            row.addWidget(value_label)
+            layout.addLayout(row)
+
+        layout.addSpacing(12)
+        close_btn = QPushButton("Close")
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(self.accept)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
+
+
+def _stop_owned_ollama_runtime(
+    ownership: Optional[OllamaRuntimeOwnership],
+    *,
+    timeout_sec: float = 5.0,
+    command_runner=subprocess.run,
+) -> bool:
+    """Stop Ollama only when this desktop session launched it.
+
+    Returns True when a stop command was sent, False when there was no owned
+    runtime to stop. This is intentionally conservative: a pre-existing
+    user-managed Ollama process is left alone.
+    """
+    if (
+        ownership is None
+        or not ownership.started_by_jarvis
+        or ownership.stopped
+    ):
+        return False
+
+    stopped = False
+    process = ownership.process
+
+    if ownership.launch_method == "macos_app" and sys.platform == "darwin":
+        try:
+            result = command_runner(
+                ["osascript", "-e", 'tell application "Ollama" to quit'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_sec,
+                check=False,
+            )
+            stopped = True
+            if getattr(result, "returncode", 0) != 0:
+                debug_log("Ollama AppleScript quit failed, falling back to TERM", "desktop")
+                command_runner(
+                    ["pkill", "-TERM", "-x", "Ollama"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=timeout_sec,
+                    check=False,
+                )
+                command_runner(
+                    [
+                        "pkill",
+                        "-TERM",
+                        "-f",
+                        "/Applications/Ollama.app/Contents/Resources/ollama serve",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=timeout_sec,
+                    check=False,
+                )
+        except Exception as exc:
+            debug_log(f"failed to stop owned Ollama.app runtime: {exc}", "desktop")
+    elif process is not None:
+        try:
+            if process.poll() is None:
+                process.terminate()
+                stopped = True
+                try:
+                    process.wait(timeout=timeout_sec)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=timeout_sec)
+        except Exception as exc:
+            debug_log(f"failed to stop owned Ollama serve process: {exc}", "desktop")
+
+    ownership.stopped = stopped
+    if stopped:
+        debug_log("owned Ollama runtime stopped", "desktop")
+    return stopped
 
 
 def _trim_extension_modules(logs: str) -> str:
@@ -258,6 +572,102 @@ def get_crash_paths() -> tuple[Path, Path, Path]:
     return crash_log, crash_marker, previous_crash
 
 
+def collect_macos_crash_report(
+    crash_log_path: Path,
+    diagnostics_dir: Optional[Path] = None,
+    max_frames: int = 20,
+) -> Optional[str]:
+    """Collect the macOS native crash report (``.ips``) for a crashed
+    session, if one exists.
+
+    "Fatal Python error: Aborted" crashes are C-level aborts whose native
+    stack faulthandler cannot capture (it only dumps Python frames). The
+    OS still writes a full report to ``~/Library/Logs/DiagnosticReports/``;
+    surfacing its exception type and top native frames alongside the Python
+    dump makes these crashes diagnosable (#584/#575/#576).
+
+    Returns a short human-readable excerpt (exception type, termination
+    indicator, process name and the top native frames of the crashed
+    thread), or ``None`` when no report applies: non-macOS platform,
+    missing/empty diagnostics directory, no report newer than the crash
+    log, or unparseable content.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        if diagnostics_dir is None:
+            diagnostics_dir = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+        if not diagnostics_dir.is_dir():
+            return None
+
+        app_name = "Jarvis"
+        since = crash_log_path.stat().st_mtime if crash_log_path.exists() else 0.0
+
+        candidates = []
+        for report in diagnostics_dir.glob(f"{app_name}-*.ips"):
+            try:
+                if report.stat().st_mtime >= since:
+                    candidates.append(report)
+            except OSError:
+                continue
+        if not candidates:
+            return None
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
+
+        raw_text = newest.read_text(encoding="utf-8", errors="replace")
+        # .ips files are usually two lines (metadata dict, then the JSON
+        # payload), but the payload can also span multiple lines when the
+        # system pretty-prints it. Try the whole file, then everything after
+        # the first (metadata) line, then the last line alone.
+        import json as _json
+        lines = raw_text.splitlines()
+        candidates = [raw_text]
+        if lines:
+            candidates.append("\n".join(lines[1:]))
+            candidates.append(lines[-1])
+        data = None
+        for candidate in candidates:
+            stripped = candidate.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                data = _json.loads(stripped)
+                break
+            except Exception:
+                continue
+        if not isinstance(data, dict):
+            return None
+
+        parts = [f"🧵 Native crash report: {newest.name}"]
+        exc = data.get("exception") or {}
+        if exc.get("type"):
+            parts.append(f"  Exception: {exc['type']}")
+        term = data.get("termination") or {}
+        if term.get("indicator"):
+            parts.append(f"  Termination: {term['indicator']}")
+
+        crashed = None
+        for thread in data.get("threads") or []:
+            if thread.get("triggered"):
+                crashed = thread
+                break
+        if crashed is None and data.get("threads"):
+            crashed = data["threads"][0]
+        frames = (crashed or {}).get("frames") or []
+        if frames:
+            parts.append("  Native frames (crashed thread):")
+            for frame in frames[:max_frames]:
+                # ``symbol`` is the demangled name; ``symbolLocation`` is a
+                # byte offset — never fall back to it for display.
+                symbol = frame.get("symbol")
+                if not isinstance(symbol, str) or not symbol:
+                    symbol = "?"
+                parts.append(f"    {symbol}")
+        return "\n".join(parts)
+    except Exception:
+        return None
+
+
 def check_previous_crash() -> Optional[str]:
     """
     Check if previous session crashed and return crash details if so.
@@ -279,8 +689,14 @@ def check_previous_crash() -> Optional[str]:
                 # Only report if there's actual crash info (faulthandler output or errors)
                 if 'Fatal' in content or 'Error' in content or 'Traceback' in content:
                     crash_content = content
+                    # On macOS, append the native .ips stack so the crash
+                    # dialog and report-issue body carry the C-level abort
+                    # source faulthandler cannot show.
+                    native = collect_macos_crash_report(crash_log)
+                    if native:
+                        crash_content += f"\n{native}\n"
                     # Save to previous_crash for reference
-                    previous_crash.write_text(content, encoding='utf-8')
+                    previous_crash.write_text(crash_content, encoding='utf-8')
 
             return crash_content
 
@@ -1240,10 +1656,101 @@ class MemoryViewerWindow(QMainWindow):
         event.accept()
 
 
+class DaemonThread(KeepAliveWorker):
+    """QThread that runs the Jarvis daemon inside the bundled app.
+
+    Inherits ``KeepAliveWorker`` so the object stays referenced in the
+    registry until its OS thread has fully finished: ``_on_daemon_finished``
+    clears ``tray.daemon_thread`` from a ``finished``-connected slot, and
+    dropping that last reference while the thread is still winding down
+    would destroy a running QThread and abort the whole app ("Fatal Python
+    error: Aborted" — #584/#575/#576, same class as #509/#407/#239).
+    """
+
+    def __init__(self, log_signals):
+        super().__init__()
+        self.log_signals = log_signals
+
+    def run(self):
+        """Run the daemon in this QThread."""
+        import sys as sys_module
+        old_stdout = sys_module.stdout
+        old_stderr = sys_module.stderr
+
+        try:
+            # Redirect stdout/stderr to capture logs
+            class LogWriter:
+                def __init__(self, emit_func):
+                    self.emit_func = emit_func
+                    self.buffer = ""
+
+                def write(self, text):
+                    if text:
+                        # Handle both bytes and str (Flask can send bytes)
+                        if isinstance(text, bytes):
+                            text = text.decode('utf-8', errors='replace')
+                        self.buffer += text
+                        if '\n' in self.buffer:
+                            lines = self.buffer.split('\n')
+                            self.buffer = lines[-1]
+                            for line in lines[:-1]:
+                                if line.strip():
+                                    self.emit_func(line + '\n')
+
+                def flush(self):
+                    if self.buffer.strip():
+                        self.emit_func(self.buffer)
+                        self.buffer = ""
+
+            log_writer = LogWriter(self.log_signals.new_log.emit)
+            sys_module.stdout = log_writer
+            sys_module.stderr = log_writer
+
+            try:
+                # Import and run the daemon
+                from jarvis.daemon import main as daemon_main
+                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
+                self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
+
+                # Run daemon - this should run the main loop
+                daemon_main()
+
+                from jarvis.daemon import is_stop_requested
+                if is_stop_requested():
+                    self.log_signals.new_log.emit("✅ Daemon stopped gracefully\n")
+                else:
+                    self.log_signals.new_log.emit("⚠️ Daemon exited unexpectedly\n")
+            except KeyboardInterrupt:
+                self.log_signals.new_log.emit("⏸️ Daemon interrupted\n")
+            except Exception as e:
+                error_msg = f"❌ Daemon runtime error: {str(e)}\n{traceback.format_exc()}\n"
+                self.log_signals.new_log.emit(error_msg)
+                # Also try to log via debug_log (though it might not work)
+                try:
+                    debug_log(f"daemon thread error: {e}", "desktop")
+                except Exception:
+                    pass
+            finally:
+                sys_module.stdout = old_stdout
+                sys_module.stderr = old_stderr
+        except Exception as e:
+            # Outer exception handler for setup errors
+            error_msg = f"❌ Daemon setup error: {str(e)}\n{traceback.format_exc()}\n"
+            try:
+                self.log_signals.new_log.emit(error_msg)
+            except Exception:
+                # If we can't emit, at least try stdout
+                print(error_msg, file=old_stderr)
+
+
 class JarvisSystemTray:
     """System tray application for Jarvis voice assistant."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        ollama_runtime_ownership: Optional[OllamaRuntimeOwnership] = None,
+    ):
         # Use existing QApplication if available, otherwise create one
         self.app = QApplication.instance()
         if self.app is None:
@@ -1255,6 +1762,9 @@ class JarvisSystemTray:
         self.daemon_thread: Optional[QThread] = None
         self.is_listening = False
         self.is_bundled = getattr(sys, 'frozen', False)
+        self._ollama_runtime_ownership = (
+            ollama_runtime_ownership or OllamaRuntimeOwnership()
+        )
 
         # Kill any orphaned Jarvis processes from previous sessions
         self.cleanup_orphaned_processes()
@@ -1263,6 +1773,13 @@ class JarvisSystemTray:
         self.log_viewer = LogViewerWindow()
         self.log_signals = LogSignals()
         self.log_signals.new_log.connect(self.log_viewer.append_log)
+
+        from desktop_app.task_centre import TaskCentreWindow
+        self.task_centre = TaskCentreWindow(
+            submit_callback=self.submit_task,
+            cancel_callback=self.cancel_task,
+        )
+        self.log_signals.new_log.connect(self.task_centre.process_log_line)
 
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
@@ -1277,6 +1794,29 @@ class JarvisSystemTray:
         from jarvis.dictation.history import DictationHistory
         self._dictation_history = DictationHistory()
         self.dictation_history_window = DictationHistoryWindow(history=self._dictation_history)
+
+        # Chat window is created lazily on first open (see show_chat). Kept
+        # alive for the session once created, same lifecycle as the dictation
+        # history window. ``self._chat_submit_fn`` is set when the daemon
+        # starts so the window can route queries in subprocess mode.
+        self.chat_window = None
+        self._chat_submit_fn = None
+        self._chat_control_fn = None
+        self._daemon_stop_expected = False
+
+        # Main-thread signal bridge for chat IPC. The log reader thread emits
+        # ``line_received`` (a queued connection) so the chat window is created
+        # and the IPC line is parsed on the Qt main thread, never on the
+        # worker thread (Qt widgets must be created on the GUI thread).
+        from desktop_app.chat_window import ChatIpcSignals
+        self._chat_ipc_signals = ChatIpcSignals()
+        self._chat_ipc_signals.line_received.connect(self._on_chat_ipc_line)
+
+        # Same bridge for the runtime-status dialog: the snapshot is
+        # gathered on a worker thread because it makes a blocking network
+        # call, and only the rendering belongs on the GUI thread.
+        self._runtime_status_signals = RuntimeStatusSignals()
+        self._runtime_status_signals.ready.connect(self._show_runtime_status_dialog)
 
         # Log reader threads
         self.log_reader_threads = []
@@ -1346,22 +1886,21 @@ class JarvisSystemTray:
                     self.daemon_process.wait()
             except Exception as e:
                 debug_log(f"error during exit cleanup: {e}", "desktop")
+        _stop_owned_ollama_runtime(self._ollama_runtime_ownership)
 
     def create_menu(self) -> None:
         """Create the system tray context menu."""
         self.menu = QMenu()
 
-        # Toggle listening action
-        self.toggle_action = QAction("▶️ Start Listening")
-        self.toggle_action.triggered.connect(self.toggle_listening)
-        self.menu.addAction(self.toggle_action)
-
-        self.menu.addSeparator()
-
         # View logs action
         self.logs_action = QAction("📝 View Logs")
         self.logs_action.triggered.connect(self.show_log_viewer)
         self.menu.addAction(self.logs_action)
+
+        # Task centre action
+        self.tasks_action = QAction("🧭 Task Centre")
+        self.tasks_action.triggered.connect(self.show_task_centre)
+        self.menu.addAction(self.tasks_action)
 
         # Memory viewer action
         self.memory_action = QAction("🧠 Memory Viewer")
@@ -1372,6 +1911,11 @@ class JarvisSystemTray:
         self.dictation_history_action = QAction("🎙️ Dictation History")
         self.dictation_history_action.triggered.connect(self.show_dictation_history)
         self.menu.addAction(self.dictation_history_action)
+
+        # Chat window action
+        self.chat_action = QAction("💬 Chat")
+        self.chat_action.triggered.connect(self.show_chat)
+        self.menu.addAction(self.chat_action)
 
         # Face window action
         self.face_action = QAction("👤 Show Face")
@@ -1387,6 +1931,11 @@ class JarvisSystemTray:
         self.settings_action = QAction("⚙️ Settings")
         self.settings_action.triggered.connect(self.show_settings)
         self.menu.addAction(self.settings_action)
+
+        # Runtime diagnostics action
+        self.runtime_status_action = QAction("🩺 Runtime Status")
+        self.runtime_status_action.triggered.connect(self.show_runtime_status)
+        self.menu.addAction(self.runtime_status_action)
 
         # Check for updates action
         self.check_updates_action = QAction("🔄 Check for Updates")
@@ -1410,6 +1959,11 @@ class JarvisSystemTray:
         self.menu.addAction(self.open_data_action)
 
         self.menu.addSeparator()
+
+        # Toggle listening action
+        self.toggle_action = QAction("▶️ Start Listening")
+        self.toggle_action.triggered.connect(self.toggle_listening)
+        self.menu.addAction(self.toggle_action)
 
         # Status action (non-clickable)
         self.status_action = QAction("⚪ Status: Stopped")
@@ -1504,11 +2058,7 @@ class JarvisSystemTray:
             self.stop_daemon()
 
         # Face should look asleep while wizard is open (daemon isn't running)
-        try:
-            from desktop_app.face_widget import JarvisState, get_jarvis_state
-            get_jarvis_state().set_state(JarvisState.ASLEEP)
-        except Exception:
-            pass
+        self._set_face_asleep()
 
         wizard = SetupWizard()
         result = wizard.exec()
@@ -1539,6 +2089,44 @@ class JarvisSystemTray:
             if reply == QMessageBox.StandardButton.Yes:
                 self.stop_daemon()
                 self.start_daemon()
+
+    def collect_runtime_status(self) -> RuntimeStatusSnapshot:
+        """Collect current runtime state for the tray diagnostics dialog."""
+        return _collect_runtime_status_snapshot(
+            is_listening=self.is_listening,
+            is_bundled=self.is_bundled,
+            daemon_process=self.daemon_process,
+            daemon_thread=self.daemon_thread,
+            ollama_runtime_ownership=self._ollama_runtime_ownership,
+        )
+
+    def show_runtime_status(self) -> None:
+        """Show a compact diagnostic summary of Jarvis' active runtime.
+
+        The snapshot is collected on a worker thread and delivered back
+        through a signal, the same marshalling this app already uses for
+        chat events. Collecting it inline would run ``check_ollama_server``
+        — a blocking request with a five second timeout — on the Qt main
+        thread, freezing every menu in the app at precisely the moment the
+        user reached for diagnostics because something looked wrong.
+        """
+        import threading
+
+        def _collect():
+            try:
+                snapshot = self.collect_runtime_status()
+            except Exception as exc:
+                debug_log(f"runtime status collection failed: {exc}", "desktop")
+                return
+            self._runtime_status_signals.ready.emit(snapshot)
+
+        threading.Thread(
+            target=_collect, name="runtime-status", daemon=True,
+        ).start()
+
+    def _show_runtime_status_dialog(self, snapshot) -> None:
+        """Render the collected snapshot. Runs on the Qt main thread."""
+        RuntimeStatusDialog(snapshot).exec()
 
     def check_for_updates(self, show_no_update_dialog: bool = False) -> None:
         """Check for available updates.
@@ -1606,11 +2194,59 @@ class JarvisSystemTray:
             if show_no_update_dialog:
                 show_update_error_dialog(str(e))
 
+    def show_launch_windows(self) -> None:
+        """Open the log viewer and face window once at app launch.
+
+        Starting or stopping the assistant never changes window visibility
+        (start_daemon/stop_daemon leave it untouched), so the
+        launch windows are opened here explicitly instead of inside
+        start_daemon.
+        """
+        self.log_viewer.show()
+        self.log_viewer.raise_()
+        self.log_viewer.activateWindow()
+        self.face_window.show()
+        self.face_window.raise_()
+
     def show_log_viewer(self) -> None:
         """Show the log viewer window and bring it to front."""
         self.log_viewer.show()
         self.log_viewer.raise_()
         self.log_viewer.activateWindow()
+
+    def show_task_centre(self) -> None:
+        """Show the interactive task centre."""
+        self.task_centre.show()
+        self.task_centre.raise_()
+        self.task_centre.activateWindow()
+
+    def submit_task(self, prompt: str):
+        """Submit a prompt to the in-process or subprocess daemon."""
+        if self.is_bundled:
+            from jarvis.daemon import submit_task
+            return submit_task(prompt)
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before submitting a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt}, ensure_ascii=False)}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return None
+
+    def cancel_task(self, task_id: str):
+        """Cancel a prompt in the in-process or subprocess daemon."""
+        if self.is_bundled:
+            from jarvis.daemon import cancel_task
+            return cancel_task(task_id)
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before cancelling a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps({'action': 'cancel', 'id': task_id})}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return True
 
     def show_memory_viewer(self) -> None:
         """Show the memory viewer window and bring it to front."""
@@ -1623,6 +2259,39 @@ class JarvisSystemTray:
         self.dictation_history_window.show()
         self.dictation_history_window.raise_()
         self.dictation_history_window.activateWindow()
+
+    def show_chat(self) -> None:
+        """Show the text chat window (created lazily on first open)."""
+        if self.chat_window is None:
+            from desktop_app.chat_window import ChatWindow
+            self.chat_window = ChatWindow(
+                submit_fn=self._chat_submit_fn,
+                daemon_available=self.is_listening,
+                cancel_fn=getattr(self, "_chat_cancel_fn", None),
+                control_fn=getattr(self, "_chat_control_fn", None),
+            )
+        else:
+            self.chat_window._submit_fn = self._chat_submit_fn
+            self.chat_window._cancel_fn = getattr(self, "_chat_cancel_fn", None)
+            self.chat_window._control_fn = getattr(self, "_chat_control_fn", None)
+            self.chat_window.set_daemon_status(
+                "running" if self.is_listening else "stopped"
+            )
+        self.chat_window.show()
+        self.chat_window.raise_()
+        self.chat_window.activateWindow()
+
+    def _set_chat_daemon_available(self, available: bool) -> None:
+        """Update an existing chat window when the daemon starts or stops."""
+        self._set_chat_daemon_status("running" if available else "stopped")
+
+    def _set_chat_daemon_status(self, status: str) -> None:
+        """Update an existing chat window with daemon lifecycle state."""
+        if self.chat_window is None:
+            return
+        self.chat_window._submit_fn = self._chat_submit_fn
+        self.chat_window._control_fn = getattr(self, "_chat_control_fn", None)
+        self.chat_window.set_daemon_status(status)
 
     def _connect_dictation_history(self, retries_left: int = 3) -> None:
         """Wire dictation engine's result callback to the history window signal.
@@ -1745,6 +2414,14 @@ class JarvisSystemTray:
 
         self.tray_icon.setIcon(icon)
 
+    def _set_face_asleep(self) -> None:
+        """Reset the face to asleep so it doesn't look ready while the daemon is down."""
+        try:
+            from desktop_app.face_widget import JarvisState, get_jarvis_state
+            get_jarvis_state().set_state(JarvisState.ASLEEP)
+        except Exception:
+            pass
+
     def toggle_listening(self) -> None:
         """Toggle the Jarvis daemon on/off."""
         if self.is_listening:
@@ -1754,90 +2431,20 @@ class JarvisSystemTray:
 
     def start_daemon(self) -> None:
         """Start the Jarvis daemon."""
+        self._daemon_stop_expected = False
+        self._set_chat_daemon_status("starting")
         try:
             if self.is_bundled:
                 # When bundled, run daemon in a QThread since Qt components may be used
-
-                class DaemonThread(QThread):
-                    """QThread to run the daemon."""
-                    def __init__(self, log_signals):
-                        super().__init__()
-                        self.log_signals = log_signals
-
-                    def run(self):
-                        """Run the daemon in this QThread."""
-                        import sys as sys_module
-                        old_stdout = sys_module.stdout
-                        old_stderr = sys_module.stderr
-
-                        try:
-                            # Redirect stdout/stderr to capture logs
-                            class LogWriter:
-                                def __init__(self, emit_func):
-                                    self.emit_func = emit_func
-                                    self.buffer = ""
-
-                                def write(self, text):
-                                    if text:
-                                        # Handle both bytes and str (Flask can send bytes)
-                                        if isinstance(text, bytes):
-                                            text = text.decode('utf-8', errors='replace')
-                                        self.buffer += text
-                                        if '\n' in self.buffer:
-                                            lines = self.buffer.split('\n')
-                                            self.buffer = lines[-1]
-                                            for line in lines[:-1]:
-                                                if line.strip():
-                                                    self.emit_func(line + '\n')
-
-                                def flush(self):
-                                    if self.buffer.strip():
-                                        self.emit_func(self.buffer)
-                                        self.buffer = ""
-
-                            log_writer = LogWriter(self.log_signals.new_log.emit)
-                            sys_module.stdout = log_writer
-                            sys_module.stderr = log_writer
-
-                            try:
-                                # Import and run the daemon
-                                from jarvis.daemon import main as daemon_main
-                                self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
-                                self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
-
-                                # Run daemon - this should run the main loop
-                                daemon_main()
-
-                                from jarvis.daemon import is_stop_requested
-                                if is_stop_requested():
-                                    self.log_signals.new_log.emit("✅ Daemon stopped gracefully\n")
-                                else:
-                                    self.log_signals.new_log.emit("⚠️ Daemon exited unexpectedly\n")
-                            except KeyboardInterrupt:
-                                self.log_signals.new_log.emit("⏸️ Daemon interrupted\n")
-                            except Exception as e:
-                                error_msg = f"❌ Daemon runtime error: {str(e)}\n{traceback.format_exc()}\n"
-                                self.log_signals.new_log.emit(error_msg)
-                                # Also try to log via debug_log (though it might not work)
-                                try:
-                                    debug_log(f"daemon thread error: {e}", "desktop")
-                                except Exception:
-                                    pass
-                            finally:
-                                sys_module.stdout = old_stdout
-                                sys_module.stderr = old_stderr
-                        except Exception as e:
-                            # Outer exception handler for setup errors
-                            error_msg = f"❌ Daemon setup error: {str(e)}\n{traceback.format_exc()}\n"
-                            try:
-                                self.log_signals.new_log.emit(error_msg)
-                            except Exception:
-                                # If we can't emit, at least try stdout
-                                print(error_msg, file=old_stderr)
-
                 self.daemon_thread = DaemonThread(self.log_signals)
-                # Connect finished signal to reset UI state
-                self.daemon_thread.finished.connect(lambda: self._on_daemon_finished())
+                # Reset UI state on completion. QueuedConnection guarantees the
+                # slot runs on the main thread (the finished signal is emitted
+                # from the worker's OS thread) and the KeepAliveWorker registry
+                # keeps the object alive until that thread has fully exited.
+                self.daemon_thread.finished.connect(
+                    self._on_daemon_finished,
+                    Qt.ConnectionType.QueuedConnection,
+                )
                 self.daemon_thread.start()
 
                 # Connect dictation engine to history window once daemon is ready
@@ -1853,6 +2460,12 @@ class JarvisSystemTray:
                     env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
                 else:
                     env["PYTHONPATH"] = str(src_path)
+                # Signal the daemon that we own its stdin (chat query-in IPC)
+                # so it starts the stdin monitor. Without this the daemon would
+                # treat a non-TTY stdin as "no monitor" on non-Windows, and a
+                # stray /dev/null wouldn't kill it.
+                env["JARVIS_STDIN_IPC"] = "1"
+                env["JARVIS_TASK_IPC"] = "1"
 
                 # Use creationflags to prevent console window popup on Windows
                 # CREATE_NEW_PROCESS_GROUP is needed for CTRL_BREAK_EVENT to work
@@ -1873,6 +2486,75 @@ class JarvisSystemTray:
                     creationflags=creationflags,
                 )
 
+                # In subprocess mode the chat window can't call the daemon
+                # directly, so it writes a __CHAT_QUERY__: line to stdin.
+                # The reply comes back as __CHAT__: events on stdout, parsed
+                # in _read_daemon_logs and routed to the chat window's signals.
+                from jarvis.daemon import CHAT_CANCEL_IPC_PREFIX, CHAT_QUERY_IPC_PREFIX
+                _proc = self.daemon_process
+
+                def _submit_chat_subprocess(text: str) -> None:
+                    import json as _json
+                    try:
+                        _proc.stdin.write(f"{CHAT_QUERY_IPC_PREFIX}{_json.dumps({'text': text})}\n")
+                        _proc.stdin.flush()
+                    except Exception as exc:
+                        # stdin closed / pipe broken (daemon died or is
+                        # restarting). Surface a terminal event so the chat
+                        # window resets instead of hanging in the thinking
+                        # state forever waiting for a reply that won't come.
+                        debug_log(f"chat stdin submit failed: {exc}", "desktop")
+                        if self.chat_window is not None:
+                            self.chat_window.set_daemon_status("crashed")
+                            self.chat_window.signals.completed.emit(None)
+
+                def _cancel_chat_subprocess() -> None:
+                    """Ask the daemon to drop the query it is running.
+
+                    Same pipe as submission, for the same reason: the
+                    query lives in the daemon process, so the flag has to
+                    be set there. A broken pipe here is not worth
+                    surfacing — the window has already refused the reply
+                    locally, and a dead daemon has no query to cancel.
+                    """
+                    try:
+                        _proc.stdin.write(f"{CHAT_CANCEL_IPC_PREFIX}\n")
+                        _proc.stdin.flush()
+                    except Exception as exc:
+                        debug_log(f"chat stdin cancel failed: {exc}", "desktop")
+
+                def _control_chat_subprocess(kind: str, payload: Optional[dict] = None) -> None:
+                    """Route a rewind command to the daemon's stdin.
+
+                    ``kind`` is ``rewind``; the matching IPC line carries the
+                    payload as prefix+JSON. A broken pipe is not worth
+                    surfacing: the window has already updated its own
+                    transcript, and a dead daemon has no memory to rewind.
+                    """
+                    import json as _json
+                    from jarvis.daemon import CHAT_REWIND_IPC_PREFIX
+                    if kind != "rewind":
+                        debug_log(f"unknown chat control command: {kind}", "desktop")
+                        return
+                    try:
+                        _proc.stdin.write(
+                            f"{CHAT_REWIND_IPC_PREFIX}{_json.dumps(payload)}\n"
+                        )
+                        _proc.stdin.flush()
+                    except Exception as exc:
+                        debug_log(f"chat stdin control failed: {exc}", "desktop")
+
+                self._chat_submit_fn = _submit_chat_subprocess
+                self._chat_cancel_fn = _cancel_chat_subprocess
+                self._chat_control_fn = _control_chat_subprocess
+                # If the chat window already exists (daemon restarted while
+                # the window was open), refresh its submit fn so it doesn't
+                # keep writing to the old (dead) subprocess stdin.
+                if self.chat_window is not None:
+                    self.chat_window._submit_fn = self._chat_submit_fn
+                    self.chat_window._cancel_fn = self._chat_cancel_fn
+                    self.chat_window.set_daemon_status("running")
+
                 # Start log reader thread
                 log_thread = threading.Thread(
                     target=self._read_daemon_logs,
@@ -1886,11 +2568,7 @@ class JarvisSystemTray:
             self.toggle_action.setText("⏸️ Stop Listening")
             self.status_action.setText("🟢 Status: Listening")
             self.update_icon()
-
-            # Show log viewer when starting listening
-            self.log_viewer.show()
-            self.log_viewer.raise_()
-            self.log_viewer.activateWindow()
+            self._set_chat_daemon_status("running")
 
             self.tray_icon.showMessage(
                 "Jarvis Started",
@@ -1899,14 +2577,12 @@ class JarvisSystemTray:
                 2000
             )
 
-            # Show face window when starting
-            self.face_window.show()
-            self.face_window.raise_()
-
             debug_log("daemon started from desktop app", "desktop")
 
         except Exception as e:
             debug_log(f"failed to start daemon: {e}", "desktop")
+            self._chat_submit_fn = None
+            self._set_chat_daemon_status("crashed")
             self.log_signals.new_log.emit(f"❌ Failed to start: {str(e)}\n{traceback.format_exc()}\n")
             self.tray_icon.showMessage(
                 "Error Starting Jarvis",
@@ -1918,22 +2594,24 @@ class JarvisSystemTray:
     def _on_daemon_finished(self) -> None:
         """Called when daemon thread finishes."""
         if self.is_listening:
+            status = "stopped" if self._daemon_stop_expected else "crashed"
             self.is_listening = False
+            self._chat_submit_fn = None
             self.toggle_action.setText("▶️ Start Listening")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self.daemon_thread = None
+            self._set_chat_daemon_status(status)
+            self._daemon_stop_expected = False
             # Reset face to asleep so it doesn't look ready while daemon is down
-            try:
-                from desktop_app.face_widget import JarvisState, get_jarvis_state
-                get_jarvis_state().set_state(JarvisState.ASLEEP)
-            except Exception:
-                pass
+            self._set_face_asleep()
 
     def _read_daemon_logs(self) -> None:
         """Read logs from daemon subprocess in a background thread."""
         if not self.daemon_process or not self.daemon_process.stdout:
             return
+
+        from jarvis.daemon import CHAT_IPC_PREFIX
 
         try:
             while True:
@@ -1945,12 +2623,37 @@ class JarvisSystemTray:
                 # Debug: log IPC events specifically
                 if "__DIARY__:" in line:
                     debug_log(f"log reader: IPC event read: {line[:80]}...", "desktop")
-                self.log_signals.new_log.emit(line)
+                # Route chat events to the main thread via the IPC signal
+                # bridge. The line is parsed and the chat window is created
+                # on the Qt main thread, never here on the log reader thread
+                # (Qt widgets must be created on the GUI thread).
+                if line.startswith(CHAT_IPC_PREFIX):
+                    self._chat_ipc_signals.line_received.emit(line)
+                if _should_emit_as_log(line):
+                    self.log_signals.new_log.emit(line)
         except Exception as e:
             debug_log(f"log reader error: {e}", "desktop")
             self.log_signals.new_log.emit(f"⚠️ Log reader error: {e}\n")
 
-    def stop_daemon(self, show_diary_dialog: bool = True) -> None:
+    def _on_chat_ipc_line(self, line: str) -> None:
+        """Handle a ``__CHAT__:`` event line on the Qt main thread.
+
+        Creates the chat window lazily (safe on the GUI thread) and forwards
+        the line to ``ChatWindow.process_ipc_line`` for parsing + signal emit.
+        """
+        if self.chat_window is None:
+            from desktop_app.chat_window import ChatWindow
+            self.chat_window = ChatWindow(
+                submit_fn=self._chat_submit_fn,
+                daemon_available=self.is_listening,
+                cancel_fn=getattr(self, "_chat_cancel_fn", None),
+            )
+        self.chat_window.process_ipc_line(line)
+
+    def stop_daemon(
+        self,
+        show_diary_dialog: bool = True,
+    ) -> None:
         """Stop the Jarvis daemon.
 
         Args:
@@ -1961,9 +2664,16 @@ class JarvisSystemTray:
         shutdown_wait_timeout_sec = 60
         diary_dialog = None
 
-        debug_log(f"stop_daemon called: is_bundled={self.is_bundled}, daemon_thread={self.daemon_thread}, show_diary_dialog={show_diary_dialog}", "desktop")
+        debug_log(
+            f"stop_daemon called: is_bundled={self.is_bundled}, "
+            f"daemon_thread={self.daemon_thread}, "
+            f"show_diary_dialog={show_diary_dialog}",
+            "desktop",
+        )
 
         try:
+            self._daemon_stop_expected = True
+            self._set_chat_daemon_status("stopping")
             if self.is_bundled and self.daemon_thread:
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
@@ -1996,12 +2706,6 @@ class JarvisSystemTray:
                         on_chunks=on_chunks,
                         on_complete=on_complete,
                     )
-
-                    # Hide other windows while showing diary dialog
-                    if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
-                        self.face_window.hide()
-                    if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
-                        self.log_viewer.hide()
 
                     # Show dialog (non-modal so we can process events)
                     diary_dialog.show()
@@ -2076,13 +2780,8 @@ class JarvisSystemTray:
                     diary_dialog.activateWindow()
                     self.app.processEvents()
 
-                    # Hide other windows
-                    if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
-                        self.face_window.hide()
-                    if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
-                        self.log_viewer.hide()
-
-                # Send signal for graceful shutdown
+                # Send signal for graceful shutdown. The daemon runs its
+                # final diary update in its shutdown block regardless.
                 if sys.platform == "win32":
                     # On Windows, signals don't work reliably with CREATE_NO_WINDOW
                     # Close stdin to trigger graceful shutdown in daemon
@@ -2173,11 +2872,16 @@ class JarvisSystemTray:
                     diary_dialog.close()
 
                 self.daemon_process = None
+                self._chat_submit_fn = None
 
+            self._daemon_stop_expected = False
             self.is_listening = False
             self.toggle_action.setText("▶️ Start Listening")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
+            self._set_chat_daemon_status("stopped")
+            # Reset face to asleep so it doesn't look ready while daemon is down
+            self._set_face_asleep()
 
             self.tray_icon.showMessage(
                 "Jarvis Stopped",
@@ -2190,6 +2894,7 @@ class JarvisSystemTray:
             debug_log("daemon stopped from desktop app", "desktop")
 
         except Exception as e:
+            self._daemon_stop_expected = False
             debug_log(f"failed to stop daemon: {e}", "desktop")
             self.log_signals.new_log.emit(f"❌ Failed to stop: {str(e)}\n")
         finally:
@@ -2217,11 +2922,15 @@ class JarvisSystemTray:
             if poll is not None:
                 # Process has terminated
                 self.daemon_process = None
+                self._chat_submit_fn = None
                 if self.is_listening:
                     self.is_listening = False
                     self.toggle_action.setText("▶️ Start Listening")
                     self.status_action.setText("⚪ Status: Stopped")
                     self.update_icon()
+                    self._set_chat_daemon_status("crashed")
+                    # Reset face to asleep so it doesn't look ready while daemon is down
+                    self._set_face_asleep()
 
                     self.tray_icon.showMessage(
                         "Jarvis Stopped",
@@ -2346,16 +3055,18 @@ def _smoke_test_main() -> int:
     # AttributeError when stdout is None) and the smoke test exits 1 before
     # ever reaching the daemon.  Wrap in UTF-8 when a binary buffer is
     # available and fall back to a sink so prints can never crash the test.
-    # Only wrap bundled (frozen) runs and Windows: a plain dev run already
-    # gets correct locale handling from Python, and pytest swaps in its own
-    # capture objects that must not be re-wrapped.
+    # Only wrap the real console streams: pytest swaps in its own capture
+    # objects that must not be re-wrapped (wrapping them detaches and
+    # closes their buffers, corrupting output capture for the process).
     try:
         import io
         for _stream_name in ("stdout", "stderr"):
             _stream = getattr(sys, _stream_name)
+            _real = getattr(sys, "__" + _stream_name, None)
             if _stream is None:
                 setattr(sys, _stream_name, io.StringIO())
             elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
+                    and (getattr(sys, "frozen", False) or _stream is _real) \
                     and hasattr(_stream, "buffer") and hasattr(_stream.buffer, "write"):
                 setattr(sys, _stream_name, io.TextIOWrapper(
                     _stream.buffer, encoding="utf-8", errors="replace"))
@@ -2399,6 +3110,65 @@ def _smoke_test_main() -> int:
     return 0
 
 
+class SetupCheckWorker(KeepAliveWorker):
+    """Worker thread to check setup status without blocking the UI.
+
+    Inherits ``KeepAliveWorker`` so dropping the local reference after the
+    check completes can never destroy a running QThread ("Fatal Python
+    error: Aborted" — #584/#575/#576). The completion signal is named
+    ``check_done`` so it does not shadow QThread's built-in ``finished``.
+    """
+
+    check_done = pyqtSignal(bool)  # Emits True if setup wizard needed
+
+    def run(self):
+        try:
+            # Lazy import: app.py keeps setup_wizard loading deferred past
+            # crash-logging setup, so resolve it from the worker thread.
+            from desktop_app.setup_wizard import should_show_setup_wizard
+            result = should_show_setup_wizard()
+            self.check_done.emit(result)
+        except Exception as e:
+            print(f"  ❌ Setup check failed: {e}", flush=True)
+            # On error, show wizard to let user fix issues
+            self.check_done.emit(True)
+
+
+class _LLMReachWorker(KeepAliveWorker):
+    """Worker thread that probes the configured OpenAI-compatible server.
+
+    Emits via ``check_done`` — never by shadowing QThread's built-in
+    ``finished`` (the keep-alive registry relies on ``finished`` to know
+    when releasing the worker is safe).
+    """
+
+    check_done = pyqtSignal(bool)
+
+    def __init__(self, provider_cfg):
+        super().__init__()
+        self.provider_cfg = provider_cfg
+
+    def run(self):
+        self.check_done.emit(_check_openai_compat_reachable(self.provider_cfg))
+
+
+class ServerCheckWorker(KeepAliveWorker):
+    """Worker thread to check Ollama server status without blocking the UI."""
+
+    # Named check_done so it does not shadow QThread's built-in finished.
+    check_done = pyqtSignal(bool, object)  # Emits (is_running, version)
+
+    def run(self):
+        try:
+            # Lazy import: resolves the Ollama helpers from the worker thread.
+            from desktop_app.setup_wizard import check_ollama_server
+            running, ver = check_ollama_server()
+            self.check_done.emit(running, ver)
+        except Exception as e:
+            print(f"  ❌ Server check failed: {e}", flush=True)
+            self.check_done.emit(False, None)
+
+
 def main() -> int:
     """Main entry point for the desktop app."""
     # Smoke-test fast path: runs before any UI, crash logging, or setup checks.
@@ -2407,13 +3177,17 @@ def main() -> int:
 
     # Fix Windows console encoding for Unicode/emoji characters
     # Only for non-frozen apps - frozen apps redirect stdout to crash log
+    # Only wrap the real console streams (sys.__stdout__/sys.__stderr__):
+    # test harnesses replace sys.stdout with capture objects whose buffers
+    # must not be detached.
     if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         try:
             import io
-            # Only wrap if stdout has a proper binary buffer
-            if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
+            if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
+                    and hasattr(sys.stdout.buffer, 'write')):
                 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
+            if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
+                    and hasattr(sys.stderr.buffer, 'write')):
                 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
         except Exception:
             pass
@@ -2525,7 +3299,6 @@ def main() -> int:
         print("  Loading setup wizard module...", flush=True)
         try:
             from desktop_app.setup_wizard import (
-                should_show_setup_wizard,
                 check_ollama_server, check_ollama_cli,
                 get_required_models, check_installed_models,
                 resolve_ollama_path,
@@ -2537,22 +3310,7 @@ def main() -> int:
             raise
 
         # Run setup check in background thread to keep splash animation alive
-        from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
-
-        class SetupCheckWorker(QThread):
-            """Worker thread to check setup status without blocking UI."""
-            # Named check_done so it does not shadow QThread's built-in
-            # finished signal (see _KeepAliveWorker in setup_wizard.py).
-            check_done = pyqtSignal(bool)  # Emits True if setup wizard needed
-
-            def run(self):
-                try:
-                    result = should_show_setup_wizard()
-                    self.check_done.emit(result)
-                except Exception as e:
-                    print(f"  ❌ Setup check failed: {e}", flush=True)
-                    # On error, show wizard to let user fix issues
-                    self.check_done.emit(True)
+        from PyQt6.QtCore import QEventLoop
 
         setup_check_result = [None]  # Use list to allow modification in closure
 
@@ -2604,23 +3362,21 @@ def main() -> int:
             splash.set_status("Checking your LLM server...")
             app.processEvents()
 
-            class _LLMReachWorker(QThread):
-                finished = pyqtSignal(bool)
-
-                def run(self):
-                    self.finished.emit(_check_openai_compat_reachable(_provider_cfg))
-
             _reach = [True]
-            _reach_worker = _LLMReachWorker()
-            _reach_worker.finished.connect(lambda ok: _reach.__setitem__(0, ok))
+            _reach_worker = _LLMReachWorker(_provider_cfg)
+            _reach_worker.check_done.connect(lambda ok: _reach.__setitem__(0, ok))
             _reach_loop = QEventLoop()
-            _reach_worker.finished.connect(_reach_loop.quit)
+            _reach_worker.check_done.connect(_reach_loop.quit)
             _reach_worker.start()
             _reach_loop.exec()
 
             if not _reach[0]:
                 print("⚠️ LLM server not reachable at startup", flush=True)
                 _show_openai_unreachable_dialog(_provider_cfg)
+
+        # Default ownership: not started by us. Re-assigned below if Jarvis
+        # launches its own Ollama server process.
+        ollama_runtime_ownership = OllamaRuntimeOwnership()
 
         if _ollama_needed:
             # Even if setup was completed before, verify Ollama server is actually running
@@ -2629,20 +3385,6 @@ def main() -> int:
             app.processEvents()
 
             # Run server check in background thread to keep splash animation alive
-            class ServerCheckWorker(QThread):
-                """Worker thread to check Ollama server status without blocking UI."""
-                # Named check_done so it does not shadow QThread's built-in
-                # finished signal (see _KeepAliveWorker in setup_wizard.py).
-                check_done = pyqtSignal(bool, object)  # Emits (is_running, version)
-
-                def run(self):
-                    try:
-                        running, ver = check_ollama_server()
-                        self.check_done.emit(running, ver)
-                    except Exception as e:
-                        print(f"  ❌ Server check failed: {e}", flush=True)
-                        self.check_done.emit(False, None)
-
             server_check_result = [None, None]  # [is_running, version]
 
             def on_server_check_done(running: bool, ver):
@@ -2675,6 +3417,7 @@ def main() -> int:
 
                 # Try to start Ollama server
                 ollama_process = None
+                ollama_launch_method = ""
                 try:
                     if sys.platform == "darwin":
                         # On macOS, try to open the Ollama app first
@@ -2685,6 +3428,7 @@ def main() -> int:
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL
                             )
+                            ollama_launch_method = "macos_app"
                         except Exception as e:
                             # Fall back to running serve command
                             print(f"  ⚠️ Ollama.app not found ({e}), trying serve command...", flush=True)
@@ -2694,6 +3438,7 @@ def main() -> int:
                                 stderr=subprocess.DEVNULL,
                                 start_new_session=True
                             )
+                            ollama_launch_method = "serve"
                     elif sys.platform == "win32":
                         # On Windows, hide the console window
                         print(f"  🪟 Starting Ollama server: {ollama_path} serve", flush=True)
@@ -2703,6 +3448,7 @@ def main() -> int:
                             stderr=subprocess.DEVNULL,
                             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
                         )
+                        ollama_launch_method = "serve"
                     else:
                         # On Linux and other platforms
                         print(f"  🐧 Starting Ollama server: {ollama_path} serve", flush=True)
@@ -2712,10 +3458,27 @@ def main() -> int:
                             stderr=subprocess.DEVNULL,
                             start_new_session=True
                         )
+                        ollama_launch_method = "serve"
+
+                    ollama_runtime_ownership = OllamaRuntimeOwnership(
+                        started_by_jarvis=True,
+                        launch_method=ollama_launch_method,
+                        process=ollama_process,
+                    )
+                    debug_log(
+                        f"Ollama runtime launched by desktop app via {ollama_launch_method}",
+                        "desktop",
+                    )
 
                     # Verify the process started
-                    if ollama_process and ollama_process.poll() is not None:
+                    if (
+                        ollama_process
+                        and ollama_launch_method != "macos_app"
+                        and ollama_process.poll() is not None
+                    ):
                         print(f"  ❌ Ollama process exited immediately with code {ollama_process.returncode}", flush=True)
+                    elif ollama_launch_method == "macos_app":
+                        print("  ✅ Ollama.app launch requested", flush=True)
                     else:
                         print(f"  ✅ Ollama process started (PID: {ollama_process.pid if ollama_process else 'unknown'})", flush=True)
 
@@ -2857,16 +3620,24 @@ def main() -> int:
 
         splash.set_status("Loading Jarvis...")
         print("Initializing JarvisSystemTray...", flush=True)
-        tray_instance = JarvisSystemTray()
+        tray_instance = JarvisSystemTray(
+            ollama_runtime_ownership=ollama_runtime_ownership,
+        )
         print("JarvisSystemTray initialized successfully", flush=True)
 
-        # Always auto-start listening (logs will be shown via start_daemon)
+        # Always auto-start listening
         splash.set_status("Starting voice assistant...")
         print("🚀 Auto-starting Jarvis listener...", flush=True)
         tray_instance.start_daemon()
 
         # Close splash screen
         splash.close_splash()
+
+        # Open the log and face windows once at launch. start_daemon and
+        # stop_daemon never change window visibility (the tray menu's
+        # View Logs / Show Face actions are the only controls after this),
+        # so the launch windows are opened here explicitly.
+        tray_instance.show_launch_windows()
 
         if crash_log_file:
             # Show notification with log file location
@@ -2912,4 +3683,3 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     sys.exit(main())
-

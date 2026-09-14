@@ -645,3 +645,88 @@ class TestDialogueMemoryUnifiedDurations:
         assert dm.MAX_UNSAVED_AGE_SEC == 120.0
 
 
+
+
+@pytest.mark.unit
+class TestDialogueMemorySessions:
+    """Session archive / restore / rewind primitives backing the text-chat
+    sessions feature. Everything is in-memory only; these methods never
+    touch the diary or the disk."""
+
+    def _conversation(self):
+        dm = DialogueMemory()
+        dm.add_message("user", "remind me to buy oat milk")
+        dm.add_message("assistant", "Noted.")
+        dm.add_message("user", "what about eggs?")
+        dm.add_message("assistant", "Eggs too.")
+        return dm
+
+    def test_all_messages_returns_every_turn_in_order(self):
+        dm = self._conversation()
+        assert dm.all_messages() == [
+            {"role": "user", "content": "remind me to buy oat milk"},
+            {"role": "assistant", "content": "Noted."},
+            {"role": "user", "content": "what about eggs?"},
+            {"role": "assistant", "content": "Eggs too."},
+        ]
+
+    def test_set_messages_restores_a_snapshot(self):
+        dm = self._conversation()
+        snapshot = dm.all_messages()
+
+        dm.clear()
+        dm.set_messages(snapshot[:2])
+
+        assert dm.all_messages() == snapshot[:2]
+        assert dm.has_recent_messages(), "restored turns must count as recent"
+
+    def test_set_messages_ignores_blank_entries(self):
+        dm = DialogueMemory()
+        dm.set_messages([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "   "},
+            {"role": "", "content": "hello"},
+        ])
+        assert dm.all_messages() == [{"role": "user", "content": "hi"}]
+
+    def test_clear_drops_conversation_and_caches(self):
+        dm = self._conversation()
+        dm.hot_cache_put("k", "v")
+        dm.record_tool_turn([{"role": "tool", "content": "x"}])
+
+        dm.clear()
+
+        assert dm.all_messages() == []
+        assert dm.hot_cache_get("k") is None
+        assert dm.get_recent_turns_with_tools() == []
+
+    def test_rewind_before_first_user_message_drops_everything(self):
+        dm = self._conversation()
+        assert dm.rewind_before_user_message(1) is True
+        assert dm.all_messages() == []
+
+    def test_rewind_before_second_user_message_keeps_first_turn(self):
+        dm = self._conversation()
+        assert dm.rewind_before_user_message(2) is True
+        assert dm.all_messages() == [
+            {"role": "user", "content": "remind me to buy oat milk"},
+            {"role": "assistant", "content": "Noted."},
+        ]
+
+    def test_rewind_to_unknown_user_index_is_a_noop(self):
+        dm = self._conversation()
+        assert dm.rewind_before_user_message(5) is False
+        assert len(dm.all_messages()) == 4
+
+    def test_rewind_clears_tool_carryover_and_hot_cache(self):
+        dm = self._conversation()
+        dm.hot_cache_put("router", "cached")
+        dm.record_tool_turn([{"role": "tool", "content": "x"}])
+
+        dm.rewind_before_user_message(2)
+
+        assert dm.hot_cache_get("router") is None
+        turns = dm.get_recent_turns_with_tools()
+        assert not any(m.get("role") == "tool" for m in turns), (
+            "tool carryover must be cleared by a rewind"
+        )

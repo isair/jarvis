@@ -27,10 +27,10 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "size": "~9.6GB",
         "vram": "16GB+",
     },
-    "gpt-oss:20b": {
-        "name": "GPT-OSS 20B (High-end)",
-        "description": "Best performance, ~12GB download",
-        "size": "~12GB",
+    "qwen3.8:27b": {
+        "name": "Qwen 3.8 27B (High-end)",
+        "description": "Best performance, ~18GB download",
+        "size": "~18GB",
         "vram": "24GB+",
     },
     "qwen3.5:0.8b": {
@@ -121,6 +121,12 @@ class Settings:
     # Screen Capture
     allowlist_bundles: list[str]
 
+    # Permissioned local computer control
+    local_control_enabled: bool
+    local_control_require_approval: bool
+    local_control_allowed_applications: list[str]
+    local_control_allowed_roots: list[str]
+
     # Text-to-Speech
     tts_enabled: bool
     tts_engine: str  # "piper" (default) or "chatterbox"
@@ -178,6 +184,7 @@ class Settings:
     tune_enabled: bool
     hot_window_enabled: bool
     hot_window_seconds: float
+    low_power_mode: bool
 
     # Echo Detection
     echo_energy_threshold: float
@@ -511,6 +518,11 @@ def get_default_config() -> Dict[str, Any]:
             "com.jetbrains.intellij",
         ],
 
+        # Permissioned local computer control. Disabled and deny-listed by default.
+        "local_control_enabled": False,
+        "local_control_require_approval": True,
+        "local_control_allowed_applications": [],
+        "local_control_allowed_roots": [],
 
         # Text-to-Speech
         "tts_enabled": True,
@@ -569,6 +581,7 @@ def get_default_config() -> Dict[str, Any]:
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 3.0,
+        "low_power_mode": False,
         "echo_energy_threshold": 2.0,
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
 
@@ -692,6 +705,12 @@ def load_settings() -> Settings:
     db_path = _expand_path(merged.get("db_path")) or _default_db_path()
     sqlite_vss_path = _expand_path(merged.get("sqlite_vss_path"))
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
+    local_control_enabled = bool(merged.get("local_control_enabled", False))
+    local_control_require_approval = bool(merged.get("local_control_require_approval", True))
+    local_control_allowed_applications = _ensure_list(
+        merged.get("local_control_allowed_applications")
+    )
+    local_control_allowed_roots = _ensure_list(merged.get("local_control_allowed_roots"))
 
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
@@ -789,6 +808,7 @@ def load_settings() -> Settings:
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 3.0))
+    low_power_mode = bool(merged.get("low_power_mode", False))
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
@@ -912,6 +932,12 @@ def load_settings() -> Settings:
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
 
+        # Permissioned local computer control
+        local_control_enabled=local_control_enabled,
+        local_control_require_approval=local_control_require_approval,
+        local_control_allowed_applications=local_control_allowed_applications,
+        local_control_allowed_roots=local_control_allowed_roots,
+
         # Text-to-Speech
         tts_enabled=tts_enabled,
         tts_engine=tts_engine,
@@ -969,6 +995,7 @@ def load_settings() -> Settings:
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
+        low_power_mode=low_power_mode,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
         # Fast tier (voice intent, tool routing, quick classifications)

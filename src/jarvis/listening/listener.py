@@ -24,7 +24,12 @@ from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
-from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
+from .intent_judge import (
+    IntentJudge,
+    _is_low_power_mode_enabled,
+    create_intent_judge,
+    warm_up_chat_model,
+)
 from ..debug import debug_log
 from ..llm import get_embedding_backend
 from ..utils.location import is_location_available
@@ -1228,13 +1233,19 @@ class VoiceListener(threading.Thread):
 
         # Import reply engine
         from ..reply.engine import run_reply_engine
+        from ..daemon import query_lock
 
-        # Process the query (keep thinking tune playing during processing)
+        # Process the query (keep thinking tune playing during processing).
+        # Hold the shared voice+text query lock so a voice query and a text
+        # chat query cannot run the reply engine concurrently against the
+        # same dialogue memory. Voice blocks while a text query finishes
+        # rather than being dropped (see daemon.query_lock).
         try:
-            reply = run_reply_engine(
-                self.db, self.cfg, None, query, self.dialogue_memory,
-                language=self._last_detected_language,
-            )
+            with query_lock():
+                reply = run_reply_engine(
+                    self.db, self.cfg, None, query, self.dialogue_memory,
+                    language=self._last_detected_language,
+                )
         except Exception as e:
             # Log the error visibly - this should never happen silently
             print(f"\n  ❌ Reply engine error: {e}", flush=True)
@@ -1544,6 +1555,11 @@ class VoiceListener(threading.Thread):
         announcing "Listening!" so the ready state actually means ready.
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
+
+        if _is_low_power_mode_enabled(self.cfg):
+            print("     🌱 Low power mode: LLM warmup skipped", flush=True)
+            debug_log("low power mode enabled: skipping LLM warmup", "voice")
+            return []
 
         chat_model = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
         # Cap warmup at 60s total: the join budget is hardcoded at 60s (see
