@@ -109,6 +109,16 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: self-contained query from the model.
 - **Output**: newline-separated tool names + one-liners, merged into the allow-list for the next turn.
 
+## 8b. Local Document Index and Search Embeddings
+
+- **File**: [src/jarvis/memory/document_index.py](../src/jarvis/memory/document_index.py) — `DocumentIndex.refresh()` and `DocumentIndex.search()`, called by [src/jarvis/tools/builtin/document_search.py](../src/jarvis/tools/builtin/document_search.py).
+- **Trigger**: only when `documentSearch` is selected and both `document_search_enabled` is true and at least one configured root exists. The tool refreshes the index before each search.
+- **Model / gating**: configured embedding backend via `get_embedding_backend(cfg)`, using `cfg.embedding_model`. No embedding call is made while the feature is disabled, no roots are configured, or the index is empty.
+- **Inputs**: for indexing, bounded chunks from resolved `.txt` and `.md` files below the configured roots; for retrieval, the user's local-document query.
+- **Output**: a vector per new or changed chunk during refresh, followed by top-k cosine-distance matches mapped back to SQLite metadata. The tool returns file paths, line ranges, and fenced excerpts for the reply loop.
+- **Limits**: chunks are capped at 40 lines and 2,000 characters; search returns at most 10 chunks; each embedding uses `llm_embedding_timeout_sec`.
+- **Data flow**: local file bytes → line-aware chunk → local embedding backend → existing vector store + SQLite metadata; query → local embedding backend → cosine search → cited local excerpts. No network or cloud service is involved.
+
 ## 9. Conversation Summariser
 
 - **File**: [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py) — `generate_conversation_summary()` (~lines 350/355).

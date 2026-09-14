@@ -359,6 +359,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("low_power_mode", "Low Power Mode",
       "Reduce background LLM residency and skip LLM startup warmup",
       "features", "bool")
+    f("document_search_enabled", "Local Document Search",
+      "Search explicitly configured local text and Markdown folders",
+      "features", "bool")
+    f("document_search_paths", "Document Search Folders",
+      "Folders Jarvis may index for local document search. Only .txt and .md files are read.",
+      "features", "list")
     f("tune_enabled", "Startup Tune",
       "Play startup sound",
       "features", "bool")
