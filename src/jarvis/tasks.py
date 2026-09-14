@@ -191,6 +191,8 @@ class TaskManager:
     def _request_approval(self, task_id: str, request: dict) -> bool:
         with self._lock:
             task = self._tasks[task_id]
+            if task.status is TaskStatus.CANCELLED:
+                return False
             condition = threading.Condition(self._lock)
             self._approval_conditions[task_id] = condition
             self._approval_decisions[task_id] = None

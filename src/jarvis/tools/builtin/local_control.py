@@ -143,12 +143,13 @@ class LocalControlTool(Tool):
             if scheme not in {"http", "https"} or not parsed_url.hostname:
                 return self._blocked("only http and https URL schemes are allowed.")
             try:
-                socket.getaddrinfo(parsed_url.hostname, parsed_url.port, type=socket.SOCK_STREAM)
+                port = parsed_url.port
+                socket.getaddrinfo(parsed_url.hostname, port, type=socket.SOCK_STREAM)
             except socket.gaierror as exc:
                 return self._blocked(
                     f"DNS resolution failed for URL host '{parsed_url.hostname}': {exc}"
                 )
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 return self._blocked(
                     f"network validation failed for URL host '{parsed_url.hostname}': {exc}"
                 )
