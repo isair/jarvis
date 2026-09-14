@@ -780,7 +780,8 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
-                    quiet: bool = False) -> Optional[str]:
+                    quiet: bool = False,
+                    approval_callback=None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -1925,10 +1926,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 tool_name=_name,
                                 tool_args=_args,
                                 system_prompt=_persona_prompt,
-                                original_prompt="",
+                                original_prompt=text,
                                 redacted_text=redacted,
                                 max_retries=1,
                                 language=language,
+                                approval_callback=approval_callback,
                             )
                             if _plan_result.reply_text:
                                 _plan_text = _maybe_digest_tool_result(
@@ -2213,10 +2215,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 tool_name=tool_name,
                 tool_args=tool_args,
                 system_prompt=_persona_prompt,
-                original_prompt="",
+                original_prompt=text,
                 redacted_text=redacted,
                 max_retries=1,
                 language=language,
+                approval_callback=approval_callback,
             )
 
             # Handle stop tool - end conversation without response

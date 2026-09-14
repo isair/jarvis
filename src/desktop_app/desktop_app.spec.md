@@ -22,6 +22,7 @@ src/desktop_app/
 ├── face_widget.py       # Animated face visualization
 ├── themes.py            # Qt stylesheets and color palette
 ├── diary_dialog.py      # End-of-session diary update dialog
+├── task_centre.py       # Interactive local task queue and monitor
 ├── chat_window.py       # Text chat interface (see chat_window.spec.md)
 ├── memory_viewer.py     # Flask-based memory browser
 ├── updater.py           # Update checking logic
@@ -102,7 +103,10 @@ The central controller that manages:
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
+| **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
 | **ChatWindow** | Text chat interface alongside voice; shares one conversation with the voice path and is enabled only while the daemon is running (see `chat_window.spec.md`) |
+
+| **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
 
 Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
 
@@ -213,6 +217,20 @@ In subprocess mode, the daemon runs as a separate process. IPC is achieved via s
 - Chat IPC lines are marshalled onto the Qt main thread via `ChatIpcSignals`, then `_on_chat_ipc_line()` forwards them to `ChatWindow.process_ipc_line()`
 - When the daemon starts, stops, or a subprocess exits unexpectedly, the tray updates any open ChatWindow lifecycle banner and clears or refreshes its subprocess stdin submit function so the window never writes to a dead pipe.
 - Same UI experience as bundled mode
+
+### Task Centre
+
+The task centre is available from the tray menu and submits prompts to the
+daemon's local task service. It displays queued, running, completed, failed,
+and cancelled tasks with their result or error. In bundled mode it calls the
+daemon service directly. In source mode it sends `TASK:` commands over the
+existing daemon stdin pipe and consumes `__TASK__:` JSON events from the log
+stream. The task centre does not create a second LLM or tool path. When localControl
+reaches a task, it renders the task as `Awaiting Approval` with the exact action
+summary and risk reason, and provides explicit Approve and Reject controls.
+Those controls use the existing bundled callback or `TASK:` stdin channel and
+the task remains auditable through its queued, running, pending-approval, and
+final progress events. Voice-triggered actions never use these controls.
 
 ## Theme System
 

@@ -121,6 +121,12 @@ class Settings:
     # Screen Capture
     allowlist_bundles: list[str]
 
+    # Permissioned local computer control
+    local_control_enabled: bool
+    local_control_require_approval: bool
+    local_control_allowed_applications: list[str]
+    local_control_allowed_roots: list[str]
+
     # Text-to-Speech
     tts_enabled: bool
     tts_engine: str  # "piper" (default) or "chatterbox"
@@ -512,6 +518,11 @@ def get_default_config() -> Dict[str, Any]:
             "com.jetbrains.intellij",
         ],
 
+        # Permissioned local computer control. Disabled and deny-listed by default.
+        "local_control_enabled": False,
+        "local_control_require_approval": True,
+        "local_control_allowed_applications": [],
+        "local_control_allowed_roots": [],
 
         # Text-to-Speech
         "tts_enabled": True,
@@ -694,6 +705,12 @@ def load_settings() -> Settings:
     db_path = _expand_path(merged.get("db_path")) or _default_db_path()
     sqlite_vss_path = _expand_path(merged.get("sqlite_vss_path"))
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
+    local_control_enabled = bool(merged.get("local_control_enabled", False))
+    local_control_require_approval = bool(merged.get("local_control_require_approval", True))
+    local_control_allowed_applications = _ensure_list(
+        merged.get("local_control_allowed_applications")
+    )
+    local_control_allowed_roots = _ensure_list(merged.get("local_control_allowed_roots"))
 
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
@@ -914,6 +931,12 @@ def load_settings() -> Settings:
 
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
+
+        # Permissioned local computer control
+        local_control_enabled=local_control_enabled,
+        local_control_require_approval=local_control_require_approval,
+        local_control_allowed_applications=local_control_allowed_applications,
+        local_control_allowed_roots=local_control_allowed_roots,
 
         # Text-to-Speech
         tts_enabled=tts_enabled,
