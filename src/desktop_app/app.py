@@ -1264,6 +1264,13 @@ class JarvisSystemTray:
         self.log_signals = LogSignals()
         self.log_signals.new_log.connect(self.log_viewer.append_log)
 
+        from desktop_app.task_centre import TaskCentreWindow
+        self.task_centre = TaskCentreWindow(
+            submit_callback=self.submit_task,
+            cancel_callback=self.cancel_task,
+        )
+        self.log_signals.new_log.connect(self.task_centre.process_log_line)
+
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
@@ -1362,6 +1369,11 @@ class JarvisSystemTray:
         self.logs_action = QAction("📝 View Logs")
         self.logs_action.triggered.connect(self.show_log_viewer)
         self.menu.addAction(self.logs_action)
+
+        # Task centre action
+        self.tasks_action = QAction("🧭 Task Centre")
+        self.tasks_action.triggered.connect(self.show_task_centre)
+        self.menu.addAction(self.tasks_action)
 
         # Memory viewer action
         self.memory_action = QAction("🧠 Memory Viewer")
@@ -1612,6 +1624,40 @@ class JarvisSystemTray:
         self.log_viewer.raise_()
         self.log_viewer.activateWindow()
 
+    def show_task_centre(self) -> None:
+        """Show the interactive task centre."""
+        self.task_centre.show()
+        self.task_centre.raise_()
+        self.task_centre.activateWindow()
+
+    def submit_task(self, prompt: str):
+        """Submit a prompt to the in-process or subprocess daemon."""
+        if self.is_bundled:
+            from jarvis.daemon import submit_task
+            return submit_task(prompt)
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before submitting a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt}, ensure_ascii=False)}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return None
+
+    def cancel_task(self, task_id: str):
+        """Cancel a prompt in the in-process or subprocess daemon."""
+        if self.is_bundled:
+            from jarvis.daemon import cancel_task
+            return cancel_task(task_id)
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before cancelling a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps({'action': 'cancel', 'id': task_id})}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return True
+
     def show_memory_viewer(self) -> None:
         """Show the memory viewer window and bring it to front."""
         self.memory_viewer.show()
@@ -1853,6 +1899,7 @@ class JarvisSystemTray:
                     env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
                 else:
                     env["PYTHONPATH"] = str(src_path)
+                env["JARVIS_TASK_IPC"] = "1"
 
                 # Use creationflags to prevent console window popup on Windows
                 # CREATE_NEW_PROCESS_GROUP is needed for CTRL_BREAK_EVENT to work
@@ -2912,4 +2959,3 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     sys.exit(main())
-

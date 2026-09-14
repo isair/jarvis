@@ -22,6 +22,7 @@ src/desktop_app/
 ├── face_widget.py       # Animated face visualization
 ├── themes.py            # Qt stylesheets and color palette
 ├── diary_dialog.py      # End-of-session diary update dialog
+├── task_centre.py       # Interactive local task queue and monitor
 ├── memory_viewer.py     # Flask-based memory browser
 ├── updater.py           # Update checking logic
 ├── update_dialog.py     # Update notification dialogs
@@ -100,6 +101,7 @@ The central controller that manages:
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
+| **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
 
 ### Tray Menu: GPU Library Recovery (Windows)
 
@@ -183,6 +185,15 @@ In subprocess mode, the daemon runs as a separate process. IPC is achieved via s
 - Desktop app intercepts these lines from the log stream
 - DiaryUpdateDialog's `process_log_line()` parses and emits signals
 - Same UI experience as bundled mode
+
+### Task Centre
+
+The task centre is available from the tray menu and submits prompts to the
+daemon's local task service. It displays queued, running, completed, failed,
+and cancelled tasks with their result or error. In bundled mode it calls the
+daemon service directly. In source mode it sends `TASK:` commands over the
+existing daemon stdin pipe and consumes `__TASK__:` JSON events from the log
+stream. The task centre does not create a second LLM or tool path.
 
 ## Theme System
 
