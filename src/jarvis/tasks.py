@@ -134,6 +134,19 @@ class TaskManager:
         raise TimeoutError("Timed out waiting for task queue")
 
     def shutdown(self, wait: bool = True) -> None:
+        with self._lock:
+            for task_id, task in self._tasks.items():
+                if task.status in {
+                    TaskStatus.QUEUED, TaskStatus.RUNNING,
+                    TaskStatus.PENDING_APPROVAL,
+                }:
+                    task.status = TaskStatus.CANCELLED
+                    task.completed_at = time.time()
+                    self._approval_decisions[task_id] = False
+                    condition = self._approval_conditions.get(task_id)
+                    if condition is not None:
+                        condition.notify_all()
+                    self._emit(task)
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
     def _run(self, task_id: str) -> None:
