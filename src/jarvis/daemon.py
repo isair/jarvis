@@ -164,6 +164,24 @@ def cancel_task(task_id: str) -> bool:
     return _global_task_manager.cancel(task_id)
 
 
+def handle_task_stdin_line(line: str) -> bool:
+    """Handle one desktop task command in subprocess mode."""
+    if not line.startswith("TASK:"):
+        return False
+    try:
+        command = json.loads(line[5:])
+        action = command.get("action")
+        if action == "submit":
+            submit_task(str(command.get("prompt", "")))
+        elif action == "cancel":
+            cancel_task(str(command.get("id", "")))
+        else:
+            debug_log(f"unknown task command action: {action}", "tasks")
+    except Exception as exc:
+        debug_log(f"invalid task command: {exc}", "tasks")
+    return True
+
+
 def _emit_task_event(event: dict) -> None:
     print(f"__TASK__:{json.dumps(event, ensure_ascii=False)}", flush=True)
 
@@ -652,16 +670,20 @@ def main(smoke_test: bool = False) -> None:
                     debug_log("SHUTDOWN command received, requesting stop", "jarvis")
                     _global_stop_requested = True
                     break
-                if line.startswith("TASK:"):
-                    try:
-                        command = json.loads(line[5:])
-                        action = command.get("action")
-                        if action == "submit":
-                            submit_task(str(command.get("prompt", "")))
-                        elif action == "cancel":
-                            cancel_task(str(command.get("id", "")))
-                    except Exception as exc:
-                        debug_log(f"invalid task command: {exc}", "tasks")
+                if handle_task_stdin_line(stripped):
+                    continue
+                # Chat query-in (subprocess mode). Returns False for any other
+                # line, which we silently ignore.
+                if handle_chat_cancel_stdin_line(stripped):
+                    continue
+                if handle_chat_new_session_stdin_line(stripped):
+                    continue
+                if handle_chat_rewind_stdin_line(stripped):
+                    continue
+                if handle_chat_restore_stdin_line(stripped):
+                    continue
+                if stripped.startswith(CHAT_QUERY_IPC_PREFIX):
+                    handle_chat_query_stdin_line(stripped)
         except Exception:
             pass  # stdin might not be available
 
