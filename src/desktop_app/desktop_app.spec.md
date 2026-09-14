@@ -101,7 +101,7 @@ The central controller that manages:
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
-| **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
+| **TaskCentreWindow** | Submit, schedule, monitor, cancel, and reschedule prompts executed by the local task service |
 
 ### Tray Menu: GPU Library Recovery (Windows)
 
@@ -190,15 +190,17 @@ In subprocess mode, the daemon runs as a separate process. IPC is achieved via s
 
 The task centre is available from the tray menu and submits prompts to the
 daemon's local task service. It displays queued, running, completed, failed,
-and cancelled tasks with their result or error. In bundled mode it calls the
-daemon service directly. In source mode it sends `TASK:` commands over the
-existing daemon stdin pipe and consumes `__TASK__:` JSON events from the log
-stream. The task centre does not create a second LLM or tool path. When localControl
-reaches a task, it renders the task as `Awaiting Approval` with the exact action
-summary and risk reason, and provides explicit Approve and Reject controls.
-Those controls use the existing bundled callback or `TASK:` stdin channel and
-the task remains auditable through its queued, running, pending-approval, and
-final progress events. Voice-triggered actions never use these controls.
+scheduled, and cancelled tasks with their result, error, or next-run time. A
+scheduled task can be cancelled or rescheduled before it fires. In bundled
+mode it calls the daemon service directly. In source mode it sends `TASK:`
+commands over the existing daemon stdin pipe and consumes `__TASK__:` JSON
+events from the log stream. The task centre does not create a second LLM or
+tool path. When localControl reaches a task, it renders the task as `Awaiting
+Approval` with the exact action summary and risk reason, and provides explicit
+Approve and Reject controls. Those controls use the existing bundled callback
+or `TASK:` stdin channel and the task remains auditable through its scheduled,
+queued, running, pending-approval, and final progress events. Voice-triggered
+actions never use these controls.
 
 ## Theme System
 

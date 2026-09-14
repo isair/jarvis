@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
+    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
+    QInputDialog,
 )
 
 from desktop_app.themes import JARVIS_THEME_STYLESHEET
@@ -39,6 +43,7 @@ class TaskCentreWindow(QDialog):
         cancel_callback: Callable[[str], object],
         approve_callback: Callable[[str], object],
         reject_callback: Callable[[str], object],
+        reschedule_callback: Optional[Callable[[str, float, Optional[str]], object]] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -49,6 +54,7 @@ class TaskCentreWindow(QDialog):
         self._cancel_callback = cancel_callback
         self._approve_callback = approve_callback
         self._reject_callback = reject_callback
+        self._reschedule_callback = reschedule_callback
         self._tasks: dict[str, dict] = {}
 
         layout = QVBoxLayout(self)
@@ -74,6 +80,14 @@ class TaskCentreWindow(QDialog):
         self.prompt.setPlaceholderText("Describe what Jarvis should do…")
         self.prompt.setFixedHeight(78)
         input_row.addWidget(self.prompt, 1)
+        self.schedule_input = QLineEdit()
+        self.schedule_input.setPlaceholderText("Optional Unix timestamp")
+        input_row.addWidget(self.schedule_input)
+        self.recurrence = QComboBox()
+        self.recurrence.addItem("One-off", None)
+        self.recurrence.addItem("Daily", "daily")
+        self.recurrence.addItem("Weekly", "weekly")
+        input_row.addWidget(self.recurrence)
         self.submit_button = QPushButton("🚀 Run Task")
         self.submit_button.setObjectName("primary")
         self.submit_button.clicked.connect(self._submit)
@@ -91,6 +105,9 @@ class TaskCentreWindow(QDialog):
         self.reject_button = QPushButton("🚫 Reject")
         self.reject_button.clicked.connect(self._reject_selected)
         actions.addWidget(self.reject_button)
+        self.reschedule_button = QPushButton("🕒 Reschedule")
+        self.reschedule_button.clicked.connect(self._reschedule_selected)
+        actions.addWidget(self.reschedule_button)
         actions.addStretch()
         layout.addLayout(actions)
 
@@ -129,12 +146,23 @@ class TaskCentreWindow(QDialog):
         if not prompt:
             self.details.setText("⚠️ Enter a task before running it.")
             return
+        run_at = None
+        schedule_text = self.schedule_input.text().strip()
+        if schedule_text:
+            try:
+                run_at = float(schedule_text)
+            except ValueError:
+                self.details.setText("⚠️ Schedule time must be a Unix timestamp.")
+                return
+        recurrence = self.recurrence.currentData()
         try:
-            self._submit_callback(prompt)
+            self._submit_callback(prompt, run_at=run_at, recurrence=recurrence)
         except Exception as exc:
             self.details.setText(f"❌ Could not queue task: {exc}")
             return
         self.prompt.clear()
+        self.schedule_input.clear()
+        self.recurrence.setCurrentIndex(0)
 
     def _cancel_selected(self) -> None:
         item = self.task_list.currentItem()
@@ -151,6 +179,24 @@ class TaskCentreWindow(QDialog):
 
     def _reject_selected(self) -> None:
         self._decide_selected(self._reject_callback, "reject")
+
+    def _reschedule_selected(self) -> None:
+        if self._reschedule_callback is None:
+            return
+        item = self.task_list.currentItem()
+        if item is None:
+            return
+        run_at, accepted = QInputDialog.getDouble(
+            self, "🕒 Reschedule Task", "Unix timestamp:", min=0
+        )
+        if not accepted:
+            return
+        task_id = str(item.data(Qt.ItemDataRole.UserRole))
+        try:
+            if not self._reschedule_callback(task_id, run_at, None):
+                self.details.setText("⚠️ Could not reschedule this task.")
+        except Exception as exc:
+            self.details.setText(f"❌ Could not reschedule task: {exc}")
 
     def _decide_selected(self, callback, action: str) -> None:
         item = self.task_list.currentItem()
@@ -181,6 +227,12 @@ class TaskCentreWindow(QDialog):
         self.approve_button.setEnabled(pending)
         self.reject_button.setEnabled(pending)
         text = f"{status}\n\n{task.get('prompt', '')}"
+        next_run = task.get("next_run_at")
+        if next_run is not None:
+            formatted = datetime.fromtimestamp(float(next_run)).isoformat(
+                sep=" ", timespec="seconds"
+            )
+            text += f"\n\n🕒 Next run: {formatted}"
         if task.get("status") == "pending_approval":
             text += (
                 f"\n\n⚠️ Action: {task.get('action_summary', 'Local action')}"

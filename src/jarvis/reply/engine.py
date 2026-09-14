@@ -781,7 +781,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
                     quiet: bool = False,
-                    approval_callback=None) -> Optional[str]:
+                    approval_callback=None,
+                    cancel_event=None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -1823,6 +1824,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
 
     while turn < max_turns:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)

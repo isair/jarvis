@@ -150,11 +150,15 @@ def get_dictation_engine():
     return _global_dictation_engine
 
 
-def submit_task(prompt: str) -> str:
+def submit_task(
+    prompt: str,
+    run_at: Optional[float] = None,
+    recurrence: Optional[str] = None,
+) -> str:
     """Submit a prompt from an interactive desktop client."""
     if _global_task_manager is None:
         raise RuntimeError("Task service is not ready")
-    return _global_task_manager.submit(prompt)
+    return _global_task_manager.submit(prompt, run_at=run_at, recurrence=recurrence)
 
 
 def cancel_task(task_id: str) -> bool:
@@ -162,6 +166,26 @@ def cancel_task(task_id: str) -> bool:
     if _global_task_manager is None:
         return False
     return _global_task_manager.cancel(task_id)
+
+
+def reschedule_task(
+    task_id: str, run_at: float, recurrence: Optional[str] = None
+) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.reschedule(task_id, run_at, recurrence)
+
+
+def approve_task(task_id: str) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.approve(task_id)
+
+
+def reject_task(task_id: str) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.reject(task_id)
 
 
 def handle_task_stdin_line(line: str) -> bool:
@@ -172,9 +196,23 @@ def handle_task_stdin_line(line: str) -> bool:
         command = json.loads(line[5:])
         action = command.get("action")
         if action == "submit":
-            submit_task(str(command.get("prompt", "")))
+            submit_task(
+                str(command.get("prompt", "")),
+                run_at=command.get("run_at"),
+                recurrence=command.get("recurrence"),
+            )
         elif action == "cancel":
             cancel_task(str(command.get("id", "")))
+        elif action == "reschedule":
+            reschedule_task(
+                str(command.get("id", "")),
+                float(command.get("run_at")),
+                command.get("recurrence"),
+            )
+        elif action == "approve":
+            approve_task(str(command.get("id", "")))
+        elif action == "reject":
+            reject_task(str(command.get("id", "")))
         else:
             debug_log(f"unknown task command action: {action}", "tasks")
     except Exception as exc:

@@ -169,7 +169,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Knowledge Graph Memory** - Self-organising memory that learns from conversations, auto-splits by topic, and surfaces relevant knowledge automatically
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
-- **Task Centre** - Queue prompts from the desktop tray, monitor progress and results across daemon restarts, and cooperatively cancel work without leaving the local app
+- **Task Centre** - Queue or schedule local prompts from the desktop tray, monitor progress and next runs across daemon restarts, and cancel or reschedule work without leaving the local app
 - **MCP Integration** - Connect to thousands of external tools (Home Assistant, GitHub, Slack, etc.)
 
 ## System Requirements

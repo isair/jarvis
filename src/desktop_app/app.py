@@ -1270,6 +1270,7 @@ class JarvisSystemTray:
             cancel_callback=self.cancel_task,
             approve_callback=self.approve_task,
             reject_callback=self.reject_task,
+            reschedule_callback=self.reschedule_task,
         )
         self.log_signals.new_log.connect(self.task_centre.process_log_line)
 
@@ -1632,16 +1633,16 @@ class JarvisSystemTray:
         self.task_centre.raise_()
         self.task_centre.activateWindow()
 
-    def submit_task(self, prompt: str):
+    def submit_task(self, prompt: str, run_at=None, recurrence=None):
         """Submit a prompt to the in-process or subprocess daemon."""
         if self.is_bundled:
             from jarvis.daemon import submit_task
-            return submit_task(prompt)
+            return submit_task(prompt, run_at=run_at, recurrence=recurrence)
         if self.daemon_process is None or self.daemon_process.stdin is None:
             raise RuntimeError("Start Jarvis before submitting a task")
         import json
         self.daemon_process.stdin.write(
-            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt}, ensure_ascii=False)}\n"
+            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt, 'run_at': run_at, 'recurrence': recurrence}, ensure_ascii=False)}\n"
         )
         self.daemon_process.stdin.flush()
         return None
@@ -1659,6 +1660,17 @@ class JarvisSystemTray:
         )
         self.daemon_process.stdin.flush()
         return True
+
+    def reschedule_task(self, task_id: str, run_at: float, recurrence=None):
+        if self.is_bundled:
+            from jarvis.daemon import reschedule_task
+            return reschedule_task(task_id, run_at, recurrence)
+        return self._send_task_command({
+            "action": "reschedule",
+            "id": task_id,
+            "run_at": run_at,
+            "recurrence": recurrence,
+        })
 
     def approve_task(self, task_id: str):
         """Approve a pending local action in the task centre."""

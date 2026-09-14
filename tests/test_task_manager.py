@@ -2,10 +2,21 @@
 
 from types import SimpleNamespace
 from threading import Event
+import time
 from unittest.mock import patch
 
 from jarvis.memory.db import Database
 from jarvis.tasks import TaskManager, TaskStatus
+
+
+def _wait_for_status(manager, task_id, status, timeout=2):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        task = manager.get(task_id)
+        if task is not None and task.status is status:
+            return task
+        time.sleep(0.01)
+    raise AssertionError(f"task did not reach {status.value}")
 
 
 def test_task_runs_reply_engine_and_reports_completion():
@@ -122,3 +133,132 @@ def test_tasks_restore_from_local_database_without_persisting_secrets(tmp_path):
     assert "[REDACTED]" in task.prompt
     restored.shutdown()
     restored_db.close()
+
+
+def test_future_schedule_keeps_task_out_of_execution_until_due():
+    started = Event()
+    manager = TaskManager(
+        db=object(),
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+
+    with patch("jarvis.tasks.run_reply_engine", side_effect=lambda *_args, **_kwargs: started.set() or "Done"):
+        task_id = manager.submit("later", run_at=time.time() + 0.15)
+        time.sleep(0.05)
+        task = manager.get(task_id)
+        assert task is not None
+        assert task.status is TaskStatus.SCHEDULED
+        assert not started.is_set()
+        _wait_for_status(manager, task_id, TaskStatus.COMPLETED)
+    manager.shutdown()
+
+
+def test_due_schedule_enters_approval_flow_before_completion():
+    manager = TaskManager(
+        db=object(),
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+
+    def reply(*_args, **kwargs):
+        approved = kwargs["approval_callback"]({"summary": "Open app", "reason": "needed"})
+        return "Done" if approved else "Rejected"
+
+    with patch("jarvis.tasks.run_reply_engine", side_effect=reply):
+        task_id = manager.submit("open app later", run_at=time.time() - 1)
+        _wait_for_status(manager, task_id, TaskStatus.PENDING_APPROVAL)
+        assert manager.approve(task_id) is True
+        _wait_for_status(manager, task_id, TaskStatus.COMPLETED)
+    manager.shutdown()
+
+
+def test_cancelling_scheduled_task_prevents_execution():
+    manager = TaskManager(
+        db=object(),
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+    with patch("jarvis.tasks.run_reply_engine") as reply:
+        task_id = manager.submit("do not run", run_at=time.time() + 0.1)
+        assert manager.cancel(task_id) is True
+        time.sleep(0.2)
+        assert manager.get(task_id).status is TaskStatus.CANCELLED
+        reply.assert_not_called()
+    manager.shutdown()
+
+
+def test_rescheduling_scheduled_task_changes_due_time():
+    manager = TaskManager(
+        db=object(),
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+    with patch("jarvis.tasks.run_reply_engine", return_value="Done"):
+        task_id = manager.submit("move me", run_at=time.time() + 10)
+        assert manager.reschedule(task_id, time.time() - 1) is True
+        _wait_for_status(manager, task_id, TaskStatus.COMPLETED)
+    manager.shutdown()
+
+
+def test_recurring_schedule_returns_to_scheduled_for_next_occurrence():
+    manager = TaskManager(
+        db=object(),
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+    with patch("jarvis.tasks.run_reply_engine", return_value="Done"):
+        task_id = manager.submit(
+            "daily report", run_at=time.time() - 1, recurrence="daily"
+        )
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            task = manager.get(task_id)
+            if (
+                task is not None
+                and task.status is TaskStatus.SCHEDULED
+                and task.next_run_at > time.time()
+            ):
+                break
+            time.sleep(0.01)
+    task = manager.get(task_id)
+    assert task.recurrence == "daily"
+    assert task.next_run_at > time.time()
+    manager.shutdown()
+
+
+def test_overdue_persisted_schedule_fires_after_restart():
+    records = {}
+
+    class PersistedDB:
+        def upsert_task_record(self, record):
+            records[record["id"]] = dict(record)
+
+        def get_task_records(self):
+            return list(records.values())
+
+    db = PersistedDB()
+    first = TaskManager(
+        db=db,
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+    task_id = first.submit("missed task", run_at=time.time() - 10)
+    first.shutdown()
+
+    restored = TaskManager(
+        db=db,
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        poll_interval=0.01,
+    )
+    with patch("jarvis.tasks.run_reply_engine", return_value="Recovered"):
+        _wait_for_status(restored, task_id, TaskStatus.COMPLETED)
+    assert restored.get(task_id).result == "Recovered"
+    restored.shutdown()
