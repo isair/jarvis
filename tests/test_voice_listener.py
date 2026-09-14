@@ -940,24 +940,31 @@ class TestCrossPlatformAudioHealthWarning:
                             listener._audio_q.get = fake_get
                             listener._callback_count = 0
 
-                            # time.time() is called first for _audio_start_time (baseline),
-                            # then in the loop for the health check (needs to be 6s later)
+                            # time.time() is called for the LLM-warmup baseline,
+                            # then for _audio_start_time (both baselines), then in
+                            # the loop for the health check (needs to be 6s later)
                             _base = time.time()
                             time_calls = [0]
 
                             def advancing_time():
                                 time_calls[0] += 1
-                                # First call sets _audio_start_time baseline
-                                if time_calls[0] == 1:
+                                # First two calls set baselines (LLM warmup + audio start)
+                                if time_calls[0] <= 2:
                                     return _base
-                                # Subsequent calls return 6s later
                                 return _base + 6
 
                             with patch("jarvis.listening.listener.time") as mock_time:
                                 mock_time.time.side_effect = advancing_time
                                 mock_time.sleep = time.sleep
 
-                                listener.run()
+                                # No LLM warmup threads: keeps time.time() call
+                                # counting deterministic (the warmup join would
+                                # consume mock values racy in a full-suite run).
+                                with patch(
+                                    "jarvis.listening.listener.VoiceListener._start_llm_warmup",
+                                    return_value=[],
+                                ):
+                                    listener.run()
 
                             captured = capsys.readouterr()
                             assert "No audio received after 5 seconds" in captured.out
@@ -1551,6 +1558,7 @@ def _make_listener_for_warmup(
     judge_model: str | None = "gemma4:e2b",
     embed_model: str = "",
     base_url: str = "http://127.0.0.1:11434",
+    low_power_mode: bool = False,
 ):
     """Construct a VoiceListener with enough stubs to exercise warmup only."""
     with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
@@ -1572,6 +1580,7 @@ def _make_listener_for_warmup(
                 mock_cfg.fast_model = judge_model or ""
                 mock_cfg.intent_judge_timeout_sec = 10.0
                 mock_cfg.intent_judge_thinking_enabled = False
+                mock_cfg.low_power_mode = low_power_mode
                 mock_cfg.wake_word = "jarvis"
                 mock_cfg.wake_aliases = []
 
@@ -1771,6 +1780,25 @@ class TestLlmWarmup:
                 t.join(timeout=2.0)
 
         assert listener._llm_warmup_results["embed"] == ("nomic-embed-text", False)
+
+    def test_low_power_mode_skips_llm_warmup(self):
+        """Low-power sessions do not pre-load LLMs at listener startup."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1",
+            judge_model="gemma4:e2b",
+            low_power_mode=True,
+        )
+        with patch(
+            "jarvis.listening.listener.warm_up_chat_model", return_value=True
+        ) as chat_warm, patch(
+            "jarvis.listening.intent_judge.warm_up_chat_model", return_value=True
+        ) as judge_warm:
+            threads = listener._start_llm_warmup()
+
+        assert threads == []
+        assert listener._llm_warmup_results == {}
+        chat_warm.assert_not_called()
+        judge_warm.assert_not_called()
 
 
 class TestWhisperWarmup:

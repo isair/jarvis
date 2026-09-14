@@ -98,7 +98,8 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 ## Threading
 
-- All wizard worker threads inherit `_KeepAliveWorker(QThread)`, which keeps
+- All wizard worker threads inherit `KeepAliveWorker(QThread)` (shared with
+  the desktop app via `desktop_app/qt_worker.py`), which keeps
   each started worker referenced in a class-level registry until its OS
   thread has fully finished (released via the built-in `finished` signal).
   Pages rebind their worker attribute inside completion slots (install

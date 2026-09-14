@@ -35,7 +35,6 @@
 **📊 Transparent progress** - We track what works (and what doesn't) with automated evals. [See current accuracy →](EVALS.md)
 
 **🚧 Known limitations:** Jarvis is under active development. Primary development happens on macOS. Windows/Linux support may lag behind. We're building in the open, [issues](https://github.com/isair/jarvis/issues) and [contributions](https://github.com/isair/jarvis/pulls) welcome!
-- Voice-only for now—no text chat interface yet ([#35](https://github.com/isair/jarvis/issues/35))
 - No mobile apps ([#17](https://github.com/isair/jarvis/issues/17))
 - "Stop" commands during speech sometimes get filtered as echo ([#24](https://github.com/isair/jarvis/issues/24))
 - Dictation is not available on macOS 26+ (Tahoe) due to a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172))
@@ -162,10 +161,11 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 ## Features
 
 - **Conversational Awareness** - Understands ongoing discussions. Ask "Jarvis, what do you think?" and it knows what you're talking about. Works naturally in multi-person conversations.
+- **Text Chat** - Type to Jarvis alongside voice. Voice and text share one conversation, so a follow-up typed in the chat window continues a voice discussion. Text never speaks. Open it from the tray menu (`💬 Chat`) while Jarvis is listening. The window is styled like an SMS thread with a single contact: speech bubbles, timestamps, and an online/typing presence line. It shows a local status banner while Jarvis starts, stops, or needs to be restarted, and every message you send carries a rewind button that rolls the conversation back to that point and regenerates the reply.
 - **Unlimited Memory** - Never forgets. Searches across all your conversation history. Memory Viewer GUI included.
 - **Adaptive Tone** - Automatically surgical for code, pragmatic for business, encouraging for wellbeing — no manual mode switching
 - **Smart Tool Selection** - Embedding-based relevance filtering picks only the tools needed per query — add unlimited MCP tools without performance degradation
-- **Built-in Tools** - Screenshot OCR, web search (DuckDuckGo → Brave → Wikipedia fallback chain with auto-fetch), weather, file access, nutrition tracking, location awareness, plus a tool-discovery escape hatch the agent uses to widen its own toolset mid-reply
+- **Built-in Tools** - Screenshot OCR, web search (DuckDuckGo → Brave → Wikipedia fallback chain with auto-fetch), weather, current time in any city or timezone, file access, nutrition tracking, location awareness, plus a tool-discovery escape hatch the agent uses to widen its own toolset mid-reply
 - **Knowledge Graph Memory** - Self-organising memory that learns from conversations, auto-splits by topic, and surfaces relevant knowledge automatically
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
@@ -179,7 +179,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 | Low-VRAM / CPU | 2GB+ | `qwen3.5:0.8b` |
 | Most users | 8GB+ | `gemma4:e2b` (default) |
 | Better quality | 16GB+ | `gemma4:e4b` |
-| High-end | 24GB+ | `gpt-oss:20b` |
+| High-end | 24GB+ | `qwen3.8:27b` |
 
 > **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
 
@@ -239,6 +239,26 @@ For reference, the underlying config keys are:
 ```
 
 Leave `embedding_provider` empty to use the same provider as chat. With no working embeddings, memory search degrades gracefully to keyword search.
+
+</details>
+
+<details>
+<summary><strong>Power and Startup</strong></summary>
+
+Jarvis favours fast first responses by default: it warms Whisper, the chat
+model, and the intent judge before announcing that it is listening. On Macs or
+laptops where heat and battery matter more than instant first-token latency,
+enable **⚙️ Settings → ✨ Features → Low Power Mode**.
+
+```json
+{
+  "low_power_mode": true
+}
+```
+
+Low Power Mode skips LLM startup warmup and shortens Ollama model residency for
+the intent judge from 30 minutes to 1 minute. Whisper still warms so voice input
+is ready. The first LLM-backed request after startup or idle may be slower.
 
 </details>
 
@@ -551,11 +571,17 @@ Get API key at [composio.dev](https://composio.dev)
 <details>
 <summary><strong>Common issues</strong></summary>
 
-**First startup takes a bit** - Jarvis pre-warms the Whisper, chat, and intent-judge models before announcing "Listening!" so the first engagement feels instant. This adds a few seconds on cold start and is bounded at 60 s — if Ollama is slow, Jarvis will start listening anyway and load the models on demand.
+**First startup takes a bit** - Jarvis pre-warms the Whisper, chat, and intent-judge models before announcing "Listening!" so the first engagement feels instant. This adds a few seconds on cold start and is bounded at 60 s. If Ollama is slow, Jarvis will start listening anyway and load the models on demand. Enable **Low Power Mode** in Settings to skip LLM startup warmup.
 
 **Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
 
+**Not sure what is running** - Open the tray menu and click **🩺 Runtime Status**. It shows whether Jarvis is listening, whether Low Power Mode is active, whether Ollama is needed/running, which models are configured, and how many MCP servers are enabled.
+
 **Responses are slow** - Ensure you have enough VRAM (8GB+ for default model; see System Requirements for other models)
+
+**Mac gets warm while Jarvis is active** - Enable **⚙️ Settings → ✨ Features → Low Power Mode**. This keeps voice recognition ready while avoiding background LLM warmup and shortening Ollama's idle residency window.
+
+**Mac is still warm after quitting** - If Jarvis starts Ollama for you, quitting Jarvis also stops that owned Ollama runtime. If Ollama was already running before Jarvis opened, Jarvis leaves it running so it does not interrupt your other local AI tools.
 
 **Windows: App won't start** - Extract full zip first, check Windows Defender
 

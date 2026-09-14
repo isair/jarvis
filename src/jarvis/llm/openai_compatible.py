@@ -391,7 +391,12 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return []
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Warm up the model by sending a minimal inference request.
 
         Phase 1 (reachability check): calls ``GET /models`` to confirm
@@ -403,7 +408,12 @@ class OpenAICompatibleBackend(LLMBackend):
         memory. Without this, an OpenAI-compatible server may leave the
         model cold until the first real request, incurring latency on the
         user's first query. This mirrors what ``OllamaBackend.warm_up()``
-        does with ``POST /api/generate``.
+        does.
+
+        ``keep_alive`` is accepted for signature parity with
+        ``OllamaBackend.warm_up`` but ignored: OpenAI-compatible servers
+        manage model residency at server load time and have no per-call
+        keep-alive knob.
 
         Best-effort: errors are swallowed; ``False`` is returned when the
         server is unreachable, the model name is missing, or the inference

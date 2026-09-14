@@ -148,7 +148,12 @@ class LLMBackend(ABC):
         available locally. Returns an empty list on error or when the
         runtime exposes no listing endpoint."""
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Page ``model`` into the runtime's resident memory ahead of the
         first real request. Default implementation is a no-op suitable for
         runtimes without per-call model unloading (OpenAI-compatible servers

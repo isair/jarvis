@@ -356,6 +356,9 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Use Wikipedia as a last-resort source when other search engines fail. "
       "No key, no account, privacy-light.",
       "features", "bool")
+    f("low_power_mode", "Low Power Mode",
+      "Reduce background LLM residency and skip LLM startup warmup",
+      "features", "bool")
     f("tune_enabled", "Startup Tune",
       "Play startup sound",
       "features", "bool")

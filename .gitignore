@@ -10,6 +10,10 @@ tests/performance/reports/
 !.claude/launch.json
 !.claude/skills/
 
+# Local agent persona / skill config (not part of the project)
+.agents/
+AGENTS.md
+
 # Release artifacts
 release_output.log
 node_modules/

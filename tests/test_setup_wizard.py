@@ -1096,7 +1096,7 @@ class TestModelOptions:
         """Model options include both recommended and lightweight options."""
         from desktop_app.setup_wizard import ModelsPage
 
-        assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
+        assert "qwen3.8:27b" in ModelsPage.MODEL_OPTIONS
         assert DEFAULT_CHAT_MODEL in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):

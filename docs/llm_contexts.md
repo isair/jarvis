@@ -22,6 +22,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Tool results from prior turns (raw or digested — see #5)
 - **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the tool orchestrator and TTS pipeline. Natural-language content is delivered immediately; no post-turn evaluator runs.
 - **Limits**: `num_ctx: 8192` (explicit). Timeout `llm_chat_timeout_sec` (45s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session. Risk: `fetch_web_page` truncates at 50,000 chars (~37k tokens) — mitigated for SMALL models by tool-result digest (#5) which compresses the payload before it enters the messages history. LARGE models receive the raw payload and may silently see a truncated context.
+- **Text-chat entry**: The desktop `ChatWindow` (see `src/desktop_app/chat_window.spec.md`) submits via `jarvis.daemon.submit_text_query`, which calls this same context on a worker thread with `tts=None` and `language=None` (no Whisper-detected language for typed input). Voice and text share the global `DialogueMemory` so they are one conversation. No new LLM context is introduced — the planner, router, enrichment, and digests all run unchanged. Text chat never speaks; the reply is returned to the UI via callbacks (bundled) or `__CHAT__:` IPC events (subprocess).
 
 ## 2. Intent Judge
 
@@ -35,7 +36,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine. When `content` is empty **or truncated mid-JSON** (reasoning models count thinking tokens against the generation cap), the judge also recovers the JSON answer from `reasoning_content` — reasoning models typically end their thinking with the full structured answer.
-- **Limits**: `intent_judge_timeout_sec` (6s). `num_ctx: 8192` (explicit). `max_tokens: 1500` (canonical cap — covers reasoning + answer on reasoning models; OpenAI-compatible backends get it at the payload root; Ollama maps it to `num_predict`).
+- **Limits**: `intent_judge_timeout_sec` (6s). `num_ctx: 8192` (explicit; the system prompt is ~2k tokens and the rolling transcript buffer at default `transcript_buffer_duration_sec=120` can reach ~1.5k tokens in chatty multi-speaker scenes; the larger window gives the few-shot examples and TRANSCRIPT NOISE block at the tail of the prompt enough headroom on Ollama). `max_tokens: 1500` (canonical cap — covers reasoning + answer on reasoning models; OpenAI-compatible backends get it at the payload root; Ollama maps it to `num_predict`). Ollama-only knobs (`keep_alive`, `num_ctx`, `num_predict`) flow via `extra_options`; OpenAI-compatible backends silently drop them. `keep_alive` is `"30m"` by default and `"1m"` when `low_power_mode` is true.
 
 ## 3. Memory Enrichment Extractor
 
@@ -111,7 +112,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 9. Conversation Summariser
 
 - **File**: [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py) — `generate_conversation_summary()` (~lines 350/355).
-- **Trigger**: background, periodic — when unsaved dialogue reaches `dialogue_memory_timeout`. One per day per `source_app`.
+- **Trigger**: background, periodic when unsaved dialogue reaches `dialogue_memory_timeout`, plus the normal daemon shutdown path with `force=True`. One summary is stored per day per `source_app`.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Respects `llm_thinking_enabled`. Uses streaming when a token callback is provided, else direct.
 - **Inputs**: recent conversation chunks + prior same-day summary (for incremental update).
 - **System prompt**: inline (~lines 310-320). Hygiene rules per [src/jarvis/memory/summariser.spec.md](src/jarvis/memory/summariser.spec.md): no deflection narration, attribution preservation, topic separation. The deflection rule (rule 6) is enumerated with concrete BAD/GOOD pairs in English plus parallel pairs in Turkish and Spanish so small models don't assume the rule is keyed to English phrasing. ≤200 words + 3-5 topic keywords.
@@ -219,9 +220,10 @@ Driven by `detect_model_size(model_name) → SMALL (≤7.5B) | LARGE (>7.5B)` �
 ## Config keys
 
 - Models: `llm_chat_model` (CHAT tier), `fast_model` (FAST tier). Every context resolves via `resolve_model(cfg, tier)`. Legacy on-disk keys (`ollama_chat_model` as a v1 → v2 alias; `intent_judge_model` / `tool_router_model` / `evaluator_model` / `planner_model` folded into `fast_model` by the v2 → v3 migration) are readable but no longer part of `Settings`.
-- Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`
+- Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`, `low_power_mode`
 - Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
 - Caps: `agentic_max_turns` (8), `tool_search_max_calls` (3), `_LLM_MAX_SELECTED` (5), `_DIGEST_MAX_CHARS` (400), `_TOOL_DIGEST_MAX_CHARS` (600). Per-context `max_tokens` caps listed above (50–1500 depending on task — the intent judge's 1500 covers reasoning + answer on reasoning models; rewrite tasks scale with input length).
+- Runtime residency: `low_power_mode` skips startup LLM warmups and shortens Ollama `keep_alive` for intent judge and warmup calls from `"30m"` to `"1m"`. It does not change prompts, model selection, timeouts, or context limits.
 
 ## KV-cache discipline (prompt construction rules)
 

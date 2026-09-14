@@ -79,6 +79,31 @@ class TestGetSupportedModelIds:
         assert DEFAULT_CHAT_MODEL in result
 
 
+class TestHighEndModelPreset:
+    """Tests for the high-end chat model preset."""
+
+    def test_high_end_preset_is_qwen38_27b(self):
+        """The high-end preset (name tagged "(High-end)") must be qwen3.8:27b."""
+        high_end = [
+            model_id
+            for model_id, info in SUPPORTED_CHAT_MODELS.items()
+            if "(High-end)" in info.get("name", "")
+        ]
+        assert high_end == ["qwen3.8:27b"]
+
+    def test_high_end_preset_fields_are_populated(self):
+        """The high-end preset must carry the usual metadata fields."""
+        info = SUPPORTED_CHAT_MODELS["qwen3.8:27b"]
+        assert info["name"] == "Qwen 3.8 27B (High-end)"
+        assert "Best performance" in info["description"]
+        assert "GB" in info["size"]
+        assert "GB+" in info["vram"]
+
+    def test_legacy_gpt_oss_preset_removed(self):
+        """The old gpt-oss:20b preset is no longer in the supported list."""
+        assert "gpt-oss:20b" not in SUPPORTED_CHAT_MODELS
+
+
 class TestDefaultConfigUsesModelConstant:
     """Tests to ensure default config uses the model constants."""
 
@@ -92,6 +117,27 @@ class TestDefaultConfigUsesModelConstant:
         config = get_default_config()
         model = config["ollama_chat_model"]
         assert model in SUPPORTED_CHAT_MODELS
+
+
+class TestLowPowerModeConfig:
+    """Tests for the low-power runtime setting."""
+
+    def test_default_config_keeps_low_power_mode_off(self):
+        """The default runtime favours warm responses over energy saving."""
+        config = get_default_config()
+        assert config["low_power_mode"] is False
+
+    def test_settings_dataclass_round_trips_low_power_mode(self, tmp_path, monkeypatch):
+        """A config override should parse into Settings.low_power_mode."""
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"low_power_mode": True}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.low_power_mode is True
 
 
 class TestWhisperHallucinationFilterDefaults:
