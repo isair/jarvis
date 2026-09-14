@@ -78,20 +78,31 @@ class LocalControlTool(Tool):
         debug_log(f"localControl blocked: {message}", "local-control")
         return ToolExecutionResult(success=False, reply_text=f"localControl blocked: {message}")
 
+    def _approval(self, context: ToolContext, request: dict) -> Optional[ToolExecutionResult]:
+        callback = getattr(context, "approval_callback", None)
+        if callback is None:
+            prompt = str(getattr(context, "original_prompt", "") or "").casefold()
+            if _setting(context, "local_control_require_approval", True):
+                if APPROVAL_PHRASE not in prompt:
+                    return self._blocked(
+                        "explicit approval is required. The user must say "
+                        "'I approve this local action'."
+                    )
+            return None
+        debug_log(f"localControl approval requested: {request['summary']}", "local-control")
+        try:
+            if not callback(request):
+                return self._blocked("action rejected by the user.")
+        except Exception as exc:
+            return self._blocked(f"approval could not be completed: {exc}")
+        return None
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         if not isinstance(args, dict):
             return self._blocked("a JSON object is required.")
         context.user_print("🖥️ Checking permission for a local control action…")
         if not _setting(context, "local_control_enabled", False):
             return self._blocked("local control is disabled in settings.")
-
-        prompt = str(getattr(context, "original_prompt", "") or "").casefold()
-        if _setting(context, "local_control_require_approval", True):
-            if APPROVAL_PHRASE not in prompt:
-                return self._blocked(
-                    "explicit approval is required. The user must say "
-                    "'I approve this local action'."
-                )
 
         operation = str(args.get("operation") or "").strip().lower()
         if operation == "open_application":
@@ -106,6 +117,14 @@ class LocalControlTool(Tool):
             }
             if application.casefold() not in allowlist:
                 return self._blocked(f"application is not in the allowlist: {application}")
+            approval = self._approval(context, {
+                "operation": operation,
+                "summary": f"Open application: {application}",
+                "risk": "Launches a local application.",
+                "reason": "The application is allowlisted and ready to launch.",
+            })
+            if approval is not None:
+                return approval
             try:
                 subprocess.Popen([application], shell=False)
             except OSError as exc:
@@ -133,6 +152,14 @@ class LocalControlTool(Tool):
                 return self._blocked(
                     f"network validation failed for URL host '{parsed_url.hostname}': {exc}"
                 )
+            approval = self._approval(context, {
+                "operation": operation,
+                "summary": f"Open URL: {url}",
+                "risk": "Opens a URL in the system browser.",
+                "reason": "The URL uses an allowed HTTP(S) scheme and resolved successfully.",
+            })
+            if approval is not None:
+                return approval
             if not webbrowser.open(url):
                 return self._blocked("the system browser declined the URL.")
             debug_log(f"localControl opened URL: {url}", "local-control")
@@ -149,6 +176,14 @@ class LocalControlTool(Tool):
                 return self._blocked(f"path is not allowed by configured roots: {path}")
             if not path.exists():
                 return self._blocked(f"path does not exist: {path}")
+            approval = self._approval(context, {
+                "operation": operation,
+                "summary": f"Reveal path: {path}",
+                "risk": "Opens a local file or folder.",
+                "reason": "The existing path is inside a configured allowed root.",
+            })
+            if approval is not None:
+                return approval
             try:
                 if sys.platform == "win32":
                     os.startfile(str(path))

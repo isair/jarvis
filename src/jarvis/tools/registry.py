@@ -318,6 +318,7 @@ def run_tool_with_retries(
     redacted_text: str,
     max_retries: int = 1,
     language: Optional[str] = None,
+    approval_callback=None,
 ) -> ToolExecutionResult:
     # Normalize tool name to canonical camelCase
     raw_name = (tool_name or "").strip()
@@ -365,9 +366,9 @@ def run_tool_with_retries(
             max_retries=max_retries,
             user_print=_user_print,
             language=language,
+            approval_callback=approval_callback,
         )
 
     # Unknown tool
     debug_log(f"unknown tool requested: {tool_name}", "tools")
     return ToolExecutionResult(success=False, reply_text=None, error_message=f"Unknown tool: {tool_name}")
-

@@ -13,13 +13,16 @@ def _context(**overrides):
         "local_control_allowed_roots": ["~"],
     }
     values.update(overrides)
-    return SimpleNamespace(
+    context = SimpleNamespace(
         cfg=SimpleNamespace(**values),
         original_prompt=overrides.get(
             "original_prompt", "Please open it. I approve this local action."
         ),
         user_print=Mock(),
     )
+    if "approval_callback" in overrides:
+        context.approval_callback = overrides["approval_callback"]
+    return context
 
 
 class TestLocalControlTool:
@@ -117,3 +120,36 @@ class TestLocalControlTool:
             "open_url",
             "reveal_path",
         }
+
+    def test_desktop_approval_broker_receives_exact_action_summary_before_launch(self):
+        approval = Mock(return_value=True)
+        context = _context(approval_callback=approval)
+
+        with patch("jarvis.tools.builtin.local_control.subprocess.Popen") as popen:
+            result = LocalControlTool().run(
+                {"operation": "open_application", "application": "notepad.exe"},
+                context,
+            )
+
+        assert result.success
+        approval.assert_called_once()
+        request = approval.call_args.args[0]
+        assert request["operation"] == "open_application"
+        assert request["summary"] == "Open application: notepad.exe"
+        assert request["risk"] == "Launches a local application."
+        assert "allowlisted" in request["reason"].lower()
+        popen.assert_called_once_with(["notepad.exe"], shell=False)
+
+    def test_rejected_desktop_approval_never_launches(self):
+        approval = Mock(return_value=False)
+        context = _context(approval_callback=approval)
+
+        with patch("jarvis.tools.builtin.local_control.subprocess.Popen") as popen:
+            result = LocalControlTool().run(
+                {"operation": "open_application", "application": "notepad.exe"},
+                context,
+            )
+
+        assert not result.success
+        assert "rejected" in result.reply_text.lower()
+        popen.assert_not_called()

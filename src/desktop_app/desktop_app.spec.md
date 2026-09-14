@@ -225,7 +225,12 @@ daemon's local task service. It displays queued, running, completed, failed,
 and cancelled tasks with their result or error. In bundled mode it calls the
 daemon service directly. In source mode it sends `TASK:` commands over the
 existing daemon stdin pipe and consumes `__TASK__:` JSON events from the log
-stream. The task centre does not create a second LLM or tool path.
+stream. The task centre does not create a second LLM or tool path. When localControl
+reaches a task, it renders the task as `Awaiting Approval` with the exact action
+summary and risk reason, and provides explicit Approve and Reject controls.
+Those controls use the existing bundled callback or `TASK:` stdin channel and
+the task remains auditable through its queued, running, pending-approval, and
+final progress events. Voice-triggered actions never use these controls.
 
 ## Theme System
 

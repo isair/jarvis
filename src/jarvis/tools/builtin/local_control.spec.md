@@ -10,11 +10,15 @@
 - `reveal_path` opens an existing file or folder under one of
   `local_control_allowed_roots`.
 
-The feature is disabled by default. When enabled, every action still requires the
-exact user phrase `I approve this local action` in the originating prompt unless
-the user deliberately disables the approval setting. Empty allowlists deny all
-applications and paths. The tool never runs arbitrary shell commands, accepts
-command arguments, deletes files, or follows paths outside configured roots.
+The feature is disabled by default. When enabled, task-centre execution presents
+each validated action as a pending approval containing an exact action summary
+and risk reason. Approve and Reject are explicit local controls. Rejection
+prevents execution and returns an honest failure to the reply engine. Voice
+execution has no task-centre approval broker and still requires the exact user
+phrase `I approve this local action` when approval is enabled. Empty allowlists
+deny all applications and paths. The tool never runs arbitrary shell commands,
+accepts command arguments, deletes files, or follows paths outside configured
+roots.
 
 The tool returns an audit-friendly raw result and logs blocked and successful
 boundaries with `debug_log`. Launches are short-lived OS hand-offs, so task-centre

@@ -1778,6 +1778,8 @@ class JarvisSystemTray:
         self.task_centre = TaskCentreWindow(
             submit_callback=self.submit_task,
             cancel_callback=self.cancel_task,
+            approve_callback=self.approve_task,
+            reject_callback=self.reject_task,
         )
         self.log_signals.new_log.connect(self.task_centre.process_log_line)
 
@@ -2244,6 +2246,30 @@ class JarvisSystemTray:
         import json
         self.daemon_process.stdin.write(
             f"TASK:{json.dumps({'action': 'cancel', 'id': task_id})}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return True
+
+    def approve_task(self, task_id: str):
+        """Approve a pending local action in the task centre."""
+        if self.is_bundled:
+            from jarvis.daemon import approve_task
+            return approve_task(task_id)
+        return self._send_task_command({"action": "approve", "id": task_id})
+
+    def reject_task(self, task_id: str):
+        """Reject a pending local action in the task centre."""
+        if self.is_bundled:
+            from jarvis.daemon import reject_task
+            return reject_task(task_id)
+        return self._send_task_command({"action": "reject", "id": task_id})
+
+    def _send_task_command(self, command: dict):
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before changing a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps(command, ensure_ascii=False)}\n"
         )
         self.daemon_process.stdin.flush()
         return True

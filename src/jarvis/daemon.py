@@ -603,6 +603,18 @@ def cancel_task(task_id: str) -> bool:
     return _global_task_manager.cancel(task_id)
 
 
+def approve_task(task_id: str) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.approve(task_id)
+
+
+def reject_task(task_id: str) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.reject(task_id)
+
+
 def _emit_task_event(event: dict) -> None:
     print(f"__TASK__:{json.dumps(event, ensure_ascii=False)}", flush=True)
 
@@ -1109,6 +1121,10 @@ def main(smoke_test: bool = False) -> None:
                             submit_task(str(command.get("prompt", "")))
                         elif action == "cancel":
                             cancel_task(str(command.get("id", "")))
+                        elif action == "approve":
+                            approve_task(str(command.get("id", "")))
+                        elif action == "reject":
+                            reject_task(str(command.get("id", "")))
                     except Exception as exc:
                         debug_log(f"invalid task command: {exc}", "tasks")
                 # Chat query-in (subprocess mode). Returns False for any other
