@@ -10,6 +10,7 @@ import os
 import time
 import signal
 import threading
+import json
 
 # Fix OpenBLAS threading crash in bundled apps (must be before numpy imports)
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
@@ -47,6 +48,7 @@ _global_stop_requested: bool = False
 _warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
+_global_task_manager = None
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
 # Desktop app's stop_daemon() should wait at least this long + buffer
@@ -146,6 +148,80 @@ def get_tts_engine():
 def get_dictation_engine():
     """Get the global dictation engine (used by desktop app for history window)."""
     return _global_dictation_engine
+
+
+def submit_task(
+    prompt: str,
+    run_at: Optional[float] = None,
+    recurrence: Optional[str] = None,
+) -> str:
+    """Submit a prompt from an interactive desktop client."""
+    if _global_task_manager is None:
+        raise RuntimeError("Task service is not ready")
+    return _global_task_manager.submit(prompt, run_at=run_at, recurrence=recurrence)
+
+
+def cancel_task(task_id: str) -> bool:
+    """Cancel a queued task, or mark a running task as cancelled."""
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.cancel(task_id)
+
+
+def reschedule_task(
+    task_id: str, run_at: float, recurrence: Optional[str] = None
+) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.reschedule(task_id, run_at, recurrence)
+
+
+def approve_task(task_id: str) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.approve(task_id)
+
+
+def reject_task(task_id: str) -> bool:
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.reject(task_id)
+
+
+def handle_task_stdin_line(line: str) -> bool:
+    """Handle one desktop task command in subprocess mode."""
+    if not line.startswith("TASK:"):
+        return False
+    try:
+        command = json.loads(line[5:])
+        action = command.get("action")
+        if action == "submit":
+            submit_task(
+                str(command.get("prompt", "")),
+                run_at=command.get("run_at"),
+                recurrence=command.get("recurrence"),
+            )
+        elif action == "cancel":
+            cancel_task(str(command.get("id", "")))
+        elif action == "reschedule":
+            reschedule_task(
+                str(command.get("id", "")),
+                float(command.get("run_at")),
+                command.get("recurrence"),
+            )
+        elif action == "approve":
+            approve_task(str(command.get("id", "")))
+        elif action == "reject":
+            reject_task(str(command.get("id", "")))
+        else:
+            debug_log(f"unknown task command action: {action}", "tasks")
+    except Exception as exc:
+        debug_log(f"invalid task command: {exc}", "tasks")
+    return True
+
+
+def _emit_task_event(event: dict) -> None:
+    print(f"__TASK__:{json.dumps(event, ensure_ascii=False)}", flush=True)
 
 
 def _install_signal_handlers() -> None:
@@ -308,6 +384,7 @@ def main(smoke_test: bool = False) -> None:
             Used by CI smoke tests to verify the build is not broken.
     """
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
+    global _global_task_manager
     global _warm_profile_graph_listener
 
     # Reset stop flag at start (in case of restart)
@@ -479,6 +556,16 @@ def main(smoke_test: bool = False) -> None:
     else:
         print("  TTS disabled", flush=True)
 
+    from .tasks import TaskManager
+    _global_task_manager = TaskManager(
+        db=db,
+        cfg=cfg,
+        dialogue_memory=_global_dialogue_memory,
+        tts=tts,
+        event_callback=_emit_task_event,
+    )
+    print("📋 Task service ready", flush=True)
+
     # Initialize voice listening (only if dependencies available)
     print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
     voice_thread: Optional[threading.Thread] = None
@@ -578,6 +665,10 @@ def main(smoke_test: bool = False) -> None:
         except Exception:
             pass
 
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=False)
+            _global_task_manager = None
+
         db.close()
 
         if _warm_profile_graph_listener is not None:
@@ -617,10 +708,27 @@ def main(smoke_test: bool = False) -> None:
                     debug_log("SHUTDOWN command received, requesting stop", "jarvis")
                     _global_stop_requested = True
                     break
+                if handle_task_stdin_line(stripped):
+                    continue
+                # Chat query-in (subprocess mode). Returns False for any other
+                # line, which we silently ignore.
+                if handle_chat_cancel_stdin_line(stripped):
+                    continue
+                if handle_chat_new_session_stdin_line(stripped):
+                    continue
+                if handle_chat_rewind_stdin_line(stripped):
+                    continue
+                if handle_chat_restore_stdin_line(stripped):
+                    continue
+                if stripped.startswith(CHAT_QUERY_IPC_PREFIX):
+                    handle_chat_query_stdin_line(stripped)
         except Exception:
             pass  # stdin might not be available
 
-    if sys.platform == "win32" and not getattr(sys, 'frozen', False):
+    if (
+        not getattr(sys, 'frozen', False)
+        and (sys.platform == "win32" or os.environ.get("JARVIS_TASK_IPC") == "1")
+    ):
         stdin_thread = threading.Thread(target=stdin_monitor, daemon=True)
         stdin_thread.start()
 
@@ -692,6 +800,10 @@ def main(smoke_test: bool = False) -> None:
             shutdown_runtime()
         except Exception as _e:
             debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
+
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=False)
+            _global_task_manager = None
 
         db.close()
 

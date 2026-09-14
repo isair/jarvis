@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   UNIQUE(date_utc, source_app)
 );
 
+-- Local task-centre state. Only redacted prompt/result/error text is stored.
+CREATE TABLE IF NOT EXISTS task_records (
+  id            TEXT PRIMARY KEY,
+  prompt        TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  result        TEXT,
+  error         TEXT,
+  created_at    REAL NOT NULL,
+  started_at    REAL,
+  completed_at  REAL,
+  next_run_at   REAL
+  ,recurrence   TEXT
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
   summary,
   topics,
@@ -127,9 +141,41 @@ class Database:
         with self._lock:
             cur = self.conn.cursor()
             cur.executescript(_SCHEMA_SQL)
+            columns = {
+                row[1]
+                for row in cur.execute("PRAGMA table_info(task_records)").fetchall()
+            }
+            if "next_run_at" not in columns:
+                cur.execute("ALTER TABLE task_records ADD COLUMN next_run_at REAL")
+            if "recurrence" not in columns:
+                cur.execute("ALTER TABLE task_records ADD COLUMN recurrence TEXT")
             if self.is_vss_enabled:
                 cur.executescript(_VSS_SCHEMA_SQL)
             self.conn.commit()
+
+    def upsert_task_record(self, task: dict) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO task_records
+                (id, prompt, status, result, error, created_at, started_at,
+                 completed_at, next_run_at, recurrence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task["id"], task["prompt"], task["status"], task.get("result"),
+                    task.get("error"), task["created_at"], task.get("started_at"),
+                    task.get("completed_at"), task.get("next_run_at"),
+                    task.get("recurrence"),
+                ),
+            )
+            self.conn.commit()
+
+    def get_task_records(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM task_records ORDER BY created_at ASC"
+            ).fetchall()
 
     
 
