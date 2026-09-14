@@ -140,6 +140,32 @@ class TestLowPowerModeConfig:
         assert settings.low_power_mode is True
 
 
+class TestLocalControlConfig:
+    def test_local_control_is_disabled_and_deny_by_default(self):
+        config = get_default_config()
+        assert config["local_control_enabled"] is False
+        assert config["local_control_require_approval"] is True
+        assert config["local_control_allowed_applications"] == []
+
+    def test_local_control_settings_round_trip(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({
+            "local_control_enabled": True,
+            "local_control_allowed_applications": ["notepad.exe"],
+            "local_control_allowed_roots": ["~/Documents"],
+        }))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.local_control_enabled is True
+        assert settings.local_control_require_approval is True
+        assert settings.local_control_allowed_applications == ["notepad.exe"]
+        assert settings.local_control_allowed_roots == ["~/Documents"]
+
+
 class TestWhisperHallucinationFilterDefaults:
     """Pin defaults for the Whisper hallucination-filter thresholds.
 
