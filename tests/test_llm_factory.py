@@ -30,6 +30,14 @@ class _Cfg:
 
 
 class TestGetLLMBackend:
+    def test_provider_catalogue_exposes_the_builtin_self_hosted_adapters(self):
+        from jarvis.llm import Provider, available_providers
+
+        assert {
+            Provider.OLLAMA.value,
+            Provider.OPENAI_COMPATIBLE.value,
+        }.issubset(set(available_providers()))
+
     def test_returns_ollama_for_default_provider(self):
         from jarvis.llm import OllamaBackend, get_llm_backend
 
@@ -51,6 +59,31 @@ class TestGetLLMBackend:
 
         assert isinstance(backend, OpenAICompatibleBackend)
         assert backend.base_url == "http://localhost:1234/v1"
+
+    def test_provider_enum_values_are_config_compatible(self):
+        from jarvis.llm import Provider
+
+        assert Provider.OLLAMA == "ollama"
+        assert Provider.OPENAI_COMPATIBLE == "openai_compatible"
+
+    def test_registered_self_hosted_adapter_uses_provider_url(self):
+        from jarvis.llm import OllamaBackend, get_llm_backend, register_provider
+
+        register_provider(
+            "test_local",
+            lambda base_url, _api_key=None: OllamaBackend(base_url),
+            replace=True,
+        )
+        cfg = _Cfg(
+            llm_provider="test_local",
+            llm_base_url="http://local-runtime:9000/v1",
+            ollama_base_url="http://ollama:11434",
+        )
+
+        backend = get_llm_backend(cfg)
+
+        assert isinstance(backend, OllamaBackend)
+        assert backend.base_url == "http://local-runtime:9000/v1"
 
     def test_falls_back_to_ollama_for_unknown_provider(self):
         from jarvis.llm import OllamaBackend, get_llm_backend
