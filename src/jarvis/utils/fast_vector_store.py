@@ -68,6 +68,10 @@ class FAISSVectorStore:
                 if vectors:
                     # Build FAISS index
                     self._build_index(np.array(vectors), summary_ids)
+                else:
+                    self._build_empty_index()
+            else:
+                self._build_empty_index()
             
             conn.close()
         except Exception as e:
@@ -204,6 +208,11 @@ class FAISSVectorStore:
                     conn.close()
                 except Exception as e:
                     logging.warning(f"Failed to delete vector from database: {e}")
+
+    def rebuild(self) -> None:
+        """Rebuild the in-memory index after deletions."""
+        self._load_vectors()
+        self._needs_rebuild = False
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the vector store."""
