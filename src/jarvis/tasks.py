@@ -23,6 +23,7 @@ def run_reply_engine(*args, **kwargs):
 class TaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    PENDING_APPROVAL = "pending_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -38,6 +39,9 @@ class Task:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
+    action_summary: Optional[str] = None
+    action_reason: Optional[str] = None
+    action_risk: Optional[str] = None
 
     def as_dict(self) -> dict:
         return {
@@ -49,6 +53,9 @@ class Task:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "action_summary": self.action_summary,
+            "action_reason": self.action_reason,
+            "action_risk": self.action_risk,
         }
 
 
@@ -74,6 +81,8 @@ class TaskManager:
         self._futures: dict[str, Future] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
+        self._approval_conditions: dict[str, threading.Condition] = {}
+        self._approval_decisions: dict[str, Optional[bool]] = {}
         self._restore()
 
     def submit(self, prompt: str) -> str:
@@ -109,6 +118,10 @@ class TaskManager:
             if future is not None:
                 future.cancel()
             self._cancel_events.setdefault(task.id, threading.Event()).set()
+            condition = self._approval_conditions.get(task_id)
+            if condition is not None:
+                self._approval_decisions[task_id] = False
+                condition.notify_all()
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
             self._persist(task)
@@ -120,7 +133,9 @@ class TaskManager:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
-                if all(task.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING} for task in self._tasks.values()):
+                if all(task.status not in {
+                    TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PENDING_APPROVAL
+                } for task in self._tasks.values()):
                     return
             time.sleep(0.01)
         raise TimeoutError("Timed out waiting for task queue")
@@ -146,6 +161,7 @@ class TaskManager:
         try:
             result = run_reply_engine(
                 self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory,
+                approval_callback=lambda request: self._request_approval(task_id, request),
                 cancel_event=cancel_event,
             )
             with self._lock:
@@ -167,6 +183,48 @@ class TaskManager:
                     self._emit(task)
             debug_log(f"task failed: {task_id}: {exc}", "tasks")
 
+    def approve(self, task_id: str) -> bool:
+        return self._decide_approval(task_id, True)
+
+    def reject(self, task_id: str) -> bool:
+        return self._decide_approval(task_id, False)
+
+    def _decide_approval(self, task_id: str, decision: bool) -> bool:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            condition = self._approval_conditions.get(task_id)
+            if task is None or task.status is not TaskStatus.PENDING_APPROVAL or condition is None:
+                return False
+            self._approval_decisions[task_id] = decision
+            condition.notify_all()
+            debug_log(
+                f"task local action {'approved' if decision else 'rejected'}: {task_id}",
+                "tasks",
+            )
+            return True
+
+    def _request_approval(self, task_id: str, request: dict) -> bool:
+        with self._lock:
+            task = self._tasks[task_id]
+            if task.status is TaskStatus.CANCELLED:
+                return False
+            condition = threading.Condition(self._lock)
+            self._approval_conditions[task_id] = condition
+            self._approval_decisions[task_id] = None
+            task.status = TaskStatus.PENDING_APPROVAL
+            task.action_summary = str(request.get("summary", "Local action"))
+            task.action_risk = str(request.get("risk", "Local action may affect the device."))
+            task.action_reason = str(request.get("reason", ""))
+            self._emit(task)
+            debug_log(f"task awaiting local action approval: {task_id}", "tasks")
+            while self._approval_decisions[task_id] is None:
+                condition.wait()
+            decision = bool(self._approval_decisions.pop(task_id))
+            self._approval_conditions.pop(task_id, None)
+            if task.status is not TaskStatus.CANCELLED:
+                task.status = TaskStatus.RUNNING
+                self._emit(task)
+            return decision
     def _emit(self, task: Task) -> None:
         if self.event_callback is None:
             return
