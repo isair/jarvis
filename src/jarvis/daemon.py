@@ -1072,7 +1072,7 @@ def main(smoke_test: bool = False) -> None:
             pass
 
         if _global_task_manager is not None:
-            _global_task_manager.shutdown(wait=False)
+            _global_task_manager.shutdown(wait=True)
             _global_task_manager = None
 
         db.close()

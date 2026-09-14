@@ -144,10 +144,12 @@ class TaskManager:
             self._persist(task)
             self._emit(task)
         try:
-            result = run_reply_engine(
-                self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory,
-                cancel_event=cancel_event,
-            )
+            from .daemon import query_lock
+            with query_lock():
+                result = run_reply_engine(
+                    self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory,
+                    cancel_event=cancel_event,
+                )
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.COMPLETED
@@ -171,7 +173,13 @@ class TaskManager:
         if self.event_callback is None:
             return
         try:
-            self.event_callback(task.as_dict())
+            event = task.as_dict()
+            event["prompt"] = redact(task.prompt)
+            if event["result"]:
+                event["result"] = redact(str(event["result"]))
+            if event["error"]:
+                event["error"] = redact(str(event["error"]))
+            self.event_callback(event)
         except Exception as exc:
             debug_log(f"task event callback failed: {exc}", "tasks")
 
