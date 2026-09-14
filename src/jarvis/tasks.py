@@ -11,7 +11,6 @@ import uuid
 from typing import Callable, Optional
 
 from .debug import debug_log
-from .utils.redact import redact
 
 
 def run_reply_engine(*args, **kwargs):
@@ -23,6 +22,7 @@ def run_reply_engine(*args, **kwargs):
 class TaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    PENDING_APPROVAL = "pending_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -38,6 +38,9 @@ class Task:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
+    action_summary: Optional[str] = None
+    action_reason: Optional[str] = None
+    action_risk: Optional[str] = None
 
     def as_dict(self) -> dict:
         return {
@@ -49,6 +52,9 @@ class Task:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "action_summary": self.action_summary,
+            "action_reason": self.action_reason,
+            "action_risk": self.action_risk,
         }
 
 
@@ -72,9 +78,9 @@ class TaskManager:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jarvis-task")
         self._tasks: dict[str, Task] = {}
         self._futures: dict[str, Future] = {}
-        self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
-        self._restore()
+        self._approval_conditions: dict[str, threading.Condition] = {}
+        self._approval_decisions: dict[str, Optional[bool]] = {}
 
     def submit(self, prompt: str) -> str:
         prompt = prompt.strip()
@@ -83,8 +89,6 @@ class TaskManager:
         task = Task(id=uuid.uuid4().hex[:12], prompt=prompt)
         with self._lock:
             self._tasks[task.id] = task
-            self._cancel_events[task.id] = threading.Event()
-            self._persist(task)
             self._emit(task)
             self._futures[task.id] = self._executor.submit(self._run, task.id)
         debug_log(f"task submitted: {task.id}", "tasks")
@@ -108,10 +112,12 @@ class TaskManager:
                 return False
             if future is not None:
                 future.cancel()
-            self._cancel_events.setdefault(task.id, threading.Event()).set()
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
-            self._persist(task)
+            condition = self._approval_conditions.get(task_id)
+            if condition is not None:
+                self._approval_decisions[task_id] = False
+                condition.notify_all()
             self._emit(task)
             debug_log(f"task cancelled: {task.id}", "tasks")
             return True
@@ -120,27 +126,14 @@ class TaskManager:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
-                if all(task.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING} for task in self._tasks.values()):
+                if all(task.status not in {
+                    TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PENDING_APPROVAL
+                } for task in self._tasks.values()):
                     return
             time.sleep(0.01)
         raise TimeoutError("Timed out waiting for task queue")
 
     def shutdown(self, wait: bool = True) -> None:
-        with self._lock:
-            for task_id, task in self._tasks.items():
-                if task.status in {
-                    TaskStatus.QUEUED, TaskStatus.RUNNING,
-                    TaskStatus.PENDING_APPROVAL,
-                }:
-                    self._cancel_events.setdefault(task_id, threading.Event()).set()
-                    task.status = TaskStatus.CANCELLED
-                    task.completed_at = time.time()
-                    self._approval_decisions[task_id] = False
-                    condition = self._approval_conditions.get(task_id)
-                    if condition is not None:
-                        condition.notify_all()
-                    self._emit(task)
-                    debug_log(f"task stop requested during shutdown: {task_id}", "tasks")
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
     def _run(self, task_id: str) -> None:
@@ -150,30 +143,28 @@ class TaskManager:
                 return
             task.status = TaskStatus.RUNNING
             task.started_at = time.time()
-            cancel_event = self._cancel_events.setdefault(task.id, threading.Event())
-            self._persist(task)
             self._emit(task)
         try:
             result = run_reply_engine(
-                self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory,
-                cancel_event=cancel_event,
+                self.db,
+                self.cfg,
+                self.tts,
+                task.prompt,
+                self.dialogue_memory,
+                approval_callback=lambda request: self._request_approval(task_id, request),
             )
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.COMPLETED
                     task.result = result or ""
                     task.completed_at = time.time()
-                    self._persist(task)
                     self._emit(task)
-                else:
-                    self._persist(task)
         except Exception as exc:
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.FAILED
                     task.error = str(exc)
                     task.completed_at = time.time()
-                    self._persist(task)
                     self._emit(task)
             debug_log(f"task failed: {task_id}: {exc}", "tasks")
 
@@ -200,8 +191,6 @@ class TaskManager:
     def _request_approval(self, task_id: str, request: dict) -> bool:
         with self._lock:
             task = self._tasks[task_id]
-            if task.status is TaskStatus.CANCELLED:
-                return False
             condition = threading.Condition(self._lock)
             self._approval_conditions[task_id] = condition
             self._approval_decisions[task_id] = None
@@ -227,42 +216,3 @@ class TaskManager:
             self.event_callback(task.as_dict())
         except Exception as exc:
             debug_log(f"task event callback failed: {exc}", "tasks")
-
-    def _persist(self, task: Task) -> None:
-        if not hasattr(self.db, "upsert_task_record"):
-            return
-        record = task.as_dict()
-        record["prompt"] = redact(task.prompt)
-        if record["result"]:
-            record["result"] = redact(str(record["result"]))
-        if record["error"]:
-            record["error"] = redact(str(record["error"]))
-        try:
-            self.db.upsert_task_record(record)
-        except Exception as exc:
-            debug_log(f"task persistence failed: {exc}", "tasks")
-
-    def _restore(self) -> None:
-        if not hasattr(self.db, "get_task_records"):
-            return
-        try:
-            rows = self.db.get_task_records()
-        except Exception as exc:
-            debug_log(f"task restore failed: {exc}", "tasks")
-            return
-        for row in rows:
-            task = Task(
-                id=row["id"], prompt=row["prompt"],
-                status=TaskStatus(row["status"]),
-                result=row["result"], error=row["error"],
-                created_at=row["created_at"], started_at=row["started_at"],
-                completed_at=row["completed_at"],
-            )
-            if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
-                task.status = TaskStatus.FAILED
-                task.error = "Task interrupted by daemon restart"
-                task.completed_at = time.time()
-                self._persist(task)
-            self._tasks[task.id] = task
-            self._cancel_events[task.id] = threading.Event()
-            self._emit(task)

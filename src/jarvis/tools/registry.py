@@ -12,12 +12,14 @@ import os
 from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
+from .builtin.local_control import LocalControlTool
 from .builtin.fetch_web_page import FetchWebPageTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
 from .builtin.nutrition.delete_meal import DeleteMealTool
 from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .builtin.weather import WeatherTool
+from .builtin.time_tool import TimeTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
 from .types import ToolExecutionResult
@@ -31,12 +33,14 @@ BUILTIN_TOOLS = {
     "screenshot": ScreenshotTool(),
     "webSearch": WebSearchTool(),
     "localFiles": LocalFilesTool(),
+    "localControl": LocalControlTool(),
     "fetchWebPage": FetchWebPageTool(),
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
     "deleteMeal": DeleteMealTool(),
     "refreshMCPTools": RefreshMCPToolsTool(),
     "getWeather": WeatherTool(),
+    "getTime": TimeTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
 }
@@ -314,6 +318,7 @@ def run_tool_with_retries(
     redacted_text: str,
     max_retries: int = 1,
     language: Optional[str] = None,
+    approval_callback=None,
 ) -> ToolExecutionResult:
     # Normalize tool name to canonical camelCase
     raw_name = (tool_name or "").strip()
@@ -361,10 +366,9 @@ def run_tool_with_retries(
             max_retries=max_retries,
             user_print=_user_print,
             language=language,
+            approval_callback=approval_callback,
         )
 
     # Unknown tool
     debug_log(f"unknown tool requested: {tool_name}", "tools")
     return ToolExecutionResult(success=False, reply_text=None, error_message=f"Unknown tool: {tool_name}")
-
-

@@ -23,6 +23,7 @@ from desktop_app.themes import JARVIS_THEME_STYLESHEET
 _STATUS_LABELS = {
     "queued": "🟡 Queued",
     "running": "🔵 Running",
+    "pending_approval": "🟠 Awaiting Approval",
     "completed": "✅ Completed",
     "failed": "❌ Failed",
     "cancelled": "⚪ Cancelled",
@@ -36,6 +37,8 @@ class TaskCentreWindow(QDialog):
         self,
         submit_callback: Callable[[str], object],
         cancel_callback: Callable[[str], object],
+        approve_callback: Callable[[str], object],
+        reject_callback: Callable[[str], object],
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -44,6 +47,8 @@ class TaskCentreWindow(QDialog):
         self.setStyleSheet(JARVIS_THEME_STYLESHEET)
         self._submit_callback = submit_callback
         self._cancel_callback = cancel_callback
+        self._approve_callback = approve_callback
+        self._reject_callback = reject_callback
         self._tasks: dict[str, dict] = {}
 
         layout = QVBoxLayout(self)
@@ -80,6 +85,12 @@ class TaskCentreWindow(QDialog):
         self.cancel_button.setObjectName("danger")
         self.cancel_button.clicked.connect(self._cancel_selected)
         actions.addWidget(self.cancel_button)
+        self.approve_button = QPushButton("✅ Approve")
+        self.approve_button.clicked.connect(self._approve_selected)
+        actions.addWidget(self.approve_button)
+        self.reject_button = QPushButton("🚫 Reject")
+        self.reject_button.clicked.connect(self._reject_selected)
+        actions.addWidget(self.reject_button)
         actions.addStretch()
         layout.addLayout(actions)
 
@@ -135,6 +146,23 @@ class TaskCentreWindow(QDialog):
         except Exception as exc:
             self.details.setText(f"❌ Could not cancel task: {exc}")
 
+    def _approve_selected(self) -> None:
+        self._decide_selected(self._approve_callback, "approve")
+
+    def _reject_selected(self) -> None:
+        self._decide_selected(self._reject_callback, "reject")
+
+    def _decide_selected(self, callback, action: str) -> None:
+        item = self.task_list.currentItem()
+        if item is None:
+            return
+        task_id = str(item.data(Qt.ItemDataRole.UserRole))
+        try:
+            if not callback(task_id):
+                self.details.setText(f"⚠️ Could not {action} this task.")
+        except Exception as exc:
+            self.details.setText(f"❌ Could not {action} task: {exc}")
+
     def _find_item(self, task_id: str) -> Optional[QListWidgetItem]:
         for index in range(self.task_list.count()):
             item = self.task_list.item(index)
@@ -144,10 +172,22 @@ class TaskCentreWindow(QDialog):
 
     def _show_task_details(self, current, _previous) -> None:
         if current is None:
+            self.approve_button.setEnabled(False)
+            self.reject_button.setEnabled(False)
             return
         task = self._tasks.get(str(current.data(Qt.ItemDataRole.UserRole)), {})
         status = _STATUS_LABELS.get(task.get("status"), "❔ Unknown")
+        pending = task.get("status") == "pending_approval"
+        self.approve_button.setEnabled(pending)
+        self.reject_button.setEnabled(pending)
         text = f"{status}\n\n{task.get('prompt', '')}"
+        if task.get("status") == "pending_approval":
+            text += (
+                f"\n\n⚠️ Action: {task.get('action_summary', 'Local action')}"
+                f"\nRisk: {task.get('action_risk', 'Local action may affect the device.')}"
+                f"\n\nReason: {task.get('action_reason', '')}"
+                "\n\nChoose Approve or Reject. Voice actions are never approved here."
+            )
         result = task.get("result") or task.get("error")
         if result:
             text += f"\n\n{result}"
