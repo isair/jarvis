@@ -11,6 +11,7 @@ import uuid
 from typing import Callable, Optional
 
 from .debug import debug_log
+from .utils.redact import redact
 
 
 def run_reply_engine(*args, **kwargs):
@@ -71,7 +72,9 @@ class TaskManager:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jarvis-task")
         self._tasks: dict[str, Task] = {}
         self._futures: dict[str, Future] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
+        self._restore()
 
     def submit(self, prompt: str) -> str:
         prompt = prompt.strip()
@@ -80,6 +83,8 @@ class TaskManager:
         task = Task(id=uuid.uuid4().hex[:12], prompt=prompt)
         with self._lock:
             self._tasks[task.id] = task
+            self._cancel_events[task.id] = threading.Event()
+            self._persist(task)
             self._emit(task)
             self._futures[task.id] = self._executor.submit(self._run, task.id)
         debug_log(f"task submitted: {task.id}", "tasks")
@@ -103,8 +108,10 @@ class TaskManager:
                 return False
             if future is not None:
                 future.cancel()
+            self._cancel_events.setdefault(task.id, threading.Event()).set()
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
+            self._persist(task)
             self._emit(task)
             debug_log(f"task cancelled: {task.id}", "tasks")
             return True
@@ -119,6 +126,11 @@ class TaskManager:
         raise TimeoutError("Timed out waiting for task queue")
 
     def shutdown(self, wait: bool = True) -> None:
+        with self._lock:
+            for task_id, task in self._tasks.items():
+                if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                    self._cancel_events.setdefault(task_id, threading.Event()).set()
+                    debug_log(f"task stop requested during shutdown: {task_id}", "tasks")
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
     def _run(self, task_id: str) -> None:
@@ -128,23 +140,30 @@ class TaskManager:
                 return
             task.status = TaskStatus.RUNNING
             task.started_at = time.time()
+            cancel_event = self._cancel_events.setdefault(task.id, threading.Event())
+            self._persist(task)
             self._emit(task)
         try:
             result = run_reply_engine(
-                self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory
+                self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory,
+                cancel_event=cancel_event,
             )
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.COMPLETED
                     task.result = result or ""
                     task.completed_at = time.time()
+                    self._persist(task)
                     self._emit(task)
+                else:
+                    self._persist(task)
         except Exception as exc:
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.FAILED
                     task.error = str(exc)
                     task.completed_at = time.time()
+                    self._persist(task)
                     self._emit(task)
             debug_log(f"task failed: {task_id}: {exc}", "tasks")
 
@@ -155,3 +174,42 @@ class TaskManager:
             self.event_callback(task.as_dict())
         except Exception as exc:
             debug_log(f"task event callback failed: {exc}", "tasks")
+
+    def _persist(self, task: Task) -> None:
+        if not hasattr(self.db, "upsert_task_record"):
+            return
+        record = task.as_dict()
+        record["prompt"] = redact(task.prompt)
+        if record["result"]:
+            record["result"] = redact(str(record["result"]))
+        if record["error"]:
+            record["error"] = redact(str(record["error"]))
+        try:
+            self.db.upsert_task_record(record)
+        except Exception as exc:
+            debug_log(f"task persistence failed: {exc}", "tasks")
+
+    def _restore(self) -> None:
+        if not hasattr(self.db, "get_task_records"):
+            return
+        try:
+            rows = self.db.get_task_records()
+        except Exception as exc:
+            debug_log(f"task restore failed: {exc}", "tasks")
+            return
+        for row in rows:
+            task = Task(
+                id=row["id"], prompt=row["prompt"],
+                status=TaskStatus(row["status"]),
+                result=row["result"], error=row["error"],
+                created_at=row["created_at"], started_at=row["started_at"],
+                completed_at=row["completed_at"],
+            )
+            if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                task.status = TaskStatus.FAILED
+                task.error = "Task interrupted by daemon restart"
+                task.completed_at = time.time()
+                self._persist(task)
+            self._tasks[task.id] = task
+            self._cancel_events[task.id] = threading.Event()
+            self._emit(task)
