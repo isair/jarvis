@@ -1065,15 +1065,15 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
 
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
         try:
             from .tools.external.mcp_runtime import shutdown_runtime
             shutdown_runtime()
         except Exception:
             pass
-
-        if _global_task_manager is not None:
-            _global_task_manager.shutdown(wait=True)
-            _global_task_manager = None
 
         db.close()
 
@@ -1221,17 +1221,16 @@ def main(smoke_test: bool = False) -> None:
         if tts is not None:
             tts.stop()
 
-        # Tear down persistent MCP sessions so subprocess-launched
-        # children (e.g. chrome-devtools-mcp's Chrome) close cleanly.
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
+        # Tear down persistent MCP sessions after task workers have stopped.
         try:
             from .tools.external.mcp_runtime import shutdown_runtime
             shutdown_runtime()
         except Exception as _e:
             debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
-
-        if _global_task_manager is not None:
-            _global_task_manager.shutdown(wait=True)
-            _global_task_manager = None
 
         db.close()
 

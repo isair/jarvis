@@ -141,6 +141,10 @@ class TaskManager:
             for task_id, task in self._tasks.items():
                 if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
                     self._cancel_events.setdefault(task_id, threading.Event()).set()
+                    task.status = TaskStatus.CANCELLED
+                    task.completed_at = time.time()
+                    self._persist(task)
+                    self._emit(task)
                     debug_log(f"task stop requested during shutdown: {task_id}", "tasks")
         self._executor.shutdown(wait=wait, cancel_futures=True)
 

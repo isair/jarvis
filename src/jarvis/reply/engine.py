@@ -2523,6 +2523,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
+    if cancel_event is not None and cancel_event.is_set():
+        return None
     safe_reply = reply.strip()
     if not safe_reply:
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
@@ -2544,6 +2546,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             tts.speak(safe_reply)
 
     # Step 11: Add to dialogue memory
+    if cancel_event is not None and cancel_event.is_set():
+        return None
     if dialogue_memory is not None:
         try:
             # Add user message
