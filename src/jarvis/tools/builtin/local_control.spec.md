@@ -4,7 +4,9 @@
 
 - `open_application` launches one exact application command or path from
   `local_control_allowed_applications`, without a shell.
-- `open_url` opens only `http` or `https` URLs using the operating system browser.
+- `open_url` resolves the host first, then opens only `http` or `https` URLs
+  using the operating system browser. DNS or network validation failures are
+  returned as failures and never reported as successful browser launches.
 - `reveal_path` opens an existing file or folder under one of
   `local_control_allowed_roots`.
 

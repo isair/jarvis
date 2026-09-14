@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
 import webbrowser
@@ -118,9 +119,20 @@ class LocalControlTool(Tool):
             if not isinstance(url, str) or not url.strip():
                 return self._blocked("open_url requires 'url'.")
             url = url.strip()
-            scheme = urlparse(url).scheme.casefold()
-            if scheme not in {"http", "https"}:
+            parsed_url = urlparse(url)
+            scheme = parsed_url.scheme.casefold()
+            if scheme not in {"http", "https"} or not parsed_url.hostname:
                 return self._blocked("only http and https URL schemes are allowed.")
+            try:
+                socket.getaddrinfo(parsed_url.hostname, parsed_url.port, type=socket.SOCK_STREAM)
+            except socket.gaierror as exc:
+                return self._blocked(
+                    f"DNS resolution failed for URL host '{parsed_url.hostname}': {exc}"
+                )
+            except OSError as exc:
+                return self._blocked(
+                    f"network validation failed for URL host '{parsed_url.hostname}': {exc}"
+                )
             if not webbrowser.open(url):
                 return self._blocked("the system browser declined the URL.")
             debug_log(f"localControl opened URL: {url}", "local-control")
