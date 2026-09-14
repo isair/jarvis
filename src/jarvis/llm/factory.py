@@ -22,13 +22,21 @@ from .openai_compatible import OpenAICompatibleBackend
 
 _OLLAMA = "ollama"
 _OPENAI_COMPATIBLE = "openai_compatible"
+_LLAMA_CPP = "llama_cpp"
 _DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+# llama.cpp's `llama-server` listens on 8080 by default and exposes its API
+# under `/v1`, matching the OpenAI-compatible wire shape.
+_DEFAULT_LLAMA_CPP_URL = "http://127.0.0.1:8080/v1"
+# Providers that reuse OpenAICompatibleBackend under the hood. ``llama_cpp``
+# is a named alias for llama.cpp's `llama-server`, which already speaks the
+# OpenAI-compatible wire shape — no bespoke backend class is needed.
+_OPENAI_SHAPED_PROVIDERS = (_OPENAI_COMPATIBLE, _LLAMA_CPP)
 
 
 def _resolve_provider(value: Any) -> str:
     if isinstance(value, str):
         v = value.strip().lower()
-        if v in (_OLLAMA, _OPENAI_COMPATIBLE):
+        if v in (_OLLAMA, _OPENAI_COMPATIBLE, _LLAMA_CPP):
             return v
     return _OLLAMA
 
@@ -39,7 +47,7 @@ def _str_attr(settings: Any, name: str, default: str = "") -> str:
 
 
 def _build(provider: str, base_url: str, api_key: Optional[str]) -> LLMBackend:
-    if provider == _OPENAI_COMPATIBLE:
+    if provider in _OPENAI_SHAPED_PROVIDERS:
         return OpenAICompatibleBackend(base_url, api_key=api_key)
     return OllamaBackend(base_url)
 
@@ -57,6 +65,8 @@ def get_llm_backend(settings: Any) -> LLMBackend:
         base_url = _str_attr(settings, "llm_base_url") or _str_attr(
             settings, "ollama_base_url", _DEFAULT_OLLAMA_URL
         )
+    elif provider == _LLAMA_CPP:
+        base_url = _str_attr(settings, "llm_base_url", _DEFAULT_LLAMA_CPP_URL)
     else:
         base_url = _str_attr(settings, "ollama_base_url", _DEFAULT_OLLAMA_URL)
     api_key = _str_attr(settings, "llm_api_key") or None
@@ -81,6 +91,8 @@ def get_embedding_backend(settings: Any) -> LLMBackend:
     if not base_url:
         if provider == _OPENAI_COMPATIBLE:
             base_url = _str_attr(settings, "llm_base_url")
+        elif provider == _LLAMA_CPP:
+            base_url = _str_attr(settings, "llm_base_url", _DEFAULT_LLAMA_CPP_URL)
         else:
             base_url = _str_attr(settings, "ollama_base_url", _DEFAULT_OLLAMA_URL)
     if not base_url:

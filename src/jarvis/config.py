@@ -708,23 +708,23 @@ def load_settings() -> Settings:
     # Ollama path, so a stale ``llm_chat_model`` (e.g. promoted by the v2
     # migration) can never shadow it.
     llm_provider = str(merged.get("llm_provider", "ollama") or "ollama").strip().lower()
-    if llm_provider not in ("ollama", "openai_compatible"):
+    if llm_provider not in ("ollama", "openai_compatible", "llama_cpp"):
         llm_provider = "ollama"
     llm_base_url = str(merged.get("llm_base_url", "") or "").strip() or ollama_base_url
     llm_api_key = str(merged.get("llm_api_key", "") or "").strip()
-    if llm_provider == "openai_compatible":
+    if llm_provider in ("openai_compatible", "llama_cpp"):
         llm_chat_model = str(merged.get("llm_chat_model", "") or "").strip() or ollama_chat_model
     else:
         llm_chat_model = ollama_chat_model
     embedding_provider_raw = str(merged.get("embedding_provider", "") or "").strip().lower()
-    if embedding_provider_raw not in ("", "ollama", "openai_compatible"):
+    if embedding_provider_raw not in ("", "ollama", "openai_compatible", "llama_cpp"):
         embedding_provider_raw = ""
     embedding_provider = embedding_provider_raw
     embedding_base_url = str(merged.get("embedding_base_url", "") or "").strip()
     embedding_api_key = str(merged.get("embedding_api_key", "") or "").strip()
     # Effective embedding provider inherits the chat provider when unset.
     _effective_embed_provider = embedding_provider or llm_provider
-    if _effective_embed_provider == "openai_compatible":
+    if _effective_embed_provider in ("openai_compatible", "llama_cpp"):
         embedding_model = str(merged.get("embedding_model", "") or "").strip() or ollama_embed_model
     else:
         embedding_model = ollama_embed_model
@@ -805,7 +805,9 @@ def load_settings() -> Settings:
     fast_model = str(merged.get("fast_model", "") or "").strip()
     if not fast_model:
         fast_model = (
-            llm_chat_model if llm_provider == "openai_compatible" else DEFAULT_FAST_MODEL
+            llm_chat_model
+            if llm_provider in ("openai_compatible", "llama_cpp")
+            else DEFAULT_FAST_MODEL
         )
     intent_judge_timeout_sec = float(merged.get("intent_judge_timeout_sec", 6.0))
 
