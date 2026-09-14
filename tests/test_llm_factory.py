@@ -264,6 +264,26 @@ class TestPerProviderModelResolution:
         })
         assert settings.llm_chat_model == "gemma4:e2b"
 
+    def test_registered_provider_survives_settings_loading(self, tmp_path, monkeypatch):
+        from jarvis.llm import OllamaBackend, get_llm_backend, register_provider
+
+        register_provider(
+            "test_configured_local",
+            lambda base_url, _api_key=None: OllamaBackend(base_url),
+            replace=True,
+        )
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "test_configured_local",
+            "llm_base_url": "http://local-runtime:9000/v1",
+            "llm_chat_model": "local-chat",
+            "fast_model": "",
+        })
+
+        assert settings.llm_provider == "test_configured_local"
+        assert get_llm_backend(settings).base_url == "http://local-runtime:9000/v1"
+        assert settings.llm_chat_model == "local-chat"
+        assert settings.fast_model == "local-chat"
+
     def test_embedding_model_not_shadowed_on_ollama_path(self, tmp_path, monkeypatch):
         settings = self._load(tmp_path, monkeypatch, {
             "llm_provider": "ollama",
