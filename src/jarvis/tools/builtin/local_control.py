@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 import socket
+import shutil
 import subprocess
 import sys
 import webbrowser
+import ctypes
+import tkinter
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -34,6 +37,121 @@ def _is_under(path: Path, roots: list[str]) -> bool:
     return False
 
 
+def _read_clipboard() -> str:
+    if sys.platform == "win32":
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if not user32.OpenClipboard(None):
+            raise OSError("could not open the clipboard")
+        try:
+            handle = user32.GetClipboardData(13)
+            if not handle:
+                return ""
+            pointer = kernel32.GlobalLock(handle)
+            if not pointer:
+                raise OSError("could not read clipboard data")
+            try:
+                return ctypes.wstring_at(pointer)
+            finally:
+                kernel32.GlobalUnlock(handle)
+        finally:
+            user32.CloseClipboard()
+    root = tkinter.Tk()
+    root.withdraw()
+    try:
+        return root.clipboard_get()
+    finally:
+        root.destroy()
+
+
+def _write_clipboard(text: str) -> None:
+    if sys.platform == "win32":
+        root = tkinter.Tk()
+        root.withdraw()
+        try:
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            root.update()
+        finally:
+            root.destroy()
+        return
+    root = tkinter.Tk()
+    root.withdraw()
+    try:
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+    finally:
+        root.destroy()
+
+
+def _list_windows() -> list[str]:
+    if sys.platform != "win32":
+        raise OSError("window management is only supported on Windows")
+    user32 = ctypes.windll.user32
+    titles: list[str] = []
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def callback(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                if buffer.value.strip():
+                    titles.append(buffer.value)
+        return True
+
+    user32.EnumWindows(callback_type(callback), 0)
+    return titles
+
+
+def _focus_window(title: str) -> bool:
+    if sys.platform != "win32":
+        raise OSError("window management is only supported on Windows")
+    user32 = ctypes.windll.user32
+    found = None
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def callback(hwnd, _lparam):
+        nonlocal found
+        length = user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if user32.IsWindowVisible(hwnd) and title.casefold() in buffer.value.casefold():
+            found = hwnd
+            return False
+        return True
+
+    user32.EnumWindows(callback_type(callback), 0)
+    if not found or not user32.SetForegroundWindow(found):
+        return False
+    return True
+
+
+def _minimize_window(title: str) -> bool:
+    if sys.platform != "win32":
+        raise OSError("window management is only supported on Windows")
+    user32 = ctypes.windll.user32
+    found = None
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def callback(hwnd, _lparam):
+        nonlocal found
+        length = user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if user32.IsWindowVisible(hwnd) and title.casefold() in buffer.value.casefold():
+            found = hwnd
+            return False
+        return True
+
+    user32.EnumWindows(callback_type(callback), 0)
+    if not found or not user32.ShowWindow(found, 6):
+        return False
+    return True
+
+
 class LocalControlTool(Tool):
     """Perform a small, explicitly approved set of local UI actions."""
 
@@ -44,8 +162,8 @@ class LocalControlTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "With explicit user approval, open an allowlisted local application, "
-            "open an HTTP(S) URL, or reveal an existing file or folder."
+            "Read or change local clipboard text, copy or move files under configured roots, "
+            "list or manage Windows, or open other allowlisted local resources."
         )
 
     @property
@@ -55,7 +173,12 @@ class LocalControlTool(Tool):
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["open_application", "open_url", "reveal_path"],
+                    "enum": [
+                        "open_application", "open_url", "reveal_path",
+                        "clipboard_read", "clipboard_write",
+                        "copy_file", "move_file", "rename_file",
+                        "list_windows", "focus_window", "minimize_window",
+                    ],
                 },
                 "application": {
                     "type": "string",
@@ -69,6 +192,10 @@ class LocalControlTool(Tool):
                     "type": "string",
                     "description": "Existing file or folder under a configured local root.",
                 },
+                "source": {"type": "string", "description": "Existing source file under a configured root."},
+                "destination": {"type": "string", "description": "Destination file under a configured root."},
+                "text": {"type": "string", "description": "Text to place on the clipboard."},
+                "title": {"type": "string", "description": "Case-insensitive window title match."},
             },
             "required": ["operation"],
             "additionalProperties": False,
@@ -105,6 +232,114 @@ class LocalControlTool(Tool):
             return self._blocked("local control is disabled in settings.")
 
         operation = str(args.get("operation") or "").strip().lower()
+        if operation == "clipboard_read":
+            try:
+                text = _read_clipboard()
+            except (OSError, RuntimeError, ValueError, tkinter.TclError) as exc:
+                return self._blocked(f"clipboard could not be read: {exc}")
+            debug_log("localControl read clipboard", "local-control")
+            return ToolExecutionResult(success=True, reply_text=f"Clipboard: {text}")
+
+        if operation == "list_windows":
+            try:
+                titles = _list_windows()
+            except (OSError, RuntimeError, ValueError, tkinter.TclError) as exc:
+                return self._blocked(f"windows could not be listed: {exc}")
+            return ToolExecutionResult(
+                success=True,
+                reply_text="Open windows:\n" + "\n".join(titles) if titles else "Open windows: none",
+            )
+
+        if operation == "clipboard_write":
+            text = args.get("text")
+            if not isinstance(text, str):
+                return self._blocked("clipboard_write requires string 'text'.")
+            approval = self._approval(context, {
+                "operation": operation,
+                "summary": f"Write clipboard text: {len(text)} characters",
+                "risk": "Replaces text currently available to other local applications.",
+                "reason": "The requested clipboard text is ready to be written.",
+            })
+            if approval is not None:
+                return approval
+            try:
+                _write_clipboard(text)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return self._blocked(f"clipboard could not be written: {exc}")
+            debug_log("localControl wrote clipboard text", "local-control")
+            return ToolExecutionResult(success=True, reply_text=f"Wrote {len(text)} characters to clipboard")
+
+        if operation in {"copy_file", "move_file", "rename_file"}:
+            source_arg = args.get("source")
+            destination_arg = args.get("destination")
+            if not isinstance(source_arg, str) or not source_arg.strip():
+                return self._blocked(f"{operation} requires 'source'.")
+            if not isinstance(destination_arg, str) or not destination_arg.strip():
+                return self._blocked(f"{operation} requires 'destination'.")
+            source = Path(os.path.expanduser(source_arg.strip())).resolve()
+            destination = Path(os.path.expanduser(destination_arg.strip())).resolve()
+            roots = list(_setting(context, "local_control_allowed_roots", []) or [])
+            if not _is_under(source, roots) or not _is_under(destination, roots):
+                return self._blocked("source and destination must be inside configured allowed roots.")
+            if not source.exists() or not source.is_file():
+                return self._blocked(f"source file does not exist: {source}")
+            summaries = {
+                "copy_file": f"Copy file: {source} -> {destination}",
+                "move_file": f"Move file: {source} -> {destination}",
+                "rename_file": f"Rename file: {source} -> {destination}",
+            }
+            risks = {
+                "copy_file": "Copies a local file and may overwrite the destination.",
+                "move_file": "Moves a local file and may overwrite the destination.",
+                "rename_file": "Renames a local file and may overwrite the destination.",
+            }
+            approval = self._approval(context, {
+                "operation": operation,
+                "summary": summaries[operation],
+                "risk": risks[operation],
+                "reason": "Both file paths are inside configured allowed roots.",
+            })
+            if approval is not None:
+                return approval
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if operation == "copy_file":
+                    shutil.copy2(source, destination)
+                else:
+                    shutil.move(source, destination)
+            except OSError as exc:
+                return self._blocked(f"{operation} failed: {exc}")
+            debug_log(f"localControl {operation}: {source} -> {destination}", "local-control")
+            return ToolExecutionResult(success=True, reply_text=f"{operation.replace('_', ' ').capitalize()} completed: {destination}")
+
+        if operation in {"focus_window", "minimize_window"}:
+            title = args.get("title")
+            if not isinstance(title, str) or not title.strip():
+                return self._blocked(f"{operation} requires 'title'.")
+            if sys.platform != "win32":
+                return self._blocked("window management is only supported on Windows.")
+            verb = "Focus" if operation == "focus_window" else "Minimize"
+            approval = self._approval(context, {
+                "operation": operation,
+                "summary": f"{verb} window: {title.strip()}",
+                "risk": (
+                    "Changes the active window in the local desktop."
+                    if operation == "focus_window"
+                    else "Changes window state in the local desktop."
+                ),
+                "reason": "The requested window title will be matched case-insensitively.",
+            })
+            if approval is not None:
+                return approval
+            try:
+                changed = _focus_window(title.strip()) if operation == "focus_window" else _minimize_window(title.strip())
+            except OSError as exc:
+                return self._blocked(str(exc))
+            if not changed:
+                return self._blocked(f"no visible window matched: {title.strip()}")
+            debug_log(f"localControl {operation}: {title.strip()}", "local-control")
+            return ToolExecutionResult(success=True, reply_text=f"{verb}d window: {title.strip()}")
+
         if operation == "open_application":
             application = args.get("application")
             if not isinstance(application, str) or not application.strip():
