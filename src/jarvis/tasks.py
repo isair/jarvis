@@ -63,12 +63,16 @@ class TaskManager:
         tts=None,
         event_callback: Optional[Callable[[dict], None]] = None,
         max_workers: int = 1,
+        max_queued_tasks: int = 100,
+        max_history: int = 200,
     ) -> None:
         self.db = db
         self.cfg = cfg
         self.dialogue_memory = dialogue_memory
         self.tts = tts
         self.event_callback = event_callback
+        self.max_queued_tasks = max_queued_tasks
+        self.max_history = max_history
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jarvis-task")
         self._tasks: dict[str, Task] = {}
         self._futures: dict[str, Future] = {}
@@ -82,9 +86,16 @@ class TaskManager:
             raise ValueError("Task prompt cannot be empty")
         task = Task(id=uuid.uuid4().hex[:12], prompt=prompt)
         with self._lock:
+            active = sum(
+                item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+                for item in self._tasks.values()
+            )
+            if active >= self.max_queued_tasks:
+                raise RuntimeError("Task queue is full")
             self._tasks[task.id] = task
             self._cancel_events[task.id] = threading.Event()
             self._persist(task)
+            self._prune_history()
             self._emit(task)
             self._futures[task.id] = self._executor.submit(self._run, task.id)
         debug_log(f"task submitted: {task.id}", "tasks")
@@ -182,6 +193,24 @@ class TaskManager:
             self.event_callback(event)
         except Exception as exc:
             debug_log(f"task event callback failed: {exc}", "tasks")
+
+    def _prune_history(self) -> None:
+        terminal = sorted(
+            (task for task in self._tasks.values()
+             if task.status in {
+                 TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED
+             }),
+            key=lambda task: task.created_at,
+        )
+        for task in terminal[:-self.max_history]:
+            self._tasks.pop(task.id, None)
+            self._futures.pop(task.id, None)
+            self._cancel_events.pop(task.id, None)
+        if hasattr(self.db, "prune_task_records"):
+            try:
+                self.db.prune_task_records(self.max_history)
+            except Exception as exc:
+                debug_log(f"task history pruning failed: {exc}", "tasks")
 
     def _persist(self, task: Task) -> None:
         if not hasattr(self.db, "upsert_task_record"):

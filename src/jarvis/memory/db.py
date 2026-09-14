@@ -165,7 +165,14 @@ class Database:
                 "SELECT * FROM task_records ORDER BY created_at ASC"
             ).fetchall()
 
-    
+    def prune_task_records(self, keep: int) -> None:
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM task_records WHERE id NOT IN "
+                "(SELECT id FROM task_records ORDER BY created_at DESC LIMIT ?)",
+                (keep,),
+            )
+            self.conn.commit()
 
     def search_hybrid(self, fts_query: str, query_vec_json: Optional[str], top_k: int = 8) -> list[sqlite3.Row]:
         with self._lock:

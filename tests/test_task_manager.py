@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from threading import Event
 from unittest.mock import patch
+import pytest
 
 from jarvis.memory.db import Database
 from jarvis.tasks import TaskManager, TaskStatus
@@ -89,6 +90,32 @@ def test_cancel_running_task_signals_reply_engine_and_stays_cancelled():
     assert task is not None
     assert task.status is TaskStatus.CANCELLED
     assert task.result is None
+    manager.shutdown()
+
+
+def test_task_queue_rejects_submissions_over_capacity():
+    manager = TaskManager(
+        db=object(),
+        cfg=SimpleNamespace(),
+        dialogue_memory=object(),
+        max_workers=1,
+        max_queued_tasks=1,
+    )
+    started = Event()
+    release = Event()
+
+    def blocking_reply(*_args, **_kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return "done"
+
+    with patch("jarvis.tasks.run_reply_engine", side_effect=blocking_reply):
+        manager.submit("first")
+        assert started.wait(timeout=1)
+        with pytest.raises(RuntimeError, match="queue is full"):
+            manager.submit("second")
+        release.set()
+        manager.wait_for_idle(timeout=2)
     manager.shutdown()
 
 

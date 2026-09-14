@@ -1230,7 +1230,7 @@ def main(smoke_test: bool = False) -> None:
             debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
 
         if _global_task_manager is not None:
-            _global_task_manager.shutdown(wait=False)
+            _global_task_manager.shutdown(wait=True)
             _global_task_manager = None
 
         db.close()
