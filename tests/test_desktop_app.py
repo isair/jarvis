@@ -46,7 +46,6 @@ class TestEntryPointImports:
             "Offenders:\n  " + "\n  ".join(relative_imports)
         )
 
-
 class TestOllamaRuntimeFlags:
     """The desktop startup must only launch/verify Ollama when a local
     provider actually uses it. A pure OpenAI-compatible setup should skip
@@ -1915,4 +1914,3 @@ class TestListeningWindowVisibility:
         assert show_idx > start_idx, (
             "the launch windows must open after the daemon auto-start"
         )
-
