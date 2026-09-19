@@ -64,3 +64,38 @@ def test_wizard_initial_size_fits_available_screen(qapp, monkeypatch):
         assert wizard.frameGeometry().height() <= wizard.screen().availableGeometry().height()
     finally:
         wizard.close()
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_whisper_install_buttons_fit_status_text(qapp, monkeypatch, installed):
+    from PyQt6.QtWidgets import QStyle, QStyleOptionButton
+
+    monkeypatch.setattr(ui, "is_apple_silicon", lambda: True)
+    monkeypatch.setattr(ui.WhisperSetupPage, "initializePage", lambda self: None)
+    monkeypatch.setattr(ui, "check_mlx_whisper_status", lambda: ui.MLXWhisperStatus(
+        is_apple_silicon=True,
+        is_ffmpeg_installed=installed,
+        ffmpeg_path="/opt/homebrew/bin/ffmpeg" if installed else None,
+        is_mlx_whisper_installed=installed,
+    ))
+    wizard = QWizard()
+    wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET)
+    page = ui.WhisperSetupPage()
+    wizard.addPage(page)
+    wizard.resize(700, 600)
+    wizard.show()
+    page._refresh_mlx_status()
+    QTest.qWait(100)
+    try:
+        for button in (page.install_ffmpeg_btn, page.install_mlx_btn):
+            assert button.isVisible()
+            assert button.isEnabled() is not installed
+            option = QStyleOptionButton()
+            button.initStyleOption(option)
+            contents = button.style().subElementRect(
+                QStyle.SubElement.SE_PushButtonContents, option, button
+            )
+            assert contents.height() >= button.fontMetrics().height()
+            assert contents.width() >= button.fontMetrics().horizontalAdvance(button.text())
+    finally:
+        wizard.close()
