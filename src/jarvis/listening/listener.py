@@ -25,6 +25,7 @@ from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
+from . import audio_io as _audio_io
 
 try:  # pragma: no cover - trivial import shim
     from ..integrations.voice_pe.models import (
@@ -2863,23 +2864,25 @@ class VoiceListener(threading.Thread):
             input_devices = [d for d in devices if d.get('max_input_channels', 0) > 0]
             debug_log(f"PortAudio initialised: {len(input_devices)} input device(s) found", "voice")
             if not input_devices:
-                print("  âŒ No microphone found. Please connect a microphone.", flush=True)
+                print("  ❌ No microphone found. Please connect a microphone.", flush=True)
                 return
         except Exception as e:
             debug_log(f"PortAudio device query failed: {e}", "voice")
-            print(f"  âŒ Audio system error: {e}", flush=True)
+            print(f"  ❌ Audio system error: {e}", flush=True)
             print("     PortAudio may not be properly installed", flush=True)
             if sys.platform == 'linux':
                 print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
             return
 
-        # Windows 11: Test microphone permission by attempting a brief recording
-        # This catches privacy settings that silently block audio access.
-        # A 5-second timeout prevents indefinite hangs when Windows blocks
-        # the audio device at the system level without raising an error.
-        # Uses InputStream (not sd.rec) so the stream can be explicitly closed
-        # on timeout, avoiding resource leaks that could block later audio init.
-        if sys.platform == 'win32':
+        # Windows 11: Test microphone permission by attempting a brief recording.
+        # Native engine skips this — it uses WASAPI directly and reports an
+        # empty-capabilities bitfield when there is no endpoint at all.
+        _native_ready = _audio_io.has_native()
+
+        if _native_ready:
+            print("  🎚  Native audio engine wired (WebRTC AEC3)", flush=True)
+            print("     In-process shared-memory pipeline; PortAudio is idle.", flush=True)
+        elif sys.platform == 'win32':
             try:
                 print("  ðŸ” Checking microphone permission...", flush=True)
                 mic_ok = threading.Event()
@@ -3378,60 +3381,99 @@ class VoiceListener(threading.Thread):
                 debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
                 print(f"  🎤 Using audio device: {device_name}", flush=True)
             else:
-                debug_log("using system default input device", "voice")
+                # No configured voice_device: bind the stream to the Windows
+                # default input device by its resolved index, so the open
+                # names the system default explicitly and the native-rate
+                # fallback below reads the very same device record. The same
+                # system default is what the TTS output opens against.
+                default_in = None
                 try:
-                    default_dev = sd.query_devices(sd.default.device[0])
-                    print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
+                    device_id = int((sd.default.device or (-1, -1))[0])
+                    if device_id >= 0:
+                        default_in = device_id
                 except Exception:
+                    default_in = None
+                if default_in is not None:
+                    stream_kwargs["device"] = default_in
+                    debug_log(
+                        f"using system default input device index {default_in}", "voice"
+                    )
+                    try:
+                        default_dev = sd.query_devices(default_in)
+                        print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
+                    except Exception:
+                        print("  🎤 Using system default input device", flush=True)
+                else:
+                    debug_log("using system default input device", "voice")
                     print("  🎤 Using system default input device", flush=True)
         except Exception:
             pass
 
-        # Open audio stream — try configured rate first, fall back to device
-        # native rate when the hardware rejects 16 kHz (common on Linux ALSA).
+        # Open audio stream — native first (WebRTC AEC3 in-process), then
+        # sounddevice+numpy and native-rate fallbacks for hosts without the DLL.
         self._stream_samplerate = self._samplerate
         open_error = None
-        try:
-            with portaudio_lock:
-                stream = sd.InputStream(
-                    samplerate=self._samplerate,
-                    channels=1,
-                    dtype="float32",
-                    blocksize=self._frame_samples,
-                    callback=self._on_audio,
-                    **stream_kwargs,
+        stream = None
+        if _audio_io.has_native():
+            st = _audio_io.native_create(self.cfg)
+            if st == _audio_io.NATIVE_OK:
+                # Native AEC3 emits 16 kHz float, 10 ms frames. The VAD/grid
+                # in the loop already handles arbitrary-length chunks with a
+                # carry buffer, so no resample / re-frame is needed here.
+                self._stream_samplerate = _audio_io.ASR_RATE_HZ
+                self._frame_samples = max(
+                    1, int(self._stream_samplerate * frame_ms / 1000)
                 )
-        except Exception as e:
-            error_msg = str(e).lower()
-            is_rate_error = "sample rate" in error_msg or "9987" in error_msg
-            if is_rate_error:
-                debug_log(f"device rejected {self._samplerate} Hz, querying native rate", "voice")
-                try:
-                    if "device" in stream_kwargs:
-                        dev_info = sd.query_devices(stream_kwargs["device"])
-                    else:
-                        dev_info = sd.query_devices(kind="input")
-                    native_rate = int(dev_info.get("default_samplerate", self._samplerate))
-                    if native_rate != self._samplerate:
-                        self._stream_samplerate = native_rate
-                        native_frame_samples = max(1, int(native_rate * 30 / 1000))
-                        print(f"  âš ï¸  Device doesn't support {self._samplerate} Hz — using {native_rate} Hz with resampling", flush=True)
-                        debug_log(f"retrying stream at native {native_rate} Hz", "voice")
-                        with portaudio_lock:
-                            stream = sd.InputStream(
-                                samplerate=native_rate,
-                                channels=1,
-                                dtype="float32",
-                                blocksize=native_frame_samples,
-                                callback=self._on_audio,
-                                **stream_kwargs,
-                            )
-                    else:
-                        open_error = e
-                except Exception:
-                    open_error = e
+                stream = _audio_io.native_stream(self._on_audio)
+                # `pre_roll_max_frames` etc. were computed above from the
+                # declared 16 kHz, so keep them in sync with the stream rate.
+                pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
             else:
-                open_error = e
+                debug_log(
+                    f"native engine unavailable (status={st}), using sounddevice", "voice"
+                )
+        if stream is None:
+            try:
+                with portaudio_lock:
+                    stream = sd.InputStream(
+                        samplerate=self._samplerate,
+                        channels=1,
+                        dtype="float32",
+                        blocksize=self._frame_samples,
+                        callback=self._on_audio,
+                        **stream_kwargs,
+                    )
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_rate_error = "sample rate" in error_msg or "9987" in error_msg
+                if is_rate_error:
+                    debug_log(f"device rejected {self._samplerate} Hz, querying native rate", "voice")
+                    try:
+                        if "device" in stream_kwargs:
+                            dev_info = sd.query_devices(stream_kwargs["device"])
+                        else:
+                            dev_info = sd.query_devices(kind="input")
+                        native_rate = int(dev_info.get("default_samplerate", self._samplerate))
+                        if native_rate != self._samplerate:
+                            self._stream_samplerate = native_rate
+                            native_frame_samples = max(1, int(native_rate * 30 / 1000))
+                            print(f"  ⚠️  Device doesn't support {self._samplerate} Hz — using {native_rate} Hz with resampling", flush=True)
+                            debug_log(f"retrying stream at native {native_rate} Hz", "voice")
+                            with portaudio_lock:
+                                stream = sd.InputStream(
+                                    samplerate=native_rate,
+                                    channels=1,
+                                    dtype="float32",
+                                    blocksize=native_frame_samples,
+                                    callback=self._on_audio,
+                                    **stream_kwargs,
+                                )
+                        else:
+                            open_error = e
+                    except Exception:
+                        open_error = e
+                else:
+                    open_error = e
 
         if open_error is not None:
             error_msg = str(open_error).lower()
@@ -4076,6 +4118,33 @@ class VoiceListener(threading.Thread):
             reason = str(record.get("reason") or record.get("raw_transcript") or "")
             self._voice_pe_event("error", f"{resolved}|{reason}")
 
+    def _clear_stream_input_buffers(self, stream) -> None:
+        """Drop this utterance's own input blocks before the decoder sees the clip.
+
+        One closed utterance leaves behind per-stream continuity blocks that no
+        longer carry its speech: the sub-frame remainder of the last
+        512-sample satellite block, and the pre-roll of the just-closed
+        utterance. After the endpoint those blocks are the ringing tail of the
+        previous reply on the Windows default output — the echo — so they are
+        cleared before the clip is sent to Whisper. With the echo tail out of
+        the grid, the next utterance starts on post-echo frames only and both
+        microphones (local ``LocalMicFrame`` and satellite
+        ``SatelliteAudioFrame``) keep one clean grid per source. Idempotent and
+        safe on every early-return of ``_transcribe_utterance``.
+        """
+        if stream is None:
+            return
+        try:
+            self._remaining_samples.pop(stream, None)
+        except Exception:
+            pass
+        try:
+            pre_roll = self._pre_rolls.get(stream)
+            if pre_roll is not None:
+                pre_roll.clear()
+        except Exception:
+            pass
+
     def _transcribe_utterance(
         self, utterance_source, utterance_stream, utterance_state
     ) -> tuple:
@@ -4084,8 +4153,7 @@ class VoiceListener(threading.Thread):
             self.is_speech_active = False
             self._silence_frames = 0
             self._utterance_frames = []
-            if utterance_stream is not None:
-                self._remaining_samples.pop(utterance_stream, None)
+            self._clear_stream_input_buffers(utterance_stream)
             token = self._turn_context
             debug_log(
                 "utterance has no grid frames: "
@@ -4136,6 +4204,7 @@ class VoiceListener(threading.Thread):
                 note="empty_concatenation",
                 state=utterance_state,
             )
+            self._clear_stream_input_buffers(utterance_stream)
             return ("skipped_too_short", {"reason": "empty_concatenation"})
 
         # Resample to Whisper's expected rate if the stream ran at a different rate
@@ -4246,6 +4315,7 @@ class VoiceListener(threading.Thread):
                 pre=pre_meta,
             )
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            self._clear_stream_input_buffers(utterance_stream)
             return (
                 "filtered" if evidence.total_samples > 0 else "skipped_too_short",
                 {
@@ -4283,6 +4353,7 @@ class VoiceListener(threading.Thread):
                 pre=pre_meta,
             )
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            self._clear_stream_input_buffers(utterance_stream)
             return (
                 "skipped_too_short",
                 {
@@ -4324,6 +4395,7 @@ class VoiceListener(threading.Thread):
                 pre=pre_meta,
             )
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            self._clear_stream_input_buffers(utterance_stream)
             return (
                 "filtered",
                 {
@@ -4337,6 +4409,13 @@ class VoiceListener(threading.Thread):
                     "preprocessor": pre_meta,
                 },
             )
+
+        # Echo-clearance for the decoder input: clear the finished stream's own
+        # remainders/pre-roll now — the TTS of the previous reply still rings
+        # off the Windows default output, and this is the last point where its
+        # tail can be separated from the user's speech. Both the local
+        # microphone and the satellite arrive here through the same stage.
+        self._clear_stream_input_buffers(utterance_stream)
 
         # Speech recognition with appropriate backend
         # ``raw_rows`` keeps the unfiltered decoder rows for the recorded status.

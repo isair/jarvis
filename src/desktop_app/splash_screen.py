@@ -123,10 +123,13 @@ class SplashScreen(QWidget):
     def __init__(self):
         super().__init__()
 
-        # Frameless, always on top, tool window (no taskbar entry)
+        # Frameless, always on top, tool window (no taskbar entry). The
+        # minimize-button hint lets ``showMinimized()`` collapse the splash to
+        # the taskbar while startup keeps running on its worker threads.
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -194,6 +197,29 @@ class SplashScreen(QWidget):
         painter.setPen(QPen(border_color, 1))
 
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 16, 16)
+
+    def _toggle_minimized(self) -> None:
+        """Collapse the splash to the taskbar, or restore it.
+
+        A frameless window carries no title-bar button, so both the mouse
+        click and any key press drive the same toggle. Startup itself never
+        pauses: the progress worker keeps running on its own thread while the
+        splash is minimized.
+        """
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.showMinimized()
+
+    def mousePressEvent(self, event):
+        """Any click on the minimizable frameless splash toggles its state."""
+        self._toggle_minimized()
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        """Any key press on the minimizable frameless splash toggles its state."""
+        self._toggle_minimized()
+        super().keyPressEvent(event)
 
     def set_status(self, status: str):
         """Update the status message."""

@@ -1,0 +1,73 @@
+#!/bin/bash
+# Copyright (C) 2021 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This script builds the perfetto.dev docs website (via ./build) and pushes the
+# contents to the gs://perfetto.dev GCS bucket. It doesn't re-deploy the
+# AppEngine instance, as that doesn't depend on the contents (use
+# ./appengine/deploy for that).
+# This is ran by the Cloud Build infrastructure (./cloudbuild.yaml) whenever a
+# docs/ change is detected. See go/perfetto-ui-autopush for more details.
+
+set -eux
+
+# The directory that contains this script (//infra/perfetto.dev)
+readonly CUR_DIR="$(cd -P ${BASH_SOURCE[0]%/*}; pwd)"
+
+# The repo root.
+readonly ROOT_DIR=$(dirname $(dirname "$CUR_DIR"))
+
+# The directory that will contain the static website artifacts.
+readonly OUT_DIR="$ROOT_DIR/out/perfetto.dev/site"
+
+# Build first.
+"$CUR_DIR/build"
+
+# The markdown docs are rendered into extension-less HTML files to make the URLs
+# look nice (e.g., /docs/tracing rather than /docs/tracing.html). By default
+# gsutil infers the mime-type from the extension, falling back to octet/stream
+# for extension-less fiels. octect/stream causes the browser to download the
+# file rather than parsing it as a web page.
+# We set use_magicfile = True here, which causes gsutil to infer the MIME type
+# by invoking `file -b --mime /path/to/file`.
+# Unfortunately, that solves the HTML MIME problem but adds another one: the
+# standard `file` util doesn't deal with .css files and marks them as text/plain
+# causing the browser to ignore the CSS.
+# Here what we do is replacing the standard `file` util with a custom made one
+# (mime_util/file) which sets the right MIME types we want. We do this by
+# prepending our script to the PATH.
+export PATH="$CUR_DIR/mime_util:$PATH"
+export BOTO_CONFIG=/tmp/boto
+cat << EOF > $BOTO_CONFIG
+[GSUtil]
+use_magicfile = True
+
+EOF
+
+# Basic checks before uploading. Test both the existence and the mime type.
+[ "$(file $OUT_DIR/index.html)" == "text/html" ]
+[ "$(file $OUT_DIR/assets/style.css)" == "text/css" ]
+[ "$(file $OUT_DIR/assets/home.png)" == "image/png" ]
+[ "$(file $OUT_DIR/docs/images/perfetto-stack.svg)" == "image/svg+xml" ]
+[ "$(file $OUT_DIR/docs/images/perfetto-stack.svg)" == "image/svg+xml" ]
+[ "$(file $OUT_DIR/docs/analysis/sql-tables)" == "text/html" ]
+
+# -j: apply 'Content-Encoding: gzip' compression to passed extensions.
+# -d: mirror also deletetions.
+# -c: compare checksums, not mtimes.
+# -r: recursive.
+# The trailing slash appended to $OUT_DIR is to prevent that gsutil creates a
+# nested sub-directory inside gs://perfetto.dev/.
+gsutil -m rsync -j html,js,css,svg -d -c -r \
+  "$OUT_DIR/" gs://perfetto.dev/

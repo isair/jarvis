@@ -232,6 +232,17 @@ class TunePlayer:
                     outdata[first:, 0] = samples[:remainder]
                     position[0] = remainder
 
+            # Same rule as the TTS path: open the output on the current Windows
+            # default device, so the tune and the spoken reply share one output
+            # and the echo timing stays on that device's clock.
+            output_device = None
+            try:
+                device_id = int((sd.default.device or (-1, -1))[1])
+                if device_id >= 0:
+                    output_device = device_id
+            except Exception:
+                output_device = None
+
             try:
                 with portaudio_lock:
                     stream = sd.OutputStream(
@@ -244,6 +255,7 @@ class TunePlayer:
                         blocksize=8192,
                         latency='high',
                         callback=callback,
+                        device=output_device,
                     )
             except Exception as exc:
                 debug_log(f"thinking tune: stream open failed: {exc!r}", category="tune")

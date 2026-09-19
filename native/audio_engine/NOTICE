@@ -1,0 +1,17 @@
+The Toustovač native Windows audio engine uses two source sets:
+
+1. This repository's own code under native/audio_engine/ — ISC-style
+   (see LICENSE at the repository root).
+
+2. WebRTC Audio Processing (AEC3 and its direct dependencies), vendored /
+   fetched at the exact pinned commit:
+
+     repo   : https://webrtc.googlesource.com/src
+     commit : 4690e0b758acf196e0ed810b6cde77c3ca74e437
+     pos    : refs/heads/main@{#45047} (2025-06-30)
+
+   WebRTC sources are BSD 3-Clause licensed; see the LICENSE file shipped
+   inside the vendored tree (third_party/webrtc-aec3/LICENSE, or the same
+   license text in the fetched tree).
+
+No binary downloads at runtime; all sources are pinned by commit hash.

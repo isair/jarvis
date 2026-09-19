@@ -902,6 +902,19 @@ class PiperTTS:
 
                 play_position[0] = end
 
+            # Bind playback explicitly to the Windows default output device
+            # (the system default read at this moment), so the reply leaves on
+            # the one output the user hears - a loud JBL on the desktop or the
+            # built-in speaker - and echo detection keeps its timing on that
+            # same device. -1/None fall through to PortAudio's own default.
+            output_device = None
+            try:
+                device_id = int((sd.default.device or (-1, -1))[1])
+                if device_id >= 0:
+                    output_device = device_id
+            except Exception:
+                output_device = None
+
             with self._audio_lock:
                 with portaudio_lock:
                     self._audio_stream = sd.OutputStream(
@@ -910,6 +923,7 @@ class PiperTTS:
                         dtype='int16',
                         blocksize=blocksize,
                         callback=audio_callback,
+                        device=output_device,
                     )
                     self._audio_stream.start()
 

@@ -1,0 +1,13 @@
+
+"track_type","track_name","upid","ts","value"
+"counter","Total big core mcycles",0,2000000000,1.100000
+"counter","Total little core mcycles",0,2000000000,1.100000
+"counter","Thread 10 (1) (big core) mcycles",1,2000000000,1.100000
+"counter","Thread 10 (1) (little core) mcycles",1,2000000000,1.100000
+"counter","Total big core mcycles",0,3000000000,23.100000
+"counter","Total little core mcycles",0,3000000000,23.100000
+"counter","Thread 10 (1) (big core) mcycles",1,3000000000,23.100000
+"counter","Thread 10 (1) (little core) mcycles",1,3000000000,23.100000
+"counter","Thread 20 (3) (big core) mcycles",2,3000000000,11.000000
+"counter","Thread 20 (3) (little core) mcycles",2,3000000000,11.000000
+"counter","Thread 40 (7) (little core) mcycles",4,3000000000,0.100000

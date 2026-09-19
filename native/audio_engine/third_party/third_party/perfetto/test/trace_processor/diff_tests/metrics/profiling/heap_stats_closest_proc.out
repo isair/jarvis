@@ -1,0 +1,54 @@
+java_heap_stats {
+  instance_stats {
+    upid: 2
+    process {
+      name: "proc1"
+      uid: 1000
+      pid: 2
+      android_user_id: 0
+      is_kernel_task: false
+    }
+    samples {
+      ts: 200000000
+      heap_size: 64
+      heap_native_size: 0
+      reachable_heap_size: 64
+      reachable_heap_native_size: 0
+      obj_count: 1
+      reachable_obj_count: 1
+      anon_rss_and_swap_size: 2048
+      roots {
+        root_type: "ROOT_JAVA_FRAME"
+        type_name: "FactoryProducerDelegateImplActor"
+        obj_count: 1
+      }
+    }
+  }
+}
+java_heap_stats {
+  instance_stats {
+    upid: 3
+    process {
+      name: "proc2"
+      uid: 1000
+      pid: 3
+      android_user_id: 0
+      is_kernel_task: false
+    }
+    samples {
+      ts: 1500000000
+      heap_size: 64
+      heap_native_size: 0
+      reachable_heap_size: 64
+      reachable_heap_native_size: 0
+      obj_count: 1
+      reachable_obj_count: 1
+      anon_rss_and_swap_size: 3072
+      roots {
+        root_type: "ROOT_JAVA_FRAME"
+        type_name: "FactoryProducerDelegateImplActor"
+        obj_count: 1
+      }
+    }
+  }
+}

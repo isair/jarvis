@@ -1,0 +1,48 @@
+android_lmk_reason {
+  lmks: {
+    oom_score_adj: 0
+  }
+  lmks: {
+    oom_score_adj: 100
+    system_ion_heap_size: 1000
+    ion_heaps_bytes: 1000
+  }
+  lmks: {
+    oom_score_adj: 200
+    system_ion_heap_size: 1000
+    ion_heaps_bytes: 1000
+    processes: {
+      process: {
+        name: "process"
+      }
+      oom_score_adj: 0
+      size: 2000
+      file_rss_bytes: 0
+      anon_rss_bytes: 2000
+      shmem_rss_bytes: 0
+      swap_bytes: 0
+    }
+  }
+  lmks: {
+    oom_score_adj: 100
+    system_ion_heap_size: 1000
+    ion_heaps_bytes: 1000
+    processes {
+      process {
+        name: "app:ui"
+        uid: 10001
+        package {
+          package_name: "app"
+          apk_version_code: 123
+          debuggable: false
+        }
+      }
+      oom_score_adj: 0
+      size: 5000
+      file_rss_bytes: 0
+      anon_rss_bytes: 2500
+      shmem_rss_bytes: 0
+      swap_bytes: 2500
+    }
+  }
+}

@@ -1,0 +1,127 @@
+packet {
+  ftrace_events {
+    cpu: 2
+    event {
+      timestamp: 1000000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#11"
+        type: 67
+        value: 0
+      }
+    }
+    event {
+      timestamp: 1003000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#11"
+        type: 67
+        value: 0
+      }
+    }
+    event {
+      timestamp: 1005000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#11"
+        type: 67
+        value: 1
+      }
+    }
+    event {
+      timestamp: 1010000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#10"
+        type: 67
+        value: 1
+      }
+    }
+    event {
+      timestamp: 1020000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#11"
+        type: 67
+        value: 1
+      }
+    }
+    event {
+      timestamp: 1030000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#10"
+        type: 67
+        value: 0
+      }
+    }
+    event {
+      timestamp: 1040000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#10"
+        type: 67
+        value: 1
+      }
+    }
+    event {
+      timestamp: 1050000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_hw#10"
+        type: 67
+        value: 1
+      }
+    }
+    event {
+      timestamp: 1060000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#11"
+        type: 67
+        value: 0
+      }
+    }
+    event {
+      timestamp: 1070000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_hw#10"
+        type: 67
+        value: 0
+      }
+    }
+    event {
+      timestamp: 1080000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#10"
+        type: 67
+        value: 0
+      }
+    }
+    event {
+      timestamp: 1085000000
+      pid: 237
+      g2d_tracing_mark_write {
+        pid: 237
+        name: "g2d_frame_sw#11"
+        type: 67
+        value: 1
+      }
+    }
+  }
+  trusted_uid: 9999
+  trusted_packet_sequence_id: 3
+}

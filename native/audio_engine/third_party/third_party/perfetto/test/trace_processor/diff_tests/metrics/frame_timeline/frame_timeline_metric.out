@@ -1,0 +1,277 @@
+android_frame_timeline_metric {
+  total_frames: 11
+  missed_app_frames: 3
+  dropped_frames: 1
+
+  process {
+    process {
+      name: "process1"
+      pid: 1001
+      is_kernel_task: false
+    }
+    total_frames: 2
+    missed_frames: 2
+    missed_app_frames: 2
+    missed_sf_frames: 0
+    frame_dur_max: 34000000
+    frame_dur_avg: 33500000
+    frame_dur_p50: 33500000
+    frame_dur_p90: 33900000
+    frame_dur_p95: 33950000
+    frame_dur_p99: 33990000
+    frame_dur_ms_p50: 33.5
+    frame_dur_ms_p90: 33.9
+    frame_dur_ms_p95: 33.95
+    frame_dur_ms_p99: 33.99
+    dropped_frames: 0
+    jank_types {
+      type: "App Deadline Missed"
+      total_count: 2
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 2
+      present_early_count: 0
+      present_dropped_count: 0
+      present_unknown_count: 0
+    }
+    jank_types {
+      type: "Buffer Stuffing"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 1
+      present_early_count: 0
+      present_dropped_count: 0
+      present_unknown_count: 0
+    }
+  }
+
+  process {
+    process {
+      name: "process2"
+      pid: 1002
+      is_kernel_task: false
+    }
+    total_frames: 2
+    missed_frames: 1
+    missed_app_frames: 1
+    missed_sf_frames: 0
+    frame_dur_max: 16000000
+    frame_dur_avg: 13333333
+    frame_dur_p50: 16000000
+    frame_dur_p90: 16000000
+    frame_dur_p95: 16000000
+    frame_dur_p99: 16000000
+    frame_dur_ms_p50: 16.0
+    frame_dur_ms_p90: 16.0
+    frame_dur_ms_p95: 16.0
+    frame_dur_ms_p99: 16.0
+    dropped_frames: 0
+    jank_types {
+      type: "App Deadline Missed"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 1
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 0
+      present_unknown_count: 0
+    }
+    jank_types {
+      type: "None"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 1
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 0
+      present_unknown_count: 0
+    }
+  }
+
+  process {
+    process {
+      name: "process3"
+      pid: 1003
+      is_kernel_task: false
+    }
+    total_frames: 2
+    missed_frames: 2
+    missed_app_frames: 0
+    missed_sf_frames: 1
+    frame_dur_max: 14000000
+    frame_dur_avg: 14000000
+    frame_dur_p50: 14000000
+    frame_dur_p90: 14000000
+    frame_dur_p95: 14000000
+    frame_dur_p99: 14000000
+    frame_dur_ms_p50: 14.0
+    frame_dur_ms_p90: 14.0
+    frame_dur_ms_p95: 14.0
+    frame_dur_ms_p99: 14.0
+    dropped_frames: 1
+    jank_types {
+      type: "Dropped Frame"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 1
+      present_unknown_count: 0
+    }
+    jank_types {
+      type: "SurfaceFlinger CPU Deadline Missed"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 1
+      present_early_count: 0
+      present_dropped_count: 0
+      present_unknown_count: 0
+    }
+  }
+
+  process {
+    process {
+      name: "process4"
+      pid: 1004
+      is_kernel_task: false
+    }
+    total_frames: 5
+    missed_frames: 4
+    missed_app_frames: 0
+    missed_sf_frames: 4
+    frame_dur_max: 2000000
+    frame_dur_avg: 1000000
+    frame_dur_p50: 500000
+    frame_dur_p90: 1800000
+    frame_dur_p95: 1900000
+    frame_dur_p99: 1980000
+    frame_dur_ms_p50: 0.500000
+    frame_dur_ms_p90: 1.800000
+    frame_dur_ms_p95: 1.9000000000000001
+    frame_dur_ms_p99: 1.980000
+    dropped_frames: 0
+    jank_types {
+      type: "SurfaceFlinger CPU Deadline Missed"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 1
+      present_unknown_count: 0
+    }
+    jank_types {
+      type: "SurfaceFlinger GPU Deadline Missed"
+      total_count: 1
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 1
+      present_unknown_count: 0
+    }
+    jank_types {
+      type: "SurfaceFlinger Scheduling"
+      total_count: 2
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 2
+      present_unknown_count: 0
+    }
+    jank_types {
+      type: "SurfaceFlinger Stuffing"
+      total_count: 2
+      present_unspecified_count: 0
+      present_on_time_count: 0
+      present_late_count: 0
+      present_early_count: 0
+      present_dropped_count: 2
+      present_unknown_count: 0
+    }
+  }
+  jank_types {
+    type: "App Deadline Missed"
+    total_count: 3
+    present_unspecified_count: 0
+    present_on_time_count: 1
+    present_late_count: 2
+    present_early_count: 0
+    present_dropped_count: 0
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "Buffer Stuffing"
+    total_count: 1
+    present_unspecified_count: 0
+    present_on_time_count: 0
+    present_late_count: 1
+    present_early_count: 0
+    present_dropped_count: 0
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "Dropped Frame"
+    total_count: 1
+    present_unspecified_count: 0
+    present_on_time_count: 0
+    present_late_count: 0
+    present_early_count: 0
+    present_dropped_count: 1
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "None"
+    total_count: 1
+    present_unspecified_count: 0
+    present_on_time_count: 1
+    present_late_count: 0
+    present_early_count: 0
+    present_dropped_count: 0
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "SurfaceFlinger CPU Deadline Missed"
+    total_count: 2
+    present_unspecified_count: 0
+    present_on_time_count: 0
+    present_late_count: 1
+    present_early_count: 0
+    present_dropped_count: 1
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "SurfaceFlinger GPU Deadline Missed"
+    total_count: 1
+    present_unspecified_count: 0
+    present_on_time_count: 0
+    present_late_count: 0
+    present_early_count: 0
+    present_dropped_count: 1
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "SurfaceFlinger Scheduling"
+    total_count: 2
+    present_unspecified_count: 0
+    present_on_time_count: 0
+    present_late_count: 0
+    present_early_count: 0
+    present_dropped_count: 2
+    present_unknown_count: 0
+  }
+  jank_types {
+    type: "SurfaceFlinger Stuffing"
+    total_count: 2
+    present_unspecified_count: 0
+    present_on_time_count: 0
+    present_late_count: 0
+    present_early_count: 0
+    present_dropped_count: 2
+    present_unknown_count: 0
+  }
+}

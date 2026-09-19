@@ -1,0 +1,6750 @@
+wattson_atrace_apps_threads {
+  metric_version: 5
+  power_model_version: 1
+  period_info {
+    period_id: 1
+    period_name: "NOTIFICATION_SHADE_EXPAND_COLLAPSE::Expand"
+    task_info {
+      estimated_mws: 202.134949
+      estimated_mw: 51.502159
+      idle_transitions_mws: 4.957417
+      total_mws: 207.092361
+      thread_name: "RenderThread"
+      process_name: "com.android.systemui"
+      thread_id: 15911
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 170.517761
+      estimated_mw: 43.446384
+      idle_transitions_mws: 1.703194
+      total_mws: 172.220963
+      thread_name: "ndroid.systemui"
+      process_name: "com.android.systemui"
+      thread_id: 15865
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 129.056351
+      estimated_mw: 32.882393
+      idle_transitions_mws: -24.609318
+      total_mws: 104.447029
+      thread_name: "swapper"
+      process_name: ""
+      thread_id: 0
+      process_id: 0
+    }
+    task_info {
+      estimated_mws: 72.917068
+      estimated_mw: 18.578609
+      idle_transitions_mws: 0.033585
+      total_mws: 72.950653
+      thread_name: "heapprofdunwind"
+      process_name: "/system/bin/heapprofd"
+      thread_id: 8283
+      process_id: 8280
+    }
+    task_info {
+      estimated_mws: 46.658119
+      estimated_mw: 11.888067
+      idle_transitions_mws: 0.364447
+      total_mws: 47.022568
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 578
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 38.587856
+      estimated_mw: 9.831837
+      idle_transitions_mws: 0.027102
+      total_mws: 38.614956
+      thread_name: "stack-unwinding"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8281
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 21.820454
+      estimated_mw: 5.559655
+      idle_transitions_mws: 0.007215
+      total_mws: 21.827669
+      thread_name: "binder:581_2"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 581
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 20.339384
+      estimated_mw: 5.182292
+      idle_transitions_mws: 0.192020
+      total_mws: 20.531406
+      thread_name: "RenderEngine"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 630
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 17.853962
+      estimated_mw: 4.549028
+      idle_transitions_mws: 0.678068
+      total_mws: 18.532030
+      thread_name: "heapprofd"
+      process_name: "/system/bin/heapprofd"
+      thread_id: 8280
+      process_id: 8280
+    }
+    task_info {
+      estimated_mws: 15.594727
+      estimated_mw: 3.973396
+      idle_transitions_mws: 0.043519
+      total_mws: 15.638245
+      thread_name: "mali-compiler"
+      process_name: "com.android.systemui"
+      thread_id: 16126
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 14.744784
+      estimated_mw: 3.756838
+      idle_transitions_mws: 0.008242
+      total_mws: 14.753026
+      thread_name: "traced_probes"
+      process_name: "/system/bin/traced_probes"
+      thread_id: 1095
+      process_id: 1095
+    }
+    task_info {
+      estimated_mws: 13.686288
+      estimated_mw: 3.487143
+      idle_transitions_mws: 1.647916
+      total_mws: 15.334204
+      thread_name: "mali_jd_thread"
+      process_name: "mali_jd_thread"
+      thread_id: 394
+      process_id: 394
+    }
+    task_info {
+      estimated_mws: 10.572844
+      estimated_mw: 2.693865
+      idle_transitions_mws: 0.220143
+      total_mws: 10.792987
+      thread_name: "binder:1423_D"
+      process_name: "system_server"
+      thread_id: 2498
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 9.642710
+      estimated_mw: 2.456876
+      idle_transitions_mws: 1.368331
+      total_mws: 11.011041
+      thread_name: "mali-cmar-backe"
+      process_name: "com.android.systemui"
+      thread_id: 15937
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 8.667897
+      estimated_mw: 2.208502
+      idle_transitions_mws: 0.309721
+      total_mws: 8.977618
+      thread_name: "s.nexuslauncher"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8021
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 8.227355
+      estimated_mw: 2.096256
+      idle_transitions_mws: 0.221031
+      total_mws: 8.448385
+      thread_name: "RenderThread"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8040
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 6.280553
+      estimated_mw: 1.600228
+      idle_transitions_mws: 0.435055
+      total_mws: 6.715608
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15878
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 6.212194
+      estimated_mw: 1.582811
+      idle_transitions_mws: 0.166026
+      total_mws: 6.378220
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2083
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 6.192045
+      estimated_mw: 1.577677
+      idle_transitions_mws: 0.147167
+      total_mws: 6.339212
+      thread_name: "binder:1423_19"
+      process_name: "system_server"
+      thread_id: 4842
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 6.155997
+      estimated_mw: 1.568492
+      idle_transitions_mws: 0.020536
+      total_mws: 6.176533
+      thread_name: "Jit thread pool"
+      process_name: "com.android.systemui"
+      thread_id: 15872
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 5.976320
+      estimated_mw: 1.522712
+      idle_transitions_mws: 0.409743
+      total_mws: 6.386063
+      thread_name: "binder:578_4"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2343
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 5.491507
+      estimated_mw: 1.399186
+      idle_transitions_mws: 0.982419
+      total_mws: 6.473926
+      thread_name: "TimerDispatch"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 652
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 5.129315
+      estimated_mw: 1.306903
+      idle_transitions_mws: 0.005174
+      total_mws: 5.134489
+      thread_name: "traced"
+      process_name: "/system/bin/traced"
+      thread_id: 1097
+      process_id: 1097
+    }
+    task_info {
+      estimated_mws: 4.638357
+      estimated_mw: 1.181812
+      idle_transitions_mws: 0.464214
+      total_mws: 5.102572
+      thread_name: "decon0_kthread"
+      process_name: "decon0_kthread"
+      thread_id: 309
+      process_id: 309
+    }
+    task_info {
+      estimated_mws: 4.559575
+      estimated_mw: 1.161738
+      idle_transitions_mws: 0.052865
+      total_mws: 4.612439
+      thread_name: "android.anim"
+      process_name: "system_server"
+      thread_id: 1496
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 4.414873
+      estimated_mw: 1.124870
+      idle_transitions_mws: 0.312739
+      total_mws: 4.727611
+      thread_name: "binder:578_1"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 622
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 4.230104
+      estimated_mw: 1.077792
+      idle_transitions_mws: 0.422902
+      total_mws: 4.653006
+      thread_name: "BckgrndExec HP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 671
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 4.162737
+      estimated_mw: 1.060628
+      idle_transitions_mws: 0.069071
+      total_mws: 4.231808
+      thread_name: "binder:1423_20"
+      process_name: "system_server"
+      thread_id: 4852
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 4.104149
+      estimated_mw: 1.045700
+      idle_transitions_mws: 0.203898
+      total_mws: 4.308047
+      thread_name: "app"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 654
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 3.189161
+      estimated_mw: 0.812569
+      idle_transitions_mws: 0.181516
+      total_mws: 3.370676
+      thread_name: "binder:15865_5"
+      process_name: "com.android.systemui"
+      thread_id: 15957
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.997894
+      estimated_mw: 0.763836
+      idle_transitions_mws: 0.229577
+      total_mws: 3.227471
+      thread_name: "binder:8021_3"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8032
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 2.906833
+      estimated_mw: 0.740635
+      idle_transitions_mws: 0.075375
+      total_mws: 2.982208
+      thread_name: "kworker/u16:2"
+      process_name: "kworker/u16:2"
+      thread_id: 86
+      process_id: 86
+    }
+    task_info {
+      estimated_mws: 2.698504
+      estimated_mw: 0.687554
+      idle_transitions_mws: 0.248653
+      total_mws: 2.947157
+      thread_name: "kworker/u17:0"
+      process_name: "kworker/u17:0"
+      thread_id: 14340
+      process_id: 14340
+    }
+    task_info {
+      estimated_mws: 2.667066
+      estimated_mw: 0.679544
+      idle_transitions_mws: 0.103628
+      total_mws: 2.770694
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1423
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 2.633665
+      estimated_mw: 0.671034
+      idle_transitions_mws: 0.230961
+      total_mws: 2.864626
+      thread_name: "kworker/u17:2"
+      process_name: "kworker/u17:2"
+      thread_id: 176
+      process_id: 176
+    }
+    task_info {
+      estimated_mws: 2.240613
+      estimated_mw: 0.570888
+      idle_transitions_mws: 0.350597
+      total_mws: 2.591210
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 629
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.010965
+      estimated_mw: 0.512376
+      idle_transitions_mws: 0.097369
+      total_mws: 2.108334
+      thread_name: "mali-cmar-backe"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 649
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.951540
+      estimated_mw: 0.497235
+      idle_transitions_mws: 0.033822
+      total_mws: 1.985362
+      thread_name: "SysUiBg"
+      process_name: "com.android.systemui"
+      thread_id: 15897
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.913638
+      estimated_mw: 0.487578
+      idle_transitions_mws: 0.188994
+      total_mws: 2.102632
+      thread_name: "binder:578_5"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2695
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.899125
+      estimated_mw: 0.483880
+      idle_transitions_mws: 0.423332
+      total_mws: 2.322457
+      thread_name: "mali_apc_thread"
+      process_name: "mali_apc_thread"
+      thread_id: 393
+      process_id: 393
+    }
+    task_info {
+      estimated_mws: 1.860847
+      estimated_mw: 0.474127
+      idle_transitions_mws: 0.095768
+      total_mws: 1.956615
+      thread_name: "android.display"
+      process_name: "system_server"
+      thread_id: 1495
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.687469
+      estimated_mw: 0.429952
+      idle_transitions_mws: 0.057915
+      total_mws: 1.745384
+      thread_name: "roidJUnitRunner"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7325
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 1.583151
+      estimated_mw: 0.403373
+      idle_transitions_mws: 0.214407
+      total_mws: 1.797558
+      thread_name: "SystemUIBg-8"
+      process_name: "com.android.systemui"
+      thread_id: 15904
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.578804
+      estimated_mw: 0.402265
+      idle_transitions_mws: 0.516872
+      total_mws: 2.095675
+      thread_name: "sugov:0"
+      process_name: "sugov:0"
+      thread_id: 520
+      process_id: 520
+    }
+    task_info {
+      estimated_mws: 1.546827
+      estimated_mw: 0.394118
+      idle_transitions_mws: 0.153495
+      total_mws: 1.700322
+      thread_name: "wmshell.main"
+      process_name: "com.android.systemui"
+      thread_id: 15882
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.491177
+      estimated_mw: 0.379938
+      idle_transitions_mws: 0.310487
+      total_mws: 1.801664
+      thread_name: "sugov:6"
+      process_name: "sugov:6"
+      thread_id: 522
+      process_id: 522
+    }
+    task_info {
+      estimated_mws: 1.483802
+      estimated_mw: 0.378059
+      idle_transitions_mws: 0.066072
+      total_mws: 1.549875
+      thread_name: "traced_perf"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8279
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 1.429781
+      estimated_mw: 0.364295
+      idle_transitions_mws: 0.008858
+      total_mws: 1.438639
+      thread_name: "HwBinder:882_4"
+      process_name: "/vendor/bin/hw/android.hardware.audio.service"
+      thread_id: 1914
+      process_id: 882
+    }
+    task_info {
+      estimated_mws: 1.408496
+      estimated_mw: 0.358872
+      idle_transitions_mws: 0.003933
+      total_mws: 1.412428
+      thread_name: "logcat"
+      process_name: "logcat"
+      thread_id: 1395
+      process_id: 1395
+    }
+    task_info {
+      estimated_mws: 1.305763
+      estimated_mw: 0.332697
+      idle_transitions_mws: 0.584814
+      total_mws: 1.890577
+      thread_name: "GPU completion"
+      process_name: "com.android.systemui"
+      thread_id: 16127
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.302774
+      estimated_mw: 0.331935
+      idle_transitions_mws: 0.161843
+      total_mws: 1.464617
+      thread_name: "SystemUIBg-2"
+      process_name: "com.android.systemui"
+      thread_id: 15898
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.265838
+      estimated_mw: 0.322524
+      idle_transitions_mws: 0.054090
+      total_mws: 1.319928
+      thread_name: "logd.writer"
+      process_name: "/system/bin/logd"
+      thread_id: 517
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 1.215388
+      estimated_mw: 0.309670
+      idle_transitions_mws: 0.033634
+      total_mws: 1.249022
+      thread_name: "RegionSampling"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 656
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.195528
+      estimated_mw: 0.304610
+      idle_transitions_mws: 0.144253
+      total_mws: 1.339781
+      thread_name: "SystemUIBg-5"
+      process_name: "com.android.systemui"
+      thread_id: 15901
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.163714
+      estimated_mw: 0.296504
+      idle_transitions_mws: 0.128639
+      total_mws: 1.292353
+      thread_name: "SystemUIBg-7"
+      process_name: "com.android.systemui"
+      thread_id: 15903
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.116467
+      estimated_mw: 0.284466
+      idle_transitions_mws: 0.156376
+      total_mws: 1.272842
+      thread_name: "SystemUIBg-1"
+      process_name: "com.android.systemui"
+      thread_id: 15896
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.100489
+      estimated_mw: 0.280395
+      idle_transitions_mws: 0.020329
+      total_mws: 1.120818
+      thread_name: "CpuMonitorServi"
+      process_name: "system_server"
+      thread_id: 1815
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.092817
+      estimated_mw: 0.278440
+      idle_transitions_mws: 0.127727
+      total_mws: 1.220544
+      thread_name: "SystemUIBg-4"
+      process_name: "com.android.systemui"
+      thread_id: 15900
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.043121
+      estimated_mw: 0.265778
+      idle_transitions_mws: 0.009673
+      total_mws: 1.052794
+      thread_name: "binder:1423_5"
+      process_name: "system_server"
+      thread_id: 1784
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.995275
+      estimated_mw: 0.253587
+      idle_transitions_mws: 0.082171
+      total_mws: 1.077446
+      thread_name: "UiAutomation"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7327
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.989691
+      estimated_mw: 0.252164
+      idle_transitions_mws: 0.056402
+      total_mws: 1.046093
+      thread_name: "binder:7309_7"
+      process_name: "android.platform.test.scenario"
+      thread_id: 15983
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.953518
+      estimated_mw: 0.242948
+      idle_transitions_mws: 0.000000
+      total_mws: 0.953518
+      thread_name: "rcuop/3"
+      process_name: "rcuop/3"
+      thread_id: 44
+      process_id: 44
+    }
+    task_info {
+      estimated_mws: 0.915803
+      estimated_mw: 0.233338
+      idle_transitions_mws: 0.331602
+      total_mws: 1.247405
+      thread_name: "sugov:4"
+      process_name: "sugov:4"
+      thread_id: 521
+      process_id: 521
+    }
+    task_info {
+      estimated_mws: 0.913046
+      estimated_mw: 0.232636
+      idle_transitions_mws: 0.676853
+      total_mws: 1.589898
+      thread_name: "HWC release"
+      process_name: "com.android.systemui"
+      thread_id: 16123
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.911683
+      estimated_mw: 0.232288
+      idle_transitions_mws: 0.028157
+      total_mws: 0.939839
+      thread_name: "logd.reader.per"
+      process_name: "/system/bin/logd"
+      thread_id: 1454
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.867771
+      estimated_mw: 0.221100
+      idle_transitions_mws: 0.009544
+      total_mws: 0.877315
+      thread_name: "rcuop/1"
+      process_name: "rcuop/1"
+      thread_id: 30
+      process_id: 30
+    }
+    task_info {
+      estimated_mws: 0.851603
+      estimated_mw: 0.216981
+      idle_transitions_mws: 0.146257
+      total_mws: 0.997860
+      thread_name: "SystemUIBg-3"
+      process_name: "com.android.systemui"
+      thread_id: 15899
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.832348
+      estimated_mw: 0.212075
+      idle_transitions_mws: 0.022652
+      total_mws: 0.855001
+      thread_name: "OomAdjuster"
+      process_name: "system_server"
+      thread_id: 1535
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.764949
+      estimated_mw: 0.194902
+      idle_transitions_mws: 0.196124
+      total_mws: 0.961073
+      thread_name: "DisplayHints"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 614
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.722141
+      estimated_mw: 0.183995
+      idle_transitions_mws: 0.105885
+      total_mws: 0.828026
+      thread_name: "SystemUIBg-6"
+      process_name: "com.android.systemui"
+      thread_id: 15902
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.704816
+      estimated_mw: 0.179581
+      idle_transitions_mws: 0.013204
+      total_mws: 0.718021
+      thread_name: "NodeLooperThrea"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2978
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.660832
+      estimated_mw: 0.168374
+      idle_transitions_mws: 0.049691
+      total_mws: 0.710522
+      thread_name: "hwuiTask1"
+      process_name: "com.android.systemui"
+      thread_id: 15910
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.659524
+      estimated_mw: 0.168041
+      idle_transitions_mws: 0.090316
+      total_mws: 0.749840
+      thread_name: "mali-cmar-backe"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8054
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.652111
+      estimated_mw: 0.166152
+      idle_transitions_mws: 0.025176
+      total_mws: 0.677287
+      thread_name: "appSf"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 655
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.642441
+      estimated_mw: 0.163688
+      idle_transitions_mws: 0.063660
+      total_mws: 0.706101
+      thread_name: "BckgrndExec LP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2701
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.615420
+      estimated_mw: 0.156803
+      idle_transitions_mws: 0.000000
+      total_mws: 0.615420
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power.stats-service.pixel"
+      thread_id: 908
+      process_id: 908
+    }
+    task_info {
+      estimated_mws: 0.548242
+      estimated_mw: 0.139687
+      idle_transitions_mws: 0.257590
+      total_mws: 0.805832
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15945
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.547491
+      estimated_mw: 0.139496
+      idle_transitions_mws: 0.051313
+      total_mws: 0.598804
+      thread_name: "binder:7309_5"
+      process_name: "android.platform.test.scenario"
+      thread_id: 8596
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.540060
+      estimated_mw: 0.137603
+      idle_transitions_mws: 0.058519
+      total_mws: 0.598580
+      thread_name: "hwuiTask0"
+      process_name: "com.android.systemui"
+      thread_id: 15909
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.514016
+      estimated_mw: 0.130967
+      idle_transitions_mws: 0.089873
+      total_mws: 0.603889
+      thread_name: "m.test.scenario"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7309
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.502903
+      estimated_mw: 0.128135
+      idle_transitions_mws: 0.023637
+      total_mws: 0.526540
+      thread_name: "ImageWallpaper"
+      process_name: "com.android.systemui"
+      thread_id: 15971
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.427704
+      estimated_mw: 0.108975
+      idle_transitions_mws: 0.009131
+      total_mws: 0.436834
+      thread_name: "android.ui"
+      process_name: "system_server"
+      thread_id: 1493
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.422870
+      estimated_mw: 0.107743
+      idle_transitions_mws: 0.086889
+      total_mws: 0.509759
+      thread_name: "AudioOut_D"
+      process_name: "/system/bin/audioserver"
+      thread_id: 1674
+      process_id: 960
+    }
+    task_info {
+      estimated_mws: 0.411673
+      estimated_mw: 0.104891
+      idle_transitions_mws: 0.010624
+      total_mws: 0.422297
+      thread_name: "binder:1423_1E"
+      process_name: "system_server"
+      thread_id: 4850
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.405716
+      estimated_mw: 0.103373
+      idle_transitions_mws: 0.014389
+      total_mws: 0.420105
+      thread_name: "binder:6316_3"
+      process_name: "com.google.android.inputmethod.latin"
+      thread_id: 6330
+      process_id: 6316
+    }
+    task_info {
+      estimated_mws: 0.390938
+      estimated_mw: 0.099608
+      idle_transitions_mws: 0.000000
+      total_mws: 0.390938
+      thread_name: "rcuop/2"
+      process_name: "rcuop/2"
+      thread_id: 37
+      process_id: 37
+    }
+    task_info {
+      estimated_mws: 0.389122
+      estimated_mw: 0.099145
+      idle_transitions_mws: 0.006769
+      total_mws: 0.395890
+      thread_name: "tworkPolicy.uid"
+      process_name: "system_server"
+      thread_id: 1879
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.362833
+      estimated_mw: 0.092447
+      idle_transitions_mws: 0.000000
+      total_mws: 0.362833
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.permissioncontroller"
+      thread_id: 2820
+      process_id: 2755
+    }
+    task_info {
+      estimated_mws: 0.339014
+      estimated_mw: 0.086378
+      idle_transitions_mws: 0.037765
+      total_mws: 0.376779
+      thread_name: "writer"
+      process_name: "/vendor/bin/hw/android.hardware.audio.service"
+      thread_id: 4238
+      process_id: 882
+    }
+    task_info {
+      estimated_mws: 0.333469
+      estimated_mw: 0.084965
+      idle_transitions_mws: 0.000000
+      total_mws: 0.333469
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 683
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.329087
+      estimated_mw: 0.083848
+      idle_transitions_mws: 0.013812
+      total_mws: 0.342898
+      thread_name: "android.bg"
+      process_name: "system_server"
+      thread_id: 1509
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.321845
+      estimated_mw: 0.082003
+      idle_transitions_mws: 0.014411
+      total_mws: 0.336256
+      thread_name: "aocd"
+      process_name: "/vendor/bin/aocd"
+      thread_id: 1167
+      process_id: 1167
+    }
+    task_info {
+      estimated_mws: 0.308830
+      estimated_mw: 0.078687
+      idle_transitions_mws: 0.028807
+      total_mws: 0.337638
+      thread_name: "InputDispatcher"
+      process_name: "system_server"
+      thread_id: 1834
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.301631
+      estimated_mw: 0.076853
+      idle_transitions_mws: 0.042708
+      total_mws: 0.344339
+      thread_name: "FastMixer"
+      process_name: "/system/bin/audioserver"
+      thread_id: 1673
+      process_id: 960
+    }
+    task_info {
+      estimated_mws: 0.273040
+      estimated_mw: 0.069568
+      idle_transitions_mws: 0.018078
+      total_mws: 0.291118
+      thread_name: "batterystats-ha"
+      process_name: "system_server"
+      thread_id: 1539
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.254518
+      estimated_mw: 0.064849
+      idle_transitions_mws: 0.000000
+      total_mws: 0.254518
+      thread_name: "statsd.writer"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 868
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.238193
+      estimated_mw: 0.060689
+      idle_transitions_mws: 0.068707
+      total_mws: 0.306900
+      thread_name: "RE Completion"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 8397
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.222412
+      estimated_mw: 0.056669
+      idle_transitions_mws: 0.035706
+      total_mws: 0.258118
+      thread_name: "adpf_handler0"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 714
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.201501
+      estimated_mw: 0.051341
+      idle_transitions_mws: 0.000000
+      total_mws: 0.201501
+      thread_name: "init"
+      process_name: "/system/bin/init"
+      thread_id: 428
+      process_id: 1
+    }
+    task_info {
+      estimated_mws: 0.198696
+      estimated_mw: 0.050626
+      idle_transitions_mws: 0.015670
+      total_mws: 0.214366
+      thread_name: "logd.klogd"
+      process_name: "/system/bin/logd"
+      thread_id: 524
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.191878
+      estimated_mw: 0.048889
+      idle_transitions_mws: 0.022557
+      total_mws: 0.214434
+      thread_name: "HwcAsyncWorker"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 651
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.191717
+      estimated_mw: 0.048848
+      idle_transitions_mws: 0.000000
+      total_mws: 0.191717
+      thread_name: "ssioncontroller"
+      process_name: "com.google.android.permissioncontroller"
+      thread_id: 2755
+      process_id: 2755
+    }
+    task_info {
+      estimated_mws: 0.180209
+      estimated_mw: 0.045916
+      idle_transitions_mws: 0.014000
+      total_mws: 0.194210
+      thread_name: "PowerManagerSer"
+      process_name: "system_server"
+      thread_id: 1652
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.169970
+      estimated_mw: 0.043307
+      idle_transitions_mws: 0.020481
+      total_mws: 0.190451
+      thread_name: "statsd.reader"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 869
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.169889
+      estimated_mw: 0.043286
+      idle_transitions_mws: 0.000000
+      total_mws: 0.169889
+      thread_name: "binder:2755_7"
+      process_name: "com.google.android.permissioncontroller"
+      thread_id: 7983
+      process_id: 2755
+    }
+    task_info {
+      estimated_mws: 0.169546
+      estimated_mw: 0.043199
+      idle_transitions_mws: 0.000000
+      total_mws: 0.169546
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.health-service.gs101"
+      thread_id: 898
+      process_id: 898
+    }
+    task_info {
+      estimated_mws: 0.165348
+      estimated_mw: 0.042129
+      idle_transitions_mws: 0.010544
+      total_mws: 0.175891
+      thread_name: "simpleinteracti"
+      process_name: "simpleinteractive"
+      thread_id: 290
+      process_id: 290
+    }
+    task_info {
+      estimated_mws: 0.164052
+      estimated_mw: 0.041799
+      idle_transitions_mws: 0.010750
+      total_mws: 0.174802
+      thread_name: "TracingMuxer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 627
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.150839
+      estimated_mw: 0.038432
+      idle_transitions_mws: 0.000000
+      total_mws: 0.150839
+      thread_name: "migration/5"
+      process_name: "migration/5"
+      thread_id: 55
+      process_id: 55
+    }
+    task_info {
+      estimated_mws: 0.134400
+      estimated_mw: 0.034244
+      idle_transitions_mws: 0.029327
+      total_mws: 0.163727
+      thread_name: "RegSampIdle"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 657
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.129794
+      estimated_mw: 0.033070
+      idle_transitions_mws: 0.016385
+      total_mws: 0.146179
+      thread_name: "init"
+      process_name: "/system/bin/init"
+      thread_id: 1
+      process_id: 1
+    }
+    task_info {
+      estimated_mws: 0.127224
+      estimated_mw: 0.032416
+      idle_transitions_mws: 0.032326
+      total_mws: 0.159551
+      thread_name: "GPU completion"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 8560
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.125891
+      estimated_mw: 0.032076
+      idle_transitions_mws: 0.043462
+      total_mws: 0.169353
+      thread_name: "rcuog/0"
+      process_name: "rcuog/0"
+      thread_id: 15
+      process_id: 15
+    }
+    task_info {
+      estimated_mws: 0.116829
+      estimated_mw: 0.029767
+      idle_transitions_mws: 0.001648
+      total_mws: 0.118477
+      thread_name: "eduling.default"
+      process_name: "system_server"
+      thread_id: 1809
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.115826
+      estimated_mw: 0.029511
+      idle_transitions_mws: 0.019265
+      total_mws: 0.135091
+      thread_name: "binder:3175_3"
+      process_name: "com.google.android.as"
+      thread_id: 3234
+      process_id: 3175
+    }
+    task_info {
+      estimated_mws: 0.113923
+      estimated_mw: 0.029026
+      idle_transitions_mws: 0.006637
+      total_mws: 0.120560
+      thread_name: "binder:960_5"
+      process_name: "/system/bin/audioserver"
+      thread_id: 2198
+      process_id: 960
+    }
+    task_info {
+      estimated_mws: 0.111549
+      estimated_mw: 0.028422
+      idle_transitions_mws: 0.021201
+      total_mws: 0.132750
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1464
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.111032
+      estimated_mw: 0.028290
+      idle_transitions_mws: 0.007461
+      total_mws: 0.118492
+      thread_name: "binder:2189_8"
+      process_name: "com.google.android.bluetooth"
+      thread_id: 8821
+      process_id: 2189
+    }
+    task_info {
+      estimated_mws: 0.108112
+      estimated_mw: 0.027546
+      idle_transitions_mws: 0.017058
+      total_mws: 0.125170
+      thread_name: "mali-mem-purge"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 640
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.107338
+      estimated_mw: 0.027349
+      idle_transitions_mws: 0.240626
+      total_mws: 0.347964
+      thread_name: "perf_mon_update"
+      process_name: "perf_mon_update_client_task"
+      thread_id: 136
+      process_id: 136
+    }
+    task_info {
+      estimated_mws: 0.105528
+      estimated_mw: 0.026888
+      idle_transitions_mws: 0.009394
+      total_mws: 0.114922
+      thread_name: "ScreenDecoratio"
+      process_name: "com.android.systemui"
+      thread_id: 15923
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.101682
+      estimated_mw: 0.025908
+      idle_transitions_mws: 0.003500
+      total_mws: 0.105182
+      thread_name: "rcuop/4"
+      process_name: "rcuop/4"
+      thread_id: 52
+      process_id: 52
+    }
+    task_info {
+      estimated_mws: 0.100266
+      estimated_mw: 0.025547
+      idle_transitions_mws: 0.004128
+      total_mws: 0.104393
+      thread_name: "lmkd"
+      process_name: "/system/bin/lmkd"
+      thread_id: 507
+      process_id: 507
+    }
+    task_info {
+      estimated_mws: 0.095606
+      estimated_mw: 0.024360
+      idle_transitions_mws: 0.022458
+      total_mws: 0.118064
+      thread_name: "migration/0"
+      process_name: "migration/0"
+      thread_id: 20
+      process_id: 20
+    }
+    task_info {
+      estimated_mws: 0.091655
+      estimated_mw: 0.023353
+      idle_transitions_mws: 0.004706
+      total_mws: 0.096361
+      thread_name: "queued-work-loo"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8064
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.089280
+      estimated_mw: 0.022748
+      idle_transitions_mws: 0.000000
+      total_mws: 0.089280
+      thread_name: "binder:6274_2"
+      process_name: "com.google.android.googlequicksearchbox:search"
+      thread_id: 6284
+      process_id: 6274
+    }
+    task_info {
+      estimated_mws: 0.088829
+      estimated_mw: 0.022633
+      idle_transitions_mws: 0.021708
+      total_mws: 0.110537
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 661
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.087806
+      estimated_mw: 0.022372
+      idle_transitions_mws: 0.012266
+      total_mws: 0.100072
+      thread_name: "binder:8021_4"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8088
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.086061
+      estimated_mw: 0.021928
+      idle_transitions_mws: 0.095302
+      total_mws: 0.181362
+      thread_name: "rcu_preempt"
+      process_name: "rcu_preempt"
+      thread_id: 14
+      process_id: 14
+    }
+    task_info {
+      estimated_mws: 0.084925
+      estimated_mw: 0.021638
+      idle_transitions_mws: 0.000000
+      total_mws: 0.084925
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.google.android.apps.docs"
+      thread_id: 6005
+      process_id: 5990
+    }
+    task_info {
+      estimated_mws: 0.084513
+      estimated_mw: 0.021533
+      idle_transitions_mws: 0.008854
+      total_mws: 0.093367
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.input.processor-service"
+      thread_id: 2039
+      process_id: 2018
+    }
+    task_info {
+      estimated_mws: 0.084039
+      estimated_mw: 0.021412
+      idle_transitions_mws: 0.000000
+      total_mws: 0.084039
+      thread_name: "FinalizerWatchd"
+      process_name: "com.google.android.inputmethod.latin"
+      thread_id: 6326
+      process_id: 6316
+    }
+    task_info {
+      estimated_mws: 0.080612
+      estimated_mw: 0.020539
+      idle_transitions_mws: 0.005383
+      total_mws: 0.085995
+      thread_name: "binder:6343_3"
+      process_name: "com.google.android.apps.wellbeing"
+      thread_id: 6357
+      process_id: 6343
+    }
+    task_info {
+      estimated_mws: 0.080499
+      estimated_mw: 0.020510
+      idle_transitions_mws: 0.057310
+      total_mws: 0.137809
+      thread_name: "mali-mem-purge"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8045
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.080438
+      estimated_mw: 0.020495
+      idle_transitions_mws: 0.002488
+      total_mws: 0.082925
+      thread_name: "binder:3195_7"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 6170
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.079276
+      estimated_mw: 0.020199
+      idle_transitions_mws: 0.008015
+      total_mws: 0.087291
+      thread_name: "droid.bluetooth"
+      process_name: "com.google.android.bluetooth"
+      thread_id: 2189
+      process_id: 2189
+    }
+    task_info {
+      estimated_mws: 0.074903
+      estimated_mw: 0.019085
+      idle_transitions_mws: 0.000000
+      total_mws: 0.074903
+      thread_name: "binder:2619_10"
+      process_name: "com.google.android.factoryota"
+      thread_id: 11897
+      process_id: 2619
+    }
+    task_info {
+      estimated_mws: 0.074506
+      estimated_mw: 0.018983
+      idle_transitions_mws: 0.000000
+      total_mws: 0.074506
+      thread_name: "binder:2857_1"
+      process_name: "com.google.android.tts"
+      thread_id: 2872
+      process_id: 2857
+    }
+    task_info {
+      estimated_mws: 0.072891
+      estimated_mw: 0.018572
+      idle_transitions_mws: 0.064386
+      total_mws: 0.137277
+      thread_name: "mali-mem-purge"
+      process_name: "com.android.systemui"
+      thread_id: 15928
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.070542
+      estimated_mw: 0.017973
+      idle_transitions_mws: 0.009221
+      total_mws: 0.079763
+      thread_name: "migration/4"
+      process_name: "migration/4"
+      thread_id: 47
+      process_id: 47
+    }
+    task_info {
+      estimated_mws: 0.069963
+      estimated_mw: 0.017826
+      idle_transitions_mws: 0.000000
+      total_mws: 0.069963
+      thread_name: "binder:6749_10"
+      process_name: "com.google.android.calendar"
+      thread_id: 11332
+      process_id: 6749
+    }
+    task_info {
+      estimated_mws: 0.068423
+      estimated_mw: 0.017434
+      idle_transitions_mws: 0.007818
+      total_mws: 0.076241
+      thread_name: "ActivityManager"
+      process_name: "system_server"
+      thread_id: 1510
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.067256
+      estimated_mw: 0.017136
+      idle_transitions_mws: 0.000000
+      total_mws: 0.067256
+      thread_name: "ndroid.calendar"
+      process_name: "com.google.android.calendar"
+      thread_id: 6749
+      process_id: 6749
+    }
+    task_info {
+      estimated_mws: 0.062248
+      estimated_mw: 0.015860
+      idle_transitions_mws: 0.005420
+      total_mws: 0.067668
+      thread_name: "binder:2224_3"
+      process_name: "com.android.hbmsvmanager"
+      thread_id: 2326
+      process_id: 2224
+    }
+    task_info {
+      estimated_mws: 0.061653
+      estimated_mw: 0.015709
+      idle_transitions_mws: 0.000000
+      total_mws: 0.061653
+      thread_name: "binder:2729_C"
+      process_name: "com.google.android.pixel.setupwizard"
+      thread_id: 10205
+      process_id: 2729
+    }
+    task_info {
+      estimated_mws: 0.058541
+      estimated_mw: 0.014916
+      idle_transitions_mws: 0.002991
+      total_mws: 0.061533
+      thread_name: "AudioService"
+      process_name: "system_server"
+      thread_id: 1917
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.058096
+      estimated_mw: 0.014802
+      idle_transitions_mws: 0.000000
+      total_mws: 0.058096
+      thread_name: "binder:6048_10"
+      process_name: "com.google.android.apps.maps"
+      thread_id: 11617
+      process_id: 6048
+    }
+    task_info {
+      estimated_mws: 0.056259
+      estimated_mw: 0.014334
+      idle_transitions_mws: 0.006806
+      total_mws: 0.063065
+      thread_name: "ogle.android.as"
+      process_name: "com.google.android.as"
+      thread_id: 3175
+      process_id: 3175
+    }
+    task_info {
+      estimated_mws: 0.056172
+      estimated_mw: 0.014312
+      idle_transitions_mws: 0.003180
+      total_mws: 0.059352
+      thread_name: "NDK MediaCodec_"
+      process_name: "com.android.systemui"
+      thread_id: 15956
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.056072
+      estimated_mw: 0.014287
+      idle_transitions_mws: 0.000000
+      total_mws: 0.056072
+      thread_name: "binder:3635_1"
+      process_name: "com.google.android.contacts"
+      thread_id: 3670
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.056006
+      estimated_mw: 0.014270
+      idle_transitions_mws: 0.000000
+      total_mws: 0.056006
+      thread_name: "binder:7503_10"
+      process_name: "com.google.android.documentsui"
+      thread_id: 11896
+      process_id: 7503
+    }
+    task_info {
+      estimated_mws: 0.054885
+      estimated_mw: 0.013984
+      idle_transitions_mws: 0.003019
+      total_mws: 0.057905
+      thread_name: "binder:4580_4"
+      process_name: "com.google.android.apps.turbo"
+      thread_id: 7898
+      process_id: 4580
+    }
+    task_info {
+      estimated_mws: 0.054087
+      estimated_mw: 0.013781
+      idle_transitions_mws: 0.013196
+      total_mws: 0.067283
+      thread_name: "rcu_exp_gp_kthr"
+      process_name: "rcu_exp_gp_kthread_worker"
+      thread_id: 18
+      process_id: 18
+    }
+    task_info {
+      estimated_mws: 0.053534
+      estimated_mw: 0.013640
+      idle_transitions_mws: 0.010632
+      total_mws: 0.064167
+      thread_name: "migration/1"
+      process_name: "migration/1"
+      thread_id: 26
+      process_id: 26
+    }
+    task_info {
+      estimated_mws: 0.053467
+      estimated_mw: 0.013623
+      idle_transitions_mws: 0.003989
+      total_mws: 0.057456
+      thread_name: "GPU completion"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8501
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.049534
+      estimated_mw: 0.012621
+      idle_transitions_mws: 0.000000
+      total_mws: 0.049534
+      thread_name: "rild_exynos"
+      process_name: "/vendor/bin/hw/rild_exynos"
+      thread_id: 1320
+      process_id: 1154
+    }
+    task_info {
+      estimated_mws: 0.049161
+      estimated_mw: 0.012526
+      idle_transitions_mws: 0.000000
+      total_mws: 0.049161
+      thread_name: "binder:2387_1"
+      process_name: "com.google.android.setupwizard"
+      thread_id: 2425
+      process_id: 2387
+    }
+    task_info {
+      estimated_mws: 0.048964
+      estimated_mw: 0.012475
+      idle_transitions_mws: 0.000000
+      total_mws: 0.048964
+      thread_name: "binder:7270_3"
+      process_name: "com.google.android.apps.photos"
+      thread_id: 7284
+      process_id: 7270
+    }
+    task_info {
+      estimated_mws: 0.047871
+      estimated_mw: 0.012197
+      idle_transitions_mws: 0.001470
+      total_mws: 0.049341
+      thread_name: "binder:3160_6"
+      process_name: "android.process.acore"
+      thread_id: 7015
+      process_id: 3160
+    }
+    task_info {
+      estimated_mws: 0.047820
+      estimated_mw: 0.012184
+      idle_transitions_mws: 0.060083
+      total_mws: 0.107903
+      thread_name: "psimon"
+      process_name: "psimon"
+      thread_id: 510
+      process_id: 510
+    }
+    task_info {
+      estimated_mws: 0.044923
+      estimated_mw: 0.011446
+      idle_transitions_mws: 0.000000
+      total_mws: 0.044923
+      thread_name: "shortcut"
+      process_name: "system_server"
+      thread_id: 1980
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.042701
+      estimated_mw: 0.010880
+      idle_transitions_mws: 0.002188
+      total_mws: 0.044889
+      thread_name: "binder:568_6"
+      process_name: "/system/bin/hw/android.system.suspend-service"
+      thread_id: 1936
+      process_id: 568
+    }
+    task_info {
+      estimated_mws: 0.042548
+      estimated_mw: 0.010841
+      idle_transitions_mws: 0.004161
+      total_mws: 0.046709
+      thread_name: "TelecomMetricsC"
+      process_name: "system_server"
+      thread_id: 2391
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.042310
+      estimated_mw: 0.010780
+      idle_transitions_mws: 0.026711
+      total_mws: 0.069021
+      thread_name: "android.io"
+      process_name: "system_server"
+      thread_id: 1494
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.042079
+      estimated_mw: 0.010721
+      idle_transitions_mws: 0.010993
+      total_mws: 0.053072
+      thread_name: "WifiHandlerThre"
+      process_name: "system_server"
+      thread_id: 1880
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.039287
+      estimated_mw: 0.010010
+      idle_transitions_mws: 0.007035
+      total_mws: 0.046322
+      thread_name: "android.fg"
+      process_name: "system_server"
+      thread_id: 1492
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.039211
+      estimated_mw: 0.009991
+      idle_transitions_mws: 0.000000
+      total_mws: 0.039211
+      thread_name: "adbd"
+      process_name: "/apex/com.android.adbd/bin/adbd"
+      thread_id: 1788
+      process_id: 1786
+    }
+    task_info {
+      estimated_mws: 0.038659
+      estimated_mw: 0.009850
+      idle_transitions_mws: 0.000000
+      total_mws: 0.038659
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.android.settings"
+      thread_id: 5255
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.038367
+      estimated_mw: 0.009775
+      idle_transitions_mws: 0.021182
+      total_mws: 0.059548
+      thread_name: ".gms.persistent"
+      process_name: "com.google.android.gms.persistent"
+      thread_id: 5844
+      process_id: 5844
+    }
+    task_info {
+      estimated_mws: 0.037910
+      estimated_mw: 0.009659
+      idle_transitions_mws: 0.000000
+      total_mws: 0.037910
+      thread_name: "FinalizerWatchd"
+      process_name: "com.android.systemui"
+      thread_id: 15876
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.036214
+      estimated_mw: 0.009227
+      idle_transitions_mws: 0.000000
+      total_mws: 0.036214
+      thread_name: "RemoveFBsThread"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 617
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.034222
+      estimated_mw: 0.008719
+      idle_transitions_mws: 0.033149
+      total_mws: 0.067371
+      thread_name: "kworker/1:1"
+      process_name: "kworker/1:1"
+      thread_id: 129
+      process_id: 129
+    }
+    task_info {
+      estimated_mws: 0.032915
+      estimated_mw: 0.008387
+      idle_transitions_mws: 0.002825
+      total_mws: 0.035740
+      thread_name: "InteractionJank"
+      process_name: "com.android.systemui"
+      thread_id: 15887
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.031691
+      estimated_mw: 0.008075
+      idle_transitions_mws: 0.000000
+      total_mws: 0.031691
+      thread_name: "adbd"
+      process_name: "/apex/com.android.adbd/bin/adbd"
+      thread_id: 1789
+      process_id: 1786
+    }
+    task_info {
+      estimated_mws: 0.031261
+      estimated_mw: 0.007965
+      idle_transitions_mws: 0.000000
+      total_mws: 0.031261
+      thread_name: "migration/2"
+      process_name: "migration/2"
+      thread_id: 33
+      process_id: 33
+    }
+    task_info {
+      estimated_mws: 0.031200
+      estimated_mw: 0.007949
+      idle_transitions_mws: 0.003840
+      total_mws: 0.035040
+      thread_name: "SensorService"
+      process_name: "system_server"
+      thread_id: 1805
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.030195
+      estimated_mw: 0.007693
+      idle_transitions_mws: 0.000000
+      total_mws: 0.030195
+      thread_name: "kworker/4:1H"
+      process_name: "kworker/4:1H"
+      thread_id: 333
+      process_id: 333
+    }
+    task_info {
+      estimated_mws: 0.028020
+      estimated_mw: 0.007139
+      idle_transitions_mws: 0.002999
+      total_mws: 0.031020
+      thread_name: "aiai-notificati"
+      process_name: "com.google.android.as"
+      thread_id: 4024
+      process_id: 3175
+    }
+    task_info {
+      estimated_mws: 0.027966
+      estimated_mw: 0.007125
+      idle_transitions_mws: 0.003243
+      total_mws: 0.031209
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 986
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.027171
+      estimated_mw: 0.006923
+      idle_transitions_mws: 0.020618
+      total_mws: 0.047790
+      thread_name: "kworker/0:2"
+      process_name: "kworker/0:2"
+      thread_id: 138
+      process_id: 138
+    }
+    task_info {
+      estimated_mws: 0.026046
+      estimated_mw: 0.006636
+      idle_transitions_mws: 0.048396
+      total_mws: 0.074442
+      thread_name: "UsfTransport"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 1451
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.024765
+      estimated_mw: 0.006310
+      idle_transitions_mws: 0.015045
+      total_mws: 0.039810
+      thread_name: "kworker/3:12"
+      process_name: "kworker/3:12"
+      thread_id: 207
+      process_id: 207
+    }
+    task_info {
+      estimated_mws: 0.024438
+      estimated_mw: 0.006227
+      idle_transitions_mws: 0.001899
+      total_mws: 0.026337
+      thread_name: "aiai-pecan-0"
+      process_name: "com.google.android.as"
+      thread_id: 4121
+      process_id: 3175
+    }
+    task_info {
+      estimated_mws: 0.023282
+      estimated_mw: 0.005932
+      idle_transitions_mws: 0.000000
+      total_mws: 0.023282
+      thread_name: "lhd"
+      process_name: "/vendor/bin/hw/lhd"
+      thread_id: 1144
+      process_id: 1144
+    }
+    task_info {
+      estimated_mws: 0.022772
+      estimated_mw: 0.005802
+      idle_transitions_mws: 0.001083
+      total_mws: 0.023855
+      thread_name: "main"
+      process_name: "app_process"
+      thread_id: 7292
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 0.020762
+      estimated_mw: 0.005290
+      idle_transitions_mws: 0.020657
+      total_mws: 0.041419
+      thread_name: "binder:7309_2"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7320
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.019641
+      estimated_mw: 0.005004
+      idle_transitions_mws: 0.000000
+      total_mws: 0.019641
+      thread_name: "heapprofd"
+      process_name: "/system/bin/heapprofd"
+      thread_id: 8282
+      process_id: 8280
+    }
+    task_info {
+      estimated_mws: 0.018365
+      estimated_mw: 0.004679
+      idle_transitions_mws: 0.003448
+      total_mws: 0.021813
+      thread_name: "com.google.usf."
+      process_name: "com.google.usf.non_wake_up"
+      thread_id: 1447
+      process_id: 1447
+    }
+    task_info {
+      estimated_mws: 0.017792
+      estimated_mw: 0.004533
+      idle_transitions_mws: 0.015196
+      total_mws: 0.032989
+      thread_name: "migration/3"
+      process_name: "migration/3"
+      thread_id: 40
+      process_id: 40
+    }
+    task_info {
+      estimated_mws: 0.017787
+      estimated_mw: 0.004532
+      idle_transitions_mws: 0.029942
+      total_mws: 0.047728
+      thread_name: "rcuog/4"
+      process_name: "rcuog/4"
+      thread_id: 51
+      process_id: 51
+    }
+    task_info {
+      estimated_mws: 0.014990
+      estimated_mw: 0.003819
+      idle_transitions_mws: 0.000000
+      total_mws: 0.014990
+      thread_name: "binder:568_8"
+      process_name: "/system/bin/hw/android.system.suspend-service"
+      thread_id: 2545
+      process_id: 568
+    }
+    task_info {
+      estimated_mws: 0.014987
+      estimated_mw: 0.003819
+      idle_transitions_mws: 0.000000
+      total_mws: 0.014987
+      thread_name: "aiai-min-shared"
+      process_name: "com.google.android.as"
+      thread_id: 3661
+      process_id: 3175
+    }
+    task_info {
+      estimated_mws: 0.013179
+      estimated_mw: 0.003358
+      idle_transitions_mws: 0.000754
+      total_mws: 0.013933
+      thread_name: "android.imms"
+      process_name: "system_server"
+      thread_id: 1842
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.012556
+      estimated_mw: 0.003199
+      idle_transitions_mws: 0.013610
+      total_mws: 0.026166
+      thread_name: "kworker/2:1"
+      process_name: "kworker/2:1"
+      thread_id: 130
+      process_id: 130
+    }
+    task_info {
+      estimated_mws: 0.012204
+      estimated_mw: 0.003110
+      idle_transitions_mws: 0.000000
+      total_mws: 0.012204
+      thread_name: "kworker/u16:0"
+      process_name: "kworker/u16:0"
+      thread_id: 8
+      process_id: 8
+    }
+    task_info {
+      estimated_mws: 0.011318
+      estimated_mw: 0.002884
+      idle_transitions_mws: 0.017252
+      total_mws: 0.028570
+      thread_name: "binder:1158_2"
+      process_name: "media.swcodec"
+      thread_id: 2109
+      process_id: 1158
+    }
+    task_info {
+      estimated_mws: 0.010716
+      estimated_mw: 0.002730
+      idle_transitions_mws: 0.003928
+      total_mws: 0.014644
+      thread_name: "TimerThread"
+      process_name: "/system/bin/audioserver"
+      thread_id: 1555
+      process_id: 960
+    }
+    task_info {
+      estimated_mws: 0.010560
+      estimated_mw: 0.002691
+      idle_transitions_mws: 0.000000
+      total_mws: 0.010560
+      thread_name: "rcuop/0"
+      process_name: "rcuop/0"
+      thread_id: 16
+      process_id: 16
+    }
+    task_info {
+      estimated_mws: 0.010216
+      estimated_mw: 0.002603
+      idle_transitions_mws: 0.024148
+      total_mws: 0.034364
+      thread_name: "kworker/7:5"
+      process_name: "kworker/7:5"
+      thread_id: 194
+      process_id: 194
+    }
+    task_info {
+      estimated_mws: 0.008739
+      estimated_mw: 0.002227
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008739
+      thread_name: "binder:15865_6"
+      process_name: "com.android.systemui"
+      thread_id: 15963
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.008457
+      estimated_mw: 0.002155
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008457
+      thread_name: "UsfHalWorker"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 983
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.007635
+      estimated_mw: 0.001945
+      idle_transitions_mws: 0.000000
+      total_mws: 0.007635
+      thread_name: "IdleTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 660
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.007634
+      estimated_mw: 0.001945
+      idle_transitions_mws: 0.003539
+      total_mws: 0.011173
+      thread_name: "binder:8021_5"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8135
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.007388
+      estimated_mw: 0.001882
+      idle_transitions_mws: 0.000000
+      total_mws: 0.007388
+      thread_name: "binder:7503_F"
+      process_name: "com.google.android.documentsui"
+      thread_id: 11618
+      process_id: 7503
+    }
+    task_info {
+      estimated_mws: 0.007272
+      estimated_mw: 0.001853
+      idle_transitions_mws: 0.000000
+      total_mws: 0.007272
+      thread_name: "ksoftirqd/2"
+      process_name: "ksoftirqd/2"
+      thread_id: 34
+      process_id: 34
+    }
+    task_info {
+      estimated_mws: 0.006824
+      estimated_mw: 0.001739
+      idle_transitions_mws: 0.000000
+      total_mws: 0.006824
+      thread_name: "binder:15865_4"
+      process_name: "com.android.systemui"
+      thread_id: 15922
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.006389
+      estimated_mw: 0.001628
+      idle_transitions_mws: 0.000000
+      total_mws: 0.006389
+      thread_name: "kworker/6:0"
+      process_name: "kworker/6:0"
+      thread_id: 13921
+      process_id: 13921
+    }
+    task_info {
+      estimated_mws: 0.005616
+      estimated_mw: 0.001431
+      idle_transitions_mws: 0.000000
+      total_mws: 0.005616
+      thread_name: "ksoftirqd/0"
+      process_name: "ksoftirqd/0"
+      thread_id: 13
+      process_id: 13
+    }
+    task_info {
+      estimated_mws: 0.004124
+      estimated_mw: 0.001051
+      idle_transitions_mws: 0.036693
+      total_mws: 0.040817
+      thread_name: "kworker/4:3"
+      process_name: "kworker/4:3"
+      thread_id: 286
+      process_id: 286
+    }
+    task_info {
+      estimated_mws: 0.001268
+      estimated_mw: 0.000323
+      idle_transitions_mws: 0.000000
+      total_mws: 0.001268
+      thread_name: "migration/7"
+      process_name: "migration/7"
+      thread_id: 69
+      process_id: 69
+    }
+    task_info {
+      estimated_mws: 0.001144
+      estimated_mw: 0.000291
+      idle_transitions_mws: 0.000000
+      total_mws: 0.001144
+      thread_name: "migration/6"
+      process_name: "migration/6"
+      thread_id: 62
+      process_id: 62
+    }
+    task_info {
+      estimated_mws: 0.000347
+      estimated_mw: 0.000088
+      idle_transitions_mws: 0.000000
+      total_mws: 0.000347
+      thread_name: "ksoftirqd/4"
+      process_name: "ksoftirqd/4"
+      thread_id: 48
+      process_id: 48
+    }
+    task_info {
+      estimated_mws: 0.000148
+      estimated_mw: 0.000038
+      idle_transitions_mws: 0.004483
+      total_mws: 0.004631
+      thread_name: "kworker/5:33"
+      process_name: "kworker/5:33"
+      thread_id: 1635
+      process_id: 1635
+    }
+  }
+  period_info {
+    period_id: 2
+    period_name: "NOTIFICATION_SHADE_QS_EXPAND_COLLAPSE"
+    task_info {
+      estimated_mws: 214.901306
+      estimated_mw: 54.754910
+      idle_transitions_mws: 4.015336
+      total_mws: 218.916641
+      thread_name: "ndroid.systemui"
+      process_name: "com.android.systemui"
+      thread_id: 15865
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 193.697937
+      estimated_mw: 49.352486
+      idle_transitions_mws: 5.232009
+      total_mws: 198.929947
+      thread_name: "RenderThread"
+      process_name: "com.android.systemui"
+      thread_id: 15911
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 139.472153
+      estimated_mw: 35.536247
+      idle_transitions_mws: -27.744040
+      total_mws: 111.728119
+      thread_name: "swapper"
+      process_name: ""
+      thread_id: 0
+      process_id: 0
+    }
+    task_info {
+      estimated_mws: 31.171541
+      estimated_mw: 7.942227
+      idle_transitions_mws: 0.168814
+      total_mws: 31.340355
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 578
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 16.574697
+      estimated_mw: 4.223083
+      idle_transitions_mws: 0.401085
+      total_mws: 16.975784
+      thread_name: "InputDispatcher"
+      process_name: "system_server"
+      thread_id: 1834
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 13.859999
+      estimated_mw: 3.531402
+      idle_transitions_mws: 0.231241
+      total_mws: 14.091240
+      thread_name: "s.nexuslauncher"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8021
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 13.159037
+      estimated_mw: 3.352804
+      idle_transitions_mws: 0.000000
+      total_mws: 13.159037
+      thread_name: "binder:581_2"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 581
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 10.990674
+      estimated_mw: 2.800324
+      idle_transitions_mws: 0.019429
+      total_mws: 11.010103
+      thread_name: "traced_probes"
+      process_name: "/system/bin/traced_probes"
+      thread_id: 1095
+      process_id: 1095
+    }
+    task_info {
+      estimated_mws: 10.847045
+      estimated_mw: 2.763729
+      idle_transitions_mws: 0.012038
+      total_mws: 10.859084
+      thread_name: "stack-unwinding"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8281
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 9.119457
+      estimated_mw: 2.323555
+      idle_transitions_mws: 0.000824
+      total_mws: 9.120282
+      thread_name: "ActivityManager"
+      process_name: "system_server"
+      thread_id: 1510
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 8.228412
+      estimated_mw: 2.096525
+      idle_transitions_mws: 0.642519
+      total_mws: 8.870932
+      thread_name: "binder:1423_D"
+      process_name: "system_server"
+      thread_id: 2498
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 7.979848
+      estimated_mw: 2.033193
+      idle_transitions_mws: 1.035555
+      total_mws: 9.015402
+      thread_name: "mali-cmar-backe"
+      process_name: "com.android.systemui"
+      thread_id: 15937
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 7.728572
+      estimated_mw: 1.969170
+      idle_transitions_mws: 0.647915
+      total_mws: 8.376487
+      thread_name: "binder:578_1"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 622
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 7.686174
+      estimated_mw: 1.958368
+      idle_transitions_mws: 0.000698
+      total_mws: 7.686872
+      thread_name: "traced"
+      process_name: "/system/bin/traced"
+      thread_id: 1097
+      process_id: 1097
+    }
+    task_info {
+      estimated_mws: 6.271694
+      estimated_mw: 1.597971
+      idle_transitions_mws: 0.005741
+      total_mws: 6.277436
+      thread_name: "trigger_perfett"
+      process_name: "trigger_perfett"
+      thread_id: 16131
+      process_id: 16131
+    }
+    task_info {
+      estimated_mws: 6.150710
+      estimated_mw: 1.567145
+      idle_transitions_mws: 1.661456
+      total_mws: 7.812166
+      thread_name: "mali_jd_thread"
+      process_name: "mali_jd_thread"
+      thread_id: 394
+      process_id: 394
+    }
+    task_info {
+      estimated_mws: 5.785116
+      estimated_mw: 1.473995
+      idle_transitions_mws: 0.313084
+      total_mws: 6.098200
+      thread_name: "binder:1423_5"
+      process_name: "system_server"
+      thread_id: 1784
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 5.454339
+      estimated_mw: 1.389716
+      idle_transitions_mws: 0.996487
+      total_mws: 6.450826
+      thread_name: "TimerDispatch"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 652
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 4.598369
+      estimated_mw: 1.171623
+      idle_transitions_mws: 0.292234
+      total_mws: 4.890603
+      thread_name: "binder:1423_19"
+      process_name: "system_server"
+      thread_id: 4842
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 4.516913
+      estimated_mw: 1.150869
+      idle_transitions_mws: 0.206536
+      total_mws: 4.723449
+      thread_name: "app"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 654
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 4.051981
+      estimated_mw: 1.032408
+      idle_transitions_mws: 0.068113
+      total_mws: 4.120093
+      thread_name: "android.ui"
+      process_name: "system_server"
+      thread_id: 1493
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 3.940035
+      estimated_mw: 1.003885
+      idle_transitions_mws: 0.077440
+      total_mws: 4.017476
+      thread_name: "kworker/u16:0"
+      process_name: "kworker/u16:0"
+      thread_id: 8
+      process_id: 8
+    }
+    task_info {
+      estimated_mws: 3.723016
+      estimated_mw: 0.948591
+      idle_transitions_mws: 1.199599
+      total_mws: 4.922614
+      thread_name: "sugov:0"
+      process_name: "sugov:0"
+      thread_id: 520
+      process_id: 520
+    }
+    task_info {
+      estimated_mws: 3.652151
+      estimated_mw: 0.930535
+      idle_transitions_mws: 0.629293
+      total_mws: 4.281444
+      thread_name: "decon0_kthread"
+      process_name: "decon0_kthread"
+      thread_id: 309
+      process_id: 309
+    }
+    task_info {
+      estimated_mws: 3.411057
+      estimated_mw: 0.869107
+      idle_transitions_mws: 0.115430
+      total_mws: 3.526487
+      thread_name: "binder:7292_5"
+      process_name: "app_process"
+      thread_id: 7860
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 3.385770
+      estimated_mw: 0.862664
+      idle_transitions_mws: 0.137454
+      total_mws: 3.523224
+      thread_name: "roidJUnitRunner"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7325
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 3.286531
+      estimated_mw: 0.837378
+      idle_transitions_mws: 0.125885
+      total_mws: 3.412416
+      thread_name: "RenderEngine"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 630
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 3.148677
+      estimated_mw: 0.802255
+      idle_transitions_mws: 0.005831
+      total_mws: 3.154509
+      thread_name: "Jit thread pool"
+      process_name: "com.android.systemui"
+      thread_id: 15872
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 3.009057
+      estimated_mw: 0.766680
+      idle_transitions_mws: 0.082840
+      total_mws: 3.091896
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2083
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 2.579574
+      estimated_mw: 0.657252
+      idle_transitions_mws: 0.143112
+      total_mws: 2.722686
+      thread_name: "kworker/u17:2"
+      process_name: "kworker/u17:2"
+      thread_id: 176
+      process_id: 176
+    }
+    task_info {
+      estimated_mws: 2.573767
+      estimated_mw: 0.655773
+      idle_transitions_mws: 0.207711
+      total_mws: 2.781478
+      thread_name: "binder:15865_5"
+      process_name: "com.android.systemui"
+      thread_id: 15957
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.360430
+      estimated_mw: 0.601416
+      idle_transitions_mws: 0.195245
+      total_mws: 2.555676
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15878
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.314942
+      estimated_mw: 0.589826
+      idle_transitions_mws: 0.232481
+      total_mws: 2.547423
+      thread_name: "binder:578_5"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2695
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.220271
+      estimated_mw: 0.565705
+      idle_transitions_mws: 0.001518
+      total_mws: 2.221789
+      thread_name: "SysUiBg"
+      process_name: "com.android.systemui"
+      thread_id: 15897
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.094507
+      estimated_mw: 0.533661
+      idle_transitions_mws: 0.317868
+      total_mws: 2.412375
+      thread_name: "BckgrndExec HP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 671
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.001611
+      estimated_mw: 0.509992
+      idle_transitions_mws: 0.038967
+      total_mws: 2.040578
+      thread_name: "traced_perf"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8279
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 1.934037
+      estimated_mw: 0.492775
+      idle_transitions_mws: 0.139782
+      total_mws: 2.073819
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1423
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.905543
+      estimated_mw: 0.485515
+      idle_transitions_mws: 0.416633
+      total_mws: 2.322176
+      thread_name: "binder:7292_4"
+      process_name: "app_process"
+      thread_id: 7730
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 1.741062
+      estimated_mw: 0.443607
+      idle_transitions_mws: 0.567846
+      total_mws: 2.308908
+      thread_name: "sugov:4"
+      process_name: "sugov:4"
+      thread_id: 521
+      process_id: 521
+    }
+    task_info {
+      estimated_mws: 1.727617
+      estimated_mw: 0.440181
+      idle_transitions_mws: 0.007566
+      total_mws: 1.735182
+      thread_name: "mali-compiler"
+      process_name: "com.android.systemui"
+      thread_id: 16126
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.694172
+      estimated_mw: 0.431660
+      idle_transitions_mws: 0.000000
+      total_mws: 1.694172
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power.stats-service.pixel"
+      thread_id: 908
+      process_id: 908
+    }
+    task_info {
+      estimated_mws: 1.595622
+      estimated_mw: 0.406550
+      idle_transitions_mws: 0.084697
+      total_mws: 1.680319
+      thread_name: "binder:1423_1E"
+      process_name: "system_server"
+      thread_id: 4850
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.561377
+      estimated_mw: 0.397825
+      idle_transitions_mws: 0.177839
+      total_mws: 1.739216
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 629
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.513686
+      estimated_mw: 0.385674
+      idle_transitions_mws: 0.469983
+      total_mws: 1.983669
+      thread_name: "sugov:6"
+      process_name: "sugov:6"
+      thread_id: 522
+      process_id: 522
+    }
+    task_info {
+      estimated_mws: 1.494437
+      estimated_mw: 0.380769
+      idle_transitions_mws: 0.116411
+      total_mws: 1.610847
+      thread_name: "binder:8021_3"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8032
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 1.161940
+      estimated_mw: 0.296052
+      idle_transitions_mws: 0.040349
+      total_mws: 1.202289
+      thread_name: "RegionSampling"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 656
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.103378
+      estimated_mw: 0.281131
+      idle_transitions_mws: 0.325698
+      total_mws: 1.429076
+      thread_name: "SystemUIBg-1"
+      process_name: "com.android.systemui"
+      thread_id: 15896
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.100736
+      estimated_mw: 0.280458
+      idle_transitions_mws: 0.142086
+      total_mws: 1.242822
+      thread_name: "UiAutomation"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7327
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 1.073456
+      estimated_mw: 0.273507
+      idle_transitions_mws: 0.113671
+      total_mws: 1.187127
+      thread_name: "binder:7309_5"
+      process_name: "android.platform.test.scenario"
+      thread_id: 8596
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 1.060661
+      estimated_mw: 0.270247
+      idle_transitions_mws: 0.319617
+      total_mws: 1.380278
+      thread_name: "SystemUIBg-4"
+      process_name: "com.android.systemui"
+      thread_id: 15900
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.991735
+      estimated_mw: 0.252685
+      idle_transitions_mws: 0.251555
+      total_mws: 1.243290
+      thread_name: "InputTracer"
+      process_name: "system_server"
+      thread_id: 1827
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.985839
+      estimated_mw: 0.251183
+      idle_transitions_mws: 0.348773
+      total_mws: 1.334612
+      thread_name: "SystemUIBg-8"
+      process_name: "com.android.systemui"
+      thread_id: 15904
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.903603
+      estimated_mw: 0.230230
+      idle_transitions_mws: 0.350992
+      total_mws: 1.254595
+      thread_name: "SystemUIBg-2"
+      process_name: "com.android.systemui"
+      thread_id: 15898
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.853655
+      estimated_mw: 0.217504
+      idle_transitions_mws: 0.394505
+      total_mws: 1.248161
+      thread_name: "SystemUIBg-5"
+      process_name: "com.android.systemui"
+      thread_id: 15901
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.843837
+      estimated_mw: 0.215002
+      idle_transitions_mws: 0.375854
+      total_mws: 1.219691
+      thread_name: "SystemUIBg-3"
+      process_name: "com.android.systemui"
+      thread_id: 15899
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.841059
+      estimated_mw: 0.214294
+      idle_transitions_mws: 0.239289
+      total_mws: 1.080347
+      thread_name: "SystemUIBg-7"
+      process_name: "com.android.systemui"
+      thread_id: 15903
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.837249
+      estimated_mw: 0.213324
+      idle_transitions_mws: 0.179144
+      total_mws: 1.016394
+      thread_name: "SystemUIBg-6"
+      process_name: "com.android.systemui"
+      thread_id: 15902
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.829898
+      estimated_mw: 0.211451
+      idle_transitions_mws: 0.174156
+      total_mws: 1.004054
+      thread_name: "wmshell.main"
+      process_name: "com.android.systemui"
+      thread_id: 15882
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.827673
+      estimated_mw: 0.210884
+      idle_transitions_mws: 0.179125
+      total_mws: 1.006799
+      thread_name: "PowerStatsServi"
+      process_name: "system_server"
+      thread_id: 2947
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.796137
+      estimated_mw: 0.202849
+      idle_transitions_mws: 0.146388
+      total_mws: 0.942525
+      thread_name: "m.test.scenario"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7309
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.757917
+      estimated_mw: 0.193110
+      idle_transitions_mws: 0.014243
+      total_mws: 0.772160
+      thread_name: "process reaper"
+      process_name: "com.android.systemui"
+      thread_id: 16132
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.752309
+      estimated_mw: 0.191682
+      idle_transitions_mws: 0.105249
+      total_mws: 0.857558
+      thread_name: "mali_apc_thread"
+      process_name: "mali_apc_thread"
+      thread_id: 393
+      process_id: 393
+    }
+    task_info {
+      estimated_mws: 0.746532
+      estimated_mw: 0.190210
+      idle_transitions_mws: 0.028181
+      total_mws: 0.774713
+      thread_name: "kworker/u17:0"
+      process_name: "kworker/u17:0"
+      thread_id: 14340
+      process_id: 14340
+    }
+    task_info {
+      estimated_mws: 0.743970
+      estimated_mw: 0.189557
+      idle_transitions_mws: 0.146008
+      total_mws: 0.889977
+      thread_name: "DisplayHints"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 614
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.730162
+      estimated_mw: 0.186039
+      idle_transitions_mws: 0.363831
+      total_mws: 1.093994
+      thread_name: "GPU completion"
+      process_name: "com.android.systemui"
+      thread_id: 16127
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.718310
+      estimated_mw: 0.183019
+      idle_transitions_mws: 0.037584
+      total_mws: 0.755895
+      thread_name: "binder:15865_6"
+      process_name: "com.android.systemui"
+      thread_id: 15963
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.681382
+      estimated_mw: 0.173610
+      idle_transitions_mws: 0.450580
+      total_mws: 1.131962
+      thread_name: "HWC release"
+      process_name: "com.android.systemui"
+      thread_id: 16123
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.616220
+      estimated_mw: 0.157007
+      idle_transitions_mws: 0.024258
+      total_mws: 0.640478
+      thread_name: "logd.writer"
+      process_name: "/system/bin/logd"
+      thread_id: 517
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.520969
+      estimated_mw: 0.132738
+      idle_transitions_mws: 0.029821
+      total_mws: 0.550790
+      thread_name: "binder:15865_7"
+      process_name: "com.android.systemui"
+      thread_id: 15964
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.491837
+      estimated_mw: 0.125316
+      idle_transitions_mws: 0.038687
+      total_mws: 0.530524
+      thread_name: "BckgrndExec LP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2701
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.424131
+      estimated_mw: 0.108065
+      idle_transitions_mws: 0.078692
+      total_mws: 0.502823
+      thread_name: "mali-cmar-backe"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 649
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.386449
+      estimated_mw: 0.098464
+      idle_transitions_mws: 0.218582
+      total_mws: 0.605031
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15945
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.342763
+      estimated_mw: 0.087333
+      idle_transitions_mws: 0.082847
+      total_mws: 0.425610
+      thread_name: "binder:7309_2"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7320
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.318815
+      estimated_mw: 0.081231
+      idle_transitions_mws: 0.000000
+      total_mws: 0.318815
+      thread_name: "logcat"
+      process_name: "logcat"
+      thread_id: 1395
+      process_id: 1395
+    }
+    task_info {
+      estimated_mws: 0.290070
+      estimated_mw: 0.073907
+      idle_transitions_mws: 0.010375
+      total_mws: 0.300445
+      thread_name: "InteractionJank"
+      process_name: "com.android.systemui"
+      thread_id: 15887
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.284995
+      estimated_mw: 0.072614
+      idle_transitions_mws: 0.007497
+      total_mws: 0.292492
+      thread_name: "binder:7309_6"
+      process_name: "android.platform.test.scenario"
+      thread_id: 10725
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.270520
+      estimated_mw: 0.068926
+      idle_transitions_mws: 0.001294
+      total_mws: 0.271814
+      thread_name: "Jit thread pool"
+      process_name: "system_server"
+      thread_id: 1465
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.241883
+      estimated_mw: 0.061630
+      idle_transitions_mws: 0.001656
+      total_mws: 0.243539
+      thread_name: "droid.apps.maps"
+      process_name: "com.google.android.apps.maps"
+      thread_id: 6048
+      process_id: 6048
+    }
+    task_info {
+      estimated_mws: 0.205438
+      estimated_mw: 0.052344
+      idle_transitions_mws: 0.033086
+      total_mws: 0.238524
+      thread_name: "vsync"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 618
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.204025
+      estimated_mw: 0.051984
+      idle_transitions_mws: 0.009086
+      total_mws: 0.213112
+      thread_name: "logd.reader.per"
+      process_name: "/system/bin/logd"
+      thread_id: 1454
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.201583
+      estimated_mw: 0.051362
+      idle_transitions_mws: 0.000000
+      total_mws: 0.201583
+      thread_name: "NodeLooperThrea"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2978
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.201397
+      estimated_mw: 0.051314
+      idle_transitions_mws: 0.038341
+      total_mws: 0.239738
+      thread_name: "adpf_handler0"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 714
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.181223
+      estimated_mw: 0.046174
+      idle_transitions_mws: 0.217516
+      total_mws: 0.398739
+      thread_name: "perf_mon_update"
+      process_name: "perf_mon_update_client_task"
+      thread_id: 136
+      process_id: 136
+    }
+    task_info {
+      estimated_mws: 0.174932
+      estimated_mw: 0.044571
+      idle_transitions_mws: 0.016272
+      total_mws: 0.191204
+      thread_name: "HwBinder:578_1"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 650
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.164429
+      estimated_mw: 0.041895
+      idle_transitions_mws: 0.010174
+      total_mws: 0.174602
+      thread_name: "TracingMuxer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 627
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.161933
+      estimated_mw: 0.041259
+      idle_transitions_mws: 0.001961
+      total_mws: 0.163894
+      thread_name: "main"
+      process_name: "app_process"
+      thread_id: 7292
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 0.160085
+      estimated_mw: 0.040788
+      idle_transitions_mws: 0.000000
+      total_mws: 0.160085
+      thread_name: "kworker/3:3H"
+      process_name: "kworker/3:3H"
+      thread_id: 4205
+      process_id: 4205
+    }
+    task_info {
+      estimated_mws: 0.152760
+      estimated_mw: 0.038922
+      idle_transitions_mws: 0.006517
+      total_mws: 0.159277
+      thread_name: "statsd.reader"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 869
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.149836
+      estimated_mw: 0.038177
+      idle_transitions_mws: 0.005029
+      total_mws: 0.154866
+      thread_name: "Background_17"
+      process_name: "com.google.android.apps.maps"
+      thread_id: 16130
+      process_id: 6048
+    }
+    task_info {
+      estimated_mws: 0.138264
+      estimated_mw: 0.035228
+      idle_transitions_mws: 0.004283
+      total_mws: 0.142547
+      thread_name: "statsd.writer"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 868
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.128982
+      estimated_mw: 0.032863
+      idle_transitions_mws: 0.028129
+      total_mws: 0.157111
+      thread_name: "RegSampIdle"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 657
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.114841
+      estimated_mw: 0.029260
+      idle_transitions_mws: 0.000000
+      total_mws: 0.114841
+      thread_name: "migration/3"
+      process_name: "migration/3"
+      thread_id: 40
+      process_id: 40
+    }
+    task_info {
+      estimated_mws: 0.111225
+      estimated_mw: 0.028339
+      idle_transitions_mws: 0.000000
+      total_mws: 0.111225
+      thread_name: "heapprofd"
+      process_name: "/system/bin/heapprofd"
+      thread_id: 8280
+      process_id: 8280
+    }
+    task_info {
+      estimated_mws: 0.108152
+      estimated_mw: 0.027556
+      idle_transitions_mws: 0.022336
+      total_mws: 0.130488
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.health-service.gs101"
+      thread_id: 898
+      process_id: 898
+    }
+    task_info {
+      estimated_mws: 0.102787
+      estimated_mw: 0.026189
+      idle_transitions_mws: 0.000000
+      total_mws: 0.102787
+      thread_name: "migration/0"
+      process_name: "migration/0"
+      thread_id: 20
+      process_id: 20
+    }
+    task_info {
+      estimated_mws: 0.091373
+      estimated_mw: 0.023281
+      idle_transitions_mws: 0.063324
+      total_mws: 0.154697
+      thread_name: "mali-mem-purge"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 640
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.086645
+      estimated_mw: 0.022076
+      idle_transitions_mws: 0.090680
+      total_mws: 0.177326
+      thread_name: "mali-mem-purge"
+      process_name: "com.android.systemui"
+      thread_id: 15928
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.084199
+      estimated_mw: 0.021453
+      idle_transitions_mws: 0.008253
+      total_mws: 0.092452
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15992
+    }
+    task_info {
+      estimated_mws: 0.082353
+      estimated_mw: 0.020983
+      idle_transitions_mws: 0.006671
+      total_mws: 0.089024
+      thread_name: "SensorService"
+      process_name: "system_server"
+      thread_id: 1805
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.077161
+      estimated_mw: 0.019660
+      idle_transitions_mws: 0.000000
+      total_mws: 0.077161
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15991
+    }
+    task_info {
+      estimated_mws: 0.071234
+      estimated_mw: 0.018150
+      idle_transitions_mws: 0.012328
+      total_mws: 0.083563
+      thread_name: "queued-work-loo"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8064
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.069340
+      estimated_mw: 0.017667
+      idle_transitions_mws: 0.032640
+      total_mws: 0.101979
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 661
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.068262
+      estimated_mw: 0.017392
+      idle_transitions_mws: 0.003502
+      total_mws: 0.071763
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 986
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.061503
+      estimated_mw: 0.015670
+      idle_transitions_mws: 0.000000
+      total_mws: 0.061503
+      thread_name: "TouchTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 658
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.061366
+      estimated_mw: 0.015636
+      idle_transitions_mws: 0.000000
+      total_mws: 0.061366
+      thread_name: "migration/1"
+      process_name: "migration/1"
+      thread_id: 26
+      process_id: 26
+    }
+    task_info {
+      estimated_mws: 0.059074
+      estimated_mw: 0.015051
+      idle_transitions_mws: 0.007234
+      total_mws: 0.066308
+      thread_name: "UsfTransport"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 1451
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.057819
+      estimated_mw: 0.014732
+      idle_transitions_mws: 0.002076
+      total_mws: 0.059896
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15994
+    }
+    task_info {
+      estimated_mws: 0.055603
+      estimated_mw: 0.014167
+      idle_transitions_mws: 0.013913
+      total_mws: 0.069516
+      thread_name: "kworker/2:1"
+      process_name: "kworker/2:1"
+      thread_id: 130
+      process_id: 130
+    }
+    task_info {
+      estimated_mws: 0.051664
+      estimated_mw: 0.013164
+      idle_transitions_mws: 0.005213
+      total_mws: 0.056877
+      thread_name: "ScreenDecoratio"
+      process_name: "com.android.systemui"
+      thread_id: 15923
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.050942
+      estimated_mw: 0.012980
+      idle_transitions_mws: 0.004026
+      total_mws: 0.054968
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15993
+    }
+    task_info {
+      estimated_mws: 0.049289
+      estimated_mw: 0.012559
+      idle_transitions_mws: 0.000000
+      total_mws: 0.049289
+      thread_name: "migration/2"
+      process_name: "migration/2"
+      thread_id: 33
+      process_id: 33
+    }
+    task_info {
+      estimated_mws: 0.047770
+      estimated_mw: 0.012171
+      idle_transitions_mws: 0.005397
+      total_mws: 0.053167
+      thread_name: "eduling.default"
+      process_name: "system_server"
+      thread_id: 1809
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.046522
+      estimated_mw: 0.011853
+      idle_transitions_mws: 0.011517
+      total_mws: 0.058039
+      thread_name: "kworker/3:12"
+      process_name: "kworker/3:12"
+      thread_id: 207
+      process_id: 207
+    }
+    task_info {
+      estimated_mws: 0.043262
+      estimated_mw: 0.011023
+      idle_transitions_mws: 0.004228
+      total_mws: 0.047490
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15988
+    }
+    task_info {
+      estimated_mws: 0.038018
+      estimated_mw: 0.009687
+      idle_transitions_mws: 0.001732
+      total_mws: 0.039750
+      thread_name: "BroadcastRunnin"
+      process_name: "com.android.systemui"
+      thread_id: 15906
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.037081
+      estimated_mw: 0.009448
+      idle_transitions_mws: 0.014265
+      total_mws: 0.051346
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15990
+    }
+    task_info {
+      estimated_mws: 0.034452
+      estimated_mw: 0.008778
+      idle_transitions_mws: 0.007819
+      total_mws: 0.042271
+      thread_name: "RE Completion"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 8397
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.033181
+      estimated_mw: 0.008454
+      idle_transitions_mws: 0.000000
+      total_mws: 0.033181
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.android.settings"
+      thread_id: 5255
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.031927
+      estimated_mw: 0.008135
+      idle_transitions_mws: 0.049831
+      total_mws: 0.081758
+      thread_name: "com.google.usf."
+      process_name: "com.google.usf.non_wake_up"
+      thread_id: 1447
+      process_id: 1447
+    }
+    task_info {
+      estimated_mws: 0.030647
+      estimated_mw: 0.007809
+      idle_transitions_mws: 0.064089
+      total_mws: 0.094736
+      thread_name: "psimon"
+      process_name: "psimon"
+      thread_id: 510
+      process_id: 510
+    }
+    task_info {
+      estimated_mws: 0.029733
+      estimated_mw: 0.007576
+      idle_transitions_mws: 0.002042
+      total_mws: 0.031775
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 683
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.029636
+      estimated_mw: 0.007551
+      idle_transitions_mws: 0.001921
+      total_mws: 0.031557
+      thread_name: "binder:15865_1"
+      process_name: "com.android.systemui"
+      thread_id: 15877
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.027352
+      estimated_mw: 0.006969
+      idle_transitions_mws: 0.000921
+      total_mws: 0.028273
+      thread_name: "simpleinteracti"
+      process_name: "simpleinteractive"
+      thread_id: 290
+      process_id: 290
+    }
+    task_info {
+      estimated_mws: 0.023126
+      estimated_mw: 0.005892
+      idle_transitions_mws: 0.003350
+      total_mws: 0.026476
+      thread_name: "otp-aiai-notifi"
+      process_name: ""
+      thread_id: 8965
+    }
+    task_info {
+      estimated_mws: 0.022854
+      estimated_mw: 0.005823
+      idle_transitions_mws: 0.003576
+      total_mws: 0.026430
+      thread_name: "binder:15865_3"
+      process_name: "com.android.systemui"
+      thread_id: 15879
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.022384
+      estimated_mw: 0.005703
+      idle_transitions_mws: 0.003920
+      total_mws: 0.026304
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15984
+    }
+    task_info {
+      estimated_mws: 0.020308
+      estimated_mw: 0.005174
+      idle_transitions_mws: 0.000000
+      total_mws: 0.020308
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.edgetpu.logging@service-edgetpu-logging"
+      thread_id: 1214
+      process_id: 1162
+    }
+    task_info {
+      estimated_mws: 0.019427
+      estimated_mw: 0.004950
+      idle_transitions_mws: 0.000000
+      total_mws: 0.019427
+      thread_name: "GoogleApiHandle"
+      process_name: "com.google.android.gms.persistent"
+      thread_id: 6076
+      process_id: 5844
+    }
+    task_info {
+      estimated_mws: 0.019070
+      estimated_mw: 0.004859
+      idle_transitions_mws: 0.003087
+      total_mws: 0.022157
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15987
+    }
+    task_info {
+      estimated_mws: 0.019027
+      estimated_mw: 0.004848
+      idle_transitions_mws: 0.006383
+      total_mws: 0.025410
+      thread_name: "UsfHalWorker"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 983
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.018090
+      estimated_mw: 0.004609
+      idle_transitions_mws: 0.002281
+      total_mws: 0.020372
+      thread_name: "kworker/5:3H"
+      process_name: "kworker/5:3H"
+      thread_id: 1032
+      process_id: 1032
+    }
+    task_info {
+      estimated_mws: 0.017976
+      estimated_mw: 0.004580
+      idle_transitions_mws: 0.000000
+      total_mws: 0.017976
+      thread_name: "migration/5"
+      process_name: "migration/5"
+      thread_id: 55
+      process_id: 55
+    }
+    task_info {
+      estimated_mws: 0.017385
+      estimated_mw: 0.004429
+      idle_transitions_mws: 0.000000
+      total_mws: 0.017385
+      thread_name: "kworker/6:7H"
+      process_name: "kworker/6:7H"
+      thread_id: 927
+      process_id: 927
+    }
+    task_info {
+      estimated_mws: 0.017028
+      estimated_mw: 0.004339
+      idle_transitions_mws: 0.028344
+      total_mws: 0.045372
+      thread_name: "kworker/6:0"
+      process_name: "kworker/6:0"
+      thread_id: 13921
+      process_id: 13921
+    }
+    task_info {
+      estimated_mws: 0.014807
+      estimated_mw: 0.003773
+      idle_transitions_mws: 0.000000
+      total_mws: 0.014807
+      thread_name: "DefaultDispatch"
+      process_name: "com.android.settings"
+      thread_id: 3030
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.014612
+      estimated_mw: 0.003723
+      idle_transitions_mws: 0.000000
+      total_mws: 0.014612
+      thread_name: "lhd"
+      process_name: "/vendor/bin/hw/lhd"
+      thread_id: 1144
+      process_id: 1144
+    }
+    task_info {
+      estimated_mws: 0.014608
+      estimated_mw: 0.003722
+      idle_transitions_mws: 0.003187
+      total_mws: 0.017795
+      thread_name: "kworker/5:33"
+      process_name: "kworker/5:33"
+      thread_id: 1635
+      process_id: 1635
+    }
+    task_info {
+      estimated_mws: 0.014081
+      estimated_mw: 0.003588
+      idle_transitions_mws: 0.002338
+      total_mws: 0.016419
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1464
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.013689
+      estimated_mw: 0.003488
+      idle_transitions_mws: 0.000000
+      total_mws: 0.013689
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.google.android.apps.docs"
+      thread_id: 6005
+      process_id: 5990
+    }
+    task_info {
+      estimated_mws: 0.013150
+      estimated_mw: 0.003350
+      idle_transitions_mws: 0.003143
+      total_mws: 0.016292
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15989
+    }
+    task_info {
+      estimated_mws: 0.013125
+      estimated_mw: 0.003344
+      idle_transitions_mws: 0.000000
+      total_mws: 0.013125
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.setupwizard"
+      thread_id: 2863
+      process_id: 2387
+    }
+    task_info {
+      estimated_mws: 0.012324
+      estimated_mw: 0.003140
+      idle_transitions_mws: 0.000000
+      total_mws: 0.012324
+      thread_name: "RxCachedWorkerP"
+      process_name: "com.google.android.apps.docs"
+      thread_id: 6006
+      process_id: 5990
+    }
+    task_info {
+      estimated_mws: 0.012290
+      estimated_mw: 0.003131
+      idle_transitions_mws: 0.000000
+      total_mws: 0.012290
+      thread_name: "-Executor] idle"
+      process_name: "com.google.android.gms"
+      thread_id: 15986
+      process_id: 5825
+    }
+    task_info {
+      estimated_mws: 0.011181
+      estimated_mw: 0.002849
+      idle_transitions_mws: 0.159340
+      total_mws: 0.170521
+      thread_name: "binder:15865_4"
+      process_name: "com.android.systemui"
+      thread_id: 15922
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.011106
+      estimated_mw: 0.002830
+      idle_transitions_mws: 0.000000
+      total_mws: 0.011106
+      thread_name: "migration/4"
+      process_name: "migration/4"
+      thread_id: 47
+      process_id: 47
+    }
+    task_info {
+      estimated_mws: 0.011101
+      estimated_mw: 0.002829
+      idle_transitions_mws: 0.000000
+      total_mws: 0.011101
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.setupwizard"
+      thread_id: 2862
+      process_id: 2387
+    }
+    task_info {
+      estimated_mws: 0.010968
+      estimated_mw: 0.002795
+      idle_transitions_mws: 0.000000
+      total_mws: 0.010968
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.apps.work.clouddpc"
+      thread_id: 5125
+      process_id: 4996
+    }
+    task_info {
+      estimated_mws: 0.009375
+      estimated_mw: 0.002389
+      idle_transitions_mws: 0.002434
+      total_mws: 0.011809
+      thread_name: "RxCachedWorkerP"
+      process_name: "com.android.settings"
+      thread_id: 5263
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.008952
+      estimated_mw: 0.002281
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008952
+      thread_name: "DefaultDispatch"
+      process_name: "com.android.settings"
+      thread_id: 3029
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.008763
+      estimated_mw: 0.002233
+      idle_transitions_mws: 0.001547
+      total_mws: 0.010310
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.contacts"
+      thread_id: 4075
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.008244
+      estimated_mw: 0.002100
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008244
+      thread_name: "IdleTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 660
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.006367
+      estimated_mw: 0.001622
+      idle_transitions_mws: 0.005399
+      total_mws: 0.011766
+      thread_name: "GpsdWatchDog"
+      process_name: "/vendor/bin/hw/gpsd"
+      thread_id: 1311
+      process_id: 1147
+    }
+    task_info {
+      estimated_mws: 0.006244
+      estimated_mw: 0.001591
+      idle_transitions_mws: 0.003325
+      total_mws: 0.009570
+      thread_name: "binder:1423_20"
+      process_name: "system_server"
+      thread_id: 4852
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.005897
+      estimated_mw: 0.001502
+      idle_transitions_mws: 0.000000
+      total_mws: 0.005897
+      thread_name: "kworker/1:1H"
+      process_name: "kworker/1:1H"
+      thread_id: 432
+      process_id: 432
+    }
+    task_info {
+      estimated_mws: 0.004904
+      estimated_mw: 0.001250
+      idle_transitions_mws: 0.000000
+      total_mws: 0.004904
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.apps.work.clouddpc"
+      thread_id: 5124
+      process_id: 4996
+    }
+    task_info {
+      estimated_mws: 0.004890
+      estimated_mw: 0.001246
+      idle_transitions_mws: 0.004577
+      total_mws: 0.009467
+      thread_name: "-Executor] idle"
+      process_name: "com.google.android.gms.persistent"
+      thread_id: 15985
+      process_id: 5844
+    }
+    task_info {
+      estimated_mws: 0.004727
+      estimated_mw: 0.001204
+      idle_transitions_mws: 0.000000
+      total_mws: 0.004727
+      thread_name: "f2fs_discard-25"
+      process_name: "f2fs_discard-254:53"
+      thread_id: 639
+      process_id: 639
+    }
+    task_info {
+      estimated_mws: 0.004593
+      estimated_mw: 0.001170
+      idle_transitions_mws: 0.002459
+      total_mws: 0.007052
+      thread_name: "kworker/7:5"
+      process_name: "kworker/7:5"
+      thread_id: 194
+      process_id: 194
+    }
+    task_info {
+      estimated_mws: 0.004339
+      estimated_mw: 0.001105
+      idle_transitions_mws: 0.000000
+      total_mws: 0.004339
+      thread_name: "kworker/4:3"
+      process_name: "kworker/4:3"
+      thread_id: 286
+      process_id: 286
+    }
+    task_info {
+      estimated_mws: 0.004289
+      estimated_mw: 0.001093
+      idle_transitions_mws: 0.003973
+      total_mws: 0.008262
+      thread_name: "binder:7309_7"
+      process_name: "android.platform.test.scenario"
+      thread_id: 15983
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.003366
+      estimated_mw: 0.000858
+      idle_transitions_mws: 0.000000
+      total_mws: 0.003366
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.contacts"
+      thread_id: 4079
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.003361
+      estimated_mw: 0.000856
+      idle_transitions_mws: 0.001746
+      total_mws: 0.005108
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.contacts"
+      thread_id: 4074
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.003029
+      estimated_mw: 0.000772
+      idle_transitions_mws: 0.000000
+      total_mws: 0.003029
+      thread_name: "kworker/4:1H"
+      process_name: "kworker/4:1H"
+      thread_id: 333
+      process_id: 333
+    }
+    task_info {
+      estimated_mws: 0.002199
+      estimated_mw: 0.000560
+      idle_transitions_mws: 0.015290
+      total_mws: 0.017490
+      thread_name: "kworker/0:2"
+      process_name: "kworker/0:2"
+      thread_id: 138
+      process_id: 138
+    }
+    task_info {
+      estimated_mws: 0.001369
+      estimated_mw: 0.000349
+      idle_transitions_mws: 0.000959
+      total_mws: 0.002328
+      thread_name: "kworker/u16:2"
+      process_name: "kworker/u16:2"
+      thread_id: 86
+      process_id: 86
+    }
+    task_info {
+      estimated_mws: 0.000084
+      estimated_mw: 0.000021
+      idle_transitions_mws: 0.000000
+      total_mws: 0.000084
+      thread_name: "ksoftirqd/0"
+      process_name: "ksoftirqd/0"
+      thread_id: 13
+      process_id: 13
+    }
+    task_info {
+      estimated_mws: 0.000045
+      estimated_mw: 0.000011
+      idle_transitions_mws: 0.013897
+      total_mws: 0.013942
+      thread_name: "kworker/1:1"
+      process_name: "kworker/1:1"
+      thread_id: 129
+      process_id: 129
+    }
+  }
+  period_info {
+    period_id: 3
+    period_name: "NOTIFICATION_SHADE_EXPAND_COLLAPSE::Collapse"
+    task_info {
+      estimated_mws: 214.993439
+      estimated_mw: 54.778385
+      idle_transitions_mws: 4.012363
+      total_mws: 219.005798
+      thread_name: "ndroid.systemui"
+      process_name: "com.android.systemui"
+      thread_id: 15865
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 193.697937
+      estimated_mw: 49.352486
+      idle_transitions_mws: 5.232009
+      total_mws: 198.929947
+      thread_name: "RenderThread"
+      process_name: "com.android.systemui"
+      thread_id: 15911
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 139.488831
+      estimated_mw: 35.540497
+      idle_transitions_mws: -27.745781
+      total_mws: 111.743057
+      thread_name: "swapper"
+      process_name: ""
+      thread_id: 0
+      process_id: 0
+    }
+    task_info {
+      estimated_mws: 31.171541
+      estimated_mw: 7.942227
+      idle_transitions_mws: 0.168814
+      total_mws: 31.340355
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 578
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 16.479012
+      estimated_mw: 4.198703
+      idle_transitions_mws: 0.401085
+      total_mws: 16.880098
+      thread_name: "InputDispatcher"
+      process_name: "system_server"
+      thread_id: 1834
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 13.851733
+      estimated_mw: 3.529297
+      idle_transitions_mws: 0.231241
+      total_mws: 14.082975
+      thread_name: "s.nexuslauncher"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8021
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 13.159037
+      estimated_mw: 3.352804
+      idle_transitions_mws: 0.000000
+      total_mws: 13.159037
+      thread_name: "binder:581_2"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 581
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 10.990674
+      estimated_mw: 2.800324
+      idle_transitions_mws: 0.019429
+      total_mws: 11.010103
+      thread_name: "traced_probes"
+      process_name: "/system/bin/traced_probes"
+      thread_id: 1095
+      process_id: 1095
+    }
+    task_info {
+      estimated_mws: 10.804115
+      estimated_mw: 2.752791
+      idle_transitions_mws: 0.012038
+      total_mws: 10.816154
+      thread_name: "stack-unwinding"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8281
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 9.119457
+      estimated_mw: 2.323555
+      idle_transitions_mws: 0.000824
+      total_mws: 9.120282
+      thread_name: "ActivityManager"
+      process_name: "system_server"
+      thread_id: 1510
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 8.228412
+      estimated_mw: 2.096525
+      idle_transitions_mws: 0.642519
+      total_mws: 8.870932
+      thread_name: "binder:1423_D"
+      process_name: "system_server"
+      thread_id: 2498
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 7.979848
+      estimated_mw: 2.033193
+      idle_transitions_mws: 1.035555
+      total_mws: 9.015402
+      thread_name: "mali-cmar-backe"
+      process_name: "com.android.systemui"
+      thread_id: 15937
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 7.686174
+      estimated_mw: 1.958368
+      idle_transitions_mws: 0.000698
+      total_mws: 7.686872
+      thread_name: "traced"
+      process_name: "/system/bin/traced"
+      thread_id: 1097
+      process_id: 1097
+    }
+    task_info {
+      estimated_mws: 7.676609
+      estimated_mw: 1.955931
+      idle_transitions_mws: 0.645664
+      total_mws: 8.322273
+      thread_name: "binder:578_1"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 622
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 6.271694
+      estimated_mw: 1.597971
+      idle_transitions_mws: 0.005741
+      total_mws: 6.277436
+      thread_name: "trigger_perfett"
+      process_name: "trigger_perfett"
+      thread_id: 16131
+      process_id: 16131
+    }
+    task_info {
+      estimated_mws: 6.150710
+      estimated_mw: 1.567145
+      idle_transitions_mws: 1.661456
+      total_mws: 7.812166
+      thread_name: "mali_jd_thread"
+      process_name: "mali_jd_thread"
+      thread_id: 394
+      process_id: 394
+    }
+    task_info {
+      estimated_mws: 5.785116
+      estimated_mw: 1.473995
+      idle_transitions_mws: 0.313084
+      total_mws: 6.098200
+      thread_name: "binder:1423_5"
+      process_name: "system_server"
+      thread_id: 1784
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 5.454339
+      estimated_mw: 1.389716
+      idle_transitions_mws: 0.996487
+      total_mws: 6.450826
+      thread_name: "TimerDispatch"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 652
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 4.597618
+      estimated_mw: 1.171431
+      idle_transitions_mws: 0.291548
+      total_mws: 4.889165
+      thread_name: "binder:1423_19"
+      process_name: "system_server"
+      thread_id: 4842
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 4.516913
+      estimated_mw: 1.150869
+      idle_transitions_mws: 0.206536
+      total_mws: 4.723449
+      thread_name: "app"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 654
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 4.051981
+      estimated_mw: 1.032408
+      idle_transitions_mws: 0.068113
+      total_mws: 4.120093
+      thread_name: "android.ui"
+      process_name: "system_server"
+      thread_id: 1493
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 3.940035
+      estimated_mw: 1.003885
+      idle_transitions_mws: 0.077440
+      total_mws: 4.017476
+      thread_name: "kworker/u16:0"
+      process_name: "kworker/u16:0"
+      thread_id: 8
+      process_id: 8
+    }
+    task_info {
+      estimated_mws: 3.710534
+      estimated_mw: 0.945410
+      idle_transitions_mws: 1.195743
+      total_mws: 4.906276
+      thread_name: "sugov:0"
+      process_name: "sugov:0"
+      thread_id: 520
+      process_id: 520
+    }
+    task_info {
+      estimated_mws: 3.652151
+      estimated_mw: 0.930535
+      idle_transitions_mws: 0.629293
+      total_mws: 4.281444
+      thread_name: "decon0_kthread"
+      process_name: "decon0_kthread"
+      thread_id: 309
+      process_id: 309
+    }
+    task_info {
+      estimated_mws: 3.411057
+      estimated_mw: 0.869107
+      idle_transitions_mws: 0.115430
+      total_mws: 3.526487
+      thread_name: "binder:7292_5"
+      process_name: "app_process"
+      thread_id: 7860
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 3.385770
+      estimated_mw: 0.862664
+      idle_transitions_mws: 0.137454
+      total_mws: 3.523224
+      thread_name: "roidJUnitRunner"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7325
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 3.286531
+      estimated_mw: 0.837378
+      idle_transitions_mws: 0.125885
+      total_mws: 3.412416
+      thread_name: "RenderEngine"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 630
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 3.148677
+      estimated_mw: 0.802255
+      idle_transitions_mws: 0.005831
+      total_mws: 3.154509
+      thread_name: "Jit thread pool"
+      process_name: "com.android.systemui"
+      thread_id: 15872
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 3.009057
+      estimated_mw: 0.766680
+      idle_transitions_mws: 0.082840
+      total_mws: 3.091896
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2083
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 2.579574
+      estimated_mw: 0.657252
+      idle_transitions_mws: 0.143112
+      total_mws: 2.722686
+      thread_name: "kworker/u17:2"
+      process_name: "kworker/u17:2"
+      thread_id: 176
+      process_id: 176
+    }
+    task_info {
+      estimated_mws: 2.573767
+      estimated_mw: 0.655773
+      idle_transitions_mws: 0.207711
+      total_mws: 2.781478
+      thread_name: "binder:15865_5"
+      process_name: "com.android.systemui"
+      thread_id: 15957
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.360430
+      estimated_mw: 0.601416
+      idle_transitions_mws: 0.195245
+      total_mws: 2.555676
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15878
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.314942
+      estimated_mw: 0.589826
+      idle_transitions_mws: 0.232481
+      total_mws: 2.547423
+      thread_name: "binder:578_5"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2695
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.220271
+      estimated_mw: 0.565705
+      idle_transitions_mws: 0.001518
+      total_mws: 2.221789
+      thread_name: "SysUiBg"
+      process_name: "com.android.systemui"
+      thread_id: 15897
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 2.094507
+      estimated_mw: 0.533661
+      idle_transitions_mws: 0.317868
+      total_mws: 2.412375
+      thread_name: "BckgrndExec HP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 671
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.001611
+      estimated_mw: 0.509992
+      idle_transitions_mws: 0.038967
+      total_mws: 2.040578
+      thread_name: "traced_perf"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8279
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 1.934037
+      estimated_mw: 0.492775
+      idle_transitions_mws: 0.139782
+      total_mws: 2.073819
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1423
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.905543
+      estimated_mw: 0.485515
+      idle_transitions_mws: 0.416633
+      total_mws: 2.322176
+      thread_name: "binder:7292_4"
+      process_name: "app_process"
+      thread_id: 7730
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 1.747171
+      estimated_mw: 0.445163
+      idle_transitions_mws: 0.570725
+      total_mws: 2.317897
+      thread_name: "sugov:4"
+      process_name: "sugov:4"
+      thread_id: 521
+      process_id: 521
+    }
+    task_info {
+      estimated_mws: 1.727617
+      estimated_mw: 0.440181
+      idle_transitions_mws: 0.007566
+      total_mws: 1.735182
+      thread_name: "mali-compiler"
+      process_name: "com.android.systemui"
+      thread_id: 16126
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.694172
+      estimated_mw: 0.431660
+      idle_transitions_mws: 0.000000
+      total_mws: 1.694172
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power.stats-service.pixel"
+      thread_id: 908
+      process_id: 908
+    }
+    task_info {
+      estimated_mws: 1.595622
+      estimated_mw: 0.406550
+      idle_transitions_mws: 0.084697
+      total_mws: 1.680319
+      thread_name: "binder:1423_1E"
+      process_name: "system_server"
+      thread_id: 4850
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.561377
+      estimated_mw: 0.397825
+      idle_transitions_mws: 0.177839
+      total_mws: 1.739216
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 629
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.513686
+      estimated_mw: 0.385674
+      idle_transitions_mws: 0.469983
+      total_mws: 1.983669
+      thread_name: "sugov:6"
+      process_name: "sugov:6"
+      thread_id: 522
+      process_id: 522
+    }
+    task_info {
+      estimated_mws: 1.494437
+      estimated_mw: 0.380769
+      idle_transitions_mws: 0.116411
+      total_mws: 1.610847
+      thread_name: "binder:8021_3"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8032
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 1.161940
+      estimated_mw: 0.296052
+      idle_transitions_mws: 0.040349
+      total_mws: 1.202289
+      thread_name: "RegionSampling"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 656
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.103378
+      estimated_mw: 0.281131
+      idle_transitions_mws: 0.325698
+      total_mws: 1.429076
+      thread_name: "SystemUIBg-1"
+      process_name: "com.android.systemui"
+      thread_id: 15896
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.100736
+      estimated_mw: 0.280458
+      idle_transitions_mws: 0.142086
+      total_mws: 1.242822
+      thread_name: "UiAutomation"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7327
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 1.073456
+      estimated_mw: 0.273507
+      idle_transitions_mws: 0.113671
+      total_mws: 1.187127
+      thread_name: "binder:7309_5"
+      process_name: "android.platform.test.scenario"
+      thread_id: 8596
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 1.060661
+      estimated_mw: 0.270247
+      idle_transitions_mws: 0.319617
+      total_mws: 1.380278
+      thread_name: "SystemUIBg-4"
+      process_name: "com.android.systemui"
+      thread_id: 15900
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.991735
+      estimated_mw: 0.252685
+      idle_transitions_mws: 0.251555
+      total_mws: 1.243290
+      thread_name: "InputTracer"
+      process_name: "system_server"
+      thread_id: 1827
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.985839
+      estimated_mw: 0.251183
+      idle_transitions_mws: 0.348773
+      total_mws: 1.334612
+      thread_name: "SystemUIBg-8"
+      process_name: "com.android.systemui"
+      thread_id: 15904
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.903603
+      estimated_mw: 0.230230
+      idle_transitions_mws: 0.350992
+      total_mws: 1.254595
+      thread_name: "SystemUIBg-2"
+      process_name: "com.android.systemui"
+      thread_id: 15898
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.853655
+      estimated_mw: 0.217504
+      idle_transitions_mws: 0.394505
+      total_mws: 1.248161
+      thread_name: "SystemUIBg-5"
+      process_name: "com.android.systemui"
+      thread_id: 15901
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.848908
+      estimated_mw: 0.216294
+      idle_transitions_mws: 0.179680
+      total_mws: 1.028588
+      thread_name: "SystemUIBg-6"
+      process_name: "com.android.systemui"
+      thread_id: 15902
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.843837
+      estimated_mw: 0.215002
+      idle_transitions_mws: 0.375854
+      total_mws: 1.219691
+      thread_name: "SystemUIBg-3"
+      process_name: "com.android.systemui"
+      thread_id: 15899
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.841059
+      estimated_mw: 0.214294
+      idle_transitions_mws: 0.239289
+      total_mws: 1.080347
+      thread_name: "SystemUIBg-7"
+      process_name: "com.android.systemui"
+      thread_id: 15903
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.829898
+      estimated_mw: 0.211451
+      idle_transitions_mws: 0.174156
+      total_mws: 1.004054
+      thread_name: "wmshell.main"
+      process_name: "com.android.systemui"
+      thread_id: 15882
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.827673
+      estimated_mw: 0.210884
+      idle_transitions_mws: 0.179125
+      total_mws: 1.006799
+      thread_name: "PowerStatsServi"
+      process_name: "system_server"
+      thread_id: 2947
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.796137
+      estimated_mw: 0.202849
+      idle_transitions_mws: 0.146388
+      total_mws: 0.942525
+      thread_name: "m.test.scenario"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7309
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.757917
+      estimated_mw: 0.193110
+      idle_transitions_mws: 0.014243
+      total_mws: 0.772160
+      thread_name: "process reaper"
+      process_name: "com.android.systemui"
+      thread_id: 16132
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.752309
+      estimated_mw: 0.191682
+      idle_transitions_mws: 0.105249
+      total_mws: 0.857558
+      thread_name: "mali_apc_thread"
+      process_name: "mali_apc_thread"
+      thread_id: 393
+      process_id: 393
+    }
+    task_info {
+      estimated_mws: 0.746532
+      estimated_mw: 0.190210
+      idle_transitions_mws: 0.028181
+      total_mws: 0.774713
+      thread_name: "kworker/u17:0"
+      process_name: "kworker/u17:0"
+      thread_id: 14340
+      process_id: 14340
+    }
+    task_info {
+      estimated_mws: 0.743970
+      estimated_mw: 0.189557
+      idle_transitions_mws: 0.146008
+      total_mws: 0.889977
+      thread_name: "DisplayHints"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 614
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.730162
+      estimated_mw: 0.186039
+      idle_transitions_mws: 0.363831
+      total_mws: 1.093994
+      thread_name: "GPU completion"
+      process_name: "com.android.systemui"
+      thread_id: 16127
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.718310
+      estimated_mw: 0.183019
+      idle_transitions_mws: 0.037584
+      total_mws: 0.755895
+      thread_name: "binder:15865_6"
+      process_name: "com.android.systemui"
+      thread_id: 15963
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.681382
+      estimated_mw: 0.173610
+      idle_transitions_mws: 0.450580
+      total_mws: 1.131962
+      thread_name: "HWC release"
+      process_name: "com.android.systemui"
+      thread_id: 16123
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.616220
+      estimated_mw: 0.157007
+      idle_transitions_mws: 0.024258
+      total_mws: 0.640478
+      thread_name: "logd.writer"
+      process_name: "/system/bin/logd"
+      thread_id: 517
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.520969
+      estimated_mw: 0.132738
+      idle_transitions_mws: 0.029821
+      total_mws: 0.550790
+      thread_name: "binder:15865_7"
+      process_name: "com.android.systemui"
+      thread_id: 15964
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.479547
+      estimated_mw: 0.122184
+      idle_transitions_mws: 0.038687
+      total_mws: 0.518234
+      thread_name: "BckgrndExec LP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2701
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.424131
+      estimated_mw: 0.108065
+      idle_transitions_mws: 0.078692
+      total_mws: 0.502823
+      thread_name: "mali-cmar-backe"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 649
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.386449
+      estimated_mw: 0.098464
+      idle_transitions_mws: 0.218582
+      total_mws: 0.605031
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15945
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.342763
+      estimated_mw: 0.087333
+      idle_transitions_mws: 0.082847
+      total_mws: 0.425610
+      thread_name: "binder:7309_2"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7320
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.318815
+      estimated_mw: 0.081231
+      idle_transitions_mws: 0.000000
+      total_mws: 0.318815
+      thread_name: "logcat"
+      process_name: "logcat"
+      thread_id: 1395
+      process_id: 1395
+    }
+    task_info {
+      estimated_mws: 0.294055
+      estimated_mw: 0.074923
+      idle_transitions_mws: 0.012163
+      total_mws: 0.306218
+      thread_name: "InteractionJank"
+      process_name: "com.android.systemui"
+      thread_id: 15887
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.284995
+      estimated_mw: 0.072614
+      idle_transitions_mws: 0.007497
+      total_mws: 0.292492
+      thread_name: "binder:7309_6"
+      process_name: "android.platform.test.scenario"
+      thread_id: 10725
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.270520
+      estimated_mw: 0.068926
+      idle_transitions_mws: 0.001294
+      total_mws: 0.271814
+      thread_name: "Jit thread pool"
+      process_name: "system_server"
+      thread_id: 1465
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.241883
+      estimated_mw: 0.061630
+      idle_transitions_mws: 0.001656
+      total_mws: 0.243539
+      thread_name: "droid.apps.maps"
+      process_name: "com.google.android.apps.maps"
+      thread_id: 6048
+      process_id: 6048
+    }
+    task_info {
+      estimated_mws: 0.205438
+      estimated_mw: 0.052344
+      idle_transitions_mws: 0.033086
+      total_mws: 0.238524
+      thread_name: "vsync"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 618
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.204025
+      estimated_mw: 0.051984
+      idle_transitions_mws: 0.009086
+      total_mws: 0.213112
+      thread_name: "logd.reader.per"
+      process_name: "/system/bin/logd"
+      thread_id: 1454
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.201583
+      estimated_mw: 0.051362
+      idle_transitions_mws: 0.000000
+      total_mws: 0.201583
+      thread_name: "NodeLooperThrea"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2978
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.201397
+      estimated_mw: 0.051314
+      idle_transitions_mws: 0.038341
+      total_mws: 0.239738
+      thread_name: "adpf_handler0"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 714
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.183260
+      estimated_mw: 0.046693
+      idle_transitions_mws: 0.223822
+      total_mws: 0.407082
+      thread_name: "perf_mon_update"
+      process_name: "perf_mon_update_client_task"
+      thread_id: 136
+      process_id: 136
+    }
+    task_info {
+      estimated_mws: 0.174932
+      estimated_mw: 0.044571
+      idle_transitions_mws: 0.016272
+      total_mws: 0.191204
+      thread_name: "HwBinder:578_1"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 650
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.164429
+      estimated_mw: 0.041895
+      idle_transitions_mws: 0.010174
+      total_mws: 0.174602
+      thread_name: "TracingMuxer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 627
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.161933
+      estimated_mw: 0.041259
+      idle_transitions_mws: 0.001961
+      total_mws: 0.163894
+      thread_name: "main"
+      process_name: "app_process"
+      thread_id: 7292
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 0.160085
+      estimated_mw: 0.040788
+      idle_transitions_mws: 0.000000
+      total_mws: 0.160085
+      thread_name: "kworker/3:3H"
+      process_name: "kworker/3:3H"
+      thread_id: 4205
+      process_id: 4205
+    }
+    task_info {
+      estimated_mws: 0.152760
+      estimated_mw: 0.038922
+      idle_transitions_mws: 0.006517
+      total_mws: 0.159277
+      thread_name: "statsd.reader"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 869
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.149836
+      estimated_mw: 0.038177
+      idle_transitions_mws: 0.005029
+      total_mws: 0.154866
+      thread_name: "Background_17"
+      process_name: "com.google.android.apps.maps"
+      thread_id: 16130
+      process_id: 6048
+    }
+    task_info {
+      estimated_mws: 0.138264
+      estimated_mw: 0.035228
+      idle_transitions_mws: 0.004283
+      total_mws: 0.142547
+      thread_name: "statsd.writer"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 868
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.128982
+      estimated_mw: 0.032863
+      idle_transitions_mws: 0.028129
+      total_mws: 0.157111
+      thread_name: "RegSampIdle"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 657
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.114841
+      estimated_mw: 0.029260
+      idle_transitions_mws: 0.000000
+      total_mws: 0.114841
+      thread_name: "migration/3"
+      process_name: "migration/3"
+      thread_id: 40
+      process_id: 40
+    }
+    task_info {
+      estimated_mws: 0.111225
+      estimated_mw: 0.028339
+      idle_transitions_mws: 0.000000
+      total_mws: 0.111225
+      thread_name: "heapprofd"
+      process_name: "/system/bin/heapprofd"
+      thread_id: 8280
+      process_id: 8280
+    }
+    task_info {
+      estimated_mws: 0.108152
+      estimated_mw: 0.027556
+      idle_transitions_mws: 0.022336
+      total_mws: 0.130488
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.health-service.gs101"
+      thread_id: 898
+      process_id: 898
+    }
+    task_info {
+      estimated_mws: 0.102787
+      estimated_mw: 0.026189
+      idle_transitions_mws: 0.000000
+      total_mws: 0.102787
+      thread_name: "migration/0"
+      process_name: "migration/0"
+      thread_id: 20
+      process_id: 20
+    }
+    task_info {
+      estimated_mws: 0.091373
+      estimated_mw: 0.023281
+      idle_transitions_mws: 0.063324
+      total_mws: 0.154697
+      thread_name: "mali-mem-purge"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 640
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.086645
+      estimated_mw: 0.022076
+      idle_transitions_mws: 0.090680
+      total_mws: 0.177326
+      thread_name: "mali-mem-purge"
+      process_name: "com.android.systemui"
+      thread_id: 15928
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.084199
+      estimated_mw: 0.021453
+      idle_transitions_mws: 0.008253
+      total_mws: 0.092452
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15992
+    }
+    task_info {
+      estimated_mws: 0.082353
+      estimated_mw: 0.020983
+      idle_transitions_mws: 0.006671
+      total_mws: 0.089024
+      thread_name: "SensorService"
+      process_name: "system_server"
+      thread_id: 1805
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.077161
+      estimated_mw: 0.019660
+      idle_transitions_mws: 0.000000
+      total_mws: 0.077161
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15991
+    }
+    task_info {
+      estimated_mws: 0.071234
+      estimated_mw: 0.018150
+      idle_transitions_mws: 0.012328
+      total_mws: 0.083563
+      thread_name: "queued-work-loo"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8064
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.069340
+      estimated_mw: 0.017667
+      idle_transitions_mws: 0.032640
+      total_mws: 0.101979
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 661
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.068262
+      estimated_mw: 0.017392
+      idle_transitions_mws: 0.003502
+      total_mws: 0.071763
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 986
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.061503
+      estimated_mw: 0.015670
+      idle_transitions_mws: 0.000000
+      total_mws: 0.061503
+      thread_name: "TouchTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 658
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.061366
+      estimated_mw: 0.015636
+      idle_transitions_mws: 0.000000
+      total_mws: 0.061366
+      thread_name: "migration/1"
+      process_name: "migration/1"
+      thread_id: 26
+      process_id: 26
+    }
+    task_info {
+      estimated_mws: 0.059074
+      estimated_mw: 0.015051
+      idle_transitions_mws: 0.007234
+      total_mws: 0.066308
+      thread_name: "UsfTransport"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 1451
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.057819
+      estimated_mw: 0.014732
+      idle_transitions_mws: 0.002076
+      total_mws: 0.059896
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15994
+    }
+    task_info {
+      estimated_mws: 0.055603
+      estimated_mw: 0.014167
+      idle_transitions_mws: 0.013913
+      total_mws: 0.069516
+      thread_name: "kworker/2:1"
+      process_name: "kworker/2:1"
+      thread_id: 130
+      process_id: 130
+    }
+    task_info {
+      estimated_mws: 0.051664
+      estimated_mw: 0.013164
+      idle_transitions_mws: 0.005213
+      total_mws: 0.056877
+      thread_name: "ScreenDecoratio"
+      process_name: "com.android.systemui"
+      thread_id: 15923
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.050942
+      estimated_mw: 0.012980
+      idle_transitions_mws: 0.004026
+      total_mws: 0.054968
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15993
+    }
+    task_info {
+      estimated_mws: 0.049289
+      estimated_mw: 0.012559
+      idle_transitions_mws: 0.000000
+      total_mws: 0.049289
+      thread_name: "migration/2"
+      process_name: "migration/2"
+      thread_id: 33
+      process_id: 33
+    }
+    task_info {
+      estimated_mws: 0.047770
+      estimated_mw: 0.012171
+      idle_transitions_mws: 0.005397
+      total_mws: 0.053167
+      thread_name: "eduling.default"
+      process_name: "system_server"
+      thread_id: 1809
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.046522
+      estimated_mw: 0.011853
+      idle_transitions_mws: 0.011517
+      total_mws: 0.058039
+      thread_name: "kworker/3:12"
+      process_name: "kworker/3:12"
+      thread_id: 207
+      process_id: 207
+    }
+    task_info {
+      estimated_mws: 0.043262
+      estimated_mw: 0.011023
+      idle_transitions_mws: 0.004228
+      total_mws: 0.047490
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15988
+    }
+    task_info {
+      estimated_mws: 0.038018
+      estimated_mw: 0.009687
+      idle_transitions_mws: 0.001732
+      total_mws: 0.039750
+      thread_name: "BroadcastRunnin"
+      process_name: "com.android.systemui"
+      thread_id: 15906
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.037081
+      estimated_mw: 0.009448
+      idle_transitions_mws: 0.014265
+      total_mws: 0.051346
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15990
+    }
+    task_info {
+      estimated_mws: 0.034452
+      estimated_mw: 0.008778
+      idle_transitions_mws: 0.007819
+      total_mws: 0.042271
+      thread_name: "RE Completion"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 8397
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.033181
+      estimated_mw: 0.008454
+      idle_transitions_mws: 0.000000
+      total_mws: 0.033181
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.android.settings"
+      thread_id: 5255
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.031927
+      estimated_mw: 0.008135
+      idle_transitions_mws: 0.049831
+      total_mws: 0.081758
+      thread_name: "com.google.usf."
+      process_name: "com.google.usf.non_wake_up"
+      thread_id: 1447
+      process_id: 1447
+    }
+    task_info {
+      estimated_mws: 0.030647
+      estimated_mw: 0.007809
+      idle_transitions_mws: 0.064089
+      total_mws: 0.094736
+      thread_name: "psimon"
+      process_name: "psimon"
+      thread_id: 510
+      process_id: 510
+    }
+    task_info {
+      estimated_mws: 0.029733
+      estimated_mw: 0.007576
+      idle_transitions_mws: 0.002042
+      total_mws: 0.031775
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 683
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.029636
+      estimated_mw: 0.007551
+      idle_transitions_mws: 0.001921
+      total_mws: 0.031557
+      thread_name: "binder:15865_1"
+      process_name: "com.android.systemui"
+      thread_id: 15877
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.027352
+      estimated_mw: 0.006969
+      idle_transitions_mws: 0.000921
+      total_mws: 0.028273
+      thread_name: "simpleinteracti"
+      process_name: "simpleinteractive"
+      thread_id: 290
+      process_id: 290
+    }
+    task_info {
+      estimated_mws: 0.023126
+      estimated_mw: 0.005892
+      idle_transitions_mws: 0.003350
+      total_mws: 0.026476
+      thread_name: "otp-aiai-notifi"
+      process_name: ""
+      thread_id: 8965
+    }
+    task_info {
+      estimated_mws: 0.022854
+      estimated_mw: 0.005823
+      idle_transitions_mws: 0.003576
+      total_mws: 0.026430
+      thread_name: "binder:15865_3"
+      process_name: "com.android.systemui"
+      thread_id: 15879
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.022384
+      estimated_mw: 0.005703
+      idle_transitions_mws: 0.003920
+      total_mws: 0.026304
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15984
+    }
+    task_info {
+      estimated_mws: 0.020308
+      estimated_mw: 0.005174
+      idle_transitions_mws: 0.000000
+      total_mws: 0.020308
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.edgetpu.logging@service-edgetpu-logging"
+      thread_id: 1214
+      process_id: 1162
+    }
+    task_info {
+      estimated_mws: 0.019427
+      estimated_mw: 0.004950
+      idle_transitions_mws: 0.000000
+      total_mws: 0.019427
+      thread_name: "GoogleApiHandle"
+      process_name: "com.google.android.gms.persistent"
+      thread_id: 6076
+      process_id: 5844
+    }
+    task_info {
+      estimated_mws: 0.019070
+      estimated_mw: 0.004859
+      idle_transitions_mws: 0.003087
+      total_mws: 0.022157
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15987
+    }
+    task_info {
+      estimated_mws: 0.019027
+      estimated_mw: 0.004848
+      idle_transitions_mws: 0.006383
+      total_mws: 0.025410
+      thread_name: "UsfHalWorker"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 983
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.018090
+      estimated_mw: 0.004609
+      idle_transitions_mws: 0.002281
+      total_mws: 0.020372
+      thread_name: "kworker/5:3H"
+      process_name: "kworker/5:3H"
+      thread_id: 1032
+      process_id: 1032
+    }
+    task_info {
+      estimated_mws: 0.017976
+      estimated_mw: 0.004580
+      idle_transitions_mws: 0.000000
+      total_mws: 0.017976
+      thread_name: "migration/5"
+      process_name: "migration/5"
+      thread_id: 55
+      process_id: 55
+    }
+    task_info {
+      estimated_mws: 0.017385
+      estimated_mw: 0.004429
+      idle_transitions_mws: 0.000000
+      total_mws: 0.017385
+      thread_name: "kworker/6:7H"
+      process_name: "kworker/6:7H"
+      thread_id: 927
+      process_id: 927
+    }
+    task_info {
+      estimated_mws: 0.017028
+      estimated_mw: 0.004339
+      idle_transitions_mws: 0.028344
+      total_mws: 0.045372
+      thread_name: "kworker/6:0"
+      process_name: "kworker/6:0"
+      thread_id: 13921
+      process_id: 13921
+    }
+    task_info {
+      estimated_mws: 0.014807
+      estimated_mw: 0.003773
+      idle_transitions_mws: 0.000000
+      total_mws: 0.014807
+      thread_name: "DefaultDispatch"
+      process_name: "com.android.settings"
+      thread_id: 3030
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.014612
+      estimated_mw: 0.003723
+      idle_transitions_mws: 0.000000
+      total_mws: 0.014612
+      thread_name: "lhd"
+      process_name: "/vendor/bin/hw/lhd"
+      thread_id: 1144
+      process_id: 1144
+    }
+    task_info {
+      estimated_mws: 0.014608
+      estimated_mw: 0.003722
+      idle_transitions_mws: 0.003187
+      total_mws: 0.017795
+      thread_name: "kworker/5:33"
+      process_name: "kworker/5:33"
+      thread_id: 1635
+      process_id: 1635
+    }
+    task_info {
+      estimated_mws: 0.014081
+      estimated_mw: 0.003588
+      idle_transitions_mws: 0.002338
+      total_mws: 0.016419
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1464
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.013689
+      estimated_mw: 0.003488
+      idle_transitions_mws: 0.000000
+      total_mws: 0.013689
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.google.android.apps.docs"
+      thread_id: 6005
+      process_id: 5990
+    }
+    task_info {
+      estimated_mws: 0.013150
+      estimated_mw: 0.003350
+      idle_transitions_mws: 0.003143
+      total_mws: 0.016292
+      thread_name: "-Executor] idle"
+      process_name: ""
+      thread_id: 15989
+    }
+    task_info {
+      estimated_mws: 0.013125
+      estimated_mw: 0.003344
+      idle_transitions_mws: 0.000000
+      total_mws: 0.013125
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.setupwizard"
+      thread_id: 2863
+      process_id: 2387
+    }
+    task_info {
+      estimated_mws: 0.012324
+      estimated_mw: 0.003140
+      idle_transitions_mws: 0.000000
+      total_mws: 0.012324
+      thread_name: "RxCachedWorkerP"
+      process_name: "com.google.android.apps.docs"
+      thread_id: 6006
+      process_id: 5990
+    }
+    task_info {
+      estimated_mws: 0.012290
+      estimated_mw: 0.003131
+      idle_transitions_mws: 0.000000
+      total_mws: 0.012290
+      thread_name: "-Executor] idle"
+      process_name: "com.google.android.gms"
+      thread_id: 15986
+      process_id: 5825
+    }
+    task_info {
+      estimated_mws: 0.011181
+      estimated_mw: 0.002849
+      idle_transitions_mws: 0.159340
+      total_mws: 0.170521
+      thread_name: "binder:15865_4"
+      process_name: "com.android.systemui"
+      thread_id: 15922
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.011106
+      estimated_mw: 0.002830
+      idle_transitions_mws: 0.000000
+      total_mws: 0.011106
+      thread_name: "migration/4"
+      process_name: "migration/4"
+      thread_id: 47
+      process_id: 47
+    }
+    task_info {
+      estimated_mws: 0.011101
+      estimated_mw: 0.002829
+      idle_transitions_mws: 0.000000
+      total_mws: 0.011101
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.setupwizard"
+      thread_id: 2862
+      process_id: 2387
+    }
+    task_info {
+      estimated_mws: 0.010968
+      estimated_mw: 0.002795
+      idle_transitions_mws: 0.000000
+      total_mws: 0.010968
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.apps.work.clouddpc"
+      thread_id: 5125
+      process_id: 4996
+    }
+    task_info {
+      estimated_mws: 0.009375
+      estimated_mw: 0.002389
+      idle_transitions_mws: 0.002434
+      total_mws: 0.011809
+      thread_name: "RxCachedWorkerP"
+      process_name: "com.android.settings"
+      thread_id: 5263
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.008952
+      estimated_mw: 0.002281
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008952
+      thread_name: "DefaultDispatch"
+      process_name: "com.android.settings"
+      thread_id: 3029
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.008763
+      estimated_mw: 0.002233
+      idle_transitions_mws: 0.001547
+      total_mws: 0.010310
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.contacts"
+      thread_id: 4075
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.008244
+      estimated_mw: 0.002100
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008244
+      thread_name: "IdleTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 660
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.006367
+      estimated_mw: 0.001622
+      idle_transitions_mws: 0.005399
+      total_mws: 0.011766
+      thread_name: "GpsdWatchDog"
+      process_name: "/vendor/bin/hw/gpsd"
+      thread_id: 1311
+      process_id: 1147
+    }
+    task_info {
+      estimated_mws: 0.006244
+      estimated_mw: 0.001591
+      idle_transitions_mws: 0.003325
+      total_mws: 0.009570
+      thread_name: "binder:1423_20"
+      process_name: "system_server"
+      thread_id: 4852
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.005897
+      estimated_mw: 0.001502
+      idle_transitions_mws: 0.000000
+      total_mws: 0.005897
+      thread_name: "kworker/1:1H"
+      process_name: "kworker/1:1H"
+      thread_id: 432
+      process_id: 432
+    }
+    task_info {
+      estimated_mws: 0.004904
+      estimated_mw: 0.001250
+      idle_transitions_mws: 0.000000
+      total_mws: 0.004904
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.apps.work.clouddpc"
+      thread_id: 5124
+      process_id: 4996
+    }
+    task_info {
+      estimated_mws: 0.004890
+      estimated_mw: 0.001246
+      idle_transitions_mws: 0.004577
+      total_mws: 0.009467
+      thread_name: "-Executor] idle"
+      process_name: "com.google.android.gms.persistent"
+      thread_id: 15985
+      process_id: 5844
+    }
+    task_info {
+      estimated_mws: 0.004727
+      estimated_mw: 0.001204
+      idle_transitions_mws: 0.000000
+      total_mws: 0.004727
+      thread_name: "f2fs_discard-25"
+      process_name: "f2fs_discard-254:53"
+      thread_id: 639
+      process_id: 639
+    }
+    task_info {
+      estimated_mws: 0.004593
+      estimated_mw: 0.001170
+      idle_transitions_mws: 0.002459
+      total_mws: 0.007052
+      thread_name: "kworker/7:5"
+      process_name: "kworker/7:5"
+      thread_id: 194
+      process_id: 194
+    }
+    task_info {
+      estimated_mws: 0.004339
+      estimated_mw: 0.001105
+      idle_transitions_mws: 0.000000
+      total_mws: 0.004339
+      thread_name: "kworker/4:3"
+      process_name: "kworker/4:3"
+      thread_id: 286
+      process_id: 286
+    }
+    task_info {
+      estimated_mws: 0.004289
+      estimated_mw: 0.001093
+      idle_transitions_mws: 0.003973
+      total_mws: 0.008262
+      thread_name: "binder:7309_7"
+      process_name: "android.platform.test.scenario"
+      thread_id: 15983
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.003366
+      estimated_mw: 0.000858
+      idle_transitions_mws: 0.000000
+      total_mws: 0.003366
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.contacts"
+      thread_id: 4079
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.003361
+      estimated_mw: 0.000856
+      idle_transitions_mws: 0.001746
+      total_mws: 0.005108
+      thread_name: "DefaultDispatch"
+      process_name: "com.google.android.contacts"
+      thread_id: 4074
+      process_id: 3635
+    }
+    task_info {
+      estimated_mws: 0.003029
+      estimated_mw: 0.000772
+      idle_transitions_mws: 0.000000
+      total_mws: 0.003029
+      thread_name: "kworker/4:1H"
+      process_name: "kworker/4:1H"
+      thread_id: 333
+      process_id: 333
+    }
+    task_info {
+      estimated_mws: 0.002199
+      estimated_mw: 0.000560
+      idle_transitions_mws: 0.015290
+      total_mws: 0.017490
+      thread_name: "kworker/0:2"
+      process_name: "kworker/0:2"
+      thread_id: 138
+      process_id: 138
+    }
+    task_info {
+      estimated_mws: 0.001369
+      estimated_mw: 0.000349
+      idle_transitions_mws: 0.000959
+      total_mws: 0.002328
+      thread_name: "kworker/u16:2"
+      process_name: "kworker/u16:2"
+      thread_id: 86
+      process_id: 86
+    }
+    task_info {
+      estimated_mws: 0.000084
+      estimated_mw: 0.000021
+      idle_transitions_mws: 0.000000
+      total_mws: 0.000084
+      thread_name: "ksoftirqd/0"
+      process_name: "ksoftirqd/0"
+      thread_id: 13
+      process_id: 13
+    }
+    task_info {
+      estimated_mws: 0.000045
+      estimated_mw: 0.000011
+      idle_transitions_mws: 0.013897
+      total_mws: 0.013942
+      thread_name: "kworker/1:1"
+      process_name: "kworker/1:1"
+      thread_id: 129
+      process_id: 129
+    }
+  }
+  period_info {
+    period_id: 4
+    period_name: "NOTIFICATION_SHADE_QS_EXPAND_COLLAPSE"
+    task_info {
+      estimated_mws: 212.662369
+      estimated_mw: 54.184452
+      idle_transitions_mws: 4.704501
+      total_mws: 217.366867
+      thread_name: "RenderThread"
+      process_name: "com.android.systemui"
+      thread_id: 15911
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 186.913879
+      estimated_mw: 47.623970
+      idle_transitions_mws: 2.544069
+      total_mws: 189.457962
+      thread_name: "ndroid.systemui"
+      process_name: "com.android.systemui"
+      thread_id: 15865
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 157.217361
+      estimated_mw: 40.057564
+      idle_transitions_mws: -26.366659
+      total_mws: 130.850693
+      thread_name: "swapper"
+      process_name: ""
+      thread_id: 0
+      process_id: 0
+    }
+    task_info {
+      estimated_mws: 35.253147
+      estimated_mw: 8.982183
+      idle_transitions_mws: 0.169810
+      total_mws: 35.422955
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 578
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 16.817244
+      estimated_mw: 4.284882
+      idle_transitions_mws: 0.000881
+      total_mws: 16.818125
+      thread_name: "binder:581_2"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 581
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 12.606975
+      estimated_mw: 3.212143
+      idle_transitions_mws: 2.993788
+      total_mws: 15.600763
+      thread_name: "mali_jd_thread"
+      process_name: "mali_jd_thread"
+      thread_id: 394
+      process_id: 394
+    }
+    task_info {
+      estimated_mws: 11.810131
+      estimated_mw: 3.009115
+      idle_transitions_mws: 1.160018
+      total_mws: 12.970149
+      thread_name: "mali-cmar-backe"
+      process_name: "com.android.systemui"
+      thread_id: 15937
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 7.805275
+      estimated_mw: 1.988714
+      idle_transitions_mws: 0.001341
+      total_mws: 7.806616
+      thread_name: "traced_probes"
+      process_name: "/system/bin/traced_probes"
+      thread_id: 1095
+      process_id: 1095
+    }
+    task_info {
+      estimated_mws: 6.475155
+      estimated_mw: 1.649811
+      idle_transitions_mws: 0.839243
+      total_mws: 7.314397
+      thread_name: "binder:578_5"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2695
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 5.837855
+      estimated_mw: 1.487433
+      idle_transitions_mws: 1.205528
+      total_mws: 7.043383
+      thread_name: "TimerDispatch"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 652
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 5.739164
+      estimated_mw: 1.462287
+      idle_transitions_mws: 0.214282
+      total_mws: 5.953445
+      thread_name: "s.nexuslauncher"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8021
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 4.942294
+      estimated_mw: 1.259252
+      idle_transitions_mws: 0.178397
+      total_mws: 5.120691
+      thread_name: "binder:1423_1E"
+      process_name: "system_server"
+      thread_id: 4850
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 4.880698
+      estimated_mw: 1.243558
+      idle_transitions_mws: 0.833182
+      total_mws: 5.713880
+      thread_name: "decon0_kthread"
+      process_name: "decon0_kthread"
+      thread_id: 309
+      process_id: 309
+    }
+    task_info {
+      estimated_mws: 4.735952
+      estimated_mw: 1.206678
+      idle_transitions_mws: 0.128440
+      total_mws: 4.864391
+      thread_name: "InputDispatcher"
+      process_name: "system_server"
+      thread_id: 1834
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 4.335796
+      estimated_mw: 1.104722
+      idle_transitions_mws: 0.422247
+      total_mws: 4.758043
+      thread_name: "binder:15865_6"
+      process_name: "com.android.systemui"
+      thread_id: 15963
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 4.090826
+      estimated_mw: 1.042305
+      idle_transitions_mws: 0.301274
+      total_mws: 4.392100
+      thread_name: "binder:15865_7"
+      process_name: "com.android.systemui"
+      thread_id: 15964
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 3.702013
+      estimated_mw: 0.943240
+      idle_transitions_mws: 0.152912
+      total_mws: 3.854926
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2083
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 3.566843
+      estimated_mw: 0.908799
+      idle_transitions_mws: 0.092040
+      total_mws: 3.658883
+      thread_name: "RenderEngine"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 630
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 3.509013
+      estimated_mw: 0.894065
+      idle_transitions_mws: 0.185621
+      total_mws: 3.694634
+      thread_name: "app"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 654
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 3.132886
+      estimated_mw: 0.798231
+      idle_transitions_mws: 0.179517
+      total_mws: 3.312403
+      thread_name: "binder:1423_5"
+      process_name: "system_server"
+      thread_id: 1784
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 3.031640
+      estimated_mw: 0.772434
+      idle_transitions_mws: 0.203438
+      total_mws: 3.235078
+      thread_name: "kworker/u17:0"
+      process_name: "kworker/u17:0"
+      thread_id: 14340
+      process_id: 14340
+    }
+    task_info {
+      estimated_mws: 2.970116
+      estimated_mw: 0.756759
+      idle_transitions_mws: 0.488750
+      total_mws: 3.458866
+      thread_name: "BckgrndExec HP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 671
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.884184
+      estimated_mw: 0.734864
+      idle_transitions_mws: 0.084653
+      total_mws: 2.968837
+      thread_name: "kworker/u16:0"
+      process_name: "kworker/u16:0"
+      thread_id: 8
+      process_id: 8
+    }
+    task_info {
+      estimated_mws: 2.742931
+      estimated_mw: 0.698874
+      idle_transitions_mws: 0.248476
+      total_mws: 2.991407
+      thread_name: "binder:578_4"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2343
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 2.301212
+      estimated_mw: 0.586328
+      idle_transitions_mws: 0.862690
+      total_mws: 3.163903
+      thread_name: "sugov:0"
+      process_name: "sugov:0"
+      thread_id: 520
+      process_id: 520
+    }
+    task_info {
+      estimated_mws: 2.278891
+      estimated_mw: 0.580641
+      idle_transitions_mws: 0.215383
+      total_mws: 2.494274
+      thread_name: "binder:8021_3"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8032
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 2.088747
+      estimated_mw: 0.532194
+      idle_transitions_mws: 0.008546
+      total_mws: 2.097293
+      thread_name: "Jit thread pool"
+      process_name: "com.android.systemui"
+      thread_id: 15872
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.972883
+      estimated_mw: 0.502673
+      idle_transitions_mws: 0.085102
+      total_mws: 2.057985
+      thread_name: "binder:1423_D"
+      process_name: "system_server"
+      thread_id: 2498
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.704472
+      estimated_mw: 0.434284
+      idle_transitions_mws: 0.002095
+      total_mws: 1.706567
+      thread_name: "mali-compiler"
+      process_name: "com.android.systemui"
+      thread_id: 16126
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.574762
+      estimated_mw: 0.401235
+      idle_transitions_mws: 0.101478
+      total_mws: 1.676240
+      thread_name: "roidJUnitRunner"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7325
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 1.549494
+      estimated_mw: 0.394797
+      idle_transitions_mws: 0.551884
+      total_mws: 2.101378
+      thread_name: "sugov:4"
+      process_name: "sugov:4"
+      thread_id: 521
+      process_id: 521
+    }
+    task_info {
+      estimated_mws: 1.549341
+      estimated_mw: 0.394758
+      idle_transitions_mws: 0.330927
+      total_mws: 1.880269
+      thread_name: "SystemUIBg-8"
+      process_name: "com.android.systemui"
+      thread_id: 15904
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.434926
+      estimated_mw: 0.365606
+      idle_transitions_mws: 1.094565
+      total_mws: 2.529490
+      thread_name: "GPU completion"
+      process_name: "com.android.systemui"
+      thread_id: 16127
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.391267
+      estimated_mw: 0.354482
+      idle_transitions_mws: 0.004212
+      total_mws: 1.395479
+      thread_name: "android.ui"
+      process_name: "system_server"
+      thread_id: 1493
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 1.370559
+      estimated_mw: 0.349206
+      idle_transitions_mws: 0.401791
+      total_mws: 1.772350
+      thread_name: "SystemUIBg-1"
+      process_name: "com.android.systemui"
+      thread_id: 15896
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.334449
+      estimated_mw: 0.340006
+      idle_transitions_mws: 0.000000
+      total_mws: 1.334449
+      thread_name: "traced"
+      process_name: "/system/bin/traced"
+      thread_id: 1097
+      process_id: 1097
+    }
+    task_info {
+      estimated_mws: 1.332296
+      estimated_mw: 0.339457
+      idle_transitions_mws: 0.034705
+      total_mws: 1.367000
+      thread_name: "binder:7292_4"
+      process_name: "app_process"
+      thread_id: 7730
+      process_id: 7292
+    }
+    task_info {
+      estimated_mws: 1.308029
+      estimated_mw: 0.333274
+      idle_transitions_mws: 0.293497
+      total_mws: 1.601526
+      thread_name: "SystemUIBg-2"
+      process_name: "com.android.systemui"
+      thread_id: 15898
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.302125
+      estimated_mw: 0.331770
+      idle_transitions_mws: 0.143022
+      total_mws: 1.445147
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 629
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 1.161767
+      estimated_mw: 0.296008
+      idle_transitions_mws: 0.385088
+      total_mws: 1.546855
+      thread_name: "sugov:6"
+      process_name: "sugov:6"
+      thread_id: 522
+      process_id: 522
+    }
+    task_info {
+      estimated_mws: 1.152329
+      estimated_mw: 0.293603
+      idle_transitions_mws: 0.293872
+      total_mws: 1.446201
+      thread_name: "SystemUIBg-4"
+      process_name: "com.android.systemui"
+      thread_id: 15900
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.122956
+      estimated_mw: 0.286119
+      idle_transitions_mws: 0.363230
+      total_mws: 1.486185
+      thread_name: "SystemUIBg-7"
+      process_name: "com.android.systemui"
+      thread_id: 15903
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.064797
+      estimated_mw: 0.271301
+      idle_transitions_mws: 0.320302
+      total_mws: 1.385099
+      thread_name: "DisplayHints"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 614
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 1.057821
+      estimated_mw: 0.269523
+      idle_transitions_mws: 0.292494
+      total_mws: 1.350315
+      thread_name: "SystemUIBg-6"
+      process_name: "com.android.systemui"
+      thread_id: 15902
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 1.036568
+      estimated_mw: 0.264108
+      idle_transitions_mws: 0.031042
+      total_mws: 1.067610
+      thread_name: "RegionSampling"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 656
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.960239
+      estimated_mw: 0.244660
+      idle_transitions_mws: 0.223148
+      total_mws: 1.183388
+      thread_name: "SystemUIBg-5"
+      process_name: "com.android.systemui"
+      thread_id: 15901
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.939872
+      estimated_mw: 0.239471
+      idle_transitions_mws: 0.249450
+      total_mws: 1.189322
+      thread_name: "SystemUIBg-3"
+      process_name: "com.android.systemui"
+      thread_id: 15899
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.936273
+      estimated_mw: 0.238554
+      idle_transitions_mws: 0.139178
+      total_mws: 1.075451
+      thread_name: "wmshell.main"
+      process_name: "com.android.systemui"
+      thread_id: 15882
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.913848
+      estimated_mw: 0.232840
+      idle_transitions_mws: 0.006823
+      total_mws: 0.920671
+      thread_name: "stack-unwinding"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8281
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 0.843748
+      estimated_mw: 0.214979
+      idle_transitions_mws: 0.672885
+      total_mws: 1.516633
+      thread_name: "HWC release"
+      process_name: "com.android.systemui"
+      thread_id: 16123
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.785158
+      estimated_mw: 0.200051
+      idle_transitions_mws: 0.053828
+      total_mws: 0.838987
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1423
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.696994
+      estimated_mw: 0.177588
+      idle_transitions_mws: 0.028179
+      total_mws: 0.725173
+      thread_name: "traced_perf"
+      process_name: "/system/bin/traced_perf"
+      thread_id: 8279
+      process_id: 8279
+    }
+    task_info {
+      estimated_mws: 0.606921
+      estimated_mw: 0.154638
+      idle_transitions_mws: 0.079790
+      total_mws: 0.686711
+      thread_name: "BckgrndExec LP"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 2701
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.572826
+      estimated_mw: 0.145951
+      idle_transitions_mws: 0.277560
+      total_mws: 0.850386
+      thread_name: "binder:15865_2"
+      process_name: "com.android.systemui"
+      thread_id: 15945
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.506018
+      estimated_mw: 0.128929
+      idle_transitions_mws: 0.038063
+      total_mws: 0.544081
+      thread_name: "binder:7309_5"
+      process_name: "android.platform.test.scenario"
+      thread_id: 8596
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.481494
+      estimated_mw: 0.122680
+      idle_transitions_mws: 0.025871
+      total_mws: 0.507365
+      thread_name: "mali-cmar-backe"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 649
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.481119
+      estimated_mw: 0.122585
+      idle_transitions_mws: 0.011302
+      total_mws: 0.492421
+      thread_name: "SysUiBg"
+      process_name: "com.android.systemui"
+      thread_id: 15897
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.383565
+      estimated_mw: 0.097729
+      idle_transitions_mws: 0.029109
+      total_mws: 0.412675
+      thread_name: "UiAutomation"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7327
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.310270
+      estimated_mw: 0.079054
+      idle_transitions_mws: 0.066640
+      total_mws: 0.376911
+      thread_name: "InputTracer"
+      process_name: "system_server"
+      thread_id: 1827
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.303042
+      estimated_mw: 0.077212
+      idle_transitions_mws: 0.007210
+      total_mws: 0.310252
+      thread_name: "TelecomMetricsC"
+      process_name: "system_server"
+      thread_id: 2391
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.256961
+      estimated_mw: 0.065471
+      idle_transitions_mws: 0.016394
+      total_mws: 0.273354
+      thread_name: "TracingMuxer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 627
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.230833
+      estimated_mw: 0.058814
+      idle_transitions_mws: 0.069143
+      total_mws: 0.299976
+      thread_name: "mali_apc_thread"
+      process_name: "mali_apc_thread"
+      thread_id: 393
+      process_id: 393
+    }
+    task_info {
+      estimated_mws: 0.191767
+      estimated_mw: 0.048860
+      idle_transitions_mws: 0.015502
+      total_mws: 0.207268
+      thread_name: "vsync"
+      process_name: "/vendor/bin/hw/android.hardware.graphics.composer@2.4-service"
+      thread_id: 618
+      process_id: 581
+    }
+    task_info {
+      estimated_mws: 0.166167
+      estimated_mw: 0.042338
+      idle_transitions_mws: 0.011727
+      total_mws: 0.177894
+      thread_name: "android.display"
+      process_name: "system_server"
+      thread_id: 1495
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.165972
+      estimated_mw: 0.042288
+      idle_transitions_mws: 0.027300
+      total_mws: 0.193272
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 986
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.165505
+      estimated_mw: 0.042169
+      idle_transitions_mws: 0.027057
+      total_mws: 0.192562
+      thread_name: "SensorService"
+      process_name: "system_server"
+      thread_id: 1805
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.162822
+      estimated_mw: 0.041486
+      idle_transitions_mws: 0.036154
+      total_mws: 0.198976
+      thread_name: "NetworkPolicy"
+      process_name: "system_server"
+      thread_id: 1878
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.160851
+      estimated_mw: 0.040983
+      idle_transitions_mws: 0.000000
+      total_mws: 0.160851
+      thread_name: "logcat"
+      process_name: "logcat"
+      thread_id: 1395
+      process_id: 1395
+    }
+    task_info {
+      estimated_mws: 0.152033
+      estimated_mw: 0.038737
+      idle_transitions_mws: 0.042261
+      total_mws: 0.194294
+      thread_name: "m.test.scenario"
+      process_name: "android.platform.test.scenario"
+      thread_id: 7309
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.150031
+      estimated_mw: 0.038227
+      idle_transitions_mws: 0.032827
+      total_mws: 0.182859
+      thread_name: "RE Completion"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 8397
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.146172
+      estimated_mw: 0.037243
+      idle_transitions_mws: 0.109778
+      total_mws: 0.255950
+      thread_name: "UsfTransport"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 1451
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.143992
+      estimated_mw: 0.036688
+      idle_transitions_mws: 0.002084
+      total_mws: 0.146076
+      thread_name: "logd.writer"
+      process_name: "/system/bin/logd"
+      thread_id: 517
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.138678
+      estimated_mw: 0.035334
+      idle_transitions_mws: 0.016135
+      total_mws: 0.154813
+      thread_name: "queued-work-loo"
+      process_name: "com.google.android.apps.nexuslauncher"
+      thread_id: 8064
+      process_id: 8021
+    }
+    task_info {
+      estimated_mws: 0.138278
+      estimated_mw: 0.035232
+      idle_transitions_mws: 0.010068
+      total_mws: 0.148347
+      thread_name: "binder:2380_1"
+      process_name: "com.android.phone"
+      thread_id: 2431
+      process_id: 2380
+    }
+    task_info {
+      estimated_mws: 0.137972
+      estimated_mw: 0.035154
+      idle_transitions_mws: 0.001887
+      total_mws: 0.139859
+      thread_name: "BG Thread #0"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 3611
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.131838
+      estimated_mw: 0.033591
+      idle_transitions_mws: 0.005395
+      total_mws: 0.137233
+      thread_name: "statsd.writer"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 868
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.127495
+      estimated_mw: 0.032484
+      idle_transitions_mws: 0.007516
+      total_mws: 0.135011
+      thread_name: "statsd.reader"
+      process_name: "/apex/com.android.os.statsd/bin/statsd"
+      thread_id: 869
+      process_id: 863
+    }
+    task_info {
+      estimated_mws: 0.124573
+      estimated_mw: 0.031740
+      idle_transitions_mws: 0.086893
+      total_mws: 0.211466
+      thread_name: "com.google.usf."
+      process_name: "com.google.usf.non_wake_up"
+      thread_id: 1447
+      process_id: 1447
+    }
+    task_info {
+      estimated_mws: 0.121527
+      estimated_mw: 0.030964
+      idle_transitions_mws: 0.009871
+      total_mws: 0.131399
+      thread_name: "adpf_handler0"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 714
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.109474
+      estimated_mw: 0.027893
+      idle_transitions_mws: 0.040663
+      total_mws: 0.150137
+      thread_name: "RegSampIdle"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 657
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.107226
+      estimated_mw: 0.027320
+      idle_transitions_mws: 0.008154
+      total_mws: 0.115380
+      thread_name: "HwBinder:578_1"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 650
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.100824
+      estimated_mw: 0.025689
+      idle_transitions_mws: 0.000000
+      total_mws: 0.100824
+      thread_name: "binder:5825_C"
+      process_name: "com.google.android.gms"
+      thread_id: 6639
+      process_id: 5825
+    }
+    task_info {
+      estimated_mws: 0.095015
+      estimated_mw: 0.024209
+      idle_transitions_mws: 0.009876
+      total_mws: 0.104891
+      thread_name: "batterystats-ha"
+      process_name: "system_server"
+      thread_id: 1539
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.092461
+      estimated_mw: 0.023558
+      idle_transitions_mws: 0.044297
+      total_mws: 0.136757
+      thread_name: "surfaceflinger"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 661
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.086083
+      estimated_mw: 0.021933
+      idle_transitions_mws: 0.045777
+      total_mws: 0.131859
+      thread_name: "mali-mem-purge"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 640
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.085021
+      estimated_mw: 0.021663
+      idle_transitions_mws: 0.000000
+      total_mws: 0.085021
+      thread_name: "rcuop/0"
+      process_name: "rcuop/0"
+      thread_id: 16
+      process_id: 16
+    }
+    task_info {
+      estimated_mws: 0.082966
+      estimated_mw: 0.021139
+      idle_transitions_mws: 0.121083
+      total_mws: 0.204049
+      thread_name: "mali-mem-purge"
+      process_name: "com.android.systemui"
+      thread_id: 15928
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.077355
+      estimated_mw: 0.019709
+      idle_transitions_mws: 0.027622
+      total_mws: 0.104977
+      thread_name: "NodeLooperThrea"
+      process_name: "/vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr"
+      thread_id: 2978
+      process_id: 683
+    }
+    task_info {
+      estimated_mws: 0.076783
+      estimated_mw: 0.019564
+      idle_transitions_mws: 0.003383
+      total_mws: 0.080166
+      thread_name: "logd.reader.per"
+      process_name: "/system/bin/logd"
+      thread_id: 1454
+      process_id: 506
+    }
+    task_info {
+      estimated_mws: 0.071316
+      estimated_mw: 0.018171
+      idle_transitions_mws: 0.207098
+      total_mws: 0.278415
+      thread_name: "perf_mon_update"
+      process_name: "perf_mon_update_client_task"
+      thread_id: 136
+      process_id: 136
+    }
+    task_info {
+      estimated_mws: 0.063890
+      estimated_mw: 0.016279
+      idle_transitions_mws: 0.033531
+      total_mws: 0.097421
+      thread_name: "UsfHalWorker"
+      process_name: "/vendor/bin/hw/android.hardware.sensors-service.multihal"
+      thread_id: 983
+      process_id: 913
+    }
+    task_info {
+      estimated_mws: 0.062777
+      estimated_mw: 0.015995
+      idle_transitions_mws: 0.000000
+      total_mws: 0.062777
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.google.android.apps.docs"
+      thread_id: 6005
+      process_id: 5990
+    }
+    task_info {
+      estimated_mws: 0.062446
+      estimated_mw: 0.015911
+      idle_transitions_mws: 0.015713
+      total_mws: 0.078159
+      thread_name: "StateService"
+      process_name: "com.google.android.apps.scone"
+      thread_id: 4924
+      process_id: 4776
+    }
+    task_info {
+      estimated_mws: 0.058787
+      estimated_mw: 0.014978
+      idle_transitions_mws: 0.003875
+      total_mws: 0.062662
+      thread_name: "migration/5"
+      process_name: "migration/5"
+      thread_id: 55
+      process_id: 55
+    }
+    task_info {
+      estimated_mws: 0.055253
+      estimated_mw: 0.014078
+      idle_transitions_mws: 0.004861
+      total_mws: 0.060114
+      thread_name: "TouchTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 658
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.053773
+      estimated_mw: 0.013701
+      idle_transitions_mws: 0.000000
+      total_mws: 0.053773
+      thread_name: "rcuop/2"
+      process_name: "rcuop/2"
+      thread_id: 37
+      process_id: 37
+    }
+    task_info {
+      estimated_mws: 0.052065
+      estimated_mw: 0.013266
+      idle_transitions_mws: 0.013428
+      total_mws: 0.065493
+      thread_name: "PowerManagerSer"
+      process_name: "system_server"
+      thread_id: 1652
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.049140
+      estimated_mw: 0.012520
+      idle_transitions_mws: 0.008039
+      total_mws: 0.057179
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.health-service.gs101"
+      thread_id: 898
+      process_id: 898
+    }
+    task_info {
+      estimated_mws: 0.048480
+      estimated_mw: 0.012352
+      idle_transitions_mws: 0.001828
+      total_mws: 0.050308
+      thread_name: "BroadcastRunnin"
+      process_name: "com.android.systemui"
+      thread_id: 15906
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.045221
+      estimated_mw: 0.011522
+      idle_transitions_mws: 0.016679
+      total_mws: 0.061900
+      thread_name: "kworker/3:12"
+      process_name: "kworker/3:12"
+      thread_id: 207
+      process_id: 207
+    }
+    task_info {
+      estimated_mws: 0.042764
+      estimated_mw: 0.010896
+      idle_transitions_mws: 0.000000
+      total_mws: 0.042764
+      thread_name: "migration/0"
+      process_name: "migration/0"
+      thread_id: 20
+      process_id: 20
+    }
+    task_info {
+      estimated_mws: 0.042384
+      estimated_mw: 0.010799
+      idle_transitions_mws: 0.010203
+      total_mws: 0.052586
+      thread_name: "rcuog/0"
+      process_name: "rcuog/0"
+      thread_id: 15
+      process_id: 15
+    }
+    task_info {
+      estimated_mws: 0.038076
+      estimated_mw: 0.009701
+      idle_transitions_mws: 0.000000
+      total_mws: 0.038076
+      thread_name: "migration/4"
+      process_name: "migration/4"
+      thread_id: 47
+      process_id: 47
+    }
+    task_info {
+      estimated_mws: 0.037316
+      estimated_mw: 0.009508
+      idle_transitions_mws: 0.011323
+      total_mws: 0.048640
+      thread_name: "migration/3"
+      process_name: "migration/3"
+      thread_id: 40
+      process_id: 40
+    }
+    task_info {
+      estimated_mws: 0.037096
+      estimated_mw: 0.009452
+      idle_transitions_mws: 0.002992
+      total_mws: 0.040088
+      thread_name: "Scheduler Threa"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 3650
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.035010
+      estimated_mw: 0.008920
+      idle_transitions_mws: 0.000000
+      total_mws: 0.035010
+      thread_name: "BG Thread #1"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 3669
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.034617
+      estimated_mw: 0.008820
+      idle_transitions_mws: 0.010964
+      total_mws: 0.045580
+      thread_name: "migration/2"
+      process_name: "migration/2"
+      thread_id: 33
+      process_id: 33
+    }
+    task_info {
+      estimated_mws: 0.033040
+      estimated_mw: 0.008418
+      idle_transitions_mws: 0.000000
+      total_mws: 0.033040
+      thread_name: "kworker/0:2"
+      process_name: "kworker/0:2"
+      thread_id: 138
+      process_id: 138
+    }
+    task_info {
+      estimated_mws: 0.031045
+      estimated_mw: 0.007910
+      idle_transitions_mws: 0.002585
+      total_mws: 0.033631
+      thread_name: "ScreenDecoratio"
+      process_name: "com.android.systemui"
+      thread_id: 15923
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.029283
+      estimated_mw: 0.007461
+      idle_transitions_mws: 0.000000
+      total_mws: 0.029283
+      thread_name: "migration/1"
+      process_name: "migration/1"
+      thread_id: 26
+      process_id: 26
+    }
+    task_info {
+      estimated_mws: 0.027738
+      estimated_mw: 0.007067
+      idle_transitions_mws: 0.000000
+      total_mws: 0.027738
+      thread_name: "BG Thread #2"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 3929
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.024507
+      estimated_mw: 0.006244
+      idle_transitions_mws: 0.003027
+      total_mws: 0.027535
+      thread_name: "system_server"
+      process_name: "system_server"
+      thread_id: 1464
+      process_id: 1423
+    }
+    task_info {
+      estimated_mws: 0.023236
+      estimated_mw: 0.005920
+      idle_transitions_mws: 0.007415
+      total_mws: 0.030651
+      thread_name: "RxSchedulerPurg"
+      process_name: "com.android.settings"
+      thread_id: 5255
+      process_id: 2499
+    }
+    task_info {
+      estimated_mws: 0.021987
+      estimated_mw: 0.005602
+      idle_transitions_mws: 0.000000
+      total_mws: 0.021987
+      thread_name: "android.hardwar"
+      process_name: "/vendor/bin/hw/android.hardware.power.stats-service.pixel"
+      thread_id: 908
+      process_id: 908
+    }
+    task_info {
+      estimated_mws: 0.017959
+      estimated_mw: 0.004576
+      idle_transitions_mws: 0.032022
+      total_mws: 0.049980
+      thread_name: "kworker/2:1"
+      process_name: "kworker/2:1"
+      thread_id: 130
+      process_id: 130
+    }
+    task_info {
+      estimated_mws: 0.014750
+      estimated_mw: 0.003758
+      idle_transitions_mws: 0.002760
+      total_mws: 0.017510
+      thread_name: "InteractionJank"
+      process_name: "com.android.systemui"
+      thread_id: 15887
+      process_id: 15865
+    }
+    task_info {
+      estimated_mws: 0.013324
+      estimated_mw: 0.003395
+      idle_transitions_mws: 0.000000
+      total_mws: 0.013324
+      thread_name: "gle.android.gms"
+      process_name: "com.google.android.gms"
+      thread_id: 5825
+      process_id: 5825
+    }
+    task_info {
+      estimated_mws: 0.010945
+      estimated_mw: 0.002789
+      idle_transitions_mws: 0.007870
+      total_mws: 0.018815
+      thread_name: "rcu_preempt"
+      process_name: "rcu_preempt"
+      thread_id: 14
+      process_id: 14
+    }
+    task_info {
+      estimated_mws: 0.008817
+      estimated_mw: 0.002246
+      idle_transitions_mws: 0.004787
+      total_mws: 0.013604
+      thread_name: "binder:7309_6"
+      process_name: "android.platform.test.scenario"
+      thread_id: 10725
+      process_id: 7309
+    }
+    task_info {
+      estimated_mws: 0.008487
+      estimated_mw: 0.002162
+      idle_transitions_mws: 0.004097
+      total_mws: 0.012584
+      thread_name: "kworker/7:5"
+      process_name: "kworker/7:5"
+      thread_id: 194
+      process_id: 194
+    }
+    task_info {
+      estimated_mws: 0.008152
+      estimated_mw: 0.002077
+      idle_transitions_mws: 0.000000
+      total_mws: 0.008152
+      thread_name: "migration/6"
+      process_name: "migration/6"
+      thread_id: 62
+      process_id: 62
+    }
+    task_info {
+      estimated_mws: 0.007198
+      estimated_mw: 0.001834
+      idle_transitions_mws: 0.001161
+      total_mws: 0.008359
+      thread_name: "hbox:interactor"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 3195
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.005429
+      estimated_mw: 0.001383
+      idle_transitions_mws: 0.016815
+      total_mws: 0.022244
+      thread_name: "kworker/1:1"
+      process_name: "kworker/1:1"
+      thread_id: 129
+      process_id: 129
+    }
+    task_info {
+      estimated_mws: 0.003032
+      estimated_mw: 0.000773
+      idle_transitions_mws: 0.000509
+      total_mws: 0.003542
+      thread_name: "lhd"
+      process_name: "/vendor/bin/hw/lhd"
+      thread_id: 1144
+      process_id: 1144
+    }
+    task_info {
+      estimated_mws: 0.002818
+      estimated_mw: 0.000718
+      idle_transitions_mws: 0.001092
+      total_mws: 0.003909
+      thread_name: "IdleTimer"
+      process_name: "/system/bin/surfaceflinger"
+      thread_id: 660
+      process_id: 578
+    }
+    task_info {
+      estimated_mws: 0.002319
+      estimated_mw: 0.000591
+      idle_transitions_mws: 0.025322
+      total_mws: 0.027640
+      thread_name: "kworker/4:3"
+      process_name: "kworker/4:3"
+      thread_id: 286
+      process_id: 286
+    }
+    task_info {
+      estimated_mws: 0.001513
+      estimated_mw: 0.000386
+      idle_transitions_mws: 0.000000
+      total_mws: 0.001513
+      thread_name: "BG Thread #3"
+      process_name: "com.google.android.googlequicksearchbox:interactor"
+      thread_id: 3930
+      process_id: 3195
+    }
+    task_info {
+      estimated_mws: 0.000448
+      estimated_mw: 0.000114
+      idle_transitions_mws: 0.030446
+      total_mws: 0.030894
+      thread_name: "migration/7"
+      process_name: "migration/7"
+      thread_id: 69
+      process_id: 69
+    }
+  }
+}

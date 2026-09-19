@@ -757,6 +757,24 @@ class DictationEngine:
             return pynput_keyboard.KeyCode.from_char(key.char.lower())
         return key
 
+    @staticmethod
+    def _name_base(key: Any) -> Optional[str]:
+        """Logical modifier name without the side suffix.
+
+        ``ctrl_l`` and ``ctrl_r`` are the same logical modifier; a hotkey
+        parsed as ``ctrl+alt`` must fire on either side. Dropping the
+        ``_l`` / ``_r`` suffix makes left- and right-hand presses equal.
+        """
+        name = getattr(key, "name", None)
+        if not name:
+            return None
+        s = str(name)
+        pair_bases = {"ctrl", "alt", "shift", "cmd", "win", "meta", "fn"}
+        head, _, tail = s.partition("_")
+        if tail in ("l", "r") and head in pair_bases:
+            return head
+        return s
+
     def _key_matches(self, key, nkey, target) -> bool:
         """Check whether *key* (raw) / *nkey* (normalised) matches *target*."""
         if target is None:
@@ -765,20 +783,34 @@ class DictationEngine:
             return True
         if getattr(key, "name", None) == getattr(target, "name", None):
             return True
+        # Side-insensitive modifier equality (ctrl_r == ctrl_l).
+        kb = self._name_base(key)
+        tb = self._name_base(target)
+        if kb and tb and kb == tb:
+            return True
         if hasattr(key, "char") and key.char:
             if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
                 return True
         return False
 
     def _all_modifiers_held(self) -> bool:
-        """Return True when every required modifier is currently pressed."""
-        return all(
-            m in self._pressed_modifiers or any(
-                getattr(p, "name", None) == getattr(m, "name", None)
-                for p in self._pressed_modifiers
-            )
-            for m in self._modifiers
-        )
+        """Return True when every required modifier is currently pressed.
+
+        Matching is side-insensitive: a right-hand Ctrl satisfies a
+        ``ctrl_l`` modifier and vice versa.
+        """
+        held_bases = {
+            base for base in (self._name_base(p) for p in self._pressed_modifiers)
+            if base
+        }
+        for modifier in self._modifiers:
+            if modifier in self._pressed_modifiers:
+                continue
+            base = self._name_base(modifier)
+            if base is None or base in held_bases:
+                continue
+            return False
+        return True
 
     def _on_key_press(self, key) -> None:
         nkey = self._normalise_key(key)
@@ -814,10 +846,19 @@ class DictationEngine:
             if self._trigger is not None:
                 trigger_match = self._key_matches(key, nkey, self._trigger)
                 if mods_held and trigger_match:
+                    debug_log(
+                        f"hotkey {self._hotkey_str!r} activated "
+                        f"(key={getattr(key, 'name', None) or getattr(key, 'char', None)!r})",
+                        "dictation",
+                    )
                     self._start_recording()
-            else:
-                if mods_held and len(self._pressed_modifiers) >= len(self._modifiers):
-                    self._start_recording()
+            elif mods_held and len(self._pressed_modifiers) >= len(self._modifiers):
+                debug_log(
+                    f"hotkey {self._hotkey_str!r} activated "
+                    f"(held={sorted(getattr(k, 'name', str(k)) for k in self._pressed_modifiers)})",
+                    "dictation",
+                )
+                self._start_recording()
 
     def _on_key_release(self, key) -> None:
         nkey = self._normalise_key(key)
@@ -1016,6 +1057,13 @@ class DictationEngine:
             audio_frames = self._audio_frames
             self._audio_frames = []
             start_time = self._record_start_time
+
+        debug_log(
+            f"hotkey released — captured {len(audio_frames)} blocks in "
+            f"{time.time() - start_time:.2f}s, "
+            f"{'discarded' if discard else 'starting transcription'}",
+            "dictation",
+        )
 
         if discard:
             # Shutdown path — tear down synchronously so the caller knows

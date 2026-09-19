@@ -1,0 +1,154 @@
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 10000
+      pid: 0
+      suspend_resume {
+        action: "suspend_enter"
+        val: 3
+        start: 1
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 12000
+      pid: 0
+      suspend_resume {
+        action: "freeze_processes"
+        val: 0
+        start: 1
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 12500
+      pid: 0
+      suspend_resume {
+        action: "thaw_processes"
+        val: 0
+        start: 1
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 12900
+      pid: 0
+      suspend_resume {
+        action: "thaw_processes"
+        val: 0
+        start: 0
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 13000
+      pid: 0
+      suspend_resume {
+        action: "freeze_processes"
+        val: 0
+        start: 0
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 15000
+      pid: 0
+      suspend_resume {
+        action: "suspend_enter"
+        val: 3
+        start: 1
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 20000
+      pid: 0
+      suspend_resume {
+        action: "suspend_enter"
+        val: 3
+        start: 0
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 30000
+      pid: 0
+      suspend_resume {
+        action: "CPU"
+        val: 0
+        start: 1
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 40000
+      pid: 0
+      suspend_resume {
+        action: "CPU"
+        val: 0
+        start: 0
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 4
+    event {
+      timestamp: 50000
+      pid: 0
+      suspend_resume {
+        action: "timekeeping_freeze"
+        val: 4
+        start: 1
+      }
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 1
+    event {
+      timestamp: 60000
+      pid: 0
+      suspend_resume {
+        action: "timekeeping_freeze"
+        val: 1
+        start: 0
+      }
+    }
+  }
+}

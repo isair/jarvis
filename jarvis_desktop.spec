@@ -30,6 +30,19 @@ datas = [
     (str(src_path / 'desktop_app' / 'desktop_assets' / '*.png'), 'desktop_app/desktop_assets'),
 ]
 
+# Toustovač native audio engine — the AEC3/APM DLL built at
+# native/audio_engine (CMake+MSVC). Bundled flat next to the exe so
+# ctypes.cdll.LoadLibrary resolves via sys._MEIPASS at first run.
+_ae_dll_debug = project_root / 'build' / 'native_audio_engine' / 'Debug' / 'jarvis_audio_engine.dll'
+_ae_dll_release = project_root / 'build' / 'native_audio_engine' / 'Release' / 'jarvis_audio_engine.dll'
+for _ae_dll in (_ae_dll_debug, _ae_dll_release):
+    if _ae_dll.is_file():
+        datas.append((str(_ae_dll), '.'))
+        print(f"Bundling native audio engine DLL: {_ae_dll}")
+        break
+else:
+    print("Native audio engine DLL not built — running scripts/build_native.ps1 first")
+
 # Collect Piper TTS data files (espeak-ng-data is required for phonemization)
 try:
     import piper
@@ -146,6 +159,8 @@ hiddenimports = [
     'jarvis.listening.transcript_buffer',
     'jarvis.listening.intent_judge',
     'jarvis.listening.transcript_postprocessor',
+    'jarvis.listening.audio_io',
+    'jarvis.native_audio',
     # Memory modules
     'jarvis.memory',
     'jarvis.memory.conversation',

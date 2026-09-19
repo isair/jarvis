@@ -1,0 +1,7 @@
+per-file androidhistogram.cc=xalep@webrtc.org
+per-file androidmetrics.cc=xalep@webrtc.org
+per-file androidvideotracksource.*=xalep@webrtc.org
+per-file androidvideotracksource.cc=xalep@webrtc.org
+
+per-file jni_generator_helper.cc=file://infra/OWNERS
+per-file jni_generator_helper.h=file://infra/OWNERS

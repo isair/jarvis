@@ -1,0 +1,114 @@
+android_startup {
+  startup {
+    startup_id: 1
+    cpu_count: 0
+    package_name: "com.google.android.calendar"
+    zygote_new_process: false
+    to_first_frame {
+      dur_ns: 100
+      main_thread_by_task_state {
+        running_dur_ns: 0
+        runnable_dur_ns: 0
+        uninterruptible_sleep_dur_ns: 0
+        interruptible_sleep_dur_ns: 0
+        uninterruptible_io_sleep_dur_ns: 0
+        uninterruptible_non_io_sleep_dur_ns: 0
+      }
+      other_processes_spawned_count: 0
+      dur_ms: 0.0001
+    }
+    activity_hosting_process_count: 0
+    event_timestamps {
+      intent_received: 100
+      first_frame: 200
+    }
+    system_state {
+      dex2oat_running: false
+      installd_running: false
+      broadcast_dispatched_count: 24
+      broadcast_received_count: 52
+      installd_dur_ns: 0
+      dex2oat_dur_ns: 0
+    }
+    slow_start_reason: "Broadcast dispatched count"
+    slow_start_reason: "Broadcast received count"
+    slow_start_reason_with_details {
+      reason_id: BROADCAST_DISPATCHED_COUNT
+      reason: "Broadcast dispatched count"
+      severity: WARNING
+      expected_value {
+        value: 15
+        unit: COUNT
+        higher_expected: false
+      }
+      actual_value {
+        value: 24
+      }
+      launch_dur: 100
+      trace_slice_sections {
+        slice_section {
+          start_timestamp: 105
+          end_timestamp: 106
+          slice_id: 6
+          slice_name: "Broadcast dispatched from android (2005:system/1000) x"
+          thread_tid: 1
+        }
+        slice_section {
+          start_timestamp: 106
+          end_timestamp: 107
+          slice_id: 8
+          slice_name: "Broadcast dispatched from android (2005:system/1000) x"
+          thread_tid: 1
+        }
+        slice_section {
+          start_timestamp: 107
+          end_timestamp: 108
+          slice_id: 10
+          slice_name: "Broadcast dispatched from android (2005:system/1000) x"
+          thread_tid: 1
+        }
+        start_timestamp: 105
+        end_timestamp: 108
+      }
+    }
+    slow_start_reason_with_details {
+      reason_id: BROADCAST_RECEIVED_COUNT
+      reason: "Broadcast received count"
+      severity: WARNING
+      expected_value {
+        value: 50
+        unit: COUNT
+        higher_expected: false
+      }
+      actual_value {
+        value: 52
+      }
+      launch_dur: 100
+      trace_slice_sections {
+        slice_section {
+          start_timestamp: 100
+          end_timestamp: 101
+          slice_id: 1
+          slice_name: "broadcastReceiveReg: x"
+          thread_tid: 2
+        }
+        slice_section {
+          start_timestamp: 101
+          end_timestamp: 102
+          slice_id: 2
+          slice_name: "broadcastReceiveReg: x"
+          thread_tid: 2
+        }
+        slice_section {
+          start_timestamp: 102
+          end_timestamp: 103
+          slice_id: 3
+          slice_name: "broadcastReceiveReg: x"
+          thread_tid: 2
+        }
+        start_timestamp: 100
+        end_timestamp: 103
+      }
+    }
+  }
+}

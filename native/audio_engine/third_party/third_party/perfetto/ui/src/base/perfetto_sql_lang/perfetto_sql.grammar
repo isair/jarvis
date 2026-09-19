@@ -1,0 +1,135 @@
+// Copyright (C) 2025 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+@top Program { expression* }
+
+expression {
+  String |
+  Number |
+  Boolean |
+  Null |
+  Keyword |
+  Function |
+  MacroVariable |
+  Identifier
+}
+
+Keyword {
+  @specialize<Identifier,
+    "ALL" | "all" |
+    "AND" | "and" |
+    "AS" | "as" |
+    "BETWEEN" | "between" |
+    "BY" | "by" |
+    "CASE" | "case" |
+    "CREATE" | "create" |
+    "CROSS" | "cross" |
+    "ELSE" | "else" |
+    "END" | "end" |
+    "FROM" | "from" |
+    "FUNCTION" | "function" |
+    "GLOB" | "glob" |
+    "GROUP" | "group" |
+    "HAVING" | "having" |
+    "INCLUDE" | "include" |
+    "INNER" | "inner" |
+    "IS" | "is" |
+    "JOIN" | "join" |
+    "LEFT" | "left" |
+    "LIMIT" | "limit" |
+    "MACRO" | "macro" |
+    "MODULE" | "module" |
+    "NOT" | "not" |
+    "ON" | "on" |
+    "OR" | "or" |
+    "ORDER" | "order" |
+    "OUTER" | "outer" |
+    "OVER" | "over" |
+    "PARTITION" | "partition" |
+    "PERFETTO" | "perfetto" |
+    "REPLACE" | "replace" |
+    "RETURNS" | "returns" |
+    "RIGHT" | "right" |
+    "SELECT" | "select" |
+    "TABLE" | "table" |
+    "THEN" | "then" |
+    "UNION" | "union" |
+    "USING" | "using" |
+    "VALUES" | "values" |
+    "VIEW" | "view" |
+    "WHEN" | "WHEN" |
+    "WHERE" | "where" |
+    "WITH" | "with"
+  >
+}
+
+Function {
+  @specialize<Identifier,
+    "AVG" | "avg" |
+    "COUNT" | "count" |
+    "CUME_DIST" | "cume_dist" |
+    "DATETIME" | "datetime" |
+    "DENSE_RANK" | "dense_rank" |
+    "EXISTS" | "exists" |
+    "FIRST_VALUE" | "first_value" |
+    "FIRST" | "first" |
+    "GROUP_CONCAT" | "group_concat" |
+    "IFNULL" | "ifnull" |
+    "IIF" | "iif" |
+    "LAG" | "lag" |
+    "LAST_VALUE" | "last_value" |
+    "LAST" | "last" |
+    "LEAD" | "lead" |
+    "MAX" | "max" |
+    "MIN" | "min" |
+    "NTH_VALUE" | "nth_value" |
+    "NTILE" | "ntile" |
+    "PERCENT_RANK" | "percent_rank" |
+    "RANK" | "rank" |
+    "ROW_NUMBER" | "row_number" |
+    "SUM" | "sum" |
+    "TIME" | "time" |
+    "TOTAL" | "total"
+  >
+}
+
+Boolean {
+  @specialize<Identifier,
+    "TRUE" | "true" |
+    "FALSE" | "false"
+  >
+}
+
+Null {
+  @specialize<Identifier,
+    "NULL" | "null"
+  >
+}
+
+@tokens {
+  String { "'" (![\'\\] | "\\" _)* "'" }
+  Number { $[0-9]+ }
+  MacroVariable { "$" $[$0-9a-zA-Z_]* }
+  LineComment { "--" ![\n]* }
+  Identifier { $[a-zA-Z_] $[$0-9a-zA-Z_.]* }
+  space { $[ \t\n\r]+ }
+  "(" ")"
+}
+
+@skip { space | LineComment }
+
+@detectDelim
+
+//! To build, run:
+//! lezer-generator ui/src/base/perfetto_sql_lang/perfetto_sql.grammar -o ui/src/base/perfetto_sql_lang/perfetto_sql.grammar.js

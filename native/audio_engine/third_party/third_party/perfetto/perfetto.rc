@@ -1,0 +1,195 @@
+# Copyright (C) 2017 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+service traced /system/bin/traced
+    class late_start
+    disabled
+    socket traced_consumer stream 0666 root root
+    socket traced_producer stream 0666 root root
+    user nobody
+    group nobody
+    task_profiles ProcessCapacityHigh
+
+# traced_relay relays its local producer's data to a central traced service
+# running in a different VM or in the host. traced and traced_relay are mutually
+# exclusive, therefore make sure they aren't running at the same time.
+#
+# Note:
+# * The relay socket name is specified by the |traced_relay.relay_port|
+#   system property.
+service traced_relay /system/bin/traced_relay
+    class late_start
+    disabled
+    socket traced_producer stream 0666 root root
+    user nobody
+    group nobody
+    task_profiles ProcessCapacityHigh
+
+service traced_probes /system/bin/traced_probes
+    class late_start
+    disabled
+    user nobody
+    # Despite the "log" group below, traced_probes is allowed to read log
+    # only on userdebug/eng via selinux (see traced_probes.te).
+    group nobody readproc log readtracefs
+    task_profiles ProcessCapacityHigh
+    # Clean up procfs configuration even if traced_probes crashes
+    # unexpectedly.
+    onrestart exec_background - nobody shell -- /system/bin/traced_probes --cleanup-after-crash
+    file /dev/kmsg w
+    capabilities DAC_READ_SEARCH
+    shared_kallsyms
+
+on property:persist.device_config.global_settings.sys_traced=1
+    setprop persist.traced.enable 1
+
+on property:persist.device_config.global_settings.sys_traced=0
+    setprop persist.traced.enable 0
+
+on property:debug.atrace.user_initiated=1
+    stop traced_probes
+
+on property:persist.traced.enable=1 && property:debug.atrace.user_initiated=""
+    start traced_probes
+
+# Possible values of persist.traced.enable:
+# - 0=disabled
+# - 1=enabled
+# - 2=relay_mode
+on property:persist.traced.enable=0
+    stop traced
+    stop traced_relay
+    stop traced_probes
+
+on property:persist.traced.enable=1
+    # Trace files need to be:
+    # - Written by either uid:shell or uid:statsd.
+    # - Read by shell and incidentd.
+    mkdir /data/misc/perfetto-traces 0773 root shell
+
+    # Traces in this directory are only accessed by dumpstate (read+unlink) and
+    # by the bug reporting UI (ls+getattr).
+    mkdir /data/misc/perfetto-traces/bugreport 0773 root shell
+
+    # Traces in this directory are only accessed by system server
+    mkdir /data/misc/perfetto-traces/profiling 0777 root shell
+
+    # This directory allows shell to save configs file in a place where the
+    # perfetto cmdline client can read then. /data/local/tmp/ isn't safe because
+    # too many other domains can write into that. See b/170404111.
+    mkdir /data/misc/perfetto-configs 0775 root shell
+
+    stop traced_relay
+    start traced
+    start traced_probes
+
+on property:persist.traced.enable=2
+    stop traced
+    start traced_relay
+    start traced_probes
+
+# Reset the Perfetto guard rail state on boot:
+on post-fs-data
+    rm /data/misc/perfetto-traces/.guardraildata
+
+#############################################################################
+#  perfetto_trace_on_boot - Starts a perfetto trace on boot
+#############################################################################
+#
+# There are two separate actions (a trigger action and a start action) to make
+# sure that perfetto_trace_on_boot is started only once on boot (otherwise,
+# whenever persist.debug.perfetto.boottrace=1 is set, perfetto_trace_on_boot
+# would start immediately).
+#
+# persist.debug.perfetto.boottrace=1 can be manually set after boot (to record
+# a trace on the next reboot) and we don't want to immediately start a trace
+# when setting the debug property. So we turn "ro.persistent_properties.ready"
+# into a trigger, and then check whether we should start tracing when the
+# trigger fires.
+on perfetto_maybe_trace_on_boot && property:persist.debug.perfetto.boottrace=1 && property:persist.traced.enable=1
+    setprop persist.debug.perfetto.boottrace ""
+    rm /data/misc/perfetto-traces/boottrace.perfetto-trace
+    # Set by traced after listen()ing on the consumer socket. Without this,
+    # perfetto could try to connect to traced before traced is ready to listen.
+    wait_for_prop sys.trace.traced_started 1
+    start perfetto_trace_on_boot
+
+on property:ro.persistent_properties.ready=true
+    trigger perfetto_maybe_trace_on_boot
+
+service perfetto_trace_on_boot /system/bin/perfetto -c /data/misc/perfetto-configs/boottrace.pbtxt --txt -o /data/misc/perfetto-traces/boottrace.perfetto-trace
+    disabled
+    gentle_kill
+    oneshot
+    user shell
+    group nobody
+
+# This is meant to stop the boot tracing.
+# To use this, add a trigger with mode STOP_TRACING in the configuration used in perfetto_trace_on_boot.
+# Then create a new config which contains `activate_triggers: <trigger name>` where <trigger name> is
+# the name specified in configuration used in perfetto_trace_on_boot.
+on property:sys.boot_completed=1 && property:init.svc.perfetto_trace_on_boot=running
+    exec -- /system/bin/perfetto -c /data/misc/perfetto-configs/stopboottracetrigger.pbtxt --txt
+
+# Forcefully enable select userspace (atrace) tracing categories early into the
+# userspace boot. This is primarily for capturing zygote events without waiting
+# for perfetto daemons or the /data partition.
+on late-init && property:ro.boot.fastboot.boottrace=enabled
+    setprop debug.atrace.tags.enableflags 802922
+
+# disable on boot complete when using textual ftrace tracing without perfetto.
+on property:sys.boot_completed=1 && property:ro.boot.fastboot.boottrace=enabled && property:init.svc.perfetto_trace_on_boot=
+    setprop debug.atrace.tags.enableflags 0
+    write /sys/kernel/debug/tracing/tracing_on 0
+    write /sys/kernel/tracing/tracing_on 0
+
+# These must be set as soon as possible for processes guarded by
+# android.sdk_sysprop_guard to find and cache the memory locations of
+# where these sysprops are stored, particularly SurfaceFlinger which starts
+# very early.
+# TODO(b/281329340): remove this when no longer needed.
+on init
+    setprop debug.perfetto.sdk_sysprop_guard_generation 0
+    setprop debug.hwui.skia_tracing_enabled false
+    setprop debug.hwui.skia_use_perfetto_track_events false
+    setprop debug.renderengine.skia_tracing_enabled false
+    setprop debug.renderengine.skia_use_perfetto_track_events false
+
+##############################################################################
+#  perfetto_persistent_sysui_tracing_for_bugreport - Keeps a persistent active
+#  tracing session, for debugging purposes
+##############################################################################
+
+on property:persist.debug.perfetto.persistent_sysui_tracing_for_bugreport=1 && property:persist.traced.enable=1 && property:ro.debuggable=1
+    # Set by traced after listen()ing on the consumer socket. Without this,
+    # perfetto could try to connect to traced before traced is ready to listen.
+    wait_for_prop sys.trace.traced_started 1
+    start perfetto_persistent_sysui_tracing_for_bugreport
+
+# If something disables traced, we don't want init to respawn the service (that will fail) continuously.
+on property:persist.traced.enable=0
+    stop perfetto_persistent_sysui_tracing_for_bugreport
+
+on property:persist.debug.perfetto.persistent_sysui_tracing_for_bugreport=0
+    setprop persist.debug.perfetto.persistent_sysui_tracing_for_bugreport ""
+
+on property:persist.debug.perfetto.persistent_sysui_tracing_for_bugreport=""
+    stop perfetto_persistent_sysui_tracing_for_bugreport
+
+service perfetto_persistent_sysui_tracing_for_bugreport /system/bin/perfetto -c /system/etc/perfetto/persistent_cfg.pbtxt --txt -o /dev/null
+    disabled
+    timeout_period 86400
+    restart_period 60
+    user nobody
+    group nobody

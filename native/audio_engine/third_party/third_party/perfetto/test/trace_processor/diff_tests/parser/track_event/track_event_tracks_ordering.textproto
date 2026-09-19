@@ -1,0 +1,161 @@
+# Parent track. Two tracks below are its children.
+packet {
+  trusted_packet_sequence_id: 1
+  timestamp: 0
+  track_descriptor {
+    uuid: 10
+    child_ordering: 3
+  }
+}
+
+# Sequence 1 defaults to track for "t1"
+packet {
+  trusted_packet_sequence_id: 1
+  timestamp: 0
+  incremental_state_cleared: true
+  first_packet_on_sequence: true
+  track_descriptor {
+    uuid: 1
+    parent_uuid: 10
+    sibling_order_rank: -10
+  }
+  trace_packet_defaults {
+    track_event_defaults {
+      track_uuid: 1
+    }
+  }
+}
+# Sequence 2 defaults to track for "t2".
+packet {
+  trusted_packet_sequence_id: 2
+  timestamp: 0
+  incremental_state_cleared: true
+  first_packet_on_sequence: true
+  track_descriptor {
+    uuid: 2
+    parent_uuid: 10
+    sibling_order_rank: -2
+  }
+  trace_packet_defaults {
+    track_event_defaults {
+      track_uuid: 2
+    }
+  }
+}
+
+# And we have an async track underneath the parent track too.
+packet {
+  trusted_packet_sequence_id: 1
+  timestamp: 0
+  track_descriptor {
+    uuid: 11
+    parent_uuid: 10
+    name: "async"
+    sibling_order_rank: 1
+  }
+}
+packet {
+  trusted_packet_sequence_id: 1
+  timestamp: 100
+  track_descriptor {
+    uuid: 12
+    parent_uuid: 10
+    name: "async2"
+    sibling_order_rank: 2
+  }
+}
+packet {
+  trusted_packet_sequence_id: 2
+  timestamp: 200
+  track_descriptor {
+    uuid: 12
+    parent_uuid: 10
+    name: "async2"
+  }
+}
+
+# Threads also can have child async tracks.
+packet {
+  trusted_packet_sequence_id: 1
+  timestamp: 200
+  track_descriptor {
+    uuid: 14
+    parent_uuid: 2
+    name: "async3"
+  }
+}
+# If we later see another track descriptor for tid 1, but with a different uuid,
+# we should detect tid reuse and start a new thread.
+packet {
+  trusted_packet_sequence_id: 3
+  timestamp: 10000
+  incremental_state_cleared: true
+  first_packet_on_sequence: true
+  track_descriptor {
+    uuid: 3
+    parent_uuid: 10
+  }
+}
+# Should appear on t3.
+packet {
+  trusted_packet_sequence_id: 3
+  timestamp: 11000
+  track_event {
+    track_uuid: 3
+    categories: "cat"
+    name: "event1_on_t3"
+    type: 3
+  }
+}
+
+# Parent track that is also a process track, will have all of their children ignore the ordering.
+packet {
+  trusted_packet_sequence_id: 4
+  timestamp: 0
+  track_descriptor {
+    uuid: 20
+    process {
+      pid: 5
+      process_name: "p1"
+    }
+    child_ordering: 3
+    chrome_process {
+      host_app_package_name: "host_app"
+    }
+  }
+}
+
+# Sequence 4 defaults to track for "t3"
+packet {
+  trusted_packet_sequence_id: 4
+  timestamp: 11001
+  incremental_state_cleared: true
+  first_packet_on_sequence: true
+  track_descriptor {
+    uuid: 15
+    parent_uuid: 20
+    sibling_order_rank: -10
+  }
+  trace_packet_defaults {
+    track_event_defaults {
+      track_uuid: 1
+    }
+  }
+}
+# Sequence 5 defaults to track for "t4".
+packet {
+  trusted_packet_sequence_id: 5
+  timestamp: 11002
+  incremental_state_cleared: true
+  first_packet_on_sequence: true
+  track_descriptor {
+    uuid: 16
+    parent_uuid: 20
+    sibling_order_rank: -2
+  }
+  trace_packet_defaults {
+    track_event_defaults {
+      track_uuid: 2
+    }
+  }
+}

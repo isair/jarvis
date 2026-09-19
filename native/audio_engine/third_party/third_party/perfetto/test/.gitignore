@@ -1,0 +1,36 @@
+# We only keep the xxx.sha256 and OWNERS files in the git repo.
+# The corresponding binary files are downloaded by
+# `tools/test_data download`, ran by install-build-deps.
+/data/*
+!/data/*.sha256
+!/data/OWNERS
+
+!/data/ui-screenshots
+/data/ui-screenshots/*.png
+/data/ui-screenshots/**/*.png
+
+!/data/chrome
+/data/chrome/*
+!/data/chrome/*.sha256
+!/data/chrome/README.md
+
+!/data/heap_graph
+/data/heap_graph/*
+!/data/heap_graph/*.sha256
+
+!/data/parser
+/data/parser/*
+!/data/parser/*.sha256
+!/data/parser/README.md
+
+!/data/simpleperf
+/data/simpleperf/*
+!/data/simpleperf/*.sha256
+
+!/data/simpleperf/bin
+/data/simpleperf/bin/*
+!/data/simpleperf/bin/*.sha256
+
+!/data/zip
+/data/zip/*
+!/data/zip/*.sha256

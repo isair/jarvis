@@ -1,0 +1,14 @@
+LIBRARY jarvis_audio_engine
+EXPORTS
+    JarvisAeAbiVersion
+    JarvisAeCreate
+    JarvisAeDestroy
+    JarvisAeSetProfile
+    JarvisAeSetListening
+    JarvisAeShmPtr
+    JarvisAeShmFrames
+    JarvisAeGetStatus
+    JarvisAeCapabilities
+    JarvisAeReadTelemetry
+    JarvisAeDumpDiagnostics
+    JarvisAeRun

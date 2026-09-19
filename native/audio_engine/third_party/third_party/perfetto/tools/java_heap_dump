@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+
+# Copyright (C) 2020 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+NULL = open(os.devnull)
+
+PACKAGES_LIST_CFG = '''data_sources {
+  config {
+    name: "android.packages_list"
+  }
+}
+'''
+
+CFG_INDENT = '      '
+CFG = '''buffers {{
+  size_kb: {size_kb}
+  fill_policy: DISCARD
+}}
+
+data_sources {{
+  config {{
+    name: "android.java_hprof"
+    java_hprof_config {{
+{target_cfg}
+{continuous_dump_config}
+    }}
+  }}
+}}
+
+data_source_stop_timeout_ms: {data_source_stop_timeout_ms}
+duration_ms: {duration_ms}
+'''
+
+OOM_CFG = '''buffers: {{
+    size_kb: {size_kb}
+    fill_policy: DISCARD
+}}
+
+data_sources: {{
+    config {{
+        name: "android.java_hprof.oom"
+        java_hprof_config {{
+{process_cfg}
+        }}
+    }}
+}}
+
+data_source_stop_timeout_ms: 100000
+
+trigger_config {{
+    trigger_mode: START_TRACING
+    trigger_timeout_ms: {wait_duration_ms}
+    triggers {{
+      name: "com.android.telemetry.art-outofmemory"
+      stop_delay_ms: 500
+    }}
+}}
+'''
+
+CONTINUOUS_DUMP = """
+      continuous_dump_config {{
+        dump_phase_ms: 0
+        dump_interval_ms: {dump_interval}
+      }}
+"""
+
+UUID = str(uuid.uuid4())[-6:]
+PROFILE_PATH = '/data/misc/perfetto-traces/java-profile-' + UUID
+
+PERFETTO_CMD = ('CFG=\'{cfg}\'; echo ${{CFG}} | '
+                'perfetto --txt -c - -o ' + PROFILE_PATH + ' -d')
+
+SDK = {
+    'S': 31,
+    'UpsideDownCake': 34,
+}
+
+
+def release_or_newer(release):
+  sdk = int(
+      subprocess.check_output(
+          ['adb', 'shell', 'getprop',
+           'ro.system.build.version.sdk']).decode('utf-8').strip())
+  if sdk >= SDK[release]:
+    return True
+  codename = subprocess.check_output(
+      ['adb', 'shell', 'getprop',
+       'ro.build.version.codename']).decode('utf-8').strip()
+  return codename == release
+
+
+def convert_size_to_kb(size):
+  if size.endswith("kb"):
+    return int(size[:-2])
+  elif size.endswith("mb"):
+    return int(size[:-2]) * 1024
+  elif size.endswith("gb"):
+    return int(size[:-2]) * 1024 * 1024
+  else:
+    return int(size)
+
+
+def generate_heap_dump_config(args):
+  fail = False
+  if args.pid is None and args.name is None:
+    print("FATAL: Neither PID nor NAME given.", file=sys.stderr)
+    fail = True
+
+  target_cfg = ""
+  if args.pid:
+    for pid in args.pid.split(','):
+      try:
+        pid = int(pid)
+      except ValueError:
+        print("FATAL: invalid PID %s" % pid, file=sys.stderr)
+        fail = True
+      target_cfg += '{}pid: {}\n'.format(CFG_INDENT, pid)
+  if args.name:
+    for name in args.name.split(','):
+      target_cfg += '{}process_cmdline: "{}"\n'.format(CFG_INDENT, name)
+  if args.dump_smaps:
+    target_cfg += '{}dump_smaps: true\n'.format(CFG_INDENT)
+
+  if fail:
+    return None
+
+  continuous_dump_cfg = ""
+  if args.continuous_dump:
+    continuous_dump_cfg = CONTINUOUS_DUMP.format(
+        dump_interval=args.continuous_dump)
+
+  if args.continuous_dump:
+    # Unlimited trace duration
+    duration_ms = 0
+  elif args.stop_when_done:
+    # Oneshot heapdump and the system supports data_source_stop_timeout_ms, we
+    # can use a short duration.
+    duration_ms = 1000
+  else:
+    # Oneshot heapdump, but the system doesn't supports
+    # data_source_stop_timeout_ms, we have to use a longer duration in the hope
+    # of giving enough time to capture the whole dump.
+    duration_ms = 20000
+
+  if args.stop_when_done:
+    data_source_stop_timeout_ms = 100000
+  else:
+    data_source_stop_timeout_ms = 0
+
+  return CFG.format(
+      size_kb=convert_size_to_kb(args.buffer_size),
+      target_cfg=target_cfg,
+      continuous_dump_config=continuous_dump_cfg,
+      duration_ms=duration_ms,
+      data_source_stop_timeout_ms=data_source_stop_timeout_ms)
+
+
+def generate_oom_config(args):
+  if not release_or_newer('UpsideDownCake'):
+    print(
+        "FATAL: OOM mode not supported for this android version",
+        file=sys.stderr)
+    return None
+
+  if args.pid:
+    print("FATAL: Specifying pid not supported in OOM mode", file=sys.stderr)
+    return None
+
+  if not args.name:
+    print(
+        "FATAL: Must specify process in OOM mode (use --name '*' to match all)",
+        file=sys.stderr)
+    return None
+
+  if args.continuous_dump:
+    print(
+        "FATAL: Specifying continuous dump not supported in OOM mode",
+        file=sys.stderr)
+    return None
+
+  if args.dump_smaps:
+    print("FATAL: Dumping smaps not supported in OOM mode", file=sys.stderr)
+    return None
+
+  process_cfg = ''
+  for name in args.name.split(','):
+    process_cfg += '{}process_cmdline: "{}"\n'.format(CFG_INDENT, name)
+
+  return OOM_CFG.format(
+      size_kb=convert_size_to_kb(args.buffer_size),
+      wait_duration_ms=args.oom_wait_seconds * 1000,
+      process_cfg=process_cfg)
+
+
+def main(argv):
+  parser = argparse.ArgumentParser()
+  parser.add_argument(
+      "-o",
+      "--output",
+      help="Filename to save profile to.",
+      metavar="FILE",
+      default=None)
+  parser.add_argument(
+      "-p",
+      "--pid",
+      help="Comma-separated list of PIDs to "
+      "profile.",
+      metavar="PIDS")
+  parser.add_argument(
+      "-n",
+      "--name",
+      help="Comma-separated list of process "
+      "names to profile.",
+      metavar="NAMES")
+  parser.add_argument(
+      "-b",
+      "--buffer-size",
+      help="Buffer size in memory that store the whole java heap graph. N(kb|mb|gb)",
+      type=str,
+      default="256mb")
+  parser.add_argument(
+      "-c",
+      "--continuous-dump",
+      help="Dump interval in ms. 0 to disable continuous dump. When continuous "
+      "dump is enabled, use CTRL+C to stop",
+      type=int,
+      default=0)
+  parser.add_argument(
+      "--no-versions",
+      action="store_true",
+      help="Do not get version information about APKs.")
+  parser.add_argument(
+      "--dump-smaps",
+      action="store_true",
+      help="Get information about /proc/$PID/smaps of target.")
+  parser.add_argument(
+      "--print-config",
+      action="store_true",
+      help="Print config instead of running. For debugging.")
+  parser.add_argument(
+      "--stop-when-done",
+      action="store_true",
+      default=None,
+      help="Use a new method to stop the profile when the dump is done. "
+      "Previously, we would hardcode a duration. Available and default on S.")
+  parser.add_argument(
+      "--no-stop-when-done",
+      action="store_false",
+      dest='stop_when_done',
+      help="Do not use a new method to stop the profile when the dump is done.")
+  parser.add_argument(
+      "--wait-for-oom",
+      action="store_true",
+      dest='wait_for_oom',
+      help="Starts a tracing session waiting for an OutOfMemoryError to be "
+      "thrown. Available on U.")
+  parser.add_argument(
+      "--oom-wait-seconds",
+      type=int,
+      default=60,
+      help="Seconds to wait for an OutOfMemoryError to be thrown. "
+      "Defaults to 60.")
+
+  args = parser.parse_args()
+
+  if args.stop_when_done is None:
+    args.stop_when_done = release_or_newer('S')
+
+  cfg = None
+  if args.wait_for_oom:
+    cfg = generate_oom_config(args)
+  else:
+    cfg = generate_heap_dump_config(args)
+
+  if not cfg:
+    parser.print_help()
+    return 1
+
+  if not args.no_versions:
+    cfg += PACKAGES_LIST_CFG
+
+  if args.print_config:
+    print(cfg)
+    return 0
+
+  output_file = args.output
+  if output_file is None:
+    fd, name = tempfile.mkstemp('profile')
+    os.close(fd)
+    output_file = name
+
+  user = subprocess.check_output(['adb', 'shell',
+                                  'whoami']).strip().decode('utf8')
+  perfetto_pid = subprocess.check_output(
+      ['adb', 'exec-out',
+       PERFETTO_CMD.format(cfg=cfg, user=user)]).strip().decode('utf8')
+  try:
+    int(perfetto_pid.strip())
+  except ValueError:
+    print("Failed to invoke perfetto: {}".format(perfetto_pid), file=sys.stderr)
+    return 1
+
+  if args.wait_for_oom:
+    print("Waiting for OutOfMemoryError")
+  else:
+    print("Dumping Java Heap.")
+
+  exists = True
+  ctrl_c_count = 0
+  # Wait for perfetto cmd to return.
+  while exists:
+    try:
+      exists = subprocess.call(
+          ['adb', 'shell', '[ -d /proc/{} ]'.format(perfetto_pid)]) == 0
+      time.sleep(1)
+    except KeyboardInterrupt as e:
+      ctrl_c_count += 1
+      subprocess.check_call(
+          ['adb', 'shell', 'kill -TERM {}'.format(perfetto_pid)])
+      if ctrl_c_count == 1:
+        print("Stopping perfetto and waiting for data...")
+      else:
+        raise e
+
+  subprocess.check_call(['adb', 'pull', PROFILE_PATH, output_file], stdout=NULL)
+
+  subprocess.check_call(['adb', 'shell', 'rm', '-f', PROFILE_PATH], stdout=NULL)
+
+  print("Wrote profile to {}".format(output_file))
+  print("This can be viewed using https://ui.perfetto.dev.")
+
+
+if __name__ == '__main__':
+  sys.exit(main(sys.argv))

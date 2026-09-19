@@ -1,0 +1,103 @@
+build_config_dir_ = "include/perfetto/base/build_configs/bazel"
+
+# Deliberately NOT a perfetto_cc_library, to avoid cyclic deps.
+# This is pulled as a default dep by all targets.
+perfetto_build_config_cc_library(
+    name = "build_config_hdr",
+    hdrs = [build_config_dir_ + "/perfetto_build_flags.h"],
+    includes = [build_config_dir_],
+)
+
+perfetto_py_binary(
+    name = "gen_amalgamated_sql_py",
+    srcs = [
+        "tools/gen_amalgamated_sql.py",
+    ],
+    main = "tools/gen_amalgamated_sql.py",
+    python_version = "PY3",
+)
+
+perfetto_py_binary(
+    name = "gen_cc_proto_descriptor_py",
+    srcs = [
+        "tools/gen_cc_proto_descriptor.py",
+    ],
+    main = "tools/gen_cc_proto_descriptor.py",
+    python_version = "PY3",
+)
+
+perfetto_go_proto_library(
+    name = "protos_perfetto_config_protos_go_proto",
+    visibility = PERFETTO_CONFIG.go_proto_library_visibility,
+    deps = [
+        ":protos_perfetto_config_protos",
+    ],
+)
+
+perfetto_go_proto_library(
+    name = "protos_perfetto_trace_minimal_protos_go_proto",
+    visibility = PERFETTO_CONFIG.go_proto_library_visibility,
+    deps = [
+        ":protos_perfetto_trace_minimal_protos",
+    ],
+)
+
+perfetto_go_proto_library(
+    name = "protos_perfetto_trace_non_minimal_protos_go_proto",
+    visibility = PERFETTO_CONFIG.go_proto_library_visibility,
+    deps = [
+        ":protos_perfetto_trace_non_minimal_protos",
+    ],
+)
+
+perfetto_go_proto_library(
+    name = "protos_perfetto_trace_track_event_protos_go_proto",
+    visibility = PERFETTO_CONFIG.go_proto_library_visibility,
+    deps = [
+        ":protos_perfetto_trace_track_event_protos",
+    ],
+)
+
+perfetto_go_proto_library(
+    name = "protos_perfetto_metrics_protos_go_proto",
+    visibility = PERFETTO_CONFIG.go_proto_library_visibility,
+    deps = [
+        ":protos_perfetto_metrics_protos",
+    ],
+)
+
+perfetto_go_proto_library(
+    name = "protos_perfetto_metrics_android_protos_go_proto",
+    visibility = PERFETTO_CONFIG.go_proto_library_visibility,
+    deps = [
+        ":protos_perfetto_metrics_android_protos",
+    ],
+)
+
+perfetto_jspb_proto_library(
+    name = "perfetto_trace_jspb_proto",
+    visibility = PERFETTO_CONFIG.public_visibility,
+    deps = [
+        ":trace_proto",
+    ],
+)
+
+# This is overridden in google internal builds via
+# PERFETTO_CONFIG.deps.version_header (see perfetto_cfg.bzl).
+perfetto_cc_library(
+    name = "cc_perfetto_version_header",
+    hdrs = ["perfetto_version.gen.h"],
+)
+
+perfetto_py_binary(
+    name = "gen_version_header_py",
+    srcs = ["tools/write_version_header.py"],
+    data = ["CHANGELOG"],
+    main = "tools/write_version_header.py",
+    python_version = "PY3",
+)
+
+exports_files(
+    ["ui/src/assets/favicon.png"],
+    visibility = PERFETTO_CONFIG.public_visibility,
+)
