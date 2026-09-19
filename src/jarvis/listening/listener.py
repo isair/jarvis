@@ -13,7 +13,8 @@ import queue
 import sys
 import platform
 from collections import deque
-from typing import Optional, TYPE_CHECKING, Any
+from typing import Optional, TYPE_CHECKING, Any, Callable, Literal
+from dataclasses import dataclass
 from datetime import datetime
 
 from rapidfuzz import fuzz
@@ -37,6 +38,15 @@ from ..utils.location import is_location_available
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
+
+
+@dataclass(frozen=True)
+class LowConfidenceEvent:
+    """A rejected Whisper segment, available in memory to listener consumers."""
+
+    confidence: float
+    transcript: str
+    reason: Literal["low_confidence"] = "low_confidence"
 
 
 def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
@@ -381,7 +391,8 @@ class VoiceListener(threading.Thread):
     """Main voice listening thread that orchestrates all voice processing."""
 
     def __init__(self, db: "Database", cfg, tts: Optional[Any],
-                 dialogue_memory: "DialogueMemory"):
+                 dialogue_memory: "DialogueMemory", *,
+                 on_low_confidence: Optional[Callable[[LowConfidenceEvent], None]] = None):
         """
         Initialise voice listener.
 
@@ -390,6 +401,9 @@ class VoiceListener(threading.Thread):
             cfg: Configuration object
             tts: Text-to-speech engine (optional)
             dialogue_memory: Dialogue memory instance
+            on_low_confidence: Optional per-segment rejection callback. Runs
+                synchronously on the transcription thread and must not block;
+                consumers should enqueue work for their own thread if needed.
         """
         super().__init__(daemon=True)
 
@@ -397,6 +411,7 @@ class VoiceListener(threading.Thread):
         self.cfg = cfg
         self.tts = tts
         self.dialogue_memory = dialogue_memory
+        self.on_low_confidence = on_low_confidence
         self._should_stop = False
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
@@ -1350,6 +1365,15 @@ class VoiceListener(threading.Thread):
                 print("  ⚠️  Speech detection failed; using audio-level detection. Enable voice_debug for details.", flush=True)
             return rms >= float(getattr(self.cfg, "voice_min_energy", 0.0045))
 
+    def _emit_low_confidence(self, confidence: float, transcript: str) -> None:
+        """Notify a consumer without allowing its failure to interrupt transcription."""
+        if self.on_low_confidence is None:
+            return
+        try:
+            self.on_low_confidence(LowConfidenceEvent(confidence, transcript))
+        except Exception as exc:
+            debug_log(f"low-confidence callback failed ({type(exc).__name__})", "voice")
+
     def _filter_noisy_segments(self, segments):
         """Filter out low-confidence Whisper segments."""
         min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
@@ -1376,6 +1400,7 @@ class VoiceListener(threading.Thread):
                 confidence = 1.0 - seg.no_speech_prob
 
             if confidence is not None and confidence < min_confidence:
+                self._emit_low_confidence(confidence, seg.text)
                 if confidence >= marginal_threshold:
                     # Marginal confidence - show in log viewer (not debug)
                     print(f"🔇 Low confidence ({confidence:.2f}): \"{seg.text.strip()[:50]}...\"", flush=True)
@@ -2525,6 +2550,7 @@ class VoiceListener(threading.Thread):
                             continue
 
                         if confidence < min_confidence:
+                            self._emit_low_confidence(confidence, seg.get("text", ""))
                             if confidence >= marginal_threshold:
                                 # Marginal confidence - show in log viewer (not debug)
                                 print(f"🔇 Low confidence ({confidence:.2f}): \"{seg_text[:50]}...\"", flush=True)
