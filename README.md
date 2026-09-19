@@ -182,7 +182,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 
 > **Note:** VRAM requirements include the fast model (`gemma4:e2b`) which is always loaded alongside the chat model for voice intent classification and other real-time work. The default chat model shares this, so no extra VRAM is needed.
 
-The setup wizard will guide you through model selection and installation on first launch. Long pages scroll to keep controls readable and navigation accessible on smaller displays.
+The setup wizard guides you through voice, local models, and capabilities on first launch. Compact cards fit comfortably at the standard window size, with stacked layouts and scrolling available on smaller displays.
 
 ## Configuration
 
