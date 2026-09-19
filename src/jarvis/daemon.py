@@ -876,7 +876,7 @@ def main(smoke_test: bool = False) -> None:
 
     # Check location detection status
     if cfg.location_enabled and not is_location_available():
-        print("📍 Optional location features unavailable. Add a GeoLite2 database in Setup → Location.", flush=True)
+        print("⚠️ 📍 Optional location features unavailable. Add a GeoLite2 database in Setup → Location.", flush=True)
     elif cfg.location_enabled:
         location_context = get_location_context(
             config_ip=cfg.location_ip_address,
