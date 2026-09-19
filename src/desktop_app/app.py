@@ -1918,8 +1918,8 @@ class JarvisSystemTray:
         # Register cleanup on app exit
         self.app.aboutToQuit.connect(self.cleanup_on_exit)
 
-        # Check for updates on startup (delayed by 5 seconds to not block app startup)
-        QTimer.singleShot(5000, self.check_for_updates)
+        # Startup update check disabled: no dialog on launch. The check runs on
+        # demand via the "🔄 Check for Updates" tray-menu entry (see create_menu).
 
         debug_log("desktop app initialized", "desktop")
 

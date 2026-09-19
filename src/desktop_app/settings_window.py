@@ -147,7 +147,7 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("ollama_chat_model", "Chat Model", "Primary LLM for conversations",
       "llm", "choice", choices=model_choices)
     f("ollama_embed_model", "Embedding Model", "Model for text embeddings",
-      "llm", "str")
+      "llm", "model")
     f("ollama_base_url", "Ollama URL", "Ollama server base URL",
       "llm", "str")
     f("llm_chat_timeout_sec", "Chat Timeout", "Max seconds for chat responses",
@@ -191,7 +191,7 @@ def _build_field_metadata() -> List[FieldMeta]:
       "llm_provider", "password", nullable=True)
     f("llm_chat_model", "Chat Model",
       "Model name the provider exposes. Leave empty to use the Ollama chat model.",
-      "llm_provider", "str", nullable=True)
+      "llm_provider", "model", nullable=True)
     f("embedding_provider", "Embedding Provider",
       "Runtime for embeddings. Leave on 'Same as chat provider' unless your "
       "chat runtime has no embeddings endpoint (then route them to Ollama).",
@@ -208,7 +208,7 @@ def _build_field_metadata() -> List[FieldMeta]:
       "llm_provider", "password", nullable=True)
     f("embedding_model", "Embedding Model",
       "Embedding model name. Leave empty to use the Ollama embedding model.",
-      "llm_provider", "str", nullable=True)
+      "llm_provider", "model", nullable=True)
 
     # --- Text-to-Speech ---
     f("tts_enabled", "Enable TTS", "Enable text-to-speech output",
@@ -635,6 +635,66 @@ def get_input_devices() -> List[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Remote model discovery (OpenAI-compatible ``/v1/models`` endpoint)
+# ---------------------------------------------------------------------------
+
+_UNSET = object()
+
+# Config keys rendered as model dropdowns, in build order.
+_MODEL_FIELD_KEYS = ("ollama_embed_model", "llm_chat_model", "embedding_model")
+
+# Widgets whose edits invalidate a model dropdown's cached listing. The
+# dropdowns are re-populated from the provider's ``/v1/models`` on change.
+_MODEL_REFRESH_TRIGGERS: Dict[str, tuple] = {
+    "llm_base_url": ("llm_chat_model", "embedding_model"),
+    "llm_api_key": ("llm_chat_model", "embedding_model"),
+    "llm_provider": ("llm_chat_model", "embedding_model"),
+    "ollama_base_url": ("llm_chat_model", "embedding_model", "ollama_embed_model"),
+    "embedding_provider": ("embedding_model",),
+    "embedding_base_url": ("embedding_model",),
+    "embedding_api_key": ("embedding_model",),
+}
+
+
+def _models_endpoint(base_url: str) -> str:
+    """``<base>/v1/models`` with the ``/v1`` segment deduplicated.
+
+    Bases with or without the version suffix map to the same URL, e.g.
+    ``http://localhost:8888/v1`` and ``http://localhost:8888`` both become
+    ``http://localhost:8888/v1/models``.
+    """
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/v1"):
+        return f"{base}/models"
+    return f"{base}/v1/models"
+
+
+def fetch_remote_models(base_url: str, api_key: str = "",
+                        timeout: float = 5.0) -> List[str]:
+    """Model ids advertised by an OpenAI-compatible server at ``/v1/models``.
+
+    Fail-soft: returns ``[]`` on any problem (server down, malformed JSON,
+    missing ``data`` array), mirroring the setup wizard's behaviour.
+    """
+    url = _models_endpoint(base_url)
+    if not url:
+        return []
+    # ``OpenAICompatibleBackend`` appends "/models" to a versioned base.
+    norm = url[: -len("/models")]
+    try:
+        from jarvis.llm import OpenAICompatibleBackend
+        backend = OpenAICompatibleBackend(
+            norm, api_key=(api_key or "").strip() or None,
+        )
+        return list(backend.list_models(timeout_sec=timeout))
+    except Exception as exc:
+        debug_log(f"model listing failed for {url}: {exc}", "settings")
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Widget builders
 # ---------------------------------------------------------------------------
 
@@ -710,6 +770,12 @@ class SettingsWindow(QDialog):
 
         self._sidebar.currentRowChanged.connect(self._pages.setCurrentIndex)
         self._sidebar.setCurrentRow(0)
+
+        # Model dropdowns read base URLs that may live on earlier pages, so
+        # refresh them once every page exists, then keep them in sync with
+        # subsequent edits of the base URL / key / provider fields.
+        self._refresh_model_combos(_MODEL_FIELD_KEYS)
+        self._wire_model_refresh()
 
         layout.addLayout(content_layout, 1)
 
@@ -1000,6 +1066,12 @@ class SettingsWindow(QDialog):
             w.setToolTip(fm.description)
             return w
 
+        if fm.field_type == "model":
+            w = QComboBox()
+            self._populate_model_combo(fm.key, w)
+            w.setToolTip(fm.description)
+            return w
+
         if fm.field_type == "device":
             w = QComboBox()
             devices = get_input_devices()
@@ -1058,6 +1130,107 @@ class SettingsWindow(QDialog):
             w.setPlaceholderText("Leave empty for default")
         w.setToolTip(fm.description)
         return w
+
+    # -- Model dropdown helpers -----------------------------------------------
+
+    def _live_text(self, key: str) -> str:
+        """Current text of a QLineEdit field, falling back to the config."""
+        w = self._widgets.get(key)
+        if isinstance(w, QLineEdit):
+            return w.text().strip()
+        return str(self._merged.get(key) or "").strip()
+
+    def _live_combo(self, key: str) -> str:
+        """Current item data of a combo field, falling back to the config."""
+        w = self._widgets.get(key)
+        if isinstance(w, QComboBox):
+            return str(w.currentData() or "").strip()
+        return str(self._merged.get(key) or "").strip()
+
+    def _chat_base(self) -> str:
+        """Effective chat-provider base URL (mirrors jarvis.config rules)."""
+        return self._live_text("llm_base_url") or self._live_text("ollama_base_url")
+
+    def _model_source(self, key: str) -> tuple:
+        """Effective ``(base_url, api_key)`` for one model field."""
+        if key == "ollama_embed_model":
+            return (self._live_text("ollama_base_url"), "")
+        if key == "llm_chat_model":
+            return (self._chat_base(), self._live_text("llm_api_key"))
+        # embedding_model: explicit override, then provider-relative pairing.
+        base = self._live_text("embedding_base_url")
+        ekey = self._live_text("embedding_api_key")
+        if base:
+            return (base, ekey or self._live_text("llm_api_key"))
+        eprovider = self._live_combo("embedding_provider")
+        if eprovider == "ollama":
+            return (self._live_text("ollama_base_url"), "")
+        if eprovider == "openai_compatible":
+            return (self._chat_base(), ekey or self._live_text("llm_api_key"))
+        # "" = same as chat provider: follow whichever URL it resolves to.
+        if (self._live_combo("llm_provider") != "openai_compatible"
+                and not self._live_text("llm_base_url")):
+            return (self._live_text("ollama_base_url"), "")
+        return (self._chat_base(), ekey or self._live_text("llm_api_key"))
+
+    def _populate_model_combo(self, key: str, combo: QComboBox,
+                              value: Any = _UNSET) -> None:
+        """Fill ``combo`` with the ids served at the field's base URL.
+
+        A saved id missing from the fresh listing is kept (marked "saved")
+        so a reload never silently drops the current value.
+        """
+        if value is _UNSET:
+            value = combo.currentData()
+            if value in (None, ""):
+                value = self._merged.get(key)
+        nullable = any(
+            fm.key == key and fm.nullable for fm in FIELD_METADATA
+        )
+        base, api_key = self._model_source(key)
+        ids = fetch_remote_models(base, api_key)
+        target = "" if value in (None, "") else str(value).strip()
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            if nullable:
+                combo.addItem("— empty (inherit default) —", "")
+            seen: set = {""}
+            for mid in ids:
+                mid = str(mid)
+                if mid and mid not in seen:
+                    combo.addItem(mid, mid)
+                    seen.add(mid)
+            if target and target not in seen:
+                combo.addItem(f"{target}  (saved)", target)
+                seen.add(target)
+            if combo.count():
+                idx = combo.findData(target)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+            else:
+                combo.setCurrentIndex(-1)
+        finally:
+            combo.blockSignals(False)
+
+    def _refresh_model_combos(self, keys) -> None:
+        """Re-populate the given model dropdowns from their providers."""
+        for key in keys:
+            widget = self._widgets.get(key)
+            if isinstance(widget, QComboBox):
+                self._populate_model_combo(key, widget)
+
+    def _wire_model_refresh(self) -> None:
+        """Re-fetch model listings when a connection field changes."""
+        for source, targets in _MODEL_REFRESH_TRIGGERS.items():
+            widget = self._widgets.get(source)
+            if widget is None:
+                continue
+            if isinstance(widget, QLineEdit):
+                widget.textChanged.connect(
+                    lambda *_args, _t=targets: self._refresh_model_combos(_t))
+            else:
+                widget.currentIndexChanged.connect(
+                    lambda *_args, _t=targets: self._refresh_model_combos(_t))
 
     def _create_nullable_int(self, fm: FieldMeta, current: Any) -> QWidget:
         """Create a combo + spinbox for an int field that can be None."""
@@ -1348,6 +1521,14 @@ class SettingsWindow(QDialog):
                     return self._defaults.get(fm.key)
             return val
 
+        if fm.field_type == "model":
+            val = w.currentData()
+            if val in (None, ""):
+                if fm.nullable:
+                    return None
+                return str(self._defaults.get(fm.key) or "")
+            return str(val)
+
         if fm.field_type == "list":
             list_w = w._list_widget
             return [list_w.item(i).text() for i in range(list_w.count())]
@@ -1455,6 +1636,9 @@ class SettingsWindow(QDialog):
             )
             if idx >= 0:
                 w.setCurrentIndex(idx)
+
+        elif fm.field_type == "model":
+            self._populate_model_combo(fm.key, w, value)
 
         elif fm.field_type == "list":
             list_w = w._list_widget

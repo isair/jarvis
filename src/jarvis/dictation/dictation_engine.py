@@ -933,13 +933,18 @@ class DictationEngine:
             return True
 
     def _begin_recording(self, token: int) -> None:
-        """Worker: open the audio stream and start capturing."""
+        """Worker: open the audio stream and start capturing.
+
+        Each state flip / user callback is applied *before* the matching
+        ``debug_log`` line so the worker's visible state is complete by the
+        time the caller's next bytecode runs, independently of stderr capture.
+        """
         # Check Whisper readiness
         model = self._whisper_model_ref()
         backend = self._whisper_backend_ref()
         if model is None and backend != "mlx":
-            debug_log("whisper model not loaded — dictation skipped", "dictation")
             self._abandon_session(token)
+            debug_log("whisper model not loaded — dictation skipped", "dictation")
             return
 
         # Bail early if the press was already released/superseded while the
@@ -948,7 +953,6 @@ class DictationEngine:
             if self._session != token or not self._recording:
                 return
 
-        debug_log("dictation recording started", "dictation")
         self._audio_frames = []
         self._record_start_time = time.time()
 
@@ -958,6 +962,7 @@ class DictationEngine:
                 self._on_dictation_start()
             except Exception as exc:
                 debug_log(f"on_dictation_start callback error: {exc}", "dictation")
+        debug_log("dictation recording started", "dictation")
 
         # Play start beep
         _play_beep(_get_start_beep())

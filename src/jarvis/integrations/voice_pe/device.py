@@ -1405,6 +1405,15 @@ class VoicePEDevice:
             }),
             "voice",
         )
+        # Press trail in the dialog: what was pressed, which action ran, and
+        # whether the press was accepted or why it was rejected.
+        verdict = "accepted" if accepted else f"rejected ({rejected_reason or result})"
+        print(
+            f"  🔘 Voice PE button: {event_value or 'unknown'} → action "
+            f"'{action}' {verdict}, gen c{self.connection_generation}"
+            f"s{self.session_generation}",
+            flush=True,
+        )
         self._mark_event(f"button:{action}")
         self._sync_face_state()
 
@@ -1416,6 +1425,16 @@ class VoicePEDevice:
         if self._client is None:
             return
         self.led_phase = pe_events.EVENT_LED_PHASE.get(name, self.led_phase)
+        # One line per Voice Assistant event in the desktop log dialog: the ring
+        # phase the satellite is driven into, named the same way the LED ring
+        # animates — waiting = cyan pulse, listening = fast green, thinking =
+        # slow amber, replying = amber-to-white, idle = off.
+        print(
+            f"  💡 Voice PE {name} → ring "
+            f"{self.led_phase} (phase #{LED_PHASES.get(self.led_phase, 0)}), "
+            f"gen c{self.connection_generation}s{self.session_generation}",
+            flush=True,
+        )
         # Per-generation ledger of the events this device accepted, so a check
         # can name the generation an event belongs to instead of the moment.
         self.event_ledger.append((int(self.session_generation), name))
@@ -1511,6 +1530,10 @@ class VoicePEDevice:
         # entry can carry is ``success``, one-to-one with the ``stt_start`` of
         # this run. A skipped or filtered stage answers through ``on_error``.
         await self._event("STT_END", {"text": text, "status": "success"})
+        # The human-readable answer of the capture phase, so the dialog shows
+        # what the satellite's mic produced between the two ring switches.
+        preview = text if len(text) <= 60 else text[:60] + "…"
+        print(f"  📝 Voice PE heard: \"{preview}\"", flush=True)
         self._bump_metric("stt_end")
         self._bump_metric("stt_end_success")
         self.session_state = SessionState.THINKING
@@ -1672,6 +1695,11 @@ class VoicePEDevice:
                         pass
                 if start_time is None:
                     start_time = loop.time()
+                    print(
+                        f"  🔊 Voice PE first PCM chunk on wire "
+                        f"(ring holds 0.384 s; paced streaming active)",
+                        flush=True,
+                    )
                 audio_duration_sent += seconds_in_chunk
                 wait_s = (audio_duration_sent - 0.384) - (
                     loop.time() - (start_time or loop.time())
@@ -1682,6 +1710,11 @@ class VoicePEDevice:
         if self.session_generation != generation or self._client is None:
             return
         await self._event("TTS_STREAM_END", {})
+        print(
+            f"  🔊 Voice PE PCM stream closed: {audio_duration_sent:.2f} s of "
+            f"audio in {len(sentences)} sentence chunk(s) over the Native API",
+            flush=True,
+        )
         await self._end_run(reply, generation)
 
     async def _close_stream(
@@ -1717,6 +1750,12 @@ class VoicePEDevice:
             return
         if url:
             await self._event("TTS_END", {"url": url})
+            wav_n = int(self.metrics.get(f"wav_bytes_{self._tts_media_id}", 0) or 0)
+            print(
+                f"  📦 Voice PE WAV ready: {wav_n} B published, satellite fetches "
+                f"and plays: {url}",
+                flush=True,
+            )
             self._bump_metric("tts_url_deliveries")
             # The satellite fetches and plays the WAV itself; this is the entry
             # the next ``AnnounceFinished`` of the same generation closes.

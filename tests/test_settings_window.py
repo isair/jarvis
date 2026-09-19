@@ -57,6 +57,7 @@ class TestFieldMetadata:
         valid_types = {
             "bool", "int", "float", "str", "choice", "device",
             "list", "password", "mmdevice_capture", "mmdevice_render",
+            "model",
         }
         for fm in FIELD_METADATA:
             assert fm.field_type in valid_types, (
@@ -174,15 +175,21 @@ class TestLLMProviderFields:
                 f"'{key}' should be a password field"
             )
 
-    def test_model_fields_are_freetext(self):
-        """The provider model fields are free text — an OpenAI-compatible
-        server's model name is not in the Ollama SUPPORTED_CHAT_MODELS
-        catalogue, so a choice dropdown would be wrong."""
+    def test_model_fields_are_dropdowns(self):
+        """The model fields are dropdowns filled from the provider's
+        ``/v1/models`` listing, so the user selects a served id instead of
+        typing it by hand (the free-text fields of the first revisions)."""
         for key in ("llm_chat_model", "embedding_model"):
             fm = self._field(key)
-            assert fm is not None and fm.field_type == "str", (
-                f"'{key}' should be a free-text str field"
+            assert fm is not None and fm.field_type == "model", (
+                f"'{key}' should be a 'model' dropdown field"
             )
+
+    def test_ollama_embed_model_is_dropdown(self):
+        """The Ollama embedding model is a dropdown too, listing the ids the
+        Ollama server advertises at its ``/v1/models`` endpoint."""
+        fm = self._field("ollama_embed_model")
+        assert fm is not None and fm.field_type == "model"
 
     def test_connection_fields_are_nullable(self):
         """Connection/credential/model fields are nullable so leaving them

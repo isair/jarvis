@@ -1340,7 +1340,10 @@ def load_settings() -> Settings:
 
     # Build Settings. Some fields support env var overrides.
     # Env overrides: JARVIS_VOICE_DEBUG, JARVIS_WHISPER_BACKEND
-    voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
+    # On unless the env says otherwise: the categorized debug lines are what
+    # the desktop "Toustovač Logs" dialog shows, so they must arrive by default;
+    # set JARVIS_VOICE_DEBUG=0 to silence them.
+    voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "1") == "1"
 
     # Normalize/convert fields
     db_path = _expand_path(merged.get("db_path")) or _default_db_path()
