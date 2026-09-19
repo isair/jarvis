@@ -61,6 +61,31 @@ class TestGetLLMBackend:
 
         assert isinstance(backend, OllamaBackend)
 
+    def test_returns_openai_compatible_for_llama_cpp_provider(self):
+        """``llama_cpp`` is a named alias for llama.cpp's ``llama-server``,
+        which already speaks the OpenAI-compatible API — so it reuses
+        ``OpenAICompatibleBackend`` rather than a bespoke backend class."""
+        from jarvis.llm import OpenAICompatibleBackend, get_llm_backend
+
+        cfg = _Cfg(llm_provider="llama_cpp", llm_base_url="http://localhost:8080/v1")
+
+        backend = get_llm_backend(cfg)
+
+        assert isinstance(backend, OpenAICompatibleBackend)
+        assert backend.base_url == "http://localhost:8080/v1"
+
+    def test_llama_cpp_defaults_to_llama_server_url_when_unset(self):
+        """When the user picks ``llama_cpp`` but leaves ``llm_base_url``
+        blank, the factory defaults to llama-server's own default listen
+        address rather than silently falling back to Ollama's."""
+        from jarvis.llm import get_llm_backend
+
+        cfg = _Cfg(llm_provider="llama_cpp")
+
+        backend = get_llm_backend(cfg)
+
+        assert backend.base_url == "http://127.0.0.1:8080/v1"
+
     def test_uses_ollama_base_url_when_llm_base_url_empty(self):
         from jarvis.llm import get_llm_backend
 
@@ -186,6 +211,20 @@ class TestGetEmbeddingBackend:
         assert isinstance(backend, OpenAICompatibleBackend)
         assert backend.base_url == "http://127.0.0.1:11434"
 
+    def test_llama_cpp_embedding_provider_resolves_independently(self):
+        """``embedding_provider: llama_cpp`` works the same way as chat:
+        an ``OpenAICompatibleBackend`` defaulted to llama-server's URL,
+        independent of the chat provider."""
+        from jarvis.llm import OpenAICompatibleBackend, get_embedding_backend
+
+        cfg = _Cfg(llm_provider="ollama", embedding_provider="llama_cpp")
+
+        backend = get_embedding_backend(cfg)
+
+        assert isinstance(backend, OpenAICompatibleBackend)
+        assert backend.base_url == "http://127.0.0.1:8080/v1"
+
+
 
 class TestPerProviderModelResolution:
     """``cfg.llm_chat_model`` / ``cfg.embedding_model`` resolve per-provider:
@@ -248,6 +287,32 @@ class TestPerProviderModelResolution:
             "ollama_embed_model": "nomic-embed-text",
         })
         assert settings.embedding_model == "text-embedding-3-small"
+
+
+class TestConfigProviderValidation:
+    def _load(self, tmp_path, monkeypatch, cfg: dict):
+        import json
+        cfg_path = tmp_path / "config.json"
+        cfg.setdefault("_config_version", 3)  # skip migration noise
+        cfg_path.write_text(json.dumps(cfg))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+        from jarvis.config import load_settings
+        return load_settings()
+
+    def test_llama_cpp_provider_survives_validation(self, tmp_path, monkeypatch):
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "llama_cpp",
+            "llm_base_url": "http://127.0.0.1:8080/v1",
+        })
+        assert settings.llm_provider == "llama_cpp"
+        assert settings.llm_base_url == "http://127.0.0.1:8080/v1"
+
+    def test_llama_cpp_embedding_provider_survives_validation(self, tmp_path, monkeypatch):
+        settings = self._load(tmp_path, monkeypatch, {
+            "llm_provider": "ollama",
+            "embedding_provider": "llama_cpp",
+        })
+        assert settings.embedding_provider == "llama_cpp"
 
 
 class TestConfigMigration:

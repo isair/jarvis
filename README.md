@@ -207,7 +207,7 @@ Tested local servers (all run on your own machine):
 | LM Studio | `http://localhost:1234/v1` | Chat, tool calling, and embeddings. |
 | Ollama (OpenAI API) | `http://localhost:11434/v1` | The native Ollama path is the default; the OpenAI shape works too. |
 | Jan | `http://localhost:1337/v1` | Chat and tool calling. |
-| llama.cpp (`llama-server`) | `http://localhost:8080/v1` | Tool calling depends on the model. |
+| llama.cpp (`llama-server`) | `http://localhost:8080/v1` (default) | Tool calling depends on the model. Also selectable as the named `llama_cpp` provider (below), which defaults to this URL automatically. |
 | LocalAI | `http://localhost:8080/v1` | Feature support depends on the backend model. |
 | vLLM | `http://localhost:8000/v1` | Tool calling depends on the model. |
 | oMLX (Apple Silicon) | varies | No embeddings endpoint, so memory uses keyword search unless you route embeddings to Ollama (below). |
@@ -227,6 +227,8 @@ For reference, the underlying config keys are:
 - `llm_api_key`: only if your server requires one; leave empty otherwise.
 - `llm_chat_model`: whatever model name your server exposes.
 - `fast_model` (optional): the small, quick model used for real-time work (voice intent, tool routing, quick classifications). Leave empty for automatic: `gemma4:e2b` on Ollama, your chat model on an OpenAI-compatible server. Set it to pin a dedicated small model.
+
+Running `llama-server` specifically? Set `"llm_provider": "llama_cpp"` instead of `"openai_compatible"` — it uses the exact same wire protocol, so nothing else changes, but `llm_base_url` defaults to `http://127.0.0.1:8080/v1` (llama-server's own default) instead of Ollama's port if you leave it unset.
 
 **Embeddings** (used for memory search) can run on a different backend. If your chat server has no embeddings endpoint, memory falls back to keyword search. To keep full semantic memory, route embeddings to Ollama (the wizard offers this automatically when it detects a server that cannot embed):
 

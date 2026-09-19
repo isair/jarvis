@@ -64,17 +64,17 @@ Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `llm_provider` | `"ollama"` | `"ollama"` or `"openai_compatible"`. Unknown values fall back to `"ollama"`. |
-| `llm_base_url` | (OpenAI-compatible only) | The OpenAI-compatible server's URL, e.g. `http://localhost:1234/v1` (LM Studio default). Read only when `llm_provider == openai_compatible`; the Ollama path always uses `ollama_base_url`. |
+| `llm_provider` | `"ollama"` | `"ollama"`, `"openai_compatible"`, or `"llama_cpp"`. Unknown values fall back to `"ollama"`. |
+| `llm_base_url` | (non-Ollama only) | The server's URL, e.g. `http://localhost:1234/v1` (LM Studio default) for `openai_compatible`, or `http://127.0.0.1:8080/v1` (llama-server's own default) for `llama_cpp`. Read only when `llm_provider` is not `ollama`; the Ollama path always uses `ollama_base_url`. |
 | `llm_api_key` | `""` | Optional bearer token. Sent only when non-empty. |
-| `llm_chat_model` | (OpenAI-compatible only) | The model name the OpenAI-compatible server exposes. Read only when `llm_provider == openai_compatible` (falling back to `ollama_chat_model` if blank); the Ollama path uses `ollama_chat_model`. |
-| `embedding_provider` | inherits `llm_provider` | `"ollama"` / `"openai_compatible"`. Override for runtimes without embeddings. |
+| `llm_chat_model` | (non-Ollama only) | The model name the server exposes. Read only when `llm_provider` is not `ollama` (falling back to `ollama_chat_model` if blank); the Ollama path uses `ollama_chat_model`. |
+| `embedding_provider` | inherits `llm_provider` | `"ollama"`, `"openai_compatible"`, or `"llama_cpp"`. Override for runtimes without embeddings. |
 | `embedding_base_url` | inherits from llm config | Override per-provider URL. |
 | `embedding_api_key` | inherits `llm_api_key` | Override per-provider key. |
-| `embedding_model` | (OpenAI-compatible only) | The OpenAI-compatible embedding model. Read only when the effective embedding provider is `openai_compatible` (falling back to `ollama_embed_model` if blank); the Ollama path uses `ollama_embed_model`. |
+| `embedding_model` | (non-Ollama only) | The embedding model exposed by the server. Read only when the effective embedding provider is not `ollama` (falling back to `ollama_embed_model` if blank); the Ollama path uses `ollama_embed_model`. |
 | `low_power_mode` | `false` | When enabled, voice startup skips LLM warmup and Ollama keep-alive windows used by warmup and the intent judge are short. |
 
-The `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys hold the Ollama configuration and are authoritative whenever the active (chat or embedding) provider is Ollama. `_load_settings` resolves `cfg.llm_chat_model`, `cfg.embedding_model`, and `cfg.fast_model` per-provider — the Ollama keys win on the Ollama path, the provider-aware keys win on the OpenAI-compatible path — so the codebase reads a single resolved field while each provider keeps its own on-disk model name. The v1 → v2 migration promotes any explicitly-set `ollama_*` values into the provider-aware keys; per-provider resolution means a promoted value never shadows the Ollama picker. The v2 → v3 migration folds the retired per-context model keys (`intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model`) into `fast_model` (an explicitly chosen judge or router model is kept; the old default value is not pinned).
+The `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys hold the Ollama configuration and are authoritative whenever the active (chat or embedding) provider is Ollama. `_load_settings` resolves `cfg.llm_chat_model`, `cfg.embedding_model`, and `cfg.fast_model` per-provider — the Ollama keys win on the Ollama path, the provider-aware keys win on the `openai_compatible` / `llama_cpp` path — so the codebase reads a single resolved field while each provider keeps its own on-disk model name. The v1 → v2 migration promotes any explicitly-set `ollama_*` values into the provider-aware keys; per-provider resolution means a promoted value never shadows the Ollama picker. The v2 → v3 migration folds the retired per-context model keys (`intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model`) into `fast_model` (an explicitly chosen judge or router model is kept; the old default value is not pinned).
 
 ### Model tiers
 
@@ -82,16 +82,16 @@ Every LLM context runs on one of two models, resolved through `resolve_model(cfg
 
 | Tier | Field | Contexts | Default |
 |------|-------|----------|---------|
-| `Tier.FAST` | `cfg.fast_model` | intent judge, tool router, tool searcher, enrichment extractor, graph placement, max-turn digest, evaluator | `gemma4:e2b` on the Ollama chat path; the active chat model on an OpenAI-compatible provider (the Ollama pull-name does not exist there) |
+| `Tier.FAST` | `cfg.fast_model` | intent judge, tool router, tool searcher, enrichment extractor, graph placement, max-turn digest, evaluator | `gemma4:e2b` on the Ollama chat path; the active chat model on a non-Ollama provider (the Ollama pull-name does not exist there) |
 | `Tier.CHAT` | `cfg.llm_chat_model` | main reply loop, planner + plan-step resolver, summariser, graph extraction, tool-specific calls, memory/tool-result digests (size-gated passes on the chat model) | the model picked at setup |
 
 Fast-tier contexts take a few thousand tokens in and emit tiny strict-JSON answers, so latency dominates; chat-tier contexts produce long-form output, so quality dominates. Contexts state their tier instead of defining a per-context fallback chain, and any future routing logic lands in exactly one place.
 
 ### Factory dispatch
 
-- `get_llm_backend(cfg)` reads `llm_provider`. For `openai_compatible` it resolves `llm_base_url` (falling back to `ollama_base_url`); for `ollama` it uses `ollama_base_url` directly so a stale `llm_base_url` from a previous OpenAI-compatible config cannot leak into the Ollama backend. `llm_api_key` is read regardless (sent only when non-empty).
-- `get_embedding_backend(cfg)` reads `embedding_provider` (falls back to `llm_provider` when unset), resolves `embedding_base_url` (falls back per-provider: `llm_base_url` for OpenAI-compatible, `ollama_base_url` for Ollama), and `embedding_api_key` (falls back to `llm_api_key`).
-- Construction is fail-soft: an unset URL becomes the default Ollama URL, so `get_*_backend` never raises. Errors surface at request time, not construction time.
+- `get_llm_backend(cfg)` reads `llm_provider`. `openai_compatible` and `llama_cpp` both construct `OpenAICompatibleBackend` — `llama_cpp` is a named alias for llama.cpp's `llama-server`, which already speaks the OpenAI-compatible wire shape, so no bespoke backend class exists for it. Each resolves `llm_base_url` with its own default when unset: `openai_compatible` falls back to `ollama_base_url`, while `llama_cpp` falls back to `http://127.0.0.1:8080/v1` (llama-server's own default listen address), never to the Ollama URL. For `ollama` the factory uses `ollama_base_url` directly so a stale `llm_base_url` from a previous non-Ollama config cannot leak into the Ollama backend. `llm_api_key` is read regardless (sent only when non-empty).
+- `get_embedding_backend(cfg)` reads `embedding_provider` (falls back to `llm_provider` when unset), resolves `embedding_base_url` (falls back per-provider: `llm_base_url` for `openai_compatible`, `llm_base_url` or the llama.cpp default for `llama_cpp`, `ollama_base_url` for `ollama`), and `embedding_api_key` (falls back to `llm_api_key`).
+- Construction is fail-soft: an unset URL becomes the default Ollama URL (or the llama.cpp default on the `llama_cpp` path), so `get_*_backend` never raises. Errors surface at request time, not construction time.
 
 ### v1 → v2 config migration
 
@@ -113,6 +113,8 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 - `warm_up(model, keep_alive="30m")` first verifies the endpoint is actually an Ollama server via `GET /api/version`, then issues a minimal `POST /api/chat` (system + user message pair, `stream: false`, `options: {num_predict: 1, temperature: 0.0}`) with the requested `keep_alive`, exercising the full inference pipeline (JIT compilation, KV-cache allocation) so the first real call does not time out. The model stays resident for the requested `keep_alive` duration; low power mode passes a short residency instead of the default half hour.
 
 ### OpenAI-compatible (`OpenAICompatibleBackend`)
+
+Serves both the `openai_compatible` and `llama_cpp` providers — llama.cpp's `llama-server` speaks this exact wire shape, so `llama_cpp` needs no backend code of its own, only its own default base URL (see "Factory dispatch" above).
 
 - Endpoints: `POST /chat/completions`, `POST /embeddings`, `GET /models`.
 - Streaming: Server-Sent Events. Lines start with `data:` and an empty payload terminator is `data: [DONE]`. Comment lines (`: ping`) and malformed payloads are skipped.
