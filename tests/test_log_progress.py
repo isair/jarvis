@@ -8,6 +8,19 @@ from desktop_app.log_output import LogStream, parse_progress
 pytestmark = pytest.mark.unit
 
 
+def test_optional_location_warning_uses_warning_colour(qapp):
+    from desktop_app.app import LogViewerWindow
+    from desktop_app.themes import COLORS
+    from PyQt6.QtGui import QColor
+    window = LogViewerWindow()
+    message = '⚠️ 📍 Optional location features unavailable. Add a GeoLite2 database in Setup → Location.'
+    window.append_log(message + '\n')
+    cursor = window.log_display.document().find('Optional location features unavailable')
+    assert not cursor.isNull()
+    assert cursor.charFormat().foreground().color() == QColor(COLORS['warning_light'])
+    window.close()
+
+
 @pytest.mark.parametrize('ready_message', [
     "     🎤 MLX Whisper 'medium' ready (Apple Silicon GPU)",
     '🎙️  Listening! Try:',

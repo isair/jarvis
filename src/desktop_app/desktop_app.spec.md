@@ -114,6 +114,7 @@ The central controller that manages:
 - Both bundled output capture and subprocess output support carriage-return progress and strip terminal control sequences. The desktop sets `TQDM_POSITION=-1` before loading dependencies so Hugging Face emits byte progress to non-terminal output, respecting explicit user environment overrides.
 - Clear resets both the timeline and download state. Report Issue includes the visible progress snapshot and applies the existing redaction rules to it.
 - Missing optional location support is reported once at startup with a pointer to Setup, without printing the full installation guide.
+- Missing optional location support is a warning, rendered in yellow because it degrades available functionality.
 
 Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
 
