@@ -388,7 +388,9 @@ Get API key at [composio.dev](https://composio.dev)
 
 **First startup takes a bit** - Initial model downloads can take several minutes, followed by loading and warmup. Watch the Logs window for transfer progress and readiness. Enable **Low Power Mode** in Settings to skip LLM startup warmup.
 
-**Jarvis doesn't hear me** - Check microphone permissions, speak clearly after "Jarvis"
+**Jarvis doesn't hear me** - Check microphone permissions and the selected input in Settings. Say "Jarvis" anywhere in your sentence.
+
+**Linux says Listening but nothing is transcribed** - Open Logs and check for capture warnings. Missing callbacks mean the recording stream is not delivering blocks; silent samples mean blocks arrive but contain no usable signal. Check input mute and the recording source in PipeWire/PulseAudio (`pavucontrol` or `wpctl status`), and choose a microphone rather than an output monitor. Try the system default or the `pipewire` input where available. Enable `voice_debug` in Settings for periodic callback counts, signal peak, speech-frame counts and capture rate. These diagnostics do not save microphone audio. Native 44.1/48 kHz inputs are resampled for speech detection and transcription.
 
 **Not sure what is running** - Open the tray menu and click **🩺 Runtime Status**. It shows whether Jarvis is listening, whether Low Power Mode is active, whether Ollama is needed/running, which models are configured, and how many MCP servers are enabled.
 

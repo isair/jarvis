@@ -4,6 +4,25 @@ This document outlines the voice listening architecture. The system uses a **tra
 
 ## Architecture Overview
 
+### Capture format and health
+
+The input stream tries the configured sample rate and falls back to the selected
+device's native rate when rejected. Frames always span the configured 10, 20 or
+30 ms at the actual capture rate; unsupported frame durations use 20 ms. Partial
+callback blocks are retained until a complete frame is available and discarded
+on audio-state resets. WebRTC VAD receives a 16 kHz mono PCM copy, including when
+the hardware captures at 44.1 or 48 kHz. Utterances retain native-rate samples
+until resampling for Whisper, preserving their duration.
+
+VAD errors emit a single warning and use the configured energy threshold instead
+of silently discarding speech. Capture health is checked every five seconds with
+a monotonic clock. Missing callbacks, silent samples, callback errors, PortAudio
+status flags and dropped queue blocks are reported outside the audio callback.
+Warnings are transition-based; dictation pauses suspend health checks. With
+`voice_debug`, diagnostics include callback/frame counts, speech-frame counts,
+peak level and capture rate, without saving microphone audio. Linux warnings
+point users to PipeWire/PulseAudio recording-source routing.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Audio Stream                            │

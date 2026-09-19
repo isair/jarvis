@@ -26,6 +26,7 @@ def _create_mock_config(**kwargs):
     mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
     mock_cfg.voice_device = kwargs.get("voice_device", None)
     mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+    mock_cfg.vad_frame_ms = kwargs.get("vad_frame_ms", 20)
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
     return mock_cfg
 
@@ -955,6 +956,7 @@ class TestCrossPlatformAudioHealthWarning:
 
                             with patch("jarvis.listening.listener.time") as mock_time:
                                 mock_time.time.side_effect = advancing_time
+                                mock_time.monotonic.side_effect = [0, 6, 6, 6]
                                 mock_time.sleep = time.sleep
 
                                 # No LLM warmup threads: keeps time.time() call
@@ -967,8 +969,8 @@ class TestCrossPlatformAudioHealthWarning:
                                     listener.run()
 
                             captured = capsys.readouterr()
-                            assert "No audio received after 5 seconds" in captured.out
-                            assert "pactl" in captured.out
+                            assert "No microphone callbacks" in captured.out
+                            assert "PipeWire" in captured.out
 
 
 class TestResample:
@@ -1037,6 +1039,7 @@ class TestSampleRateFallback:
     def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys):
         """Falls back to device native rate when 16 kHz is rejected."""
         mock_whisper_model = MagicMock()
+        mock_whisper_model.transcribe.return_value = ([], None)
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
             mock_sys.platform = "linux"
@@ -1080,12 +1083,24 @@ class TestSampleRateFallback:
 
                             listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
 
-                            # Make the run loop exit immediately
+                            # Drive native-rate speech through framing, VAD and Whisper.
+                            import numpy as np
+                            class StrictVad:
+                                def is_speech(self, pcm, rate):
+                                    assert rate == 16000 and len(pcm) == 640
+                                    return bool(np.max(np.abs(np.frombuffer(pcm, dtype=np.int16))) > 0)
+                            listener._vad = StrictVad()
+                            mock_cfg.endpoint_silence_ms = 40
+                            mock_cfg.whisper_min_audio_duration = 0.3
+                            listener._check_query_timeout = MagicMock()
                             get_calls = [0]
                             def fake_get(timeout=0.2):
                                 get_calls[0] += 1
-                                if get_calls[0] >= 2:
-                                    listener._should_stop = True
+                                if get_calls[0] == 1:
+                                    return np.ones((17640, 1), dtype=np.float32) * .1
+                                if get_calls[0] == 2:
+                                    return np.zeros((4410, 1), dtype=np.float32)
+                                listener._should_stop = True
                                 raise q.Empty()
 
                             listener._audio_q = MagicMock()
@@ -1093,6 +1108,7 @@ class TestSampleRateFallback:
 
                             with patch("jarvis.listening.listener.time") as mock_time:
                                 mock_time.time.return_value = 0
+                                mock_time.monotonic.return_value = 0
                                 mock_time.sleep = time.sleep
                                 listener.run()
 
@@ -1103,6 +1119,9 @@ class TestSampleRateFallback:
                             assert second_call_kwargs["samplerate"] == 44100
                             # Listener should store the stream rate
                             assert listener._stream_samplerate == 44100
+                            assert listener._frame_samples == 44100 * mock_cfg.vad_frame_ms // 1000
+                            assert second_call_kwargs['blocksize'] == listener._frame_samples
+                            assert len(mock_whisper_model.transcribe.call_args[0][0]) == 6400
 
                             captured = capsys.readouterr()
                             assert "44100" in captured.out

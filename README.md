@@ -156,6 +156,13 @@ Connect MCP servers for browser automation, Home Assistant, GitHub, databases an
 ## Troubleshooting
 
 <details>
+<summary><strong>Linux says Listening, but never hears speech</strong></summary>
+
+Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Enable `voice_debug` in Settings for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).
+
+</details>
+
+<details>
 <summary><strong>Downloads look paused</strong></summary>
 
 Open **Logs** from the tray. The progress card shows transfer details when available and elapsed waiting time when updates pause. After downloading, loading the model into memory is a separate step.
