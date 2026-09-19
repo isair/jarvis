@@ -2962,8 +2962,8 @@ def _build_unreachable_message(cfg) -> str:
     )
 
 
-def _show_openai_unreachable_dialog(cfg) -> None:
-    """Show a warning dialog with an option to open the Setup Wizard."""
+def _show_openai_unreachable_dialog(cfg, splash: QWidget) -> None:
+    """Suspend the startup splash while the warning or setup wizard is open."""
     from PyQt6.QtWidgets import QMessageBox
 
     dialog = QMessageBox()
@@ -2972,10 +2972,16 @@ def _show_openai_unreachable_dialog(cfg) -> None:
     dialog.setIcon(QMessageBox.Icon.Warning)
     open_wizard_btn = dialog.addButton("🔧 Open Setup Wizard", QMessageBox.ButtonRole.ActionRole)
     dialog.addButton("Close", QMessageBox.ButtonRole.RejectRole)
-    dialog.exec()
-
-    if dialog.clickedButton() == open_wizard_btn:
-        _run_setup_wizard()
+    splash_was_visible = splash.isVisible()
+    splash.hide()
+    QApplication.processEvents()
+    debug_log("startup splash hidden for server recovery dialog", "startup")
+    try:
+        dialog.exec()
+        if dialog.clickedButton() == open_wizard_btn:
+            _run_setup_wizard()
+    finally:
+        splash.setVisible(splash_was_visible)
 
 
 def _run_setup_wizard() -> bool:
@@ -3325,7 +3331,7 @@ def main() -> int:
 
             if not _reach[0]:
                 print("⚠️ LLM server not reachable at startup", flush=True)
-                _show_openai_unreachable_dialog(_provider_cfg)
+                _show_openai_unreachable_dialog(_provider_cfg, splash)
 
         # Default ownership: not started by us. Re-assigned below if Jarvis
         # launches its own Ollama server process.

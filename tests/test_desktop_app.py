@@ -99,6 +99,45 @@ class TestOpenAICompatStartupCheck:
     check reachability and warn the user early rather than failing silently
     on the first request."""
 
+    @pytest.mark.parametrize("open_wizard", [False, True])
+    @pytest.mark.parametrize("wizard_accepted", [False, True])
+    def test_splash_hidden_during_warning_and_wizard(
+        self, qapp, monkeypatch, open_wizard, wizard_accepted
+    ):
+        from types import SimpleNamespace
+        from PyQt6.QtWidgets import QMessageBox, QWidget
+        from desktop_app import app as app_mod
+
+        splash = QWidget()
+        splash.show()
+        qapp.processEvents()
+        visited = []
+
+        def show_warning(dialog):
+            assert not splash.isVisible()
+            visited.append("warning")
+            return 0
+
+        def run_wizard():
+            assert not splash.isVisible()
+            visited.append("wizard")
+            return wizard_accepted
+
+        monkeypatch.setattr(QMessageBox, "exec", show_warning)
+        monkeypatch.setattr(QMessageBox, "clickedButton", lambda dialog: next(
+            button for button in dialog.buttons()
+            if (dialog.buttonRole(button) == QMessageBox.ButtonRole.ActionRole) == open_wizard
+        ))
+        monkeypatch.setattr(app_mod, "_run_setup_wizard", run_wizard)
+        try:
+            app_mod._show_openai_unreachable_dialog(
+                SimpleNamespace(llm_base_url="http://localhost:1234/v1"), splash
+            )
+            assert visited == (["warning", "wizard"] if open_wizard else ["warning"])
+            assert splash.isVisible()
+        finally:
+            splash.close()
+
     def test_reachable_when_models_listed(self):
         from types import SimpleNamespace
         from desktop_app.app import _check_openai_compat_reachable
@@ -1915,4 +1954,3 @@ class TestListeningWindowVisibility:
         assert show_idx > start_idx, (
             "the launch windows must open after the daemon auto-start"
         )
-
