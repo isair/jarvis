@@ -14,16 +14,16 @@ from desktop_app import setup_wizard as ui
     ui.WelcomePage, ui.OllamaInstallPage, ui.OllamaServerPage,
     ui.WhisperSetupPage, ui.LocationPage, ui.MCPPage, ui.CompletePage,
 ])
-@pytest.mark.parametrize("height", [600, 800])
-def test_controls_fit_on_short_display(qapp, monkeypatch, page_type, height):
+@pytest.mark.parametrize("width,height", [(700, 600), (700, 800), (960, 780)])
+def test_controls_fit_on_short_display(qapp, monkeypatch, page_type, width, height):
     # Exercise real styled layouts without discovery, installs or config writes.
     monkeypatch.setattr(page_type, "initializePage", lambda self: None)
     wizard = QWizard()
     wizard.setWizardStyle(QWizard.WizardStyle.ModernStyle)
-    wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET)
+    wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET + ui.WIZARD_STYLESHEET)
     page = page_type()
     wizard.addPage(page)
-    wizard.resize(700, height)
+    wizard.resize(width, height)
     wizard.show()
     QTest.qWait(100)
     try:
@@ -43,6 +43,9 @@ def test_controls_fit_on_short_display(qapp, monkeypatch, page_type, height):
         scrolls = page.findChildren(QScrollArea)
         assert scrolls
         scroll = scrolls[0]
+        assert scroll.horizontalScrollBar().maximum() == 0
+        if width == 960:
+            assert scroll.verticalScrollBar().maximum() == 0
         scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
         bottom = scroll.widget().mapTo(
             scroll.viewport(), QPoint(0, scroll.widget().height())
@@ -79,7 +82,7 @@ def test_whisper_install_buttons_fit_status_text(qapp, monkeypatch, installed):
         is_mlx_whisper_installed=installed,
     ))
     wizard = QWizard()
-    wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET)
+    wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET + ui.WIZARD_STYLESHEET)
     page = ui.WhisperSetupPage()
     wizard.addPage(page)
     wizard.resize(700, 600)

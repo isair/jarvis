@@ -21,6 +21,16 @@ An OpenAI-compatible user has opted out of the local Ollama stack, so `should_sh
 
 ## Layout and overflow
 
+The wizard uses a shared dark visual theme in `themes.py`, with neutral cards,
+amber selections and primary actions, and a four-stage header: Voice,
+Intelligence, Capabilities, Ready. The standard window is 960 × 780, bounded
+by the available screen. Normal page content fits without scrolling at this
+size. Provider choices, connection/model settings, and chat/fast selectors use
+paired columns at page widths of at least 820 pixels and stack below that.
+Cards use layout margins rather than additional stylesheet padding. Editable
+dropdowns apply their padding once, on the outer control. Exit sits apart
+from Back and the primary action in the footer.
+
 Every page provides a scroll viewport for content that exceeds the window.
 `ScrollableWizardPage` wraps ordinary page layouts; pages with a dedicated
 scroll area retain it. Content keeps its minimum usable size, including
