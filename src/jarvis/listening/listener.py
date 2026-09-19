@@ -17,7 +17,7 @@ from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
 from rapidfuzz import fuzz
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
@@ -37,6 +37,49 @@ from ..utils.location import is_location_available
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
+
+
+def _is_input_format_error(exc: Exception) -> bool:
+    """Distinguish unsupported capture formats from access/device failures."""
+    code = exc.args[1] if len(exc.args) > 1 else None
+    message = str(exc).lower()
+    return code in (-9998, -9997) or any(part in message for part in (
+        'invalid number of channels', 'invalid channel count',
+        'invalid sample rate', 'paerrorcode -9998', 'paerrorcode -9997',
+    ))
+
+
+def _open_input_stream(sample_rate, frame_ms, device_kwargs, *, callback=None, serialise=True):
+    """Open mono first, then bounded native-rate/channel alternatives on the same input."""
+    candidates = [(sample_rate, 1)]
+    last_error = None
+    for rate, channels in candidates:
+        try:
+            with portaudio_lock if serialise else nullcontext():
+                stream = sd.InputStream(
+                    samplerate=rate, channels=channels, dtype='float32',
+                    blocksize=max(1, int(rate * frame_ms / 1000)),
+                    callback=callback, **device_kwargs,
+                )
+            debug_log(f"Input format accepted: {rate} Hz, {channels} channel(s)", "voice")
+            return stream, rate, channels
+        except Exception as exc:
+            if not _is_input_format_error(exc):
+                raise
+            last_error = exc
+            debug_log(f"Input format rejected: {rate} Hz, {channels} channel(s): {exc}", "voice")
+            if len(candidates) == 1:
+                try:
+                    info = (sd.query_devices(device_kwargs['device']) if 'device' in device_kwargs
+                            else sd.query_devices(kind='input'))
+                    native_rate = int(info.get('default_samplerate', sample_rate))
+                    max_channels = int(info.get('max_input_channels', 1))
+                except Exception:
+                    raise exc
+                rates = list(dict.fromkeys(r for r in (sample_rate, native_rate) if r > 0))
+                counts = list(dict.fromkeys(c for c in (1, 2, max_channels) if 0 < c <= max_channels))
+                candidates.extend((r, c) for c in counts for r in rates if (r, c) != candidates[0])
+    raise last_error
 
 
 def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
@@ -1537,7 +1580,7 @@ class VoiceListener(threading.Thread):
 
     def _audio_frames(self, buf):
         """Keep native-rate frame boundaries across arbitrary callback block sizes."""
-        mono = buf.reshape(-1, buf.shape[-1])[:, 0] if buf.ndim > 1 else buf.flatten()
+        mono = buf.mean(axis=1) if buf.ndim > 1 else buf.flatten()
         if mono.size:
             self._audio_peak = max(self._audio_peak, float(np.max(np.abs(mono))))
         if self._pending_audio is not None:
@@ -1793,6 +1836,22 @@ class VoiceListener(threading.Thread):
                 print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
             return
 
+        # Resolve the same input for the permission probe and continuous capture.
+        stream_kwargs = {}
+        device_env = (self.cfg.voice_device or '').strip().lower()
+        if device_env and device_env not in ('default', 'system'):
+            try:
+                stream_kwargs['device'] = int(self.cfg.voice_device)
+            except ValueError:
+                for idx, dev in enumerate(devices):
+                    if dev.get('max_input_channels', 0) > 0 and device_env in dev.get('name', '').lower():
+                        stream_kwargs['device'] = idx
+                        break
+                else:
+                    print("  ❌ Selected microphone not found. Choose an available input in Settings.", flush=True)
+                    debug_log("configured input device did not match an available microphone", "voice")
+                    return
+
         # Windows 11: Test microphone permission by attempting a brief recording
         # This catches privacy settings that silently block audio access.
         # A 5-second timeout prevents indefinite hangs when Windows blocks
@@ -1817,9 +1876,8 @@ class VoiceListener(threading.Thread):
                     # stop/close after a successful start stays guarded.
                     stream = None
                     try:
-                        stream = sd.InputStream(
-                            samplerate=self._samplerate, channels=1,
-                            dtype="float32", blocksize=int(self._samplerate * 0.1),
+                        stream, _, _ = _open_input_stream(
+                            self._samplerate, 100, stream_kwargs, serialise=False,
                         )
                         stream.start()
                         time.sleep(0.15)
@@ -2182,9 +2240,6 @@ class VoiceListener(threading.Thread):
         debug_log(f"VAD: enabled={bool(self._vad is not None)}, aggressiveness={getattr(self.cfg, 'vad_aggressiveness', 2)}", "voice")
 
         # Audio device setup
-        stream_kwargs = {}
-        device_env = (self.cfg.voice_device or '').strip().lower()
-
         if self.cfg.voice_debug:
             debug_log("available input devices:", "voice")
             try:
@@ -2199,22 +2254,6 @@ class VoiceListener(threading.Thread):
                         debug_log(f"  [{idx}] {name} (channels={max_in}, default_sr={rate})", "voice")
             except Exception:
                 pass
-
-        # Configure audio device
-        if device_env and device_env not in ("default", "system"):
-            try:
-                device_index = int(self.cfg.voice_device)
-            except ValueError:
-                device_index = None
-                try:
-                    for idx, dev in enumerate(sd.query_devices()):
-                        if dev.get("max_input_channels", 0) > 0 and isinstance(dev.get("name"), str) and (self.cfg.voice_device or '').lower() in dev.get("name").lower():
-                            device_index = idx
-                            break
-                except Exception:
-                    device_index = None
-            if device_index is not None:
-                stream_kwargs["device"] = device_index
 
         # Log which device will be used
         try:
@@ -2233,51 +2272,18 @@ class VoiceListener(threading.Thread):
         except Exception:
             pass
 
-        # Open audio stream — try configured rate first, fall back to device
-        # native rate when the hardware rejects 16 kHz (common on Linux ALSA).
         self._stream_samplerate = self._samplerate
         open_error = None
         try:
-            with portaudio_lock:
-                stream = sd.InputStream(
-                    samplerate=self._samplerate,
-                    channels=1,
-                    dtype="float32",
-                    blocksize=self._frame_samples,
-                    callback=self._on_audio,
-                    **stream_kwargs,
-                )
+            stream, self._stream_samplerate, channels = _open_input_stream(
+                self._samplerate, frame_ms, stream_kwargs, callback=self._on_audio,
+            )
+            self._frame_samples = max(1, int(self._stream_samplerate * frame_ms / 1000))
+            if self._stream_samplerate != self._samplerate or channels != 1:
+                print(f"  🎤 Using {self._stream_samplerate} Hz, {channels} input channel(s); "
+                      "converting to mono and resampling for speech recognition", flush=True)
         except Exception as e:
-            error_msg = str(e).lower()
-            is_rate_error = "sample rate" in error_msg or "9987" in error_msg
-            if is_rate_error:
-                debug_log(f"device rejected {self._samplerate} Hz, querying native rate", "voice")
-                try:
-                    if "device" in stream_kwargs:
-                        dev_info = sd.query_devices(stream_kwargs["device"])
-                    else:
-                        dev_info = sd.query_devices(kind="input")
-                    native_rate = int(dev_info.get("default_samplerate", self._samplerate))
-                    if native_rate != self._samplerate:
-                        self._stream_samplerate = native_rate
-                        self._frame_samples = max(1, int(native_rate * frame_ms / 1000))
-                        print(f"  ⚠️  Device doesn't support {self._samplerate} Hz; using {native_rate} Hz with resampling", flush=True)
-                        debug_log(f"retrying stream at native {native_rate} Hz", "voice")
-                        with portaudio_lock:
-                            stream = sd.InputStream(
-                                samplerate=native_rate,
-                                channels=1,
-                                dtype="float32",
-                                blocksize=self._frame_samples,
-                                callback=self._on_audio,
-                                **stream_kwargs,
-                            )
-                    else:
-                        open_error = e
-                except Exception:
-                    open_error = e
-            else:
-                open_error = e
+            open_error = e
 
         if open_error is not None:
             error_msg = str(open_error).lower()
