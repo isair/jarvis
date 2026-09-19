@@ -92,8 +92,6 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
                 log(f"  {desc} already exists: {target_path.name}")
                 continue
 
-            log(f"  Downloading {desc}...")
-
             # Stream download with retry on rate limiting (HTTP 429)
             max_retries = 4
             response = None
@@ -114,6 +112,25 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
 
             total_size = int(response.headers.get("content-length", 0))
             downloaded = 0
+            started_at = time.monotonic()
+            last_update = started_at
+
+            def report_progress(complete=False):
+                elapsed = max(time.monotonic() - started_at, 0.001)
+                size = downloaded / 1_000_000
+                rate = size / elapsed
+                if total_size:
+                    pct = 100 if complete else min(99, int(downloaded * 100 / total_size))
+                    message = f"📥 Piper {desc}: {pct}%|| {size:.1f}/{total_size / 1_000_000:.1f} MB · {rate:.1f} MB/s"
+                else:
+                    if complete:
+                        message = f"📥 Piper {desc}: 100%|| {size:.1f} MB received · total size unknown"
+                    else:
+                        message = f"📥 Piper {desc}: {size:.1f} MB [total size unknown · {rate:.1f} MB/s]"
+                if progress_callback:
+                    progress_callback(message)
+
+            report_progress()
 
             # Write to temp file first, then rename (atomic)
             temp_path = target_path.with_suffix(".tmp")
@@ -121,14 +138,15 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total_size > 0 and progress_callback:
-                        pct = (downloaded / total_size) * 100
-                        if downloaded % (1024 * 1024) < 8192:  # Log every ~1MB
-                            log(f"  Downloading {desc}... {pct:.0f}%")
+                    if time.monotonic() - last_update >= 1:
+                        report_progress()
+                        last_update = time.monotonic()
 
             # Rename temp to final
             temp_path.rename(target_path)
-            log(f"  Downloaded {desc}: {target_path.name}")
+            response.close()
+            report_progress(complete=True)
+            debug_log(f"Piper {desc} available: {target_path.name}", "tts")
 
         return str(onnx_path)
 

@@ -53,7 +53,11 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
 # Audio processing imports (optional)
 try:
     import sounddevice as sd
-    import webrtcvad
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='pkg_resources is deprecated',
+                                category=UserWarning, module='webrtcvad')
+        import webrtcvad
     import numpy as np
 except ImportError as e:
     sd = None
@@ -1822,11 +1826,15 @@ class VoiceListener(threading.Thread):
                 return
 
             self._mlx_model_repo = _get_mlx_model_repo(model_name)
-            print(f"     🎤 Loading MLX Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
+            print(f"🎤 Preparing Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
 
             max_retries = 4
             for attempt in range(max_retries + 1):
                 try:
+                    from .model_download import prepare_mlx_model
+                    # Use the same local path for warmup and subsequent transcriptions
+                    # so mlx-whisper reuses its in-memory model cache.
+                    self._mlx_model_repo = prepare_mlx_model(_get_mlx_model_repo(model_name))
                     # Pre-load the model by doing a warmup transcription.
                     # Use low-amplitude noise (not silence) so the decoder actually runs —
                     # silent audio trips the no-speech short-circuit and leaves the decode

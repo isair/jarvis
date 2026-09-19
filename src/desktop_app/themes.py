@@ -41,6 +41,11 @@ COLORS = {
 
 # Comprehensive Qt stylesheet matching the Memory Viewer's design
 JARVIS_THEME_STYLESHEET = """
+    QWidget#download_card {
+        background-color: #161920;
+        border: 1px solid #27272a;
+        border-radius: 12px;
+    }
     QMainWindow, QDialog, QWizard, QWizardPage {
         background-color: #0a0b0f;
     }

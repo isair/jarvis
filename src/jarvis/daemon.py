@@ -875,7 +875,9 @@ def main(smoke_test: bool = False) -> None:
         debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
 
     # Check location detection status
-    if cfg.location_enabled:
+    if cfg.location_enabled and not is_location_available():
+        print("📍 Optional location features unavailable. Add a GeoLite2 database in Setup → Location.", flush=True)
+    elif cfg.location_enabled:
         location_context = get_location_context(
             config_ip=cfg.location_ip_address,
             auto_detect=cfg.location_auto_detect,
@@ -924,11 +926,10 @@ def main(smoke_test: bool = False) -> None:
         print("  TTS disabled", flush=True)
 
     # Initialize voice listening (only if dependencies available)
-    print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
+    print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
     voice_thread.start()
-    print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
 
     # Initialize dictation engine (hold-to-dictate)
     dictation = None
