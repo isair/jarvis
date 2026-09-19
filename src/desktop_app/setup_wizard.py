@@ -374,7 +374,7 @@ try:
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
         QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox,
-        QRadioButton, QButtonGroup, QStackedWidget
+        QRadioButton, QButtonGroup, QStackedWidget, QLayout
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
@@ -489,6 +489,28 @@ class CommandWorker(KeepAliveWorker):
             self.completed.emit(False, f"❌ Error: {str(e)}")
 
 
+class ScrollableWizardPage(QWizardPage):
+    """Keep page content at its minimum usable size inside a scroll viewport."""
+
+    def setLayout(self, layout):
+        # Pages with a dedicated scroll area already provide overflow handling.
+        if any(isinstance(layout.itemAt(i).widget(), QScrollArea)
+               for i in range(layout.count())):
+            super().setLayout(layout)
+            return
+        content = QWidget()
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        content.setLayout(layout)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        super().setLayout(outer)
+
+
 class SetupWizard(QWizard):
     """Main setup wizard window."""
 
@@ -496,7 +518,11 @@ class SetupWizard(QWizard):
         super().__init__(parent)
         self.setWindowTitle("🚀 Jarvis Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
-        self.setMinimumSize(700, 875)
+        available = self.screen().availableGeometry()
+        self.setMinimumSize(min(700, available.width() - 40),
+                            min(500, available.height() - 80))
+        self.resize(min(760, available.width() - 40),
+                    min(875, available.height() - 80))
 
         # Apply dark theme
         self._apply_theme()
@@ -624,7 +650,7 @@ class SetupWizard(QWizard):
         """)
 
 
-class WelcomePage(QWizardPage):
+class WelcomePage(ScrollableWizardPage):
     """Welcome page with status overview."""
 
     def __init__(self, parent=None):
@@ -842,7 +868,7 @@ class WelcomePage(QWizardPage):
         return wizard.ollama_entry_page_id()
 
 
-class ProviderChoicePage(QWizardPage):
+class ProviderChoicePage(ScrollableWizardPage):
     """Choose which local runtime serves the LLM: Ollama (the bundled
     default) or an OpenAI-compatible server (LM Studio, oMLX, llama.cpp's
     ``llama-server``, vLLM, LocalAI). The choice branches the rest of the
@@ -1038,7 +1064,7 @@ class _CapabilityWorker(KeepAliveWorker):
         self.done.emit(caps)
 
 
-class OpenAICompatiblePage(QWizardPage):
+class OpenAICompatiblePage(ScrollableWizardPage):
     """Collect the OpenAI-compatible server's connection details. Shown only
     on the OpenAI-compatible branch; it writes the ``llm_*`` /
     ``embedding_model`` config keys and then skips straight to Whisper setup.
@@ -1269,10 +1295,6 @@ class OpenAICompatiblePage(QWizardPage):
         self._fast_model_combo.setVisible(not linked)
         if linked:
             self._fast_model_combo.setCurrentText("")
-        # Let the wizard recalculate its size from the current page's content
-        wizard = self.wizard()
-        if wizard:
-            wizard.adjustSize()
         self.completeChanged.emit()
 
     def _on_connect(self):
@@ -1402,12 +1424,6 @@ class OpenAICompatiblePage(QWizardPage):
         # Only auto-discover when the user hasn't already saved a custom URL.
         if not saved_url:
             self._start_discovery()
-        # Force the wizard to recalculate its height for this page's content.
-        # Without this, Qt compresses widgets to fit the wizard's current size
-        # instead of growing the window (see CLAUDE.md Qt Layout section).
-        wizard = self.wizard()
-        if wizard:
-            QTimer.singleShot(0, wizard.adjustSize)
 
     def _start_discovery(self):
         self._connect_status.setText("🔍 Looking for local servers…")
@@ -1505,7 +1521,7 @@ class OpenAICompatiblePage(QWizardPage):
         return super().nextId()
 
 
-class OllamaInstallPage(QWizardPage):
+class OllamaInstallPage(ScrollableWizardPage):
     """Page for installing Ollama CLI."""
 
     def __init__(self, parent=None):
@@ -1648,7 +1664,7 @@ class OllamaInstallPage(QWizardPage):
         return super().nextId()
 
 
-class OllamaServerPage(QWizardPage):
+class OllamaServerPage(ScrollableWizardPage):
     """Page for starting Ollama server."""
 
     def __init__(self, parent=None):
@@ -1844,7 +1860,7 @@ class OllamaServerPage(QWizardPage):
         return super().nextId()
 
 
-class ModelsPage(QWizardPage):
+class ModelsPage(ScrollableWizardPage):
     """Page for installing required AI models — dual-category (fast + chat)."""
 
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
@@ -1872,10 +1888,6 @@ class ModelsPage(QWizardPage):
         except Exception:
             pass
         return self._WHISPER_VRAM_MB
-
-    _WIZARD_HEIGHT_BASE = 875
-    _WIZARD_HEIGHT_WITH_BUTTONS = 955
-    _WIZARD_HEIGHT_INSTALLING = 1170
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2192,15 +2204,11 @@ class ModelsPage(QWizardPage):
             self.install_btn.setVisible(True)
             self.install_btn.setEnabled(True)
             self.skip_btn.setVisible(True)
-            if not self.progress.isVisible():
-                self._set_wizard_height(self._WIZARD_HEIGHT_WITH_BUTTONS)
         else:
             self.models_label.setText(f"All required models are installed: {', '.join(rinst)}")
             self._is_complete = True
             self.install_btn.setVisible(False)
             self.skip_btn.setVisible(False)
-            if not self.progress.isVisible():
-                self._set_wizard_height(self._WIZARD_HEIGHT_BASE)
         self.completeChanged.emit()
 
     def _save_model_to_config(self):
@@ -2250,10 +2258,6 @@ class ModelsPage(QWizardPage):
         self._sync_combo_states()
         self._refresh_vram_display()
         self._update_models_display()
-        # Force the wizard to recalculate its height for this page's content.
-        wiz = self.wizard()
-        if wiz:
-            QTimer.singleShot(0, wiz.adjustSize)
 
     def _install_models(self):
         if not self._save_model_to_config():
@@ -2281,7 +2285,6 @@ class ModelsPage(QWizardPage):
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
         self.log_output.setVisible(True)
-        self._set_wizard_height(self._WIZARD_HEIGHT_INSTALLING)
         self.status_label.setText(f"Installing {m}... ({self._current_model_index + 1}/{len(self._missing_models)})")
         self.status_label.setStyleSheet("color: #a1a1aa;")
         op = "ollama"
@@ -2332,11 +2335,7 @@ class ModelsPage(QWizardPage):
             return w.dictation_page_id
         return super().nextId()
 
-    def _set_wizard_height(self, height):
-        w = self.wizard()
-        if w:
-            w.setMinimumHeight(height)
-            w.resize(w.width(), height)
+
 def _is_faster_whisper_turbo_supported() -> bool:
     """Check if the installed faster-whisper supports the large-v3-turbo model."""
     try:
@@ -2347,7 +2346,7 @@ def _is_faster_whisper_turbo_supported() -> bool:
         return False
 
 
-class WhisperSetupPage(QWizardPage):
+class WhisperSetupPage(ScrollableWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
     # Multilingual models - support ~99 languages
@@ -2621,12 +2620,10 @@ class WhisperSetupPage(QWizardPage):
         btn_layout.setSpacing(8)
 
         self.install_ffmpeg_btn = QPushButton("🎬 FFmpeg")
-        self.install_ffmpeg_btn.setFixedHeight(32)
         self.install_ffmpeg_btn.clicked.connect(self._install_ffmpeg)
         btn_layout.addWidget(self.install_ffmpeg_btn)
 
         self.install_mlx_btn = QPushButton("🧠 MLX Whisper")
-        self.install_mlx_btn.setFixedHeight(32)
         self.install_mlx_btn.clicked.connect(self._install_mlx_whisper)
         btn_layout.addWidget(self.install_mlx_btn)
 
@@ -3012,7 +3009,7 @@ class WhisperSetupPage(QWizardPage):
         return super().nextId()
 
 
-class LocationPage(QWizardPage):
+class LocationPage(ScrollableWizardPage):
     """Page for configuring location detection."""
 
     def __init__(self, parent=None):
@@ -3303,7 +3300,7 @@ class LocationPage(QWizardPage):
         return super().nextId()
 
 
-class DictationPage(QWizardPage):
+class DictationPage(ScrollableWizardPage):
     """Page for configuring dictation (hold-to-dictate) settings."""
 
     @staticmethod
@@ -3488,7 +3485,7 @@ class DictationPage(QWizardPage):
         return super().nextId()
 
 
-class MCPPage(QWizardPage):
+class MCPPage(ScrollableWizardPage):
     """Page for selecting popular MCP servers to enable."""
 
     def __init__(self, parent=None):
@@ -3645,7 +3642,7 @@ class MCPPage(QWizardPage):
         return super().nextId()
 
 
-class SearchProvidersPage(QWizardPage):
+class SearchProvidersPage(ScrollableWizardPage):
     """Explain and configure web-search fallback providers.
 
     Ordering mirrors the runtime fallback chain: DDG → Brave → Wikipedia →
@@ -3812,7 +3809,7 @@ class SearchProvidersPage(QWizardPage):
         return super().nextId()
 
 
-class CompletePage(QWizardPage):
+class CompletePage(ScrollableWizardPage):
     """Final page showing setup is complete."""
 
     def __init__(self, parent=None):
@@ -3928,4 +3925,3 @@ if __name__ == "__main__":
     result = wizard.exec()
     print(f"Wizard result: {result}")
     sys.exit(0)
-
