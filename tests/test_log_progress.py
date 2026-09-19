@@ -8,6 +8,36 @@ from desktop_app.log_output import LogStream, parse_progress
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('ready_message', [
+    "     🎤 MLX Whisper 'medium' ready (Apple Silicon GPU)",
+    '🎙️  Listening! Try:',
+])
+def test_ready_dismisses_preparation_card_and_preserves_log(qapp, ready_message):
+    from desktop_app.app import LogViewerWindow
+    window = LogViewerWindow()
+    window.append_log('🎤 Loading Whisper into memory and warming up speech recognition...\n')
+    assert not window.download_card.isHidden()
+    window.append_log(ready_message + '\n')
+    assert window.download_card.isHidden()
+    assert ready_message in window.log_display.toPlainText()
+    window.append_log('📥 Checking Whisper model files (first run may download a large model)...\n')
+    assert not window.download_card.isHidden()
+    window.close()
+
+
+def test_last_download_completion_dismisses_card(qapp):
+    from desktop_app.app import LogViewerWindow
+    window = LogViewerWindow()
+    window.append_log('weights.npz: 20%|xx| 2M/10M [00:02<00:08, 1MB/s]\n')
+    window.append_log('weights.npz: 100%|xxxxxxxxxx| 10M/10M [00:10<00:00, 1MB/s]\n')
+    assert window.download_card.isHidden()
+    assert 'Downloaded weights.npz' in window.log_display.toPlainText()
+    # Terminal libraries can repeat their final update while closing.
+    window.append_log('weights.npz: 100%|xxxxxxxxxx| 10M/10M [00:10<00:00, 1MB/s]\n')
+    assert window.download_card.isHidden()
+    window.close()
+
+
 def test_stream_handles_terminal_updates_and_partial_lines():
     lines = []
     stream = LogStream(lines.append)
@@ -73,6 +103,7 @@ def test_completion_of_small_file_does_not_hide_active_download(qapp):
     window = LogViewerWindow()
     window.append_log("weights.npz: 20%|xx| 2M/10M [00:02<00:08, 1MB/s]\n")
     window.append_log("config.json: 100%|xxx| 2k/2k [00:01<00:00, 2kB/s]\n")
+    assert not window.download_card.isHidden()
     assert "weights.npz" in window.download_title.text()
     assert window.download_bar.value() == 20
     window.close()

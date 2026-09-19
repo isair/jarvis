@@ -1330,6 +1330,7 @@ class LogViewerWindow(QMainWindow):
                     self._progress_timer.start()
                 else:
                     self._progress_timer.stop()
+                    self.download_card.hide()
                 continue
             if line.startswith('📥 Checking Whisper model files'):
                 self._downloads.clear()
@@ -1350,10 +1351,10 @@ class LogViewerWindow(QMainWindow):
                 self.download_bar.setRange(0, 0)
                 self._progress_detail = 'Model files ready · loading into memory and warming up'
                 self.download_detail.setText(self._progress_detail)
-            elif 'MLX Whisper' in line and 'ready (Apple Silicon GPU)' in line:
-                self.download_bar.setRange(0, 100)
-                self.download_bar.setValue(100)
-                self.download_detail.setText('Speech recognition model ready')
+            elif ('MLX Whisper' in line and 'ready (Apple Silicon GPU)' in line
+                  or line.strip() == '🎙️  Listening! Try:'):
+                self._progress_timer.stop()
+                self.download_card.hide()
             if any(message in line for message in (
                 'Download failed', 'Download error', 'Failed to initialise MLX Whisper',
                 'Daemon exited unexpectedly', 'Daemon stopped',
