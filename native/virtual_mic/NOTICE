@@ -1,0 +1,33 @@
+/*--
+
+    NOTICE - attribution for native/virtual_mic sources.
+
+    Toustovač bundles or forks the following third-party material:
+
+    1. Microsoft SysVAD audio sample (used as the architecture reference for
+       the minimal capture-only WaveRT driver):
+
+       repository : https://github.com/microsoft/Windows-driver-samples
+       commit     : 3c3fb49073c047c4cc8e6c203c6331f62b426507
+       subtree    : audio/sysvad
+       license    : MIT (see LICENSE in the repository)
+
+       Files modelled on it (rewritten, capture-only subset):
+       adapter.{h,cpp}, minip.{h,cpp}, topology.{h,cpp},
+       minwavertstream.{h,cpp}, formats.h.
+
+    2. Microsoft Windows Implementation Library (WIL):
+
+       https://github.com/microsoft/wil
+       commit: the tag shipping with WDK 28000.2526 (record the resolved
+       value in the build receipt)
+       license : MIT
+
+    3. Microsoft Windows SDK / WDK (toolchain):
+
+       Visual Studio 2026, WDK 28000.2526, matching Windows SDK build 28000,
+       MSVC v14.50, x64.
+
+    All remaining files in native/virtual_mic are project-owned code under
+    the project license declared in the repository root.
+--*/

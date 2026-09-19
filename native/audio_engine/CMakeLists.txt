@@ -597,7 +597,7 @@ add_library(jarvis_audio_engine SHARED
   $<TARGET_OBJECTS:jarvis_bsl_obj>)
 set_target_properties(jarvis_audio_engine PROPERTIES
   OUTPUT_NAME "jarvis_audio_engine" CXX_STANDARD 20)
-target_link_libraries(jarvis_audio_engine PRIVATE ole32 avrt iphlpapi winmm)
+target_link_libraries(jarvis_audio_engine PRIVATE ole32 avrt iphlpapi winmm bcrypt)
 
 add_executable(jarvis_audio_engine_sidecar
   "${CMAKE_CURRENT_SOURCE_DIR}/src/sidecar_main.cpp"
@@ -611,4 +611,4 @@ target_include_directories(jarvis_audio_engine_sidecar PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_definitions(jarvis_audio_engine_sidecar PRIVATE
   JARVIS_USE_WEBRTC_AEC3=1 WEBRTC_WIN=1)
-target_link_libraries(jarvis_audio_engine_sidecar PRIVATE ole32 avrt iphlpapi winmm)
+target_link_libraries(jarvis_audio_engine_sidecar PRIVATE ole32 avrt iphlpapi winmm bcrypt)

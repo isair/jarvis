@@ -52,7 +52,7 @@ from .tts_stream import (
     split_sentences,
     synthesize_pcm_async,
 )
-from .voice_transport import AudioIngress, UdpAudioServer
+from .voice_transport import AudioIngress, UdpAudioServer, pcm16_to_float32
 
 try:  # pragma: no cover - trivial import shim
     from jarvis.debug import debug_log
@@ -184,6 +184,123 @@ def _seed_reconnect_tries(logic: Any, cfg: Any) -> None:
         pass
 
 
+class DesktopMicLease:
+    """Per-satellite desktop microphone lease for the Windows virtual mic.
+
+    The stock Voice PE session machine (``SessionState``) is not changed; this
+    lease only tracks the *consumer* side of the cleaned stream. The broker
+    reports the physical capture-client count of the ``Toustovač Clean
+    Microphone`` endpoint; a 0 -> non-zero transition arms the lease and the
+    device keeps one continuous Assist capture session, while the zero-count
+    idle window releases it after ``idle_release_s``. All transitions are
+    idempotent, and ``generation`` increments on every arm so callers can
+    recognize stale callbacks, mirroring the connection/session generations.
+    """
+
+    #: Full contract set of the lease (the UI shows exactly these values).
+    STATES = ("disabled", "arming", "streaming", "reconnecting", "stopping")
+
+    #: Finite exponential backoff of reopen attempts; the sequence is
+    #: exhausted after ``len(BACKOFF_S)`` tries and the next failure then
+    #: closes the lease with a named reason instead of looping forever.
+    BACKOFF_S: tuple = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+    def __init__(self, idle_release_s: float = 5.0) -> None:
+        self._state = "disabled"
+        self._generation = 0
+        self._idle_release_s = float(idle_release_s or 5.0)
+        self._last_active_mono = 0.0
+        self._retry_index = 0
+        self._muted = False
+
+    # -- state helpers ------------------------------------------------------
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    @property
+    def idle_release_s(self) -> float:
+        return self._idle_release_s
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
+
+    def _stamp(self) -> None:
+        self._last_active_mono = time.monotonic()
+
+    # -- contract methods ---------------------------------------------------
+
+    def on_client_count(self, count: Any) -> str:
+        """One broker poll: arm on 0 -> non-zero, expire after the idle window."""
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            self._stamp()
+            if self._state == "disabled":
+                self._generation += 1
+                self._state = "arming"
+                self._retry_index = 0
+            elif self._state in ("arming", "streaming", "reconnecting"):
+                self._state = "streaming"
+            return self._state
+        if self._state == "disabled":
+            return self._state
+        if self._last_active_mono and (
+            time.monotonic() - self._last_active_mono >= self._idle_release_s
+        ):
+            self.release()
+        return self._state
+
+    def mark_streaming(self) -> None:
+        """The first cleaned frame of the armed generation reached the bus."""
+        if self._state in ("arming", "reconnecting", "streaming"):
+            self._state = "streaming"
+            self._stamp()
+
+    def on_failure(self, reason: str) -> None:
+        """Finite exponential backoff for reopen attempts."""
+        if self._state == "disabled":
+            return
+        self._retry_index += 1
+        if self._retry_index > len(self.BACKOFF_S):
+            self._state = "disabled"
+            return
+        self._state = "reconnecting"
+        self._stamp()
+
+    def next_backoff_s(self) -> float:
+        index = min(self._retry_index, len(self.BACKOFF_S) - 1)
+        return float(self.BACKOFF_S[index])
+
+    def set_muted(self, muted: bool) -> None:
+        """Hardware/soft mute is a device-level mute of the virtual mic."""
+        self._muted = bool(muted)
+
+    def release(self) -> None:
+        """Idempotent final release: ``stopping`` then ``disabled``."""
+        if self._state == "disabled":
+            return
+        self._state = "stopping"
+        self._state = "disabled"
+
+    def snapshot(self) -> dict:
+        return {
+            "state": self._state,
+            "generation": int(self._generation),
+            "idle_release_s": float(self._idle_release_s),
+            "muted": bool(self._muted),
+            "retry_index": int(self._retry_index),
+        }
+
+
 class VoicePEDevice:
     """Stock Voice PE satellite attached to the existing Jarvis pipeline."""
 
@@ -255,6 +372,8 @@ class VoicePEDevice:
         self.last_finished_generation: int = 0
         self._conversation_id = ""
         self._conversation_started = 0.0
+        #: Desktop microphone lease of this satellite (virtual mic side).
+        self.lease = DesktopMicLease()
         self._active_channel = int(config.preferred_input_channel or 0)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.actions = pe_events.ActionRunner()
@@ -363,6 +482,7 @@ class VoicePEDevice:
         self.session = None
         self.session_state = SessionState.IDLE
         self.led_phase = "not_ready"
+        self.lease.release()
 
     async def _on_connect(self, *_args) -> None:
         """Post-connect synchronisation in the stock contract order."""
@@ -677,6 +797,14 @@ class VoicePEDevice:
         self._cancel_tts_task()
 
         self._active_channel = int(self.config.preferred_input_channel or 0)
+        # Host AEC modes consume the raw channel when the firmware carries it.
+        if str(self.config.voice_pe_dsp_mode or "host_raw_aec") in (
+            "host_raw_aec",
+            "shadow_compare",
+        ) and self.capabilities.multi_channel_audio:
+            self._active_channel = 1
+        if self._ingress is not None:
+            self._ingress._multi = bool(self.capabilities.multi_channel_audio)
         if not self.capabilities.multi_channel_audio:
             self._active_channel = 0
 
@@ -688,6 +816,8 @@ class VoicePEDevice:
             enhanced=self._active_channel == 0,
         )
         self.state = DeviceState.VOICE_ACTIVE
+        if self.lease.state in ("arming", "streaming", "reconnecting"):
+            self.lease.mark_streaming()
         # The wake-word flag is diagnostic only: with disable_wake_words the
         # pipeline always starts in the STT stage.
         self._metric_wake_flag(bool(flags & COMMAND_FLAG_USE_WAKE_WORD))
@@ -805,6 +935,7 @@ class VoicePEDevice:
             self._closed_runs = set(list(self._closed_runs)[-32:])
         self._mark_event("aborted" if not reason else f"abort:{reason}")
         self._sync_face_state()
+        self._lease_after_run()
 
     def _clear_listener_audio(
         self, context: Optional[TurnContext] = None, cancel_pending: bool = True
@@ -919,6 +1050,58 @@ class VoicePEDevice:
             and self.session_state is not SessionState.IDLE
         )
 
+    # ------------------------------------------------------------------
+    # Desktop microphone lease (Windows virtual microphone)
+    # ------------------------------------------------------------------
+
+    def notify_capture_clients(self, count: Any) -> str:
+        """Feed one broker-reported capture-client count into this lease.
+
+        The 0 -> non-zero transition arms the lease and opens the first
+        continuous Assist capture session; zero clients expire it after the
+        configured idle window. Idempotent: repeated values only stamp.
+        """
+        self.lease.on_client_count(count)
+        if self.lease.state == "arming":
+            self._submit(self._lease_cycle(int(self.lease.generation)))
+        return self.lease.state
+
+    async def _lease_cycle(self, lease_generation: int) -> None:
+        """Open/keep one continuous Assist capture session for the lease."""
+        lease = self.lease
+        if (
+            int(lease.generation) != int(lease_generation)
+            or lease.state not in ("arming", "streaming", "reconnecting")
+        ):
+            return
+        if self._client is None or not getattr(self._client, "is_connected", False):
+            lease.on_failure("no_connection")
+            if lease.state == "reconnecting":
+                await asyncio.sleep(lease.next_backoff_s())
+                await self._lease_cycle(lease_generation)
+            return
+        # A programmatic open of the *same* conversation keeps the stock
+        # contract: the firmware then calls ``handle_pipeline_start`` again,
+        # the session generation moves, and the ingress gets a fresh lane.
+        if not self.holds_session():
+            self._rotate_conversation("")
+            try:
+                await self._client.start_conversation(self._conversation_id)
+                lease.mark_streaming()
+            except Exception as err:  # noqa: BLE001 - finite backoff below
+                self.last_error = f"lease: {err}"
+                lease.on_failure(str(err))
+                if lease.state == "reconnecting":
+                    await asyncio.sleep(lease.next_backoff_s())
+                    await self._lease_cycle(lease_generation)
+            return
+        lease.mark_streaming()
+
+    def _lease_after_run(self) -> None:
+        """Chain the next continuous-capture run after any run terminal."""
+        if self.lease.state in ("arming", "streaming", "reconnecting"):
+            self._submit(self._lease_cycle(int(self.lease.generation)))
+
     def selected_audio_channel(self, stream=None) -> Optional[int]:
         """Locked audio channel for one stream, or ``None`` before the lock."""
         if self._ingress is None:
@@ -1031,6 +1214,22 @@ class VoicePEDevice:
             return
         self._submit(self._on_reply_async(reply or "", token))
 
+    def announce_reply(
+        self,
+        reply: str,
+        token: Any = None,
+        *,
+        start_conversation: bool = True,
+    ) -> None:
+        """Deliver a late reply after its Voice Assistant run has expired."""
+        if not reply or self._client is None:
+            return
+        self._submit(
+            self._announce_reply_async(
+                reply, token, start_conversation=start_conversation
+            )
+        )
+
     def on_error(self, code: str, message: str, token: Any = None) -> None:
         if not self._token_is_current(token):
             return
@@ -1116,6 +1315,7 @@ class VoicePEDevice:
         # Mute: the soft switch entity and the hardware binary sensor.
         if key and key == self.entities.mute_key():
             self.media.muted = bool(getattr(state, "state", False))
+            self.lease.set_muted(self.media.muted)
             if self.media.muted:
                 self._handle_muted(self.turn_context())
             return
@@ -1123,6 +1323,7 @@ class VoicePEDevice:
         info = self.entities.info_for(key) if key else None
         if info is not None and str(getattr(info, "name", "")).lower().startswith("mute"):
             self.media.muted = bool(getattr(state, "state", False))
+            self.lease.set_muted(self.media.muted)
             if self.media.muted:
                 self._handle_muted(self.turn_context())
 
@@ -1353,6 +1554,7 @@ class VoicePEDevice:
         started = time.monotonic()
         if self.capabilities.uses_api_audio:
             # ``API_AUDIO && SPEAKER``: raw PCM frames over the Native API.
+            print("  🔊 Voice PE output: Native API PCM", flush=True)
             await self._event("TTS_STREAM_START", {})
             self._tts_task = asyncio.ensure_future(self._stream_reply(reply, generation))
         else:
@@ -1361,8 +1563,61 @@ class VoicePEDevice:
             self._tts_task = asyncio.ensure_future(
                 self._deliver_tts_by_url(reply, generation)
             )
+            print("  🔊 Voice PE output: LAN WAV announcement", flush=True)
         await asyncio.sleep(0)
         self._record_latency("tts_first_chunk_ms", started)
+
+    async def _announce_reply_async(
+        self,
+        reply: str,
+        token: Any = None,
+        *,
+        start_conversation: bool = True,
+    ) -> None:
+        """Out-of-run TTS fallback tied to the same physical satellite.
+
+        This path is intentionally separate from the generation ledger: the
+        old run is already terminal, so reopening its TTS events would violate
+        the one-terminal-per-run invariant. The announcement RPC owns its own
+        completion response and may open the next conversation when configured.
+        """
+        if self._client is None or not reply:
+            return
+        # A newer button press wins; an old answer must not talk over it.
+        if self.holds_session():
+            debug_log("late Voice PE reply suppressed: newer run is active", "voice")
+            return
+        media_id = await self.tts_media_url(reply)
+        if not media_id:
+            self.last_error = "tts_announcement: empty media URL"
+            return
+        started = time.monotonic()
+        try:
+            print("  🔊 Voice PE output: late-reply announcement fallback", flush=True)
+            success = await self.media.announce(
+                media_id,
+                text=reply,
+                timeout=max(30.0, float(self.config.conversation_timeout_s)),
+                start_conversation=(
+                    start_conversation
+                    and self.config.continued_conversation
+                    and self.capabilities.start_conversation
+                ),
+            )
+            self._bump_metric("late_reply_announcements")
+            self.metrics["late_reply_announcement_success"] = bool(success)
+            self._record_latency("late_reply_announcement_ms", started)
+            debug_log(
+                f"late Voice PE reply announcement success={bool(success)} "
+                f"source_generation={getattr(token, 'session_generation', 0)}",
+                "voice",
+            )
+        except Exception as err:
+            self.last_error = f"tts_announcement: {type(err).__name__}"
+            debug_log(
+                f"late Voice PE reply announcement failed: {type(err).__name__}",
+                "voice",
+            )
 
     async def _stream_reply(self, reply: str, generation: Optional[int] = None) -> None:
         """Paced 512-sample PCM stream: 384 ms of stock ring buffer by design.
@@ -1402,6 +1657,19 @@ class VoicePEDevice:
                 if self.session_generation != generation or self._client is None:
                     return
                 self._client.send_voice_assistant_audio(payload)
+                # Model the exact satellite-bound payload as the lane far-end
+                # (pre-output PCM). 3 ms link + 12 ms speaker model, both on
+                # the same monotonic clock as the microphone packets.
+                if self._ingress is not None:
+                    try:
+                        self._ingress.push_tts_reference(
+                            self._stream(),
+                            pcm16_to_float32(payload),
+                            16000,
+                            time.monotonic_ns() + 3_000_000 + 12_000_000,
+                        )
+                    except Exception:
+                        pass
                 if start_time is None:
                     start_time = loop.time()
                 audio_duration_sent += seconds_in_chunk
@@ -1529,11 +1797,13 @@ class VoicePEDevice:
             self.session_state = SessionState.CONTINUE_PENDING
             self._mark_event("continue_pending")
             self._sync_face_state()
+            self._lease_after_run()
             return
         self.session = None
         self.session_state = SessionState.IDLE
         self._mark_event("run_end")
         self._sync_face_state()
+        self._lease_after_run()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1550,13 +1820,16 @@ class VoicePEDevice:
             self._conversation_started = now
 
     def _should_continue(self, reply: str) -> bool:
-        """An asked question keeps the dialog open; anything else closes it."""
+        """Keep successful turns open while the configured window is valid."""
         if not self.config.continued_conversation or not reply:
             return False
         if self.media.muted:
             return False
-        text = reply.strip()
-        return text.endswith("?")
+        if self._conversation_started <= 0:
+            return True
+        return (
+            time.monotonic() - self._conversation_started
+        ) < max(1.0, float(self.config.conversation_timeout_s))
 
     async def _start_udp_server(self) -> Optional[int]:
         """UDP microphone for firmware without the ``API_AUDIO`` flag."""
@@ -1657,6 +1930,11 @@ class VoicePEDevice:
     def health_snapshot(self) -> dict:
         """Health view for the diagnostics panel and the CLI status command."""
         queue_ms = self._ingress.depth_ms() if self._ingress is not None else 0
+        source_status = (
+            self._ingress.source_status(self._stream())
+            if self._ingress is not None
+            else {"source_id": self.device_id, "aec_state": "unknown"}
+        )
         return {
             "connected": bool(
                 self._client is not None and getattr(self._client, "is_connected", False)
@@ -1673,6 +1951,8 @@ class VoicePEDevice:
             "led_phase_id": LED_PHASES.get(self.led_phase, 0),
             "connection_generation": self.connection_generation,
             "session_generation": self.session_generation,
+            "lease": self.lease.snapshot(),
+            "source_status": source_status,
             "error": self.last_error,
         }
 

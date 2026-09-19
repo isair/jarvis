@@ -116,6 +116,9 @@ class RuntimeStatusSnapshot:
     # One-line Voice PE summary (node name when paired, else the reason it is
     # idle). See src/jarvis/integrations/voice_pe/voice_pe.spec.md.
     voice_pe: str = "disabled"
+    # One-line Clean Microphone (Windows virtual microphone) summary, taken
+    # from the in-process publisher and the Voice PE desktop leases.
+    virtual_microphone: str = "disabled"
 
 
 class RuntimeStatusSignals(QObject):
@@ -224,6 +227,24 @@ def _collect_runtime_status_snapshot(
         except Exception as exc:
             debug_log(f"runtime status Voice PE health failed: {exc}", "desktop")
 
+    # Clean Microphone (virtual microphone) one-line summary.
+    virtual_microphone_summary = "disabled"
+    try:
+        from jarvis.output.virtual_microphone import get_publisher
+
+        _vmic = get_publisher()
+        if _vmic is not None:
+            _vm_st = _vmic.status()
+            _vm_lat = _vm_st.get("latency_ms", {})
+            virtual_microphone_summary = (
+                f"{_vm_st.get('state')} "
+                f"(source={_vm_st.get('source')}, "
+                f"frames={_vm_st.get('frames_produced')}, "
+                f"p95={_vm_lat.get('p95')} ms)"
+            )
+    except Exception as exc:
+        debug_log(f"runtime status Clean Mic check failed: {exc}", "desktop")
+
     return RuntimeStatusSnapshot(
         daemon_state="Listening" if is_listening else "Stopped",
         daemon_mode="bundled" if is_bundled else "subprocess",
@@ -240,6 +261,7 @@ def _collect_runtime_status_snapshot(
         embedding_model=embedding_model,
         mcp_count=mcp_count,
         voice_pe=voice_pe_summary,
+        virtual_microphone=virtual_microphone_summary,
     )
 
 
@@ -276,6 +298,7 @@ def _runtime_status_rows(snapshot: RuntimeStatusSnapshot) -> list[tuple[str, str
         ),
         ("🔌 MCP", "Configured servers", str(snapshot.mcp_count)),
         ("🛰️ Voice PE", "Status", snapshot.voice_pe),
+        ("🎙️ Clean Mic", "Status", snapshot.virtual_microphone),
     ]
 
 

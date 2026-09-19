@@ -454,6 +454,32 @@ class Settings:
     voice_device: str | None
     sample_rate: int
     voice_min_energy: float
+    #: ``wasapi_native_v2`` (default) | ``portaudio_compat``. PortAudio only
+    #: via this explicit, user-visible compatibility setting.
+    voice_input_backend: str
+    #: MMDevice ID from ``JarvisAeEnumerateEndpoints``; empty = role default.
+    voice_capture_endpoint_id: str
+    voice_render_endpoint_id: str
+    #: ``console`` | ``multimedia`` | ``communications`` role for defaults.
+    voice_endpoint_role: str
+    #: ``mono``|``left``|``right``|``channel_index``|``stereo_average``.
+    voice_capture_channel_mode: str
+    voice_capture_channel_index: int
+    #: ``host_raw_aec`` (default) | ``device_enhanced`` | ``shadow_compare``.
+    voice_pe_dsp_mode: str
+    voice_pe_jitter_target_ms: int
+    voice_pe_jitter_max_ms: int
+    voice_pe_aec_acquire_max_ms: int
+    #: ``v2`` handle engine (default) or ``v1`` — one-release manual rollback.
+    native_audio_pipeline: str
+    native_aec_required: bool
+    native_reference_required_during_playback: bool
+    native_audio_v1_rollback: bool
+    #: Opt-in bounded multitrack WAV diagnostics per lane.
+    audio_diagnostic_multitrack: bool
+    native_aec_mode: int
+    native_profile: int
+    native_require_raw_capture: int
 
     # Voice Collection & Timing
     voice_block_seconds: float
@@ -659,6 +685,24 @@ class Settings:
     #: Explicit minimal throughput from a real streamed warm-up. An unknown
     #: accelerator is only a miss when the latency also fails this limit.
     voice_pe_llm_min_tokens_per_s: float
+
+    # Windows virtual microphone (Toustovač Clean Microphone, WDK WaveRT).
+    # Master switch for the CleanAudioBus daemon publisher.
+    virtual_microphone_enabled: bool
+    # Canonical source: ``local``, ``voice_pe:<mac>``, or empty (= none).
+    # Exactly one source is published while the first capture client is active.
+    virtual_microphone_source: str
+    # Fixed device-friendly endpoint name (also the INF FriendlyName).
+    virtual_microphone_name: str
+    #: Idle release window in seconds for the first-generation Desktop
+    #: Microphone lease: after this silence the lease reaches ``disabled``.
+    virtual_microphone_idle_release_s: float
+    #: Fail-closed silence policy (the AEC-required behavior): while the
+    #: named source is not ready the endpoint emits explicit silence only.
+    virtual_microphone_fail_closed: bool
+    #: When True, unconverged lanes stay active instead of being replaced
+    #: by silence — the one explicitly non-fail-closed option.
+    virtual_microphone_publish_unconverged: bool
 
     # Centralized identity / recording profile (Talkie Toaster)
     assistant_display_name: str = BRANDING["display_name"]
@@ -1025,6 +1069,24 @@ def get_default_config() -> Dict[str, Any]:
         "voice_device": None,
         "sample_rate": 16000,
         "voice_min_energy": 0.02,
+        "voice_input_backend": "wasapi_native_v2",
+        "voice_capture_endpoint_id": "",
+        "voice_render_endpoint_id": "",
+        "voice_endpoint_role": "multimedia",
+        "voice_capture_channel_mode": "stereo_average",
+        "voice_capture_channel_index": 0,
+        "voice_pe_dsp_mode": "host_raw_aec",
+        "voice_pe_jitter_target_ms": 80,
+        "voice_pe_jitter_max_ms": 250,
+        "voice_pe_aec_acquire_max_ms": 1500,
+        "native_audio_pipeline": "v2",
+        "native_aec_required": True,
+        "native_reference_required_during_playback": True,
+        "native_audio_v1_rollback": False,
+        "audio_diagnostic_multitrack": False,
+        "native_aec_mode": 1,
+        "native_profile": 2,
+        "native_require_raw_capture": 1,
 
         # Voice Collection & Timing
         "voice_block_seconds": 4.0,
@@ -1229,6 +1291,17 @@ def get_default_config() -> Dict[str, Any]:
         # Throughput the real streamed warm-up must exceed for that model to
         # count in a campaign. Explicit and configurable per profile.
         "voice_pe_llm_min_tokens_per_s": 5.0,
+
+        # Windows virtual microphone (Toustovač Clean Microphone). The bus
+        # exists only while enabled; one canonical source is published at a
+        # time. An empty ``source`` keeps the endpoint published with fail-
+        # closed silence so latency measurement stays possible.
+        "virtual_microphone_enabled": False,
+        "virtual_microphone_source": "",
+        "virtual_microphone_name": "Toustovač Clean Microphone",
+        "virtual_microphone_idle_release_s": 5.0,
+        "virtual_microphone_fail_closed": True,
+        "virtual_microphone_publish_unconverged": False,
     }
 
 
@@ -1341,6 +1414,51 @@ def load_settings() -> Settings:
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
+
+    def _as_backend(value: Any) -> str:
+        text = str(value or "wasapi_native_v2").strip().lower()
+        return text if text in ("wasapi_native_v2", "portaudio_compat") else "wasapi_native_v2"
+
+    def _as_role(value: Any) -> str:
+        text = str(value or "multimedia").strip().lower()
+        return text if text in ("console", "multimedia", "communications") else "multimedia"
+
+    def _as_channel_mode(value: Any) -> str:
+        text = str(value or "stereo_average").strip().lower()
+        return text if text in ("mono", "left", "right", "channel_index", "stereo_average") else "stereo_average"
+
+    def _as_dsp_mode(value: Any) -> str:
+        text = str(value or "host_raw_aec").strip().lower()
+        return text if text in ("host_raw_aec", "device_enhanced", "shadow_compare") else "host_raw_aec"
+
+    voice_input_backend = _as_backend(merged.get("voice_input_backend"))
+    voice_capture_endpoint_id = str(merged.get("voice_capture_endpoint_id", "") or "").strip()
+    voice_render_endpoint_id = str(merged.get("voice_render_endpoint_id", "") or "").strip()
+    voice_endpoint_role = _as_role(merged.get("voice_endpoint_role"))
+    voice_capture_channel_mode = _as_channel_mode(merged.get("voice_capture_channel_mode"))
+    voice_capture_channel_index = max(0, int(merged.get("voice_capture_channel_index", 0)))
+    voice_pe_dsp_mode = _as_dsp_mode(merged.get("voice_pe_dsp_mode"))
+    voice_pe_jitter_target_ms = max(10, min(500, int(merged.get("voice_pe_jitter_target_ms", 80))))
+    voice_pe_jitter_max_ms = max(voice_pe_jitter_target_ms, int(merged.get("voice_pe_jitter_max_ms", 250)))
+    voice_pe_aec_acquire_max_ms = max(200, int(merged.get("voice_pe_aec_acquire_max_ms", 1500)))
+    native_audio_pipeline = str(merged.get("native_audio_pipeline", "v2") or "v2").strip().lower()
+    if native_audio_pipeline not in ("v1", "v2"):
+        native_audio_pipeline = "v2"
+    native_aec_required = bool(merged.get("native_aec_required", True))
+    native_reference_required_during_playback = bool(
+        merged.get("native_reference_required_during_playback", True)
+    )
+    native_audio_v1_rollback = bool(merged.get("native_audio_v1_rollback", False)) or (
+        native_audio_pipeline == "v1"
+    )
+    audio_diagnostic_multitrack = bool(merged.get("audio_diagnostic_multitrack", False))
+    native_aec_mode = int(merged.get("native_aec_mode", 1))
+    if native_aec_mode not in (0, 1, 2):
+        native_aec_mode = 1
+    native_profile = int(merged.get("native_profile", 2))
+    if native_profile not in (0, 1, 2):
+        native_profile = 2
+    native_require_raw_capture = 1 if bool(merged.get("native_require_raw_capture", 1)) else 0
     voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
     voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
     voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 60.0))
@@ -1500,8 +1618,15 @@ def load_settings() -> Settings:
             voice_pe_preferred_input_channel = 1
         # ``auto`` leaves the integer alone; the auto pass decides per stream.
     else:
-        # No explicit enum, the integer is not touched, and the enum mirrors it.
-        voice_pe_audio_channel = "raw" if voice_pe_preferred_input_channel == 1 else "enhanced"
+        # No explicit enum: the integer is not touched, and the enum mirrors
+        # it — except under host_raw_aec, whose default lock is the raw
+        # channel of the satellite (data2).
+        if (str(merged.get("voice_pe_dsp_mode", "host_raw_aec")).strip().lower()
+                == "host_raw_aec"
+                and not merged.get("voice_pe_preferred_input_channel")):
+            voice_pe_audio_channel = "raw"
+        else:
+            voice_pe_audio_channel = "raw" if voice_pe_preferred_input_channel == 1 else "enhanced"
     # Also propagate the enum back into the merged dict so later reads see the
     # same pair that ``Settings`` ends up with.
     merged["voice_pe_audio_channel"] = voice_pe_audio_channel
@@ -1535,6 +1660,37 @@ def load_settings() -> Settings:
     #: unknown accelerator passes if the latency is actually good.
     voice_pe_llm_min_tokens_per_s = max(
         0.1, _voice_pe_float(merged.get("voice_pe_llm_min_tokens_per_s"), 5.0)
+    )
+    # Windows virtual microphone (Toustovač Clean Microphone). Source is the
+    # canonical ``local`` / ``voice_pe:<mac>`` / empty string, normalized so
+    # the publisher can compare it against ``CleanAudioFrame.source_id`` 1:1.
+    virtual_microphone_enabled = bool(merged.get("virtual_microphone_enabled", False))
+    _vm_source_raw = merged.get("virtual_microphone_source")
+    virtual_microphone_source = str(_vm_source_raw or "").strip().lower()
+    if virtual_microphone_source.startswith("voice_pe:"):
+        _vm_mac = virtual_microphone_source.split(":", 1)[1].strip()
+        virtual_microphone_source = (
+            f"voice_pe:{_vm_mac.upper()}" if _vm_mac else "voice_pe"
+        )
+    elif virtual_microphone_source not in ("", "none", "local", "voice_pe"):
+        virtual_microphone_source = ""
+    if virtual_microphone_source == "none":
+        virtual_microphone_source = ""
+    virtual_microphone_name = str(
+        merged.get("virtual_microphone_name")
+        or "Toustovač Clean Microphone"
+    ).strip()
+    try:
+        virtual_microphone_idle_release_s = max(
+            0.2, float(merged.get("virtual_microphone_idle_release_s", 5.0))
+        )
+    except (TypeError, ValueError):
+        virtual_microphone_idle_release_s = 5.0
+    virtual_microphone_fail_closed = bool(
+        merged.get("virtual_microphone_fail_closed", True)
+    )
+    virtual_microphone_publish_unconverged = bool(
+        merged.get("virtual_microphone_publish_unconverged", False)
     )
     # Button mapping accepts the dict form and the "event=action" list form
     # the settings UI writes.
@@ -1687,6 +1843,24 @@ def load_settings() -> Settings:
         voice_device=voice_device,
         sample_rate=sample_rate,
         voice_min_energy=voice_min_energy,
+        voice_input_backend=voice_input_backend,
+        voice_capture_endpoint_id=voice_capture_endpoint_id,
+        voice_render_endpoint_id=voice_render_endpoint_id,
+        voice_endpoint_role=voice_endpoint_role,
+        voice_capture_channel_mode=voice_capture_channel_mode,
+        voice_capture_channel_index=voice_capture_channel_index,
+        voice_pe_dsp_mode=voice_pe_dsp_mode,
+        voice_pe_jitter_target_ms=voice_pe_jitter_target_ms,
+        voice_pe_jitter_max_ms=voice_pe_jitter_max_ms,
+        voice_pe_aec_acquire_max_ms=voice_pe_aec_acquire_max_ms,
+        native_audio_pipeline=native_audio_pipeline,
+        native_aec_required=native_aec_required,
+        native_reference_required_during_playback=native_reference_required_during_playback,
+        native_audio_v1_rollback=native_audio_v1_rollback,
+        audio_diagnostic_multitrack=audio_diagnostic_multitrack,
+        native_aec_mode=native_aec_mode,
+        native_profile=native_profile,
+        native_require_raw_capture=native_require_raw_capture,
 
         # Voice Collection & Timing
         voice_block_seconds=voice_block_seconds,
@@ -1801,6 +1975,14 @@ def load_settings() -> Settings:
         voice_pe_button_actions=voice_pe_button_actions,
         voice_pe_hardware_timeout_s=voice_pe_hardware_timeout_s,
         voice_pe_llm_min_tokens_per_s=voice_pe_llm_min_tokens_per_s,
+
+        # Windows virtual microphone (Toustovač Clean Microphone)
+        virtual_microphone_enabled=virtual_microphone_enabled,
+        virtual_microphone_source=virtual_microphone_source,
+        virtual_microphone_name=virtual_microphone_name,
+        virtual_microphone_idle_release_s=virtual_microphone_idle_release_s,
+        virtual_microphone_fail_closed=virtual_microphone_fail_closed,
+        virtual_microphone_publish_unconverged=virtual_microphone_publish_unconverged,
 
         # Centralized identity / recording profile (Talkie Toaster)
         assistant_display_name=assistant_display_name,

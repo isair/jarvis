@@ -115,6 +115,15 @@ class SinkFanout:
             return None
         return None
 
+    def _named_device(self, context: Optional[TurnContext]) -> Optional[VoicePEDevice]:
+        """Physical device from a turn token, ignoring its expired generation."""
+        if context is None:
+            return None
+        return next(
+            (device for device in self._devices if device.device_id == context.device_id),
+            None,
+        )
+
     # -- milestones -------------------------------------------------------
     #
     # Every milestone carries the context of its own turn, so a callback of an
@@ -139,9 +148,28 @@ class SinkFanout:
             device.on_transcript(text, context)
 
     def on_reply(self, reply: str, context: Optional[TurnContext] = None) -> None:
+        if context is None:
+            # Local-microphone turns still mirror their answer to every idle
+            # satellite. They do not transfer conversation ownership: the
+            # local hot-window state remains authoritative for that turn.
+            for candidate in self._devices:
+                if not candidate.holds_session():
+                    candidate.announce_reply(
+                        reply, None, start_conversation=False
+                    )
+            return
         device = self._owner(context)
         if device is not None:
             device.on_reply(reply, context)
+            return
+
+        # A slow model may finish after stock firmware closed the originating
+        # Voice Assistant run. Deliver the answer as an announcement to that
+        # same physical device instead of silently dropping it. Never inject an
+        # old reply into a newer active generation.
+        device = self._named_device(context)
+        if device is not None and not device.holds_session():
+            device.announce_reply(reply, context, start_conversation=True)
 
     def on_error(
         self, code: str, message: str, context: Optional[TurnContext] = None

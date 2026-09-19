@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
   if (argc > 4) require_raw = static_cast<uint32_t>(std::stoul(argv[4]));
 
   JarvisAeConfig cfg{};
-  cfg.abi_version = JARVIS_AE_ABI_VERSION;
+  cfg.abi_version = JARVIS_AE_ABI_VERSION_V1;  /* v1 global shm pipeline */
   cfg.aec_mode = aec_mode;
   cfg.profile = profile;
   cfg.require_raw_capture = require_raw;

@@ -859,6 +859,10 @@ class VoiceListener(threading.Thread):
         # Audio callback monitoring (for debugging)
         self._callback_count = 0
         self._last_callback_log_time = 0
+        #: True when the WASAPI native v2/v1 bridge feeds the queue (the
+        #: pumps publish to the CleanAudioBus themselves); False for the
+        #: PortAudio compatibility lane, whose callback is the hand-off.
+        self._native_backend = False
 
         # Voice activity detection
         self.is_speech_active = False
@@ -1360,6 +1364,29 @@ class VoiceListener(threading.Thread):
         could_be_hot_window = self.state_manager.was_speech_during_hot_window(
             utterance_start_time, utterance_end_time
         )
+
+        # An explicit wake word is already a deterministic engagement signal.
+        # Do not spend a full LLM request asking the intent judge to rediscover
+        # it -- on single-slot llama.cpp that request queues every later router
+        # and answer behind it. Post-TTS/hot-window speech still uses the judge
+        # because it needs the echo and conversational-context decision.
+        if self._wake_timestamp is not None and not could_be_hot_window and not is_speaking_now:
+            wake_word = getattr(self.cfg, "wake_word", "toustovač")
+            aliases = set(getattr(self.cfg, "wake_aliases", [])) | {wake_word}
+            query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
+            self.state_manager.cancel_hot_window_activation()
+            self._transcript_buffer.mark_segment_processed(text_lower)
+            self._clear_audio_buffers()
+            self.state_manager.start_collection(query_fragment, context=self._turn_context)
+            self._set_face_state_wake()
+            self._set_face_state_listening(utterance_energy)
+            self._start_thinking_tune()
+            debug_log("explicit wake word accepted without LLM intent judge", "voice")
+            try:
+                print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
+            except Exception:
+                pass
+            return
 
         # Use the upgraded intent judge if available (with full transcript context)
         # Allow during TTS for longer utterances (>3 words) that might be user responses
@@ -1931,9 +1958,9 @@ class VoiceListener(threading.Thread):
             self._flash_face_error()
             return
 
-        # Satellite milestone: the agent produced the reply text. The attached
-        # device delivers the audio itself (API PCM or the ``TTS_END`` WAV URL),
-        # so the local playback below only runs when no satellite holds the run.
+        # Satellite milestone: the agent produced the reply text. Voice PE and
+        # the Windows default output are independent sinks: a stale/closed
+        # satellite generation must never suppress audible local feedback.
         self._voice_pe_event("reply", reply or "", token=turn_context)
         satellite_reply = self._turn_source == AUDIO_SOURCE_VOICE_PE
         if turn_context is self._turn_context:
@@ -1941,16 +1968,7 @@ class VoiceListener(threading.Thread):
 
 
         # Handle TTS with proper callbacks
-        if reply and satellite_reply:
-            # The satellite owns the audio of this run: no second local speech,
-            # no local hot window (the device keeps its own continuation).
-            self._stop_thinking_tune()
-            self._flash_face_success()
-            debug_log(
-                f"satellite TTS only ({len(reply)} chars), local playback skipped",
-                "voice",
-            )
-        elif reply and self.tts and self.tts.enabled:
+        if reply and self.tts and self.tts.enabled:
             # Stop thinking tune when TTS starts
             self._stop_thinking_tune()
             # Success pop right after generation, before speech begins.
@@ -1960,7 +1978,11 @@ class VoiceListener(threading.Thread):
             def _on_tts_complete():
                 import time as _time
                 debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
-                self.activate_hot_window()
+                # Voice PE owns its continued-conversation lifecycle. Opening a
+                # second local hot window after the mirrored Windows playback
+                # would let two microphones race for the next turn.
+                if not satellite_reply:
+                    self.activate_hot_window()
 
             # Duration callback to update echo detector with exact timing (Piper only)
             def _on_duration_known(duration: float):
@@ -1970,10 +1992,19 @@ class VoiceListener(threading.Thread):
 
             # Track TTS start for echo detection with actual text
             self.track_tts_start(reply)
-            debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
+            output_mode = "voice_pe+windows" if satellite_reply else "windows"
+            debug_log(
+                f"starting TTS for reply ({len(reply)} chars, output={output_mode})",
+                "voice",
+            )
 
             self.tts.speak(reply, completion_callback=_on_tts_complete,
                           duration_callback=_on_duration_known)
+            if satellite_reply:
+                print(
+                    "  🔊 Audio queued: Voice PE + Windows default (WASAPI)",
+                    flush=True,
+                )
         else:
             debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response
@@ -2318,6 +2349,42 @@ class VoiceListener(threading.Thread):
         self._spellcheck_protected_cached = folded
         return folded
 
+    def _spellcheck_canonical_terms(self) -> dict[str, str]:
+        """Wake aliases that must become the configured canonical wake word.
+
+        Whisper moves Czech diacritics around and frequently alternates the
+        historical ``toast-`` and campaign ``toust-`` stems. The transcript
+        post-processor performs the diacritic-insensitive comparison; this
+        method only declares which one-token identities belong to the wake
+        word instead of letting Hunspell treat them as ordinary adjectives.
+        """
+        cached = getattr(self, "_spellcheck_canonical_cached", None)
+        if cached is not None:
+            return cached
+
+        from ..config import BRANDING
+
+        canonical = str(getattr(self.cfg, "wake_word", "toustovač") or "toustovač")
+        aliases = {
+            canonical,
+            "toustováč",
+            "toustovači",
+            "toustováči",
+            "toastovač",
+            "toastováč",
+            "toastovači",
+            "toastováči",
+        }
+        aliases.update(str(a) for a in getattr(self.cfg, "wake_aliases", []) or [])
+        aliases.update(str(a) for a in BRANDING.get("wake_words", []) or [])
+        mapping = {
+            alias: canonical
+            for alias in aliases
+            if alias and not any(ch.isspace() for ch in alias.strip())
+        }
+        self._spellcheck_canonical_cached = mapping
+        return mapping
+
     def _is_speech_frame(self, frame) -> bool:
         """Determine if audio frame contains speech."""
         if np is None:
@@ -2508,10 +2575,19 @@ class VoiceListener(threading.Thread):
         self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
     def _on_audio(self, indata, frames, time_info, status):
-        """Audio callback from sounddevice."""
+        """Audio callback from sounddevice or the native bridge pumps."""
         try:
             if self._should_stop or self._dictation_active:
                 return
+            # Hand off the cleaned/capture block to the CleanAudioBus:
+            # the native pumps publish per frame themselves, the PortAudio
+            # lane publishes through this single callback.
+            if not self._native_backend:
+                import numpy as _np
+                from . import audio_io as _audio_io
+
+                vec = _np.ascontiguousarray(indata, dtype=_np.float32).reshape(-1)
+                _audio_io._publish_portaudio_frames(vec, self._stream_samplerate)
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
@@ -3409,14 +3485,22 @@ class VoiceListener(threading.Thread):
         except Exception:
             pass
 
-        # Open audio stream — native first (WebRTC AEC3 in-process), then
-        # sounddevice+numpy and native-rate fallbacks for hosts without the DLL.
+        # Open audio stream — native v2 first (WebRTC AEC3 in-process), the
+        # PortAudio lane only for the explicit compat backend or the manual
+        # v1 rollback path. Fail-closed while native_aec_required is set.
         self._stream_samplerate = self._samplerate
         open_error = None
         stream = None
-        if _audio_io.has_native():
+        backend_name = str(
+            getattr(self.cfg, "voice_input_backend", "wasapi_native_v2") or ""
+        ).strip()
+        native_requested = backend_name != "portaudio_compat"
+        native_up = False
+        if native_requested and _audio_io.has_native():
             st = _audio_io.native_create(self.cfg)
             if st == _audio_io.NATIVE_OK:
+                native_up = True
+                self._native_backend = True
                 # Native AEC3 emits 16 kHz float, 10 ms frames. The VAD/grid
                 # in the loop already handles arbitrary-length chunks with a
                 # carry buffer, so no resample / re-frame is needed here.
@@ -3429,9 +3513,26 @@ class VoiceListener(threading.Thread):
                 # declared 16 kHz, so keep them in sync with the stream rate.
                 pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
             else:
+                # Fail-closed per the engine policy: with native_aec_required
+                # the listener stops instead of splicing unprocessed PortAudio
+                # frames into a UI that claims AEC was applied.
                 debug_log(
-                    f"native engine unavailable (status={st}), using sounddevice", "voice"
+                    f"AUDIO_DSP_ERROR: native engine not ready "
+                    f"(status={_audio_io.last_native_status()}); local input "
+                    "disabled — set voice_input_backend=portaudio_compat for "
+                    "the compatibility lane",
+                    "voice",
                 )
+                return
+        elif (native_requested and not _audio_io.has_native()
+              and bool(getattr(self.cfg, "native_aec_required", True))
+              and sys.platform == "win32"):
+            debug_log(
+                "AUDIO_DSP_ERROR: jarvis_audio_engine.dll absent while "
+                "native_aec_required=true; local input disabled",
+                "voice",
+            )
+            return
         if stream is None:
             try:
                 with portaudio_lock:
@@ -4701,6 +4802,7 @@ class VoiceListener(threading.Thread):
             self._last_detected_language or self._whisper_language_code(),
             enabled=bool(getattr(self.cfg, "speech_spellcheck_enabled", True)),
             protected_terms=self._spellcheck_protected_terms(),
+            canonical_terms=self._spellcheck_canonical_terms(),
         )
         _spellcheck_ms = (time.perf_counter() - _spellcheck_started) * 1000.0
         if correction.replacements:
@@ -4723,6 +4825,10 @@ class VoiceListener(threading.Thread):
         print(f"{separator}\n📝 Heard: \"{whisper_transcript}\"", flush=True)
         if text != whisper_transcript:
             print(f"   ✏️ Hunspell fixed: \"{text}\"", flush=True)
+        elif correction.checked:
+            print("   ✏️ Hunspell running: no error found", flush=True)
+        elif bool(getattr(self.cfg, "speech_spellcheck_enabled", True)):
+            print("   ⚠️ Hunspell skipped: dictionary/language unavailable", flush=True)
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):

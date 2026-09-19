@@ -14,6 +14,11 @@ $NATIVE_BUILD  = Join-Path $REPO_ROOT 'build\native_audio_engine'
 $NATIVE_DEBUG  = Join-Path $NATIVE_BUILD 'Debug\jarvis_audio_engine.dll'
 $NATIVE_REL    = Join-Path $NATIVE_BUILD 'Release\jarvis_audio_engine.dll'
 
+$VM_BUILD   = Join-Path $REPO_ROOT 'build\virtual_mic'
+$VM_REL     = Join-Path $VM_BUILD 'Release'
+$VM_PKG     = Join-Path $REPO_ROOT 'native\virtual_mic\package'
+$VM_DRV_OUT = Join-Path $REPO_ROOT 'native\virtual_mic\driver\Toustova.5E9AEB52\x64\Release'
+
 # --- resolve the best python ------------------------------------------------
 function Resolve-Python {
     $c = @(
@@ -60,6 +65,80 @@ $DLL = if (Test-Path -LiteralPath $NATIVE_DEBUG -PathType Leaf) { $NATIVE_DEBUG 
        elseif (Test-Path -LiteralPath $NATIVE_REL -PathType Leaf) { $NATIVE_REL }
 else { throw "jarvis_audio_engine.dll missing under $NATIVE_BUILD" }
 Info "native DLL = $DLL"
+
+# --- 1b. virtual-mic stack: broker + installer (cmake) -----------------------
+$BROKER_EXE = Join-Path $VM_REL 'ToustovacAudioBroker.exe'
+$INSTALL_EXE = Join-Path $VM_REL 'ToustovacAudioInstall.exe'
+if ($Rebuild -or -not (Test-Path -LiteralPath $BROKER_EXE -PathType Leaf) `
+    -or -not (Test-Path -LiteralPath $INSTALL_EXE -PathType Leaf)) {
+    Info 'Building virtual-mic user-mode binaries (CMake)'
+    & cmake -S "$REPO_ROOT\native\virtual_mic" -B "$VM_BUILD" "-DPython3_EXECUTABLE=$PY"
+    if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
+    & cmake --build "$VM_BUILD" --config Release --parallel 8
+    if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE)" }
+}
+foreach ($f in @($BROKER_EXE, $INSTALL_EXE)) {
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) {
+        throw "virtual-mic binary missing: $f"
+    }
+    Info ('virtual-mic binary = ' + $f)
+}
+
+# --- 1c. virtual-mic WDK driver package (msbuild) ----------------------------
+# The WDK installs km headers either flat (Include\km) or per SDK version
+# (Include\<ver>\km); probe both before declaring the kit missing.
+$KITS_INC  = 'C:\Program Files (x86)\Windows Kits\10\Include'
+$KM_INC    = $null
+if (Test-Path -LiteralPath (Join-Path $KITS_INC 'km')) {
+    $KM_INC = Join-Path $KITS_INC 'km'
+} elseif (Test-Path -LiteralPath $KITS_INC) {
+    $ver = (Get-ChildItem $KITS_INC -Directory | Sort-Object Name | Select-Object -Last 1).Name
+    $cand = Join-Path (Join-Path $KITS_INC $ver) 'km'
+    if (Test-Path -LiteralPath $cand) { $KM_INC = $cand }
+}
+$DRV_SYS  = Join-Path $VM_DRV_OUT 'ToustovacVirtualMic.sys'
+$PKG_INF  = Join-Path $VM_PKG 'ToustovacVirtualMic.inf'
+$DRV_DONE = (Test-Path -LiteralPath $PKG_INF -PathType Leaf) -and `
+            (Test-Path -LiteralPath $DRV_SYS -PathType Leaf)
+if ($Rebuild -or -not $DRV_DONE) {
+    $hasKm = $false
+    if ($KM_INC -and (Test-Path -LiteralPath $KM_INC)) { $hasKm = $true }
+    if (-not $hasKm) {
+        Info 'WDK km headers missing (Include\km): driver package not built here;'
+        Info 'driver sources under native\virtual_mic\driver build with WDK 28000.2526.'
+    } else {
+        Info 'Building virtual-mic driver package (msbuild)'
+        $MSBUILD = Get-Command MSBuild.exe -ErrorAction SilentlyContinue
+        $msb = if ($MSBUILD) { $MSBUILD.Source } else {
+            'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe'
+        }
+        & $msb "$REPO_ROOT\native\virtual_mic\driver\ToustovacVirtualMic.vcxproj" `
+            /m /p:Configuration=Release /p:Platform=x64 /nologo
+        if ($LASTEXITCODE -ne 0) { throw "driver msbuild failed ($LASTEXITCODE)" }
+    }
+}
+if (-not (Test-Path -LiteralPath $PKG_INF -PathType Leaf)) {
+    throw "virtual-mic package INF missing: $PKG_INF"
+}
+# Copy the staged package + broker/install exes into the dist so the bundle
+# (and the idempotent bootstrapper) share one folder.
+$DIST     = Join-Path $REPO_ROOT 'dist\Jarvis'
+$DIST_INT = Join-Path $DIST '_internal'
+if (Test-Path -LiteralPath $DIST -PathType Container) {
+    Info 'Staging virtual-mic artifacts into dist\Jarvis'
+    foreach ($src in @(
+            (Join-Path $VM_PKG 'ToustovacVirtualMic.inf'),
+            (Join-Path $VM_PKG 'ToustovacVirtualMic.sys'),
+            (Join-Path $VM_PKG 'ToustovacVirtualMic.cat'),
+            $BROKER_EXE, $INSTALL_EXE)) {
+        if (Test-Path -LiteralPath $src -PathType Leaf) {
+            Copy-Item -LiteralPath $src -Destination $DIST -Force
+            if (Test-Path -LiteralPath $DIST_INT -PathType Container) {
+                Copy-Item -LiteralPath $src -Destination $DIST_INT -Force
+            }
+        }
+    }
+}
 
 # --- 2. PyInstaller bundle of the desktop app (Jarvis.exe) ------------------
 if ($Rebuild -or -not (Test-Path -LiteralPath $BUNDLED_EXE -PathType Leaf)) {

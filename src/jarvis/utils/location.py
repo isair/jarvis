@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 import json
+import os
 import random
 import threading
 import sys
@@ -300,10 +301,51 @@ def _get_external_ip_automatically() -> Optional[str]:
 
 
 def _get_database_path() -> Path:
-    """Get the path where the GeoLite2 database should be stored."""
-    base_dir = Path.home() / ".local" / "share" / "jarvis" / "geoip"
+    """Resolve the shipped GeoLite2 database, then the user override.
+
+    The database is versioned at the repository root and bundled by the
+    desktop spec. Older code looked only in the per-user data directory, so a
+    clean checkout and every packaged build incorrectly reported it missing.
+    """
+    filename = "GeoLite2-City.mmdb"
+    configured = os.environ.get("JARVIS_GEOLITE2_DB", "").strip()
+    user_path = Path.home() / ".local" / "share" / "jarvis" / "geoip" / filename
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    # The binary build ships its own copy of the database, so prefer the
+    # bundle-local paths ahead of the per-user data directory. This keeps the
+    # packaged app self-contained (works from a clean checkout too).
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        candidates.append(Path(bundle_root) / filename)
+
+    # PyInstaller one-folder builds may expose data beside the executable or
+    # below its `_internal` directory depending on the bootloader version.
+    executable_root = Path(sys.executable).resolve().parent
+    candidates.extend((executable_root / filename, executable_root / "_internal" / filename))
+
+    try:
+        project_root = Path(__file__).resolve().parents[3]
+        candidates.extend((project_root / filename, project_root / "data" / filename))
+    except (IndexError, OSError):
+        pass
+
+    # User-installed copy is the last resort (still honoured for overrides).
+    candidates.append(user_path)
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+
+    # Keep the setup instructions pointed at a writable persistent location.
+    base_dir = user_path.parent
     base_dir.mkdir(parents=True, exist_ok=True)
-    return base_dir / "GeoLite2-City.mmdb"
+    return user_path
 
 
 def _print_location_setup_instructions(db_path: Path) -> None:

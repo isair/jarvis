@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Toustovač Clean Microphone: minimal capture-only WaveRT driver.
+     Modelled on Microsoft SysVAD (see native/virtual_mic/NOTICE for the
+     pinned upstream commit). Toolchain: VS 2026, WDK 28000.2526, SDK 28000,
+     MSVC v14.50, x64. -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5E9AEB52-21CE-445A-8B32-6F6E8F5B0A11}</ProjectGuid>
+    <RootNamespace>ToustovacVirtualMic</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <PlatformToolset>v143</PlatformToolset>
+    <TargetName>ToustovacVirtualMic</TargetName>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <PlatformToolset>v143</PlatformToolset>
+    <TargetName>ToustovacVirtualMic</TargetName>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <Optimization>MaxSpeed</Optimization>
+      <AdditionalIncludeDirectories>$(KitsRoot10)Include\10.0.26100.0\shared;$(KitsRoot10)Include\10.0.26100.0\um;$(KitsRoot10)Include\10.0.26100.0\ucrt;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_AMD64_;NTDDI_VERSION=0x0A000003;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalOptions>/INTEGRITYCHECK /OPT:NOLBR %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="adapter.cpp" />
+    <ClCompile Include="minip.cpp" />
+    <ClCompile Include="minwavert.cpp" />
+    <ClCompile Include="minwavertstream.cpp" />
+    <ClCompile Include="topology.cpp" />
+    <ClCompile Include="pcm_ring.cpp" />
+    <ClCompile Include="control_device.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="ToustovacVirtualMic.inx" />
+    <None Include="README.md" />
+    <None Include="NOTICE" />
+  </ItemGroup>
+  <PropertyGroup>
+    <OutDir>Toustova.5E9AEB52\x64\$(Configuration)\</OutDir>
+    <IntDir>Toustova.5E9AEB52\x64\$(Configuration)\</IntDir>
+    <TargetName>ToustovacVirtualMic</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- WDK driver artifacts: copy the built inf/sys + generated cat into the
+       staged package folder so the installer/PyInstaller find one folder. -->
+  <Target Name="StagePackage" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)$(TargetName).sys" DestinationFolder="$(MSBuildThisFileDirectory)package" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)$(TargetName).inx" DestinationFiles="$(MSBuildThisFileDirectory)package\$(TargetName).inf" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(OutDir)$(TargetName).cat')" SourceFiles="$(OutDir)$(TargetName).cat" DestinationFolder="$(MSBuildThisFileDirectory)package" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

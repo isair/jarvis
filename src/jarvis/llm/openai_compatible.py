@@ -23,15 +23,40 @@ which backend is active.
 """
 from __future__ import annotations
 
+import functools
+import ipaddress
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 import json
 import requests
 
 from ..debug import debug_log
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
+
+
+_RETRYABLE_GENERATION_STATUS = frozenset({429, 502, 503, 504})
+
+
+def _serialised_request(method):
+    """Run one request at a time against a single-slot llama.cpp server."""
+
+    @functools.wraps(method)
+    def wrapped(self, *args, **kwargs):
+        queued_at = time.monotonic()
+        with self._request_gate:
+            wait_ms = (time.monotonic() - queued_at) * 1000.0
+            if wait_ms >= 25.0:
+                debug_log(
+                    f"LLM single-slot gate: {method.__name__} waited {wait_ms:.1f} ms",
+                    "llm",
+                )
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 @dataclass
@@ -104,6 +129,11 @@ class OpenAICompatibleBackend(LLMBackend):
     def __init__(self, base_url: str, api_key: Optional[str] = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key or None
+        self._request_gate = threading.RLock()
+        self._session = requests.Session()
+        self._models_cache: List[str] = []
+        self._models_cache_at = 0.0
+        self._configured_model_hint = ""
 
     @property
     def base_url(self) -> str:
@@ -115,6 +145,65 @@ class OpenAICompatibleBackend(LLMBackend):
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
+    def _is_local_server(self) -> bool:
+        """Whether generation is served by this PC or the local network."""
+        host = (urlparse(self._base_url).hostname or "").strip().lower()
+        if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+            return True
+        try:
+            address = ipaddress.ip_address(host)
+            return bool(address.is_loopback or address.is_private or address.is_link_local)
+        except ValueError:
+            return False
+
+    def _generation_timeout(self, timeout_sec: float):
+        """Use a connect deadline, but no read deadline, for local inference.
+
+        ``requests`` treats a float as both a connect and socket-read timeout.
+        A single-slot llama.cpp server can spend that interval queued or in
+        prefill before returning a byte, which is not a failed generation.
+        """
+        connect_timeout = min(10.0, max(0.5, float(timeout_sec or 10.0)))
+        if self._is_local_server():
+            return (connect_timeout, None)
+        return (connect_timeout, max(connect_timeout, float(timeout_sec or 30.0)))
+
+    def _post_generation(
+        self,
+        payload: Dict[str, Any],
+        *,
+        timeout_sec: float,
+        stream: bool = False,
+    ) -> requests.Response:
+        """POST one generation, absorbing transient server-load states."""
+        attempts = 20 if self._is_local_server() else 3
+        response: Optional[requests.Response] = None
+        for attempt in range(attempts):
+            response = self._session.post(
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=self._headers(),
+                timeout=self._generation_timeout(timeout_sec),
+                stream=stream,
+            )
+            status = response.status_code
+            if status not in _RETRYABLE_GENERATION_STATUS:
+                return response
+            retry_after = response.headers.get("Retry-After")
+            response.close()
+            try:
+                delay = float(retry_after) if retry_after else min(2.0, 0.2 * (2 ** attempt))
+            except (TypeError, ValueError):
+                delay = min(2.0, 0.2 * (2 ** attempt))
+            debug_log(
+                f"LLM server busy ({status}); retry {attempt + 1}/{attempts} "
+                f"in {delay:.2f}s",
+                "llm",
+            )
+            time.sleep(max(0.0, delay))
+        assert response is not None
+        return response
+
     def _resolved_model(self, model: str, timeout_sec: float = 3.0) -> str:
         """The id the server actually serves, from ``GET /models``.
 
@@ -124,8 +213,14 @@ class OpenAICompatibleBackend(LLMBackend):
         for ``/chat/completions`` and ``/embeddings``; an exact match wins
         first. If the server lists nothing, the configured name is used.
         """
-        names = self.list_models(timeout_sec=timeout_sec)
         want = str(model or "")
+        # A daemon restart can change the configured GGUF while the desktop
+        # process and backend singleton survive. Force one catalogue refresh
+        # when the configured hint changes; reuse it inside an agent turn.
+        if want != self._configured_model_hint:
+            self._configured_model_hint = want
+            self._models_cache_at = 0.0
+        names = self.list_models(timeout_sec=timeout_sec)
         if not names:
             return want
         if want in names:
@@ -134,6 +229,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
     # ── chat ───────────────────────────────────────────────────────────
 
+    @_serialised_request
     def direct(
         self,
         chat_model: str,
@@ -165,12 +261,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["max_tokens"] = max_tokens
 
         try:
-            with requests.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=timeout_sec,
-            ) as resp:
+            with self._post_generation(payload, timeout_sec=timeout_sec) as resp:
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -185,8 +276,8 @@ class OpenAICompatibleBackend(LLMBackend):
                     f"OpenAICompatibleBackend.direct: empty content from response keys={list(data.keys())}",
                     "llm",
                 )
-        except requests.exceptions.Timeout:
-            debug_log(f"OpenAICompatibleBackend.direct: timeout after {timeout_sec}s", "llm")
+        except requests.exceptions.ConnectTimeout:
+            debug_log("OpenAICompatibleBackend.direct: connection timed out", "llm")
             return None
         except Exception as e:
             # The exception string can embed the full URL (and any query-string
@@ -196,6 +287,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
         return None
 
+    @_serialised_request
     def streaming(
         self,
         chat_model: str,
@@ -216,12 +308,8 @@ class OpenAICompatibleBackend(LLMBackend):
         }
 
         try:
-            with requests.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=timeout_sec,
-                stream=True,
+            with self._post_generation(
+                payload, timeout_sec=timeout_sec, stream=True
             ) as resp:
                 resp.raise_for_status()
 
@@ -259,7 +347,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
                 result = "".join(full_response)
                 return result if result.strip() else None
-        except requests.exceptions.Timeout:
+        except requests.exceptions.ConnectTimeout:
             return None
         except Exception:
             return None
@@ -290,6 +378,7 @@ class OpenAICompatibleBackend(LLMBackend):
                     func["arguments"] = json.dumps(args)
         return messages
 
+    @_serialised_request
     def chat(
         self,
         chat_model: str,
@@ -328,18 +417,13 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["tools"] = tools
 
         try:
-            with requests.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=timeout_sec,
-            ) as resp:
+            with self._post_generation(payload, timeout_sec=timeout_sec) as resp:
                 resp.raise_for_status()
                 data = resp.json()
             if isinstance(data, dict):
                 return _normalise_response(data)
-        except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+        except requests.exceptions.ConnectTimeout:
+            print("  ❌ LLM server connection timed out", flush=True)
             return None
         except requests.exceptions.ConnectionError:
             # ConnectionError messages embed the configured URL via the
@@ -370,6 +454,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
     # ── embeddings & discovery ────────────────────────────────────────
 
+    @_serialised_request
     def embed(
         self,
         text: str,
@@ -378,7 +463,7 @@ class OpenAICompatibleBackend(LLMBackend):
     ) -> Optional[List[float]]:
         served = self._resolved_model(model)
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 f"{self._base_url}/embeddings",
                 json={"model": served, "input": text},
                 headers=self._headers(),
@@ -387,7 +472,7 @@ class OpenAICompatibleBackend(LLMBackend):
             if resp.status_code >= 400:
                 # Some OpenAI-shaped servers (e.g. the native OpenVINO NPU
                 # retrieval service) only accept `input` as a list.
-                resp = requests.post(
+                resp = self._session.post(
                     f"{self._base_url}/embeddings",
                     json={"model": served, "input": [text]},
                     headers=self._headers(),
@@ -404,9 +489,13 @@ class OpenAICompatibleBackend(LLMBackend):
             return None
         return None
 
+    @_serialised_request
     def list_models(self, timeout_sec: float = 5.0) -> List[str]:
+        now = time.monotonic()
+        if self._models_cache and now - self._models_cache_at < 30.0:
+            return list(self._models_cache)
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{self._base_url}/models",
                 headers=self._headers(),
                 timeout=timeout_sec,
@@ -420,7 +509,9 @@ class OpenAICompatibleBackend(LLMBackend):
                     name = m.get("id")
                     if isinstance(name, str) and name:
                         names.append(name)
-            return names
+            self._models_cache = names
+            self._models_cache_at = now
+            return list(names)
         except Exception:
             return []
 
@@ -433,7 +524,7 @@ class OpenAICompatibleBackend(LLMBackend):
         """
         # 1. LM Studio's native shape, most reliable for ``n_gpu_layers``.
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{self._base_url}/api/v0/models",
                 headers=self._headers(),
                 timeout=2.0,
@@ -456,7 +547,7 @@ class OpenAICompatibleBackend(LLMBackend):
             pass
         # 2. The plain OpenAI-compatible shape of the same number.
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{self._base_url}/models",
                 headers=self._headers(),
                 timeout=2.0,
@@ -480,6 +571,7 @@ class OpenAICompatibleBackend(LLMBackend):
             pass
         return None
 
+    @_serialised_request
     def warm_up(
         self,
         model: str,
@@ -531,16 +623,13 @@ class OpenAICompatibleBackend(LLMBackend):
             "messages": [{"role": "user", "content": "ping"}],
             "max_tokens": 8,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         started = time.time()
         first_token: Optional[float] = None
         try:
-            with requests.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                stream=True,
-                headers=self._headers(),
-                timeout=remaining,
+            with self._post_generation(
+                payload, timeout_sec=remaining, stream=True
             ) as resp:
                 if not resp.ok:
                     return False
@@ -599,6 +688,7 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return False
 
+    @_serialised_request
     def check_capabilities(
         self,
         chat_model: str,

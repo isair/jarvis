@@ -30,6 +30,15 @@ datas = [
     (str(src_path / 'desktop_app' / 'desktop_assets' / '*.png'), 'desktop_app/desktop_assets'),
 ]
 
+# Offline IP geolocation used by weather defaults. The runtime resolver checks
+# this bundled copy before asking the user to install another database.
+_geolite_db = project_root / 'GeoLite2-City.mmdb'
+if _geolite_db.is_file():
+    datas.append((str(_geolite_db), '.'))
+    print(f"Bundling GeoLite2 city database from {_geolite_db}")
+else:
+    print("Warning: GeoLite2-City.mmdb not found at project root")
+
 # Toustovač native audio engine — the AEC3/APM DLL built at
 # native/audio_engine (CMake+MSVC). Bundled flat next to the exe so
 # ctypes.cdll.LoadLibrary resolves via sys._MEIPASS at first run.
@@ -42,6 +51,36 @@ for _ae_dll in (_ae_dll_debug, _ae_dll_release):
         break
 else:
     print("Native audio engine DLL not built — running scripts/build_native.ps1 first")
+
+# Toustovač Clean Microphone stack — the WDK driver package plus the broker
+# and the idempotent bootstrapper. The daemon drives first-run/in-place
+# updates through ToustovacAudioInstall.exe, which must sit next to the INF
+# (first lookup) so we stage the artifacts flat into the bundle root.
+def _vm_first_existing(*paths):
+    for p in paths:
+        if p and Path(p).is_file():
+            return Path(p)
+    return None
+
+_vm = project_root / 'native' / 'virtual_mic'
+_vm_built = project_root / 'build' / 'virtual_mic' / 'Release'
+for _name in (
+    'ToustovacAudioBroker.exe',
+    'ToustovacAudioInstall.exe',
+    'ToustovacVirtualMic.inf',
+    'ToustovacVirtualMic.cat',
+    'ToustovacVirtualMic.sys',
+):
+    _src = _vm_first_existing(
+        _vm_built / _name,
+        _vm / 'package' / _name,
+        _vm / 'driver' / 'Toustova.5E9AEB52' / 'x64' / 'Release' / _name,
+    )
+    if _src is not None:
+        datas.append((str(_src), '.'))
+        print(f"Bundling virtual-mic artifact: {_src}")
+    else:
+        print(f"virtual-mic artifact missing: {_name} — run scripts/run_windows.ps1")
 
 # Collect Piper TTS data files (espeak-ng-data is required for phonemization)
 try:
@@ -160,6 +199,7 @@ hiddenimports = [
     'jarvis.listening.intent_judge',
     'jarvis.listening.transcript_postprocessor',
     'jarvis.listening.audio_io',
+    'jarvis.listening.clean_audio_bus',
     'jarvis.native_audio',
     # Memory modules
     'jarvis.memory',
@@ -167,7 +207,9 @@ hiddenimports = [
     'jarvis.memory.db',
     # Output modules
     'jarvis.output',
+    'jarvis.output.audio_device',
     'jarvis.output.tts',
+    'jarvis.output.virtual_microphone',
     'jarvis.output.tune_player',
     # Piper TTS (local neural TTS)
     'piper',
@@ -612,4 +654,3 @@ else:
         upx_exclude=[],
         name='Jarvis',
     )
-

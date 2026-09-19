@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import sys
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import as_file, files
@@ -75,6 +76,9 @@ class TranscriptCorrection:
     corrected: str
     language: str
     replacements: tuple[tuple[str, str], ...]
+    #: True only when the requested dictionary was loaded and every eligible
+    #: token passed through the Hunspell decision loop.
+    checked: bool = False
 
 
 @lru_cache(maxsize=4)
@@ -137,7 +141,7 @@ def _is_protected(token: str, protected_folded: frozenset[str]) -> bool:
     """True for tokens the layer must not rewrite."""
     if len(token) < 2:                                  # single letter
         return True
-    if token in protected_folded:
+    if token.casefold() in protected_folded:
         return True
     upper_flags = [ch.isupper() for ch in token if ch.isalpha()]
     if "@" in token:                                    # e-mail
@@ -154,6 +158,15 @@ def _is_protected(token: str, protected_folded: frozenset[str]) -> bool:
     if caps == set(range(len(token))) and token.isupper():
         return True                                     # CAPS abbreviation
     return True                                         # CamelCase / mixed forms
+
+
+def _identity_fold(value: str) -> str:
+    """Case/diacritic-insensitive identity used only for named aliases."""
+    return "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", str(value)).casefold()
+        if not unicodedata.combining(ch)
+    )
 
 
 def _match_case(token: str, candidate: str) -> str:
@@ -210,6 +223,7 @@ def correct_transcript(
     *,
     enabled: bool = True,
     protected_terms: frozenset[str] = frozenset(),
+    canonical_terms: Mapping[str, str] | None = None,
 ) -> TranscriptCorrection:
     """Spell-correct a final transcript for ``language``, bypassing otherwise.
 
@@ -239,6 +253,14 @@ def correct_transcript(
     folded_protected = frozenset(folded_protected) | frozenset(
         unicodedata.normalize("NFC", term).casefold() for term in protected_terms if str(term)
     )
+    canonical_by_fold = {
+        _identity_fold(alias): unicodedata.normalize("NFC", str(canonical))
+        for alias, canonical in (canonical_terms or {}).items()
+        if str(alias).strip()
+        and str(canonical).strip()
+        and " " not in str(alias).strip()
+        and " " not in str(canonical).strip()
+    }
 
     try:
         dictionary = _load_dictionary(dictionary_id)
@@ -266,12 +288,28 @@ def correct_transcript(
 
     for match in WORD_RE.finditer(normalized):
         token = match.group()
-        if folded_protected and token.casefold() in folded_protected:
-            continue
-        if _is_protected(token, folded_protected):
-            continue
         pieces.append(normalized[cursor:match.start()])
         cursor = match.end()
+
+        # Brand/wake aliases are identities, not ordinary spelling guesses.
+        # Canonicalise them before Hunspell can turn e.g. ``toastováč`` into
+        # the valid Czech adjective ``toastová``. NFKD folding deliberately
+        # accepts Whisper's unstable diacritics while preserving the configured
+        # canonical spelling in downstream wake detection.
+        canonical = canonical_by_fold.get(_identity_fold(token))
+        if canonical is not None:
+            replacement = _match_case(token, canonical)
+            if replacement != token:
+                replacements.append((token, replacement))
+            pieces.append(replacement)
+            continue
+
+        if folded_protected and token.casefold() in folded_protected:
+            pieces.append(token)
+            continue
+        if _is_protected(token, folded_protected):
+            pieces.append(token)
+            continue
         if processed >= _MAX_WORDS:
             # Remaining words ride verbatim; the voice loop stays unblocked.
             processed += 1
@@ -354,6 +392,7 @@ def correct_transcript(
         corrected=corrected,
         language=lang,
         replacements=tuple(replacements),
+        checked=True,
     )
 
 

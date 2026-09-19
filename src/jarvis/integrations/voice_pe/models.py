@@ -133,6 +133,17 @@ LOCAL_STREAM = StreamId("", 0, 0)
 AUDIO_CHANNEL_ENHANCED = 0
 AUDIO_CHANNEL_RAW = 1
 
+#: Host AEC modes (``voice_pe_dsp_mode``). ``host_raw_aec`` is the production
+#: default: channel 1 (``data2``/raw) goes through the native engine's own
+#: AEC3 lane using the Windows loopback as far-end reference.
+#: ``device_enhanced`` keeps channel 0 (XMOS) without host processing;
+#: ``shadow_compare`` delivers channel 0 while lane B cleans channel 1 for
+#: diagnostics only — the two signals are never mixed.
+DSP_MODE_HOST_RAW_AEC = "host_raw_aec"
+DSP_MODE_DEVICE_ENHANCED = "device_enhanced"
+DSP_MODE_SHADOW_COMPARE = "shadow_compare"
+DSP_MODES = (DSP_MODE_HOST_RAW_AEC, DSP_MODE_DEVICE_ENHANCED, DSP_MODE_SHADOW_COMPARE)
+
 
 @dataclass(frozen=True, slots=True)
 class SatelliteAudioFrame:
@@ -373,6 +384,16 @@ class VoicePEConfig:
     #: Explicit channel selection: ``enhanced`` (``data``/ch0), ``raw``
     #: (``data2``/ch1) or ``auto``. Locked per StreamId once chosen.
     audio_channel: str = "enhanced"
+    #: One of :data:`DSP_MODES`. ``host_raw_aec`` routes the raw satellite
+    #: channel through the native AEC3 lane (production default under loud
+    #: Windows playback).
+    voice_pe_dsp_mode: str = "host_raw_aec"
+    #: Jitter buffer target in milliseconds.
+    voice_pe_jitter_target_ms: int = 80
+    #: Jitter buffer hard ceiling in milliseconds.
+    voice_pe_jitter_max_ms: int = 250
+    #: Delay-acquisition budget in milliseconds before a named failure.
+    voice_pe_aec_acquire_max_ms: int = 1500
     continued_conversation: bool = True
     conversation_timeout_s: float = 300.0
     reconnect_min_s: float = 1.0

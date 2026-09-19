@@ -9,6 +9,11 @@ import numpy as np
 
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock
+from .audio_device import (
+    output_stream_samplerate,
+    resample_int16,
+    windows_default_output,
+)
 
 
 def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
@@ -232,21 +237,29 @@ class TunePlayer:
                     outdata[first:, 0] = samples[:remainder]
                     position[0] = remainder
 
-            # Same rule as the TTS path: open the output on the current Windows
-            # default device, so the tune and the spoken reply share one output
-            # and the echo timing stays on that device's clock.
-            output_device = None
+            # Same rule as TTS: Windows means the WASAPI multimedia default,
+            # resolved now rather than PortAudio's cross-host-API default.
             try:
-                device_id = int((sd.default.device or (-1, -1))[1])
-                if device_id >= 0:
-                    output_device = device_id
-            except Exception:
-                output_device = None
+                output_device = windows_default_output(sd)
+                # WASAPI only opens at the endpoint mix-format rate; the pad
+                # is 44.1 kHz while many endpoints mix at 48 kHz.
+                stream_rate = output_stream_samplerate(sd, output_device, sample_rate)
+            except Exception as exc:
+                # Do not silently reroute a studio workstation to ASIO/ADAT.
+                # The spoken TTS path will surface the same actionable error.
+                debug_log(
+                    f"thinking tune: Windows default output unavailable: {exc!r}",
+                    category="tune",
+                )
+                return
+            if stream_rate != sample_rate:
+                samples = resample_int16(np, samples, sample_rate, stream_rate)
+                total = samples.size
 
             try:
                 with portaudio_lock:
                     stream = sd.OutputStream(
-                        samplerate=sample_rate,
+                        samplerate=stream_rate,
                         channels=1,
                         dtype='int16',
                         # Large block + high latency: fewer callbacks, fewer

@@ -16,6 +16,7 @@ no second TTS stack is created.
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Optional
@@ -233,11 +234,13 @@ def synthesize_pcm(engine, text: str) -> Optional[bytes]:
             noise_scale=float(getattr(engine, "noise_scale", 0.667)),
             noise_w_scale=float(getattr(engine, "noise_w", 0.8)),
         )
-        parts = [
-            chunk.audio_int16_array
-            for chunk in voice.synthesize(prepared, syn_config)
-            if getattr(chunk, "audio_int16_array", None) is not None
-        ]
+        synthesis_lock = getattr(engine, "_synthesis_lock", None)
+        with synthesis_lock if synthesis_lock is not None else nullcontext():
+            parts = [
+                chunk.audio_int16_array
+                for chunk in voice.synthesize(prepared, syn_config)
+                if getattr(chunk, "audio_int16_array", None) is not None
+            ]
         if not parts:
             return None
         src_rate = int(getattr(engine, "_sample_rate", SAMPLE_RATE) or SAMPLE_RATE)

@@ -23,6 +23,9 @@ def __getattr__(name: str):
         "IntentJudge": ".intent_judge",
         "IntentJudgment": ".intent_judge",
         "create_intent_judge": ".intent_judge",
+        "CleanAudioBus": ".clean_audio_bus",
+        "CleanAudioFrame": ".clean_audio_bus",
+        "get_bus": ".clean_audio_bus",
     }
     if name in _imports:
         import importlib
@@ -44,4 +47,7 @@ __all__ = [
     "IntentJudge",
     "IntentJudgment",
     "create_intent_judge",
+    "CleanAudioBus",
+    "CleanAudioFrame",
+    "get_bus",
 ]

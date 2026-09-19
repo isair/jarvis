@@ -1125,6 +1125,33 @@ def main(smoke_test: bool = False) -> None:
         debug_log(f"voice_pe init failed (non-fatal): {e}", "voice")
         print(f"  ⚠ Voice PE not available: {e}", flush=True)
 
+    # Windows virtual microphone: the CleanAudioBus consumer that feeds the
+    # Toustovač Clean Microphone endpoint through the ToustovacAudioBroker.
+    try:
+        from .output import virtual_microphone as _vm
+
+        if getattr(cfg, "virtual_microphone_enabled", False):
+            info = _vm.ensure_installed()
+            if not info.get("error"):
+                idx = _vm.resolve_device_index(cfg)
+                if idx is not None:
+                    info = dict(info, mic_device_index=idx)
+            print(
+                f"🎙️ Clean Microphone package={info.get('package')} "
+                f"installed={info.get('installed') or '-'} "
+                f"updated={info.get('updated')} "
+                f"device_index={info.get('mic_device_index', '-')}",
+                flush=True,
+            )
+            debug_log(f"virtual microphone setup: {info}", "voice")
+
+        if _vm.start_publisher(cfg, voice_thread) is not None:
+            print("🎙️ Clean Microphone publisher started", flush=True)
+        else:
+            print("🎙️ Clean Microphone disabled", flush=True)
+    except Exception as e:
+        debug_log(f"virtual microphone publisher init failed (non-fatal): {e}", "voice")
+
     if smoke_test:
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
@@ -1145,6 +1172,13 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
             _global_voice_pe_manager = None
+
+        try:
+            from .output.virtual_microphone import stop_publisher
+
+            stop_publisher()
+        except Exception:
+            pass
 
         if voice_thread is not None:
             try:

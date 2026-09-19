@@ -384,6 +384,17 @@ Jarvis can act as the satellite-side client of the stock **Voice: Preview Editio
 
 ```json
 {
+  "voice_input_backend": "wasapi_native_v2",
+  "voice_capture_endpoint_id": "",
+  "voice_render_endpoint_id": "",
+  "voice_endpoint_role": "multimedia",
+  "voice_capture_channel_mode": "stereo_average",
+  "native_audio_pipeline": "v2",
+  "native_aec_required": true,
+  "native_reference_required_during_playback": true,
+  "native_audio_v1_rollback": false,
+  "audio_diagnostic_multitrack": false,
+  "voice_device": "0",
   "voice_pe_enabled": true,
   "voice_pe_discovery_enabled": true,
   "voice_pe_host": "192.168.1.50",
@@ -392,6 +403,11 @@ Jarvis can act as the satellite-side client of the stock **Voice: Preview Editio
   "voice_pe_disable_wake_words": true,
   "voice_pe_prefer_api_audio": true,
   "voice_pe_preferred_input_channel": 0,
+  "voice_pe_dsp_mode": "host_raw_aec",
+  "voice_pe_jitter_target_ms": 80,
+  "voice_pe_jitter_max_ms": 250,
+  "voice_pe_aec_acquire_max_ms": 1500,
+  "voice_pe_audio_channel": "raw",
   "voice_pe_continued_conversation": true,
   "voice_pe_conversation_timeout_s": 300.0,
   "voice_pe_reconnect_min_s": 1.0,
@@ -404,11 +420,28 @@ Jarvis can act as the satellite-side client of the stock **Voice: Preview Editio
     "triple_press": "open_command_palette",
     "long_press": "cancel_current_agent_run",
     "easter_egg_press": "toaster_easter_egg"
-  }
+  },
+  "virtual_microphone_enabled": true,
+  "virtual_microphone_source": "voice_pe:20:F8:3B:09:A3:44",
+  "virtual_microphone_name": "Toustovač Clean Microphone",
+  "virtual_microphone_idle_release_s": 5.0,
+  "virtual_microphone_fail_closed": true,
+  "virtual_microphone_publish_unconverged": false
 }
 ```
 
 The Noise PSK lives inside `voice_pe_devices` in the same `0o600` file (`JARVIS_VOICE_PE_PSK` overrides it in-process), and only its length is ever logged. Stock firmware limits: the rotary encoder publishes no raw wheel entity (the media-player volume is authoritative), the single centre click is resolved on the device, `voice_assistant_leds` is internal and driven by the assistant events, and microphone and TTS are separate phases rather than simultaneous.
+
+### Windows virtual microphone (`Toustovač Clean Microphone`)
+
+The cleaned PCM produced after the per-source AEC3 lanes is fanned out on a canonical continuous `CleanAudioBus` (48 kHz mono float32, 480-sample/10 ms frames, monotonic QPC timestamps; see `src/jarvis/listening/clean_audio_bus.py`) before the VAD. The daemon publisher (`src/jarvis/output/virtual_microphone.py`) feeds that bus through the `ToustovacAudioBroker.exe` named pipe (`\\.\pipe\ToustovacCleanMic.v1`) into the minimal WaveRT capture driver `ToustovacVirtualMic.sys`, which shows up as the standard Windows endpoint `Toustovač Clean Microphone` — visible in Windows Sound Settings and in Edge's microphone picker like any physical microphone.
+
+- Exactly one source at a time: `local` (USB headset lane), `voice_pe:<MAC>` (one exact satellite) or empty/`none` for silence. Sources switch atomically over one fade frame with a new publisher generation; local and Voice PE PCM are never mixed.
+- `virtual_microphone_fail_closed=true` mirrors the AEC-required behaviour: while the lane is still acquiring or the reference goes inactive, the endpoint emits explicit silence (never a repeated stale frame). `virtual_microphone_publish_unconverged` opts into unprocessed lane output while unconverged.
+- Per satellite the `DesktopMicLease` (`device.py`) tracks the Edge capture-client count: the 0→1 transition arms the lease and opens/keeps the continuous Assist capture session; the count returning to 0 releases it after `virtual_microphone_idle_release_s`. Hardware mute forces silence.
+- `virtual_microphone_name` stays `Toustovač Clean Microphone` for the endpoint plus an abbreviated `Toustovač Mic` alias on constrained store interfaces; identity (driver instance, endpoint and part GUIDs) is stable across restart and in-place application upgrade.
+- Install/repair/uninstall is done by the first-party bootstrapper `ToustovacAudioInstall.exe` (idempotent `ROOT\VIVERRA\TOUSTOVAC_CLEAN_MIC` devnode detection, SetupAPI/NewDev staging, per-service-SID broker `ToustovacAudioBroker`, IMMDevice `DEVICE_STATE_ACTIVE` + silence-smoke verification, reverse-order rollback; one UAC prompt). The section in Settings also offers `Open Sound Settings` (`ms-settings:sound`) and `Copy diagnostics` (telemetry only: states, generations, counters, p50/p95 latency — never PCM content).
+- The driver, broker and sources live in `native/virtual_mic/{driver,broker,installer,package}`; the build/InfVerif/HLK expectations and the pinned toolchain are recorded in `native/virtual_mic/README.md` with the SysVAD/MSVC/WIL attribution in `native/virtual_mic/NOTICE`.
 
 Hand-rolled CLI in the existing `sys.argv` style:
 

@@ -138,6 +138,21 @@ def from_settings(settings: Any) -> VoicePEConfig:
         # First paired MAC acts as the implicit secret id.
         psk_id = next(iter(sorted(devices)))
 
+    # DSP mode selects the default channel selection when none was spelled
+    # out: host_raw_aec locks the raw channel, the others keep channel 0.
+    mode = str(
+        getattr(settings, "voice_pe_dsp_mode", "") or ""
+    ).strip().lower()
+    if mode not in ("host_raw_aec", "device_enhanced", "shadow_compare"):
+        mode = "host_raw_aec"
+    explicit_channel = str(getattr(settings, "voice_pe_audio_channel", "") or "").strip().lower()
+    default_channel = "raw" if mode == "host_raw_aec" else "enhanced"
+    if not explicit_channel:
+        legacy = _as_int(getattr(settings, "voice_pe_preferred_input_channel", 0), 0)
+        explicit_channel = (
+            "raw" if legacy == 1 and mode != "host_raw_aec" else default_channel
+        )
+
     return VoicePEConfig(
         enabled=bool(getattr(settings, "voice_pe_enabled", False)),
         discovery_enabled=bool(getattr(settings, "voice_pe_discovery_enabled", True)),
@@ -152,11 +167,16 @@ def from_settings(settings: Any) -> VoicePEConfig:
         preferred_input_channel=_as_int(
             getattr(settings, "voice_pe_preferred_input_channel", 0), 0
         ),
-        audio_channel=_as_audio_channel(
-            getattr(settings, "voice_pe_audio_channel", "") or _audio_channel_from_int(
-                getattr(settings, "voice_pe_preferred_input_channel", 0)
-            ),
-            "enhanced",
+        audio_channel=_as_audio_channel(explicit_channel, default_channel),
+        voice_pe_dsp_mode=mode,
+        voice_pe_jitter_target_ms=_as_int(
+            getattr(settings, "voice_pe_jitter_target_ms", 80), 80
+        ),
+        voice_pe_jitter_max_ms=_as_int(
+            getattr(settings, "voice_pe_jitter_max_ms", 250), 250
+        ),
+        voice_pe_aec_acquire_max_ms=_as_int(
+            getattr(settings, "voice_pe_aec_acquire_max_ms", 1500), 1500
         ),
         continued_conversation=bool(
             getattr(settings, "voice_pe_continued_conversation", True)

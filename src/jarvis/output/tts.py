@@ -17,6 +17,11 @@ from urllib.parse import urlparse
 
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock
+from .audio_device import (
+    output_stream_samplerate,
+    resample_int16,
+    windows_default_output,
+)
 
 
 # ============================================================================
@@ -657,6 +662,10 @@ class PiperTTS:
         self._sample_rate: int = 22050  # Piper default, updated on model load
         self._initialized = False
         self._init_lock = threading.Lock()
+        # Piper/onnxruntime synthesis is shared by local playback and Voice PE
+        # egress. Keep model execution single-flight while allowing both sinks
+        # to consume the resulting speech independently.
+        self._synthesis_lock = threading.RLock()
         self._init_error: Optional[str] = None
 
         # Audio stream for interruption
@@ -847,11 +856,12 @@ class PiperTTS:
                 noise_w_scale=self.noise_w,
             )
             audio_chunks = []
-            for chunk in self._voice.synthesize(text, syn_config):
-                if self._should_interrupt.is_set():
-                    debug_log("Piper TTS interrupted during synthesis", "tts")
-                    return
-                audio_chunks.append(chunk.audio_int16_array)
+            with self._synthesis_lock:
+                for chunk in self._voice.synthesize(text, syn_config):
+                    if self._should_interrupt.is_set():
+                        debug_log("Piper TTS interrupted during synthesis", "tts")
+                        return
+                    audio_chunks.append(chunk.audio_int16_array)
 
             # Check for interruption after synthesis
             if self._should_interrupt.is_set():
@@ -902,23 +912,26 @@ class PiperTTS:
 
                 play_position[0] = end
 
-            # Bind playback explicitly to the Windows default output device
-            # (the system default read at this moment), so the reply leaves on
-            # the one output the user hears - a loud JBL on the desktop or the
-            # built-in speaker - and echo detection keeps its timing on that
-            # same device. -1/None fall through to PortAudio's own default.
-            output_device = None
-            try:
-                device_id = int((sd.default.device or (-1, -1))[1])
-                if device_id >= 0:
-                    output_device = device_id
-            except Exception:
-                output_device = None
+            # Resolve at playback time so a Windows default-device change is
+            # picked up without restarting the daemon. On Windows this is the
+            # WASAPI multimedia default used by Edge, never an implicit ASIO or
+            # WDM-KS fallback.
+            output_device = windows_default_output(sd)
+
+            # The WASAPI host only opens at the endpoint's mix-format rate
+            # (otherwise PortAudio returns paInvalidSampleRate / -9997), so
+            # match the device and resample the synthesis to it. Seconds-of-
+            # speech are identical before and after the resample.
+            stream_rate = output_stream_samplerate(sd, output_device, self._sample_rate)
+            if stream_rate != self._sample_rate:
+                full_audio = resample_int16(
+                    np, full_audio, self._sample_rate, stream_rate
+                )
 
             with self._audio_lock:
                 with portaudio_lock:
                     self._audio_stream = sd.OutputStream(
-                        samplerate=self._sample_rate,
+                        samplerate=stream_rate,
                         channels=1,
                         dtype='int16',
                         blocksize=blocksize,

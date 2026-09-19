@@ -8,6 +8,7 @@ Reads/writes config.json directly and groups settings by category.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -65,6 +66,7 @@ CATEGORIES = [
     ("vad", "📊 Voice Activity Detection"),
     ("timing", "⏱️ Timing & Windows"),
     ("voice_pe", "🎙️ Voice PE"),
+    ("virtual_mic", "🎙️ Windows Virtual Microphone"),
     ("memory", "🧠 Memory & Dialogue"),
     ("location", "📍 Location"),
     ("features", "✨ Features"),
@@ -115,6 +117,21 @@ def _dictation_hotkey_choices() -> list:
         (val, f"{label} (default)" if val == default else label)
         for val, label in options
     ]
+
+
+def _known_voice_pe_macs() -> List[str]:
+    """MACs of the configured Voice PE satellites, for the source dropdown."""
+    macs: List[str] = []
+    try:
+        from jarvis.integrations.voice_pe.config import load_config as _vp_load
+
+        devices = _vp_load().devices or {}
+        for mac in devices:
+            if mac and str(mac).upper() not in macs:
+                macs.append(str(mac).upper())
+    except Exception:
+        pass
+    return macs
 
 
 def _build_field_metadata() -> List[FieldMeta]:
@@ -247,6 +264,50 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("voice_min_energy", "Min Energy",
       "Minimum audio energy to register voice",
       "voice_input", "float", min_val=0.0, max_val=1.0, step=0.005)
+    f("voice_input_backend", "Input Backend",
+      "wasapi_native_v2: in-process WASAPI + WebRTC AEC3 (default). "
+      "portaudio_compat: explicit PortAudio lane for old hosts.",
+      "voice_input", "choice",
+      choices=[("wasapi_native_v2", "WASAPI native v2 (default)"),
+               ("portaudio_compat", "PortAudio compatibility lane")])
+    f("voice_capture_endpoint_id", "Capture Endpoint (MMDevice)",
+      "Microphone MMDevice ID; empty uses the role default.",
+      "voice_input", "mmdevice_capture", nullable=True)
+    f("voice_render_endpoint_id", "Render Endpoint (MMDevice)",
+      "Loopback reference MMDevice ID; empty uses the role default.",
+      "voice_input", "mmdevice_render", nullable=True)
+    f("voice_endpoint_role", "Default Endpoint Role",
+      "Role used to resolve the empty endpoint ids, per the Windows "
+      "default-device semantics.",
+      "voice_input", "choice",
+      choices=[("console", "console"), ("multimedia", "multimedia"),
+               ("communications", "communications")])
+    f("voice_capture_channel_mode", "Capture Channel Mode",
+      "mono / left / right / channel_index / stereo_average; index selects "
+      "the exact ADAT sub-frame (e.g. 31 + 32 pair).",
+      "voice_input", "choice",
+      choices=[("stereo_average", "stereo_average (default)"),
+               ("mono", "mono"), ("left", "left"), ("right", "right"),
+               ("channel_index", "channel_index")])
+    f("voice_capture_channel_index", "Capture Channel Index",
+      "0-based index used by the channel_index mode.",
+      "voice_input", "int", min_val=0, max_val=31, step=1)
+    f("native_audio_pipeline", "Native Pipeline",
+      "v2 = handle-based multi-lane engine. v1 = manual, one-release "
+      "rollback to the old global singleton (never selected automatically).",
+      "voice_input", "choice",
+      choices=[("v2", "v2 (default)"), ("v1", "v1 rollback")])
+    f("native_aec_required", "Native AEC Required",
+      "While true, a loaded engine without its AEC fails closed "
+      "(AUDIO_DSP_ERROR) instead of silently splicing PortAudio frames.",
+      "voice_input", "bool")
+    f("native_reference_required_during_playback", "Reference Required",
+      "A missing render reference during active playback stops with "
+      "reference_alignment_failed.",
+      "voice_input", "bool")
+    f("audio_diagnostic_multitrack", "Multitrack Diagnostics",
+      "Opt-in bounded WAV dump per lane (reference / raw / cleaned).",
+      "voice_input", "bool")
 
     # --- Wake Word ---
     f("wake_word", "Wake Word",
@@ -453,11 +514,33 @@ def _build_field_metadata() -> List[FieldMeta]:
       "processed one (needs multi-channel support)",
       "voice_pe", "choice",
       choices=[(0, "Channel 0 (enhanced)"), (1, "Channel 1 (less processed)")])
+    f("voice_pe_dsp_mode", "Host AEC Mode",
+      "host_raw_aec: channel 1 (raw) through the native AEC3 lane against the "
+      "Windows loopback / modelled TTS far-end (default). device_enhanced: "
+      "channel 0 only. shadow_compare: cleaned raw drives ASR, enhanced kept "
+      "for diagnostics.",
+      "voice_pe", "choice",
+      choices=[("host_raw_aec", "host_raw_aec (default)"),
+               ("device_enhanced", "device_enhanced"),
+               ("shadow_compare", "shadow_compare")])
+    f("voice_pe_jitter_target_ms", "AEC Jitter Target",
+      "Target queue depth of the lane jitter buffer (80 ms default).",
+      "voice_pe", "int", min_val=10, max_val=500, step=5, suffix="ms")
+    f("voice_pe_jitter_max_ms", "AEC Jitter Ceiling",
+      "Hard ceiling of the lane jitter buffer; older blocks are dropped "
+      "and counted (250 ms default).",
+      "voice_pe", "int", min_val=20, max_val=1000, step=10, suffix="ms")
+    f("voice_pe_aec_acquire_max_ms", "AEC Acquisition Budget",
+      "Delay-acquisition budget before the lane reports aec_unconverged "
+      "(1500 ms default).",
+      "voice_pe", "int", min_val=200, max_val=10000, step=50, suffix="ms")
     f("voice_pe_continued_conversation", "Continued Conversation",
-      "Keep the dialog open after a Jarvis question, without a wake word",
+      "Automatically reopen the microphone after every successful reply, "
+      "without a wake word, while the conversation window remains valid",
       "voice_pe", "bool")
     f("voice_pe_conversation_timeout_s", "Conversation Window",
-      "How long one conversation id stays valid for follow-up turns",
+      "Maximum age of one conversation for automatic follow-up turns "
+      "(300 seconds = 5 minutes)",
       "voice_pe", "float", min_val=1.0, max_val=3600.0, step=1.0, suffix="s")
     f("voice_pe_reconnect_min_s", "Reconnect Backoff Minimum",
       "First retry delay of the exponential backoff",
@@ -476,6 +559,41 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Accent colour of the led_ring light: '8c00ff' or '0.55,0,1'. The stock "
       "firmware drives the internal pixel effects itself",
       "voice_pe", "str", nullable=True)
+
+    # --- Windows Virtual Microphone ---
+    # The continuous CleanAudioBus output of the single post-AEC3 source,
+    # published to the kernel-side Toustovač Clean Microphone endpoint.
+    f("virtual_microphone_enabled", "Enable Clean Microphone",
+      "Publish the cleaned audio stream after AEC3 to the Windows endpoint "
+      "named \"Toustovač Clean Microphone\" so any application can select it.",
+      "virtual_mic", "bool")
+    _vm_choices = [
+        ("", "None (silence)"),
+        ("local", "Local USB microphone"),
+    ] + [
+        (f"voice_pe:{mac}", f"Voice PE {mac}")
+        for mac in _known_voice_pe_macs()
+    ]
+    f("virtual_microphone_source", "Source",
+      "One canonical source is active while the first capture client is "
+      "connected: the local USB lane or one Voice PE satellite.",
+      "virtual_mic", "choice", choices=_vm_choices)
+    f("virtual_microphone_name", "Endpoint Name",
+      "Fixed device-friendly name of the endpoint. The stock name is "
+      "\"Toustovač Clean Microphone\".",
+      "virtual_mic", "str", nullable=True)
+    f("virtual_microphone_idle_release_s", "Idle Release",
+      "Seconds of silence after which the desktop microphone lease reaches "
+      "'disabled' (default 5.0 s).",
+      "virtual_mic", "float", min_val=0.2, max_val=60.0, step=0.1, suffix="s")
+    f("virtual_microphone_fail_closed", "Fail-Closed Source",
+      "While the AEC lane is still acquiring or the reference is missing, "
+      "emit explicit silence instead of unprocessed frames.",
+      "virtual_mic", "bool")
+    f("virtual_microphone_publish_unconverged", "Publish Unconverged",
+      "Keep unprocessed lane output active instead of replacing it with "
+      "silence while the AEC is not converged.",
+      "virtual_mic", "bool")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",
@@ -575,6 +693,10 @@ class SettingsWindow(QDialog):
         for cat_key, cat_label in CATEGORIES:
             if cat_key == "mcps":
                 page = self._build_mcp_page()
+            elif cat_key == "virtual_mic":
+                page = self._build_virtual_mic_page(
+                    fields_by_cat.get(cat_key, [])
+                )
             else:
                 cat_fields = fields_by_cat.get(cat_key, [])
                 if not cat_fields:
@@ -642,6 +764,190 @@ class SettingsWindow(QDialog):
         scroll.setWidget(container)
         return scroll
 
+    # -- Windows Virtual Microphone page --------------------------------------
+
+    def _build_virtual_mic_page(self, fields: List[FieldMeta]) -> QWidget:
+        """Clean Microphone section: form + read-only state + actions."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(16, 16, 16, 16)
+        vbox.setSpacing(14)
+
+        form = QFormLayout()
+        form.setSpacing(14)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        for fm in fields:
+            widget = self._create_widget(fm)
+            self._widgets[fm.key] = widget
+            label = QLabel(fm.label)
+            label.setToolTip(fm.description)
+            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            form.addRow(label, widget)
+        vbox.addLayout(form)
+
+        # Read-only publish/lease state (telemetry only, no audio content).
+        self._vmic_status_label = QLabel("State: not started")
+        self._vmic_status_label.setObjectName("subtitle")
+        self._vmic_status_label.setWordWrap(True)
+        vbox.addWidget(self._vmic_status_label)
+
+        # Action row: sound settings, diagnostics copy, install, uninstall.
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
+
+        sound_btn = QPushButton("🔊 Open Sound Settings")
+        sound_btn.clicked.connect(self._on_open_sound_settings)
+        actions.addWidget(sound_btn)
+
+        copy_btn = QPushButton("📋 Copy Diagnostics")
+        copy_btn.clicked.connect(self._on_copy_diagnostics)
+        actions.addWidget(copy_btn)
+
+        reinstall_btn = QPushButton("🔧 Reinstall")
+        reinstall_btn.clicked.connect(self._on_reinstall)
+        actions.addWidget(reinstall_btn)
+
+        uninstall_btn = QPushButton("🗑️ Uninstall")
+        uninstall_btn.setObjectName("danger")
+        uninstall_btn.clicked.connect(self._on_uninstall)
+        actions.addWidget(uninstall_btn)
+
+        actions.addStretch()
+        vbox.addLayout(actions)
+        vbox.addStretch()
+
+        scroll.setWidget(container)
+        return scroll
+
+    def set_virtual_mic_status_text(self, lines) -> None:
+        """Update the read-only Clean Microphone state block."""
+        if getattr(self, "_vmic_status_label", None) is None:
+            return
+        self._vmic_status_label.setText("\n".join(str(x) for x in lines))
+
+    def _virtual_mic_diagnostics_text(self) -> list[str]:
+        """Telemetry-only diagnostics lines (no audio content)."""
+        lines: list[str] = []
+        try:
+            from jarvis.output.virtual_microphone import get_publisher
+
+            publisher = get_publisher()
+            if publisher is not None:
+                st = publisher.status()
+                lat = st.get("latency_ms", {})
+                bus = st.get("bus", {})
+                lines.append(
+                    "virtual_microphone: state={state} source={source} "
+                    "gen={gen} frames={frames} silence={silence} "
+                    "sequence={seq} stale={stale} gaps={gaps} "
+                    "p50={p50}ms p95={p95}ms max={max}ms "
+                    "muted={muted} fail_closed={fail_closed}".format(
+                        state=st.get("state"),
+                        source=st.get("source"),
+                        gen=st.get("producer_generation"),
+                        frames=st.get("frames_produced"),
+                        silence=st.get("silence_frames"),
+                        seq=st.get("sequence"),
+                        stale=st.get("stale_packets"),
+                        gaps=st.get("sequence_gaps"),
+                        p50=lat.get("p50"),
+                        p95=lat.get("p95"),
+                        max=lat.get("max"),
+                        muted=st.get("muted"),
+                        fail_closed=st.get("fail_closed"),
+                    )
+                )
+                lines.append(
+                    "clean_audio_bus: published={published} "
+                    "consumers={consumers}".format(
+                        published=bus.get("published_frames"),
+                        consumers=bus.get("consumers"),
+                    )
+                )
+            else:
+                lines.append("virtual_microphone: disabled")
+        except Exception as exc:
+            lines.append(f"virtual_microphone unavailable: {exc}")
+        try:
+            from jarvis.daemon import get_voice_pe_manager
+
+            manager = get_voice_pe_manager()
+            if manager is not None:
+                for dev in (manager.health() or {}).get("devices") or []:
+                    lease = dev.get("lease") or {}
+                    source = dev.get("source_status") or {}
+                    lines.append(
+                        "voice_pe[{device}]: source={src} "
+                        "lease={lease} generation=({conn},{sess})".format(
+                            device=dev.get("device"),
+                            src=source.get("aec_state"),
+                            lease=lease.get("state"),
+                            conn=dev.get("connection_generation"),
+                            sess=dev.get("session_generation"),
+                        )
+                    )
+        except Exception:
+            pass
+        return lines
+
+    def _on_open_sound_settings(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl("ms-settings:sound"))
+
+    def _on_copy_diagnostics(self) -> None:
+        lines = self._virtual_mic_diagnostics_text()
+        from PyQt6.QtWidgets import QApplication
+
+        try:
+            QApplication.clipboard().setText("\n".join(lines))
+        except Exception as exc:
+            debug_log(f"virtual mic diagnostics copy failed: {exc}", "settings")
+
+    def _on_reinstall(self) -> None:
+        for exe in self._virtual_mic_installers():
+            if exe is not None:
+                self._run_installer(exe, "-Install", "Reinstall")
+                return
+
+    def _on_uninstall(self) -> None:
+        for exe in self._virtual_mic_installers():
+            if exe is not None:
+                self._run_installer(exe, "-Uninstall", "Uninstall")
+                return
+
+    def _virtual_mic_installers(self) -> List[Optional[Path]]:
+        candidates = [
+            Path(__file__).resolve().parents[2] / "native" / "virtual_mic"
+            / "installer" / "ToustovacAudioInstall.exe",
+            Path(sys.prefix) / "native" / "virtual_mic"
+            / "installer" / "ToustovacAudioInstall.exe",
+        ]
+        return [c if c.exists() else None for c in candidates]
+
+    def _run_installer(self, exe: Path, mode: str, label: str) -> None:
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                [str(exe), mode], capture_output=True, text=True, timeout=30,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            if hasattr(self, "_vmic_status_label") and self._vmic_status_label is not None:
+                self._vmic_status_label.setText(
+                    "State: "
+                    + " | ".join(
+                        line.strip() for line in output.splitlines() if line.strip()
+                    )
+                )
+        except Exception as exc:
+            debug_log(f"virtual mic {label.lower()} failed: {exc}", "settings")
+
     def _create_widget(self, fm: FieldMeta) -> QWidget:
         """Create the appropriate input widget for a field."""
         current = self._merged.get(fm.key)
@@ -704,6 +1010,32 @@ class SettingsWindow(QDialog):
             )
             if idx >= 0:
                 w.setCurrentIndex(idx)
+            w.setToolTip(fm.description)
+            return w
+
+        if fm.field_type in ("mmdevice_capture", "mmdevice_render"):
+            w = QComboBox()
+            w.addItem("🔧 System Default (role)", "")
+            try:
+                from jarvis import native_audio as _na
+                if not _na.is_loaded():
+                    _na.load()
+                for line in _na.endpoint_lines(
+                    2 if fm.field_type == "mmdevice_capture" else 3
+                ):
+                    parts = line.split(" id=", 1)
+                    val = parts[1].split(" name=", 1)[0] if len(parts) > 1 else ""
+                    disp = parts[0][:120] if val else line
+                    if val:
+                        w.addItem(f"{val}  {disp[:70]}", val)
+            except Exception as exc:
+                debug_log(f"mmdevice enumeration failed: {exc}", "settings")
+            current = "" if current in (None, "") else str(current)
+            idx = w.findData(current) if current else 0
+            if idx < 0 and current:
+                w.addItem(f"{current}  (not in current enumeration)", current)
+                idx = w.count() - 1
+            w.setCurrentIndex(max(0, idx))
             w.setToolTip(fm.description)
             return w
 

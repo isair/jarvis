@@ -11,6 +11,7 @@ Strategies (ToolSelectionStrategy enum):
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import Enum
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -71,7 +72,7 @@ _STOP_WORDS = frozenset({
     "off", "over", "just", "also", "very", "too", "some", "any", "all",
 })
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _CAMEL_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
 
 
@@ -114,6 +115,35 @@ def _all_tool_names(
     mcp_tools: Dict[str, "ToolSpec"],
 ) -> List[str]:
     return list(builtin_tools.keys()) + list(mcp_tools.keys())
+
+
+def deterministic_tool_route(
+    query: str,
+    builtin_tools: Dict[str, "Tool"],
+    mcp_tools: Dict[str, "ToolSpec"],
+) -> List[str]:
+    """Route unambiguous high-frequency intents without another LLM call.
+
+    This deliberately stays small: only intents with a canonical tool and
+    unmistakable vocabulary belong here. It removes router + planner latency
+    from the common voice-demo path while ambiguous requests still use the
+    configured strategy.
+    """
+    folded = "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", str(query)).casefold()
+        if not unicodedata.combining(ch)
+    )
+    words = set(_TOKEN_RE.findall(folded))
+    known = set(builtin_tools) | set(mcp_tools)
+    weather_words = {
+        "weather", "forecast", "temperature", "rain", "raining",
+        "pocasi", "predpoved", "teplota", "prsi", "dest",
+    }
+    if "getWeather" in known and words.intersection(weather_words):
+        selected = ["getWeather"]
+        return _ensure_always_included(selected, builtin_tools, mcp_tools)
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +444,14 @@ def select_tools(
     Returns:
         List of tool name strings.
     """
+    deterministic = deterministic_tool_route(query, builtin_tools, mcp_tools)
+    if deterministic:
+        debug_log(
+            f"Deterministic tool route: {', '.join(deterministic)}",
+            "planning",
+        )
+        return deterministic
+
     if strategy == ToolSelectionStrategy.KEYWORD:
         return _select_keyword(query, builtin_tools, mcp_tools)
     elif strategy == ToolSelectionStrategy.EMBEDDING:

@@ -1,6 +1,7 @@
 LIBRARY jarvis_audio_engine
 EXPORTS
     JarvisAeAbiVersion
+    JarvisAeEnumerateEndpoints
     JarvisAeCreate
     JarvisAeDestroy
     JarvisAeSetProfile
@@ -12,3 +13,15 @@ EXPORTS
     JarvisAeReadTelemetry
     JarvisAeDumpDiagnostics
     JarvisAeRun
+    JarvisAeEngineCreate
+    JarvisAeEngineDestroy
+    JarvisAeEngineRun
+    JarvisAeEngineReadTelemetry
+    JarvisAeEngineDumpDiagnostics
+    JarvisAeLaneCreate
+    JarvisAeLaneDestroy
+    JarvisAeLanePushCapture
+    JarvisAeLanePushReference
+    JarvisAeLanePopClean
+    JarvisAeLaneReadTelemetry
+    JarvisAeLaneReset
