@@ -3182,7 +3182,7 @@ def _smoke_test_main() -> int:
         import io
         for _stream_name in ("stdout", "stderr"):
             _stream = getattr(sys, _stream_name)
-            _real = getattr(sys, "__" + _stream_name, None)
+            _real = getattr(sys, "__" + _stream_name + "__", None)
             if _stream is None:
                 setattr(sys, _stream_name, io.StringIO())
             elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
