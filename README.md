@@ -567,6 +567,8 @@ Get API key at [composio.dev](https://composio.dev)
 
 ## Troubleshooting
 
+**Model downloads look paused?** Open **Logs** from the tray. The download card shows real transferred bytes, percentage, speed and estimated time remaining when available, without flooding the activity timeline. If updates pause, it shows how long it has been waiting. Whisper's first download can be large; loading and warming up are shown separately after its files are ready.
+
 <details>
 <summary><strong>Common issues</strong></summary>
 

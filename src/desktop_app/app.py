@@ -15,6 +15,9 @@ import time
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
+# Hugging Face uses this non-terminal mode to emit actual byte progress.
+# Set it before importing tqdm, including in the inherited daemon environment.
+os.environ.setdefault('TQDM_POSITION', '-1')
 
 # Suppress pkg_resources deprecation warning from webrtcvad
 import warnings
@@ -38,8 +41,8 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from desktop_app.cuda_recovery import CudaRecoveryAction
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
-from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton, QProgressBar
+from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor, QTextCharFormat, QColor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 from desktop_app.qt_worker import KeepAliveWorker
 
@@ -63,7 +66,8 @@ except ImportError:
 from jarvis.debug import debug_log
 from jarvis.config import default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
 from desktop_app.diary_dialog import DiaryUpdateDialog
-from desktop_app.themes import JARVIS_THEME_STYLESHEET
+from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
+from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
 
 
@@ -1210,7 +1214,7 @@ class LogViewerWindow(QMainWindow):
         title.setStyleSheet("font-size: 20px; font-weight: 600; color: #fbbf24;")
         title_layout.addWidget(title)
 
-        subtitle = QLabel("Real-time activity and debug output")
+        subtitle = QLabel("Activity timeline · downloads stay visible above the log")
         subtitle.setObjectName("subtitle")
         title_layout.addWidget(subtitle)
 
@@ -1259,6 +1263,31 @@ class LogViewerWindow(QMainWindow):
 
         layout.addWidget(header_row)
 
+        self.download_card = QWidget()
+        self.download_card.setObjectName("download_card")
+        download_layout = QVBoxLayout(self.download_card)
+        download_layout.setContentsMargins(20, 16, 20, 16)
+        self.download_title = QLabel()
+        self.download_title.setObjectName("section_title")
+        self.download_title.setTextFormat(Qt.TextFormat.PlainText)
+        self.download_title.setWordWrap(True)
+        self.download_detail = QLabel()
+        self.download_detail.setTextFormat(Qt.TextFormat.PlainText)
+        self.download_detail.setWordWrap(True)
+        self.download_bar = QProgressBar()
+        download_layout.addWidget(self.download_title)
+        download_layout.addWidget(self.download_bar)
+        download_layout.addWidget(self.download_detail)
+        layout.addWidget(self.download_card)
+        self.download_card.hide()
+        self._downloads = {}
+        self._download_times = {}
+        self._last_progress_at = 0.0
+        self._progress_detail = ""
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(1000)
+        self._progress_timer.timeout.connect(self._refresh_download_status)
+
         # Create text display for logs with monospace font
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
@@ -1268,18 +1297,109 @@ class LogViewerWindow(QMainWindow):
         layout.addWidget(self.log_display)
 
         # Initial message
-        self.append_log("🚀 Jarvis Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
+        self.append_log("📝 Activity log ready\n")
 
     def append_log(self, text: str) -> None:
-        """Append text to the log display."""
-        self.log_display.moveCursor(QTextCursor.MoveOperation.End)
-        self.log_display.insertPlainText(text)
-        self.log_display.moveCursor(QTextCursor.MoveOperation.End)
+        """Keep transfer updates in a card and important events in the timeline."""
+        for line in clean_log(text).replace('\r', '\n').splitlines():
+            if not line.strip():
+                continue
+            progress = parse_progress(line)
+            if progress:
+                previous = self._downloads.get(progress.name)
+                self._downloads[progress.name] = progress
+                self._download_times[progress.name] = time.monotonic()
+                if progress.percent == 100:
+                    if previous is None or previous.percent != 100:
+                        self._append_event(f"✅ Downloaded {progress.name} · {progress.detail}")
+                    # A small metadata file can finish while model weights are
+                    # still transferring on another Hub worker.
+                    progress = next((p for p in self._downloads.values() if p.percent != 100), progress)
+                elif previous is None or previous.percent == 100:
+                    self._append_event(f"📥 Downloading {progress.name}")
+                self.download_card.show()
+                self.download_title.setText(f"📥 {progress.name}")
+                self.download_bar.setFormat('%p%')
+                self.download_bar.setRange(0, 0 if progress.percent is None else 100)
+                if progress.percent is not None:
+                    self.download_bar.setValue(progress.percent)
+                self._progress_detail = progress.detail
+                self.download_detail.setText(progress.detail)
+                self._last_progress_at = self._download_times[progress.name]
+                if progress.percent != 100:
+                    self._progress_timer.start()
+                else:
+                    self._progress_timer.stop()
+                continue
+            if line.startswith('📥 Checking Whisper model files'):
+                self._downloads.clear()
+                self._download_times.clear()
+                self.download_card.show()
+                self.download_title.setText('📥 Preparing Whisper model files')
+                self.download_bar.setRange(0, 0)
+                self.download_bar.setFormat('%p%')
+                self._progress_detail = 'Checking the local cache and model server'
+                self.download_detail.setText(self._progress_detail)
+                self._last_progress_at = time.monotonic()
+                self._progress_timer.start()
+            elif line.startswith('🎤 Loading Whisper into memory'):
+                self._progress_timer.stop()
+                self.download_card.show()
+                self.download_title.setText('🎤 Preparing speech recognition')
+                self.download_bar.setFormat('%p%')
+                self.download_bar.setRange(0, 0)
+                self._progress_detail = 'Model files ready · loading into memory and warming up'
+                self.download_detail.setText(self._progress_detail)
+            elif 'MLX Whisper' in line and 'ready (Apple Silicon GPU)' in line:
+                self.download_bar.setRange(0, 100)
+                self.download_bar.setValue(100)
+                self.download_detail.setText('Speech recognition model ready')
+            if any(message in line for message in (
+                'Download failed', 'Download error', 'Failed to initialise MLX Whisper',
+                'Daemon exited unexpectedly', 'Daemon stopped',
+            )):
+                self._progress_timer.stop()
+                self._downloads.clear()
+                self._download_times.clear()
+                if not self.download_card.isHidden():
+                    self.download_bar.setRange(0, 100)
+                    self.download_bar.setFormat('Interrupted')
+                    self.download_detail.setText(self._progress_detail + " · See details below")
+            self._append_event(line)
+
+    def _append_event(self, line):
+        cursor = self.log_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        style = QTextCharFormat()
+        style.setForeground(QColor(COLORS['text_muted']))
+        cursor.insertText(time.strftime('%H:%M:%S') + '  ', style)
+        colour = 'text_primary'
+        if '❌' in line or 'Traceback' in line:
+            colour = 'error_light'
+        elif '⚠' in line:
+            colour = 'warning_light'
+        elif line.lstrip().startswith(('✓', '✅')):
+            colour = 'success_light'
+        style.setForeground(QColor(COLORS[colour]))
+        cursor.insertText(line + '\n', style)
+        self.log_display.setTextCursor(cursor)
+        self.log_display.ensureCursorVisible()
+
+    def _refresh_download_status(self):
+        elapsed = int(time.monotonic() - self._last_progress_at)
+        if elapsed >= 15:
+            self.download_detail.setText(
+                self._progress_detail + f" · No new progress for {elapsed}s; waiting for the download server"
+            )
 
     def clear_logs(self) -> None:
         """Clear all logs."""
         self.log_display.clear()
-        self.append_log("🗑️ Logs Cleared\n" + _LOG_SEPARATOR + "\n\n")
+        self._downloads.clear()
+        self._download_times.clear()
+        self._progress_timer.stop()
+        self.download_card.hide()
+        self.append_log("🗑️ Logs cleared\n")
 
     def _report_issue(self) -> None:
         """Open GitHub issue with redacted log contents."""
@@ -1293,6 +1413,9 @@ class LogViewerWindow(QMainWindow):
 
         # Get all log content and redact sensitive information (preserving line breaks)
         log_content = self.log_display.toPlainText()
+        if not self.download_card.isHidden():
+            percentage = f"{self.download_bar.value()}% · " if self.download_bar.maximum() else ''
+            log_content += f"\n{self.download_title.text()}: {percentage}{self.download_detail.text()}\n"
         redacted_logs = log_content
         for pattern, repl in _REDACTION_RULES:
             redacted_logs = pattern.sub(repl, redacted_logs)
@@ -1679,30 +1802,7 @@ class DaemonThread(KeepAliveWorker):
 
         try:
             # Redirect stdout/stderr to capture logs
-            class LogWriter:
-                def __init__(self, emit_func):
-                    self.emit_func = emit_func
-                    self.buffer = ""
-
-                def write(self, text):
-                    if text:
-                        # Handle both bytes and str (Flask can send bytes)
-                        if isinstance(text, bytes):
-                            text = text.decode('utf-8', errors='replace')
-                        self.buffer += text
-                        if '\n' in self.buffer:
-                            lines = self.buffer.split('\n')
-                            self.buffer = lines[-1]
-                            for line in lines[:-1]:
-                                if line.strip():
-                                    self.emit_func(line + '\n')
-
-                def flush(self):
-                    if self.buffer.strip():
-                        self.emit_func(self.buffer)
-                        self.buffer = ""
-
-            log_writer = LogWriter(self.log_signals.new_log.emit)
+            log_writer = LogStream(self.log_signals.new_log.emit)
             sys_module.stdout = log_writer
             sys_module.stderr = log_writer
 

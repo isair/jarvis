@@ -104,6 +104,16 @@ The central controller that manages:
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
 | **ChatWindow** | Text chat interface alongside voice; shares one conversation with the voice path and is enabled only while the daemon is running (see `chat_window.spec.md`) |
 
+### Activity log and downloads
+
+- The log viewer uses a timestamped timeline with distinct success, warning and error colours from the shared theme. Messages are inserted as plain text, including tracebacks.
+- Download updates appear in a live card above the timeline, showing the filename, percentage, transferred/total bytes, speed and remaining time when supplied by the downloader. Unknown totals use an indeterminate bar, never a fabricated percentage.
+- Repeated updates are coalesced; the timeline retains download start/completion events and all ordinary messages. Completion of a small metadata file must not hide another active model download.
+- After 15 seconds without a transfer update, the card states how long it has been waiting. It does not invent byte progress. Model loading/warmup is a separate indeterminate stage, followed by readiness or an error.
+- Both bundled output capture and subprocess output support carriage-return progress and strip terminal control sequences. The desktop sets `TQDM_POSITION=-1` before loading dependencies so Hugging Face emits byte progress to non-terminal output, respecting explicit user environment overrides.
+- Clear resets both the timeline and download state. Report Issue includes the visible progress snapshot and applies the existing redaction rules to it.
+- Missing optional location support is reported once at startup with a pointer to Setup, without printing the full installation guide.
+
 Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
