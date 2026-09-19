@@ -163,7 +163,9 @@ A `QMainWindow` styled like an SMS thread with a single contact:
   bubbles, Jarvis's replies are left-aligned dark bubbles, and local notices
   are small centred lines. Each bubble carries a small muted timestamp. Sent
   messages additionally carry a subtle `⟲` rewind button (see **Rewind**
-  below) to the left of the bubble. The transcript mirrors the single
+  below) to the left of the bubble. Whenever any user, assistant, or local
+  notice message is added, the transcript scrolls to the bottom after layout
+  so the latest message stays visible. The transcript mirrors the single
   conversation's message list and is rebuilt atomically on rewind.
 - A multi-line input box with send button. Enter sends; Shift+Enter inserts a
   newline (multi-line input).
