@@ -1544,19 +1544,43 @@ class VoiceListener(threading.Thread):
         print(f"     🎤 Whisper '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
         return resolved_device
 
+    def _report_llm_warmup(self) -> None:
+        """Describe model probes without claiming full role requests were tested."""
+        results = self._llm_warmup_results
+        groups = {}
+        for key, label in (('chat', 'chat'), ('judge', 'intent judge'), ('router', 'tool router')):
+            if key in results:
+                groups.setdefault(results[key], []).append(label)
+        for (name, ok), roles in groups.items():
+            status = 'passed' if ok else 'failed'
+            icon = '🔥' if ok else '⚠️'
+            print(f"     {icon} Model '{name}': warmup probe {status} (used by {', '.join(roles)})", flush=True)
+        if groups:
+            print("     ℹ️ Warmup checks model loading, not full requests or their timeouts.", flush=True)
+        if 'judge' in results:
+            timeout = float(getattr(self.cfg, 'intent_judge_timeout_sec', 6.0))
+            print(f"     🧠 Intent detection: {timeout:g}s timeout (full intent request not tested)", flush=True)
+        if 'embed' in results:
+            name, ok = results['embed']
+            if ok:
+                print(f"     📐 Embedding probe passed: '{name}'", flush=True)
+            else:
+                print(f"     ⚠️ Embedding probe failed: '{name}'. Check model availability and embedding settings.", flush=True)
+
     def _start_llm_warmup(self) -> list[threading.Thread]:
         """Pre-load chat and intent judge models via the active backend.
 
         Warmup goes through ``warm_up_chat_model`` → ``LLMBackend.warm_up``,
         so it pages models into Ollama's resident memory on the Ollama path
         and sends a minimal inference to load the model on an OpenAI-
-        compatible server. Starts up to two daemon threads concurrently so
+        compatible server. Starts daemon threads concurrently so
         warmup overlaps with Whisper initialisation. When both models point
         at the same model, a single warmup covers both.
 
         Results land in ``self._llm_warmup_results`` keyed by role. The
         caller joins the returned threads with a shared deadline before
-        announcing "Listening!" so the ready state actually means ready.
+        reporting the probe outcomes and announcing "Listening!". Full
+        role-specific requests and their deadlines are not exercised.
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
 
@@ -1590,9 +1614,6 @@ class VoiceListener(threading.Thread):
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
         embed_model = str(getattr(self.cfg, "embedding_model", "") or "").strip()
-        shared_embed = bool(embed_model) and embed_model in {
-            m for m in (chat_model, judge_model, router_model) if m
-        }
 
         threads: list[threading.Thread] = []
 
@@ -1606,10 +1627,6 @@ class VoiceListener(threading.Thread):
                 # Router reusing chat_model is already covered.
                 if router_model and router_model == chat_model:
                     self._llm_warmup_results["router"] = (chat_model, ok)
-                # When the embed model matches chat, the chat warmup already
-                # loaded the model into memory; no separate embed thread runs.
-                if shared_embed and embed_model == chat_model:
-                    self._llm_warmup_results["embed"] = (chat_model, ok)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
@@ -1619,8 +1636,6 @@ class VoiceListener(threading.Thread):
                 self._llm_warmup_results["judge"] = (judge_model, ok)
                 if router_model and router_model == judge_model:
                     self._llm_warmup_results["router"] = (judge_model, ok)
-                if shared_embed and embed_model == judge_model:
-                    self._llm_warmup_results["embed"] = (judge_model, ok)
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
 
@@ -1628,12 +1643,12 @@ class VoiceListener(threading.Thread):
             def _warm_router() -> None:
                 ok = warm_up_chat_model(self.cfg, router_model, timeout=chat_timeout)
                 self._llm_warmup_results["router"] = (router_model, ok)
-                if shared_embed and embed_model == router_model:
-                    self._llm_warmup_results["embed"] = (router_model, ok)
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
-        if embed_model and not shared_embed:
+        # Chat success cannot establish support for the embeddings endpoint,
+        # even when both settings happen to name the same model.
+        if embed_model:
             def _warm_embed() -> None:
                 try:
                     backend = get_embedding_backend(self.cfg)
@@ -2056,8 +2071,8 @@ class VoiceListener(threading.Thread):
                 except Exception as e:
                     debug_log(f"faster-whisper warmup failed: {e}", "voice")
 
-        # Wait for LLM warmups before announcing "Listening!" so the first
-        # engagement is responsive. A single 60s budget is shared across
+        # Wait for LLM probes before announcing "Listening!". A single
+        # 60s budget is shared across
         # all warmup threads so a slow/down Ollama can't block us from
         # listening — we'll just pay the cold-load cost on demand.
         warmup_threads = getattr(self, "_llm_warmup_threads", [])
@@ -2069,27 +2084,11 @@ class VoiceListener(threading.Thread):
                 t.join(timeout=remaining)
 
             still_warming = any(t.is_alive() for t in warmup_threads)
-            results = getattr(self, "_llm_warmup_results", {})
-
-            # Trailing space after ⚠️ intentional: the warning glyph renders
-            # narrower than 🧠/💬, so the pad keeps columns aligned.
-            def _print_status(role_key: str, label: str, ok_icon: str) -> None:
-                entry = results.get(role_key)
-                if entry is None:
-                    return
-                name, ok = entry
-                icon = ok_icon if ok else "⚠️ "
-                status = "ready" if ok else "warmup failed — will load on first use"
-                print(f"     {icon} {label} '{name}' {status}", flush=True)
-
-            _print_status("chat", "Chat model", "💬")
-            _print_status("judge", "Intent judge", "🧠")
-            _print_status("router", "Tool router", "🔧")
-            _print_status("embed", "Embed model", "📐")
+            self._report_llm_warmup()
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")
-                print("     ⏳ Some models still warming — continuing anyway", flush=True)
+                print("     ⏳ Some model probes are still running; continuing startup.", flush=True)
 
         # Audio parameters
         frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))

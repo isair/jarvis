@@ -49,8 +49,8 @@ def _stub_missing_modules(monkeypatch):
 
     # Ensure requests.exceptions.Timeout is a proper exception class
     requests_mod = sys.modules.get("requests")
-    if requests_mod is not None:
-        requests_mod.exceptions.Timeout = type("Timeout", (Exception,), {})
+    if isinstance(requests_mod, MagicMock):
+        monkeypatch.setattr(requests_mod.exceptions, "Timeout", type("Timeout", (Exception,), {}))
 
 from src.jarvis.memory.db import Database
 
