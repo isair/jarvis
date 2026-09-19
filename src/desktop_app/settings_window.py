@@ -120,15 +120,21 @@ def _dictation_hotkey_choices() -> list:
 
 
 def _known_voice_pe_macs() -> List[str]:
-    """MACs of the configured Voice PE satellites, for the source dropdown."""
+    """MACs of the configured Voice PE satellites, for the source dropdown.
+
+    Reads the flat ``voice_pe_devices`` mapping directly from the active
+    config (``JARVIS_CONFIG_PATH`` first, else the default path); the MAC
+    keys are exactly the ``voice_pe:<mac>`` source ids the publisher uses.
+    """
     macs: List[str] = []
     try:
-        from jarvis.integrations.voice_pe.config import load_config as _vp_load
+        from jarvis.config import load_settings as _load_settings
 
-        devices = _vp_load().devices or {}
-        for mac in devices:
-            if mac and str(mac).upper() not in macs:
-                macs.append(str(mac).upper())
+        raw_devices = getattr(_load_settings(), "voice_pe_devices", None)
+        if isinstance(raw_devices, dict):
+            for mac in raw_devices:
+                if mac and str(mac).upper() not in macs:
+                    macs.append(str(mac).upper())
     except Exception:
         pass
     return macs
@@ -745,9 +751,11 @@ class SettingsWindow(QDialog):
         self._pages = QStackedWidget()
         content_layout.addWidget(self._pages, 1)
 
-        # Build pages from categories
+        # Build pages from categories (rebuilt per dialog so the Voice PE
+        # satellite MACs from the active config.json show up in the
+        # virtual-microphone source dropdown).
         fields_by_cat: Dict[str, List[FieldMeta]] = {}
-        for fm in FIELD_METADATA:
+        for fm in _build_field_metadata():
             fields_by_cat.setdefault(fm.category, []).append(fm)
 
         for cat_key, cat_label in CATEGORIES:
