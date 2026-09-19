@@ -155,4 +155,6 @@ src/jarvis/llm/
 
 ## Failure handling
 
+`chat()` recognises response-body read timeouts wrapped as `requests.ConnectionError(urllib3.ReadTimeoutError(...))`. These follow the normal timeout path: a safe message includes the configured timeout, `None` is returned, and intent detection does not enter connection-failure cooldown. Classification uses exception types and explicit causes/arguments, never message matching or raw exception text. Actual connection failures still propagate; URLs, headers and credentials are not printed.
+
 Backends fail soft for transient issues so the reply engine can degrade gracefully: timeouts and HTTP errors return `None` (or `[]` for `list_models`); HTTP 400 with `tools` set raises `ToolsNotSupportedError`; any other unexpected error is logged via `debug_log("...", "llm")` and returns `None`. The one exception is `requests.ConnectionError` (server unreachable), which `chat()` re-raises so callers like the intent judge can apply their own back-off — voice, for example, wants a 30s cooldown after a connection-refused error so it stops hammering an unresponsive Ollama between wake words.

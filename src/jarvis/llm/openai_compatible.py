@@ -30,6 +30,7 @@ import json
 import requests
 
 from ..debug import debug_log
+from .errors import is_timeout_error
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
@@ -316,9 +317,13 @@ class OpenAICompatibleBackend(LLMBackend):
             if isinstance(data, dict):
                 return _normalise_response(data)
         except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+            print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as exc:
+            if is_timeout_error(exc):
+                debug_log("chat response read timed out (wrapped transport timeout)", "llm")
+                print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
+                return None
             # ConnectionError messages embed the configured URL via the
             # underlying urllib3 exception, which can leak account-bearing
             # query strings to stdout. Print only the failure mode and
