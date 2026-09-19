@@ -88,7 +88,7 @@ Keep sections concise. Use collapsible `<details>` for lengthy content. Avoid do
 
 ---
 
-When the user says "remember" something, add it to CLAUDE.md in the appropriate section (project-specific above the ---, or portable below).
+When the user says "remember" something, add it to AGENTS.md in the appropriate section (project-specific above the ---, or portable below).
 
 Run your changes and test them manually, iterate until everything is good.
 
