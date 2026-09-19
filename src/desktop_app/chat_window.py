@@ -333,6 +333,9 @@ class ChatWindow(QMainWindow):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.transcript_widget.setStyleSheet(_TRANSCRIPT_AREA_STYLE)
+        self.transcript_widget.verticalScrollBar().rangeChanged.connect(
+            self._finish_scroll_to_bottom
+        )
         self._transcript_container = QWidget()
         self._transcript_layout = QVBoxLayout(self._transcript_container)
         self._transcript_layout.setContentsMargins(4, 4, 4, 4)

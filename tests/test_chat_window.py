@@ -605,9 +605,10 @@ class TestChatWindowTranscriptScroll:
 
     def test_append_scrolls_to_bottom_after_many_lines(self, qapp, monkeypatch):
         from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtTest import QTest
 
         monkeypatch.setattr(
-            "jarvis.daemon.submit_text_query", lambda text, **kw: None
+            "desktop_app.chat_window.get_hot_window_messages", lambda: []
         )
         win = ChatWindow()
         win.show()
@@ -616,26 +617,31 @@ class TestChatWindowTranscriptScroll:
         # lines. Each append must bring the cursor (the view) back to the end.
         for _ in range(80):
             win._append_assistant("line of transcript content " * 4)
-        qapp.processEvents()
+        QTest.qWait(100)
 
         scroll_bar = win.transcript_widget.verticalScrollBar()
+        assert scroll_bar.maximum() > 0
         assert scroll_bar.value() == scroll_bar.maximum()
 
-    def test_new_message_scrolls_to_bottom_from_scrolled_up_position(self, qapp):
+    @pytest.mark.parametrize("kind", ["user", "assistant", "system"])
+    def test_new_message_scrolls_to_bottom_from_scrolled_up_position(self, qapp, monkeypatch, kind):
         from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtTest import QTest
+
+        monkeypatch.setattr("desktop_app.chat_window.get_hot_window_messages", lambda: [])
 
         win = ChatWindow()
         win.show()
         for index in range(80):
             win._append_assistant(f"older message {index} " * 4)
-        qapp.processEvents()
+        QTest.qWait(100)
 
         scroll_bar = win.transcript_widget.verticalScrollBar()
         scroll_bar.setValue(scroll_bar.minimum())
         assert scroll_bar.value() < scroll_bar.maximum()
 
-        win._append_user("newest message")
-        qapp.processEvents()
+        getattr(win, f"_append_{kind}")("newest message")
+        QTest.qWait(100)
 
         assert scroll_bar.value() == scroll_bar.maximum()
 
