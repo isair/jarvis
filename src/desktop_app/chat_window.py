@@ -20,8 +20,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QCloseEvent, QShowEvent
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QRectF
+from PyQt6.QtGui import (
+    QCloseEvent, QShowEvent, QPainter, QColor, QPen, QLinearGradient,
+    QRadialGradient, QShortcut, QKeySequence,
+)
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -31,10 +34,105 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
     QWidget,
+    QSizeGrip,
 )
 
 from jarvis.debug import debug_log
-from desktop_app.themes import COLORS, JARVIS_THEME_STYLESHEET
+from desktop_app.themes import COLORS, JARVIS_THEME_STYLESHEET, CHAT_THEME_STYLESHEET
+
+
+class PhoneShell(QWidget):
+    """Rounded, layered chassis drawn inside the translucent window."""
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+        metal = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        for position, colour in (
+            (0, 'text_muted'), (.18, 'bg_hover'), (.5, 'border'),
+            (.8, 'bg_primary'), (1, 'text_muted'),
+        ):
+            metal.setColorAt(position, QColor(COLORS[colour]))
+        painter.setPen(QPen(QColor(COLORS['border']), 1))
+        painter.setBrush(metal)
+        painter.drawRoundedRect(rect, 36, 36)
+        painter.setBrush(QColor(COLORS['bg_primary']))
+        painter.drawRoundedRect(rect.adjusted(4, 4, -4, -4), 32, 32)
+
+
+class ChatTitleBar(QWidget):
+    """Desktop window movement, with a fallback for unsupported platforms."""
+
+    def mousePressEvent(self, event) -> None:
+        self._drag_offset = None
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is None or not handle.startSystemMove():
+                self._drag_offset = event.globalPosition().toPoint() - self.window().pos()
+            event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        offset = getattr(self, '_drag_offset', None)
+        if offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window().move(event.globalPosition().toPoint() - offset)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            if window.isMaximized():
+                window.showNormal()
+            else:
+                window.showMaximized()
+
+
+class JarvisOrb(QWidget):
+    """Resolution-independent amber core, with no external image assets."""
+
+    def __init__(self, size: int, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self.setAccessibleName('Jarvis')
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.scale(self.width() / 100, self.height() / 100)
+        glow = QRadialGradient(50, 50, 50)
+        colour = QColor(COLORS['accent_primary'])
+        colour.setAlpha(65)
+        glow.setColorAt(0, colour)
+        colour.setAlpha(0)
+        glow.setColorAt(1, colour)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(QRectF(0, 0, 100, 100))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(COLORS['accent_muted']), .8))
+        painter.drawEllipse(QRectF(16, 16, 68, 68))
+        painter.setPen(QPen(QColor(COLORS['accent_secondary']), 2))
+        painter.drawArc(QRectF(22, 22, 56, 56), 25 * 16, 130 * 16)
+        painter.drawArc(QRectF(22, 22, 56, 56), 205 * 16, 130 * 16)
+        painter.setPen(QPen(
+            QColor(COLORS['accent_secondary']), 3,
+            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+        ))
+        for x, height in ((38, 10), (46, 24), (54, 32), (62, 16)):
+            painter.drawLine(x, 50 - height // 2, x, 50 + height // 2)
+
+
+class ChatSizeGrip(QSizeGrip):
+    """A visible resize affordance, including on platforms with blank grips."""
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(
+            QColor(COLORS['text_muted']), 1,
+            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+        ))
+        painter.drawLine(5, 12, 12, 5)
+        painter.drawLine(10, 12, 12, 10)
 
 
 def get_hot_window_messages() -> list:
@@ -95,9 +193,9 @@ _INPUT_STYLE = f"""
     QPlainTextEdit {{
         background-color: {COLORS['bg_secondary']};
         color: {COLORS['text_primary']};
-        border: 1px solid {COLORS['border']};
-        border-radius: 18px;
-        padding: 8px 14px;
+        border: none;
+        border-radius: 14px;
+        padding: 8px 4px;
         font-family: '.AppleSystemUIFont', 'Segoe UI', sans-serif;
         font-size: 14px;
     }}
@@ -109,10 +207,10 @@ _INPUT_STYLE = f"""
 _SEND_BTN_STYLE = f"""
     QPushButton {{
         background-color: {COLORS['accent_primary']};
-        color: #0a0b0f;
+        color: {COLORS['bg_primary']};
         border: none;
         border-radius: 18px;
-        padding: 8px 16px;
+        padding: 0;
         font-weight: 600;
         font-size: 14px;
     }}
@@ -128,10 +226,10 @@ _SEND_BTN_STYLE = f"""
 _STOP_BTN_STYLE = f"""
     QPushButton {{
         background-color: {COLORS['error']};
-        color: #ffffff;
+        color: {COLORS['text_primary']};
         border: none;
         border-radius: 18px;
-        padding: 8px 16px;
+        padding: 0;
         font-weight: 600;
         font-size: 14px;
     }}
@@ -181,22 +279,22 @@ _HEADER_STATUS_STYLE = f"""
 _BUBBLE_STYLES = {
     "user": f"""
         QLabel {{
-            background-color: {COLORS['accent_primary']};
-            color: #0a0b0f;
-            border-radius: 14px;
-            border-bottom-right-radius: 4px;
-            padding: 9px 12px;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {COLORS['accent_secondary']}, stop:1 {COLORS['accent_primary']});
+            color: {COLORS['bg_primary']};
+            border-radius: 18px;
+            border-bottom-right-radius: 5px;
+            padding: 12px 16px;
             font-size: 14px;
         }}
     """,
     "assistant": f"""
         QLabel {{
-            background-color: {COLORS['bg_tertiary']};
+            background-color: {COLORS['bg_secondary']};
             color: {COLORS['text_primary']};
             border: 1px solid {COLORS['border']};
-            border-radius: 14px;
-            border-bottom-left-radius: 4px;
-            padding: 9px 12px;
+            border-radius: 18px;
+            border-bottom-left-radius: 5px;
+            padding: 12px 16px;
             font-size: 14px;
         }}
     """,
@@ -225,7 +323,7 @@ _DAEMON_STATUS_PLACEHOLDERS = {
     "stopping": "Jarvis is stopping",
     "stopped": "Start Listening from the tray to use chat",
     "crashed": "Start Listening from the tray to reconnect chat",
-    "running": "Type a message to Jarvis... (Enter to send, Shift+Enter for newline)",
+    "running": "Message Jarvis…",
 }
 
 _HEADER_STATUS_TEXTS = {
@@ -261,11 +359,15 @@ class ChatWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("Jarvis Chat")
+        self.setObjectName('chatWindow')
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # A portrait, phone-like window reads as a message thread. The tray
         # re-shows the same instance, so the size persists for the session.
-        self.setMinimumSize(440, 600)
-        self.resize(480, 720)
-        self.setStyleSheet(JARVIS_THEME_STYLESHEET)
+        self.setMinimumSize(380, 560)
+        available = self.screen().availableGeometry()
+        self.resize(min(480, available.width()), min(800, available.height()))
+        self.setStyleSheet(JARVIS_THEME_STYLESHEET + CHAT_THEME_STYLESHEET)
         self._submit_fn = submit_fn
         # Subprocess mode routes cancellation to the daemon the same way it
         # routes a submission. Without it, Stop sets a flag in this
@@ -293,36 +395,82 @@ class ChatWindow(QMainWindow):
         self.signals.busy.connect(self._on_busy)
 
         # --- Layout -----------------------------------------------------
-        central = QWidget()
+        central = PhoneShell()
+        central.setObjectName('phoneShell')
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 12)
-        root.setSpacing(8)
+        shell_layout = QVBoxLayout(central)
+        shell_layout.setContentsMargins(10, 10, 10, 10)
+        surface = QWidget()
+        surface.setObjectName('chatSurface')
+        shell_layout.addWidget(surface)
+        root = QVBoxLayout(surface)
+        root.setContentsMargins(18, 10, 18, 10)
+        root.setSpacing(12)
+
+        self.title_bar = ChatTitleBar()
+        title_layout = QHBoxLayout(self.title_bar)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        self.minimise_button = QPushButton('−')
+        self.close_button = QPushButton('×')
+        for button, name, callback in (
+            (self.minimise_button, 'Minimise chat', self.showMinimized),
+            (self.close_button, 'Close chat', self.close),
+        ):
+            button.setObjectName('chatWindowControl')
+            button.setFixedSize(36, 36)
+            button.setAccessibleName(name)
+            button.setToolTip(name)
+            button.clicked.connect(callback)
+        title_layout.addWidget(self.minimise_button)
+        title_layout.addStretch()
+        capsule = QLabel('J A R V I S  /  CHAT')
+        capsule.setObjectName('chatCapsule')
+        capsule.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        title_layout.addWidget(capsule)
+        title_layout.addStretch()
+        title_layout.addWidget(self.close_button)
+        root.addWidget(self.title_bar)
+        self._close_shortcut = QShortcut(QKeySequence.StandardKey.Close, self)
+        self._close_shortcut.activated.connect(self.close)
 
         # Contact header, like the top of an SMS thread.
         header = QHBoxLayout()
         header.setSpacing(10)
-        avatar = QLabel("🤖")
-        avatar.setFixedSize(36, 36)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet(
-            f"background-color: {COLORS['bg_tertiary']};"
-            f" border-radius: 18px; font-size: 18px;"
-        )
+        avatar = JarvisOrb(60)
         header.addWidget(avatar)
         name_col = QVBoxLayout()
-        name_col.setSpacing(0)
+        name_col.setSpacing(3)
         name_label = QLabel("Jarvis")
-        name_label.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 15px; font-weight: 700;"
-        )
+        name_label.setObjectName('chatName')
         name_col.addWidget(name_label)
         self._header_status = QLabel("")
         self._header_status.setStyleSheet(_HEADER_STATUS_STYLE)
         name_col.addWidget(self._header_status)
         header.addLayout(name_col)
         header.addStretch(1)
+        companion = QLabel('YOUR\nCOMPANION')
+        companion.setObjectName('chatEyebrow')
+        companion.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header.addWidget(companion)
         root.addLayout(header)
+
+        self.empty_state = QWidget()
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(8, 0, 8, 0)
+        empty_layout.setSpacing(12)
+        empty_layout.addStretch()
+        empty_layout.addWidget(JarvisOrb(120), alignment=Qt.AlignmentFlag.AlignCenter)
+        for text, name in (
+            ('A little space to think.', 'chatEmptyTitle'),
+            ('Ask a question. Follow a thought.\nPick up where your voice left off.', 'chatEmptyDetail'),
+        ):
+            label = QLabel(text)
+            label.setObjectName(name)
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(label)
+        empty_layout.addStretch()
+        root.addWidget(self.empty_state, stretch=1)
 
         # Transcript: a scroll area whose container holds one row widget per
         # message, so sent messages can carry a rewind button. Rebuilt
@@ -339,46 +487,78 @@ class ChatWindow(QMainWindow):
         self._transcript_container = QWidget()
         self._transcript_layout = QVBoxLayout(self._transcript_container)
         self._transcript_layout.setContentsMargins(4, 4, 4, 4)
-        self._transcript_layout.setSpacing(8)
+        self._transcript_layout.setSpacing(16)
         self._transcript_layout.addStretch(1)
         self.transcript_widget.setWidget(self._transcript_container)
         root.addWidget(self.transcript_widget, stretch=1)
+        self.transcript_widget.hide()
 
         # Status indicator (display-only label)
         self._status_label = QLabel("")
         self._status_label.setStyleSheet(_STATUS_STYLE)
+        self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
         root.addWidget(self._status_label)
 
         # Input row: input box + send + stop
-        row = QHBoxLayout()
+        composer = QWidget()
+        composer.setObjectName('chatComposer')
+        row = QHBoxLayout(composer)
+        row.setContentsMargins(12, 10, 10, 10)
         row.setSpacing(8)
 
         self.input_widget = QPlainTextEdit()
         self.input_widget.setPlaceholderText(_DAEMON_STATUS_PLACEHOLDERS["running"])
-        self.input_widget.setFixedHeight(52)
+        self.input_widget.setFixedHeight(58)
+        self.input_widget.setAccessibleName('Message Jarvis')
+        self.input_widget.setToolTip('Enter to send. Shift+Enter for a new line.')
         self.input_widget.setStyleSheet(_INPUT_STYLE)
         self.input_widget.keyPressEvent = self._input_key_press  # type: ignore[method-assign]
         row.addWidget(self.input_widget, stretch=1)
 
-        self.send_button = QPushButton("Send")
+        self.send_button = QPushButton("↑")
+        self.send_button.setFixedSize(38, 38)
+        self.send_button.setAccessibleName('Send message')
+        self.send_button.setToolTip('Send message (Enter)')
         self.send_button.setStyleSheet(_SEND_BTN_STYLE)
         self.send_button.clicked.connect(self._send)
         row.addWidget(self.send_button)
 
-        self.stop_button = QPushButton("Stop")
+        self.stop_button = QPushButton("■")
+        self.stop_button.setFixedSize(38, 38)
+        self.stop_button.setAccessibleName('Stop response')
+        self.stop_button.setToolTip('Stop response')
         self.stop_button.setStyleSheet(_STOP_BTN_STYLE)
         self.stop_button.clicked.connect(self._stop)
         self.stop_button.setVisible(False)
         row.addWidget(self.stop_button)
 
-        root.addLayout(row)
+        root.addWidget(composer)
+        hint = QLabel('ENTER TO SEND  ·  SHIFT + ENTER FOR A NEW LINE')
+        hint.setObjectName('chatEyebrow')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+        footer = QHBoxLayout()
+        footer.addSpacing(16)
+        footer.addStretch()
+        indicator = QLabel()
+        indicator.setObjectName('chatHomeIndicator')
+        indicator.setFixedSize(88, 4)
+        footer.addWidget(indicator)
+        footer.addStretch()
+        grip = ChatSizeGrip(self)
+        grip.setFixedSize(16, 16)
+        grip.setToolTip('Resize chat')
+        footer.addWidget(grip)
+        root.addLayout(footer)
 
         self._query_in_flight = False
         # Whether the transcript has been seeded from the daemon's hot window.
         # Seeded once on first show so re-opening never duplicates turns.
         self._hot_window_seeded = False
         self.set_daemon_available(daemon_available)
+        self.input_widget.setFocus()
 
     # --- Sending --------------------------------------------------------
 
@@ -574,6 +754,8 @@ class ChatWindow(QMainWindow):
 
     def _append_message(self, kind: str, text: str, user_index: Optional[int] = None) -> None:
         """Add one message row to the transcript."""
+        self.empty_state.hide()
+        self.transcript_widget.show()
         self._messages.append(
             {
                 "kind": kind,
@@ -600,7 +782,9 @@ class ChatWindow(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(8)
+        layout.setSpacing(16)
+        self.empty_state.setVisible(not messages)
+        self.transcript_widget.setVisible(bool(messages))
         for m in messages:
             layout.addWidget(self._make_message_row(m))
         layout.addStretch(1)
@@ -625,12 +809,13 @@ class ChatWindow(QMainWindow):
             # Bubble with a timestamp underneath, aligned to the sender's edge.
             bubble = QLabel(text)
             bubble.setObjectName("bubble")
+            bubble.setTextFormat(Qt.TextFormat.PlainText)
             bubble.setWordWrap(True)
             bubble.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
             )
             bubble.setStyleSheet(_BUBBLE_STYLES[kind])
-            bubble.setMaximumWidth(max(280, int(self.width() * 0.72)))
+            bubble.setMaximumWidth(self._bubble_width())
             column = QVBoxLayout()
             column.setSpacing(2)
             column.addWidget(bubble)
@@ -657,16 +842,17 @@ class ChatWindow(QMainWindow):
                         lambda _checked=False, idx=user_index, txt=text:
                         self._rewind_to_user(idx, txt)
                     )
+                row.addStretch(1)
                 row.addWidget(
                     rewind_btn, alignment=Qt.AlignmentFlag.AlignVCenter
                 )
-                row.addStretch(1)
                 row.addLayout(column)
             else:
                 row.addLayout(column)
                 row.addStretch(1)
         else:
             label = QLabel(f"  ⏳ {text}")
+            label.setTextFormat(Qt.TextFormat.PlainText)
             label.setWordWrap(True)
             label.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
@@ -683,10 +869,13 @@ class ChatWindow(QMainWindow):
         super().resizeEvent(event)
         if not hasattr(self, "transcript_widget"):
             return
-        max_w = max(280, int(self.width() * 0.72))
+        max_w = self._bubble_width()
         for label in self.transcript_widget.findChildren(QLabel):
             if label.objectName() == "bubble":
                 label.setMaximumWidth(max_w)
+
+    def _bubble_width(self) -> int:
+        return max(120, int((self.width() - 64) * 0.82))
 
     def _scroll_to_bottom(self) -> None:
         """Keep the latest message visible after Qt settles the new row."""

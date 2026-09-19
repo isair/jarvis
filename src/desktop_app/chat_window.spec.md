@@ -154,7 +154,19 @@ viewer, which is what it is for.
 
 ### `ChatWindow` (in `desktop_app.chat_window`)
 
-A `QMainWindow` styled like an SMS thread with a single contact:
+A `QMainWindow` styled as a futuristic phone with a single contact:
+
+- A translucent, frameless window with a rounded graphite chassis, inset
+  display and amber accents from the shared theme. Its initial portrait size
+  is capped by the available screen, with a 380 × 560 minimum usable size.
+- A draggable top bar with accessible minimise and close controls. Double-click
+  toggles maximise/restore; a bottom-right resize grip resizes the window.
+  The platform close shortcut also hides the chat without ending the conversation.
+- A vector amber core emblem, compact chat capsule and home indicator complete
+  the phone shell. No remote assets, network requests or decorative animations
+  are required.
+- An empty conversation shows an introductory panel, never a fabricated message.
+  It disappears as soon as a typed, seeded, assistant or local notice arrives.
 
 - A contact header (avatar, "Jarvis", and a presence line such as "Online" or
   "Typing…" while a query is in flight).
@@ -169,6 +181,9 @@ A `QMainWindow` styled like an SMS thread with a single contact:
   conversation's message list and is rebuilt atomically on rewind.
 - A multi-line input box with send button. Enter sends; Shift+Enter inserts a
   newline (multi-line input).
+- The inset composer uses labelled, keyboard-accessible icon controls and a
+  separate keyboard hint. Message bodies and local notices are selectable plain
+  text, including strings that resemble HTML. Bubbles resize with the window.
 - A "Stop" button. It marks the exchange abandoned locally, routes the
   cancellation to whichever process is running the query (see Cancellation),
   and resets the thinking indicator immediately. It is distinct from `request_stop` (full
@@ -225,7 +240,8 @@ cannot write to a dead pipe.
 
 ### Theme
 
-All styling uses `JARVIS_THEME_STYLESHEET` from `desktop_app.themes`. No
+All styling uses `JARVIS_THEME_STYLESHEET`, `CHAT_THEME_STYLESHEET` and the shared
+palette from `desktop_app.themes`. No
 hardcoded colours. The window is dark-themed and consistent with the rest of
 the app.
 
