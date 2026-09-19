@@ -621,6 +621,24 @@ class TestChatWindowTranscriptScroll:
         scroll_bar = win.transcript_widget.verticalScrollBar()
         assert scroll_bar.value() == scroll_bar.maximum()
 
+    def test_new_message_scrolls_to_bottom_from_scrolled_up_position(self, qapp):
+        from desktop_app.chat_window import ChatWindow
+
+        win = ChatWindow()
+        win.show()
+        for index in range(80):
+            win._append_assistant(f"older message {index} " * 4)
+        qapp.processEvents()
+
+        scroll_bar = win.transcript_widget.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.minimum())
+        assert scroll_bar.value() < scroll_bar.maximum()
+
+        win._append_user("newest message")
+        qapp.processEvents()
+
+        assert scroll_bar.value() == scroll_bar.maximum()
+
 
 @pytest.mark.unit
 class TestChatWindowCloseHidesNotDestroys:

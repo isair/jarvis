@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QCloseEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -686,6 +686,15 @@ class ChatWindow(QMainWindow):
                 label.setMaximumWidth(max_w)
 
     def _scroll_to_bottom(self) -> None:
+        """Keep the latest message visible after Qt settles the new row."""
+        bar = self.transcript_widget.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        # Inserting a message schedules a layout pass. At this point the
+        # scrollbar maximum can still describe the transcript before the new
+        # row, so repeat the scroll once Qt has recalculated its contents.
+        QTimer.singleShot(0, self._finish_scroll_to_bottom)
+
+    def _finish_scroll_to_bottom(self) -> None:
         bar = self.transcript_widget.verticalScrollBar()
         bar.setValue(bar.maximum())
 
