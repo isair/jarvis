@@ -129,7 +129,7 @@ The exception is genuinely external boundaries the codebase does not own: on-dis
 
 ## Qt Layout: showing hidden widgets compresses existing ones
 
-When toggling widget visibility in a `QFormLayout` or `QVBoxLayout` inside a constrained parent (e.g. a `QWizardPage`), Qt does **not** automatically grow the parent window — it compresses existing widgets to make room instead. Always call `parent.adjustSize()` (or `wizard.adjustSize()` for `QWizard`) after `setVisible()` to force a proper layout recalculation. Without it, combo boxes and other form fields end up visibly squished.
+When toggling widget visibility inside a constrained layout, provide a scroll viewport whose content retains its minimum usable size. Wizard pages use `ScrollableWizardPage` or a dedicated scroll area. Do not grow the wizard with `adjustSize()` or hardcoded heights when revealing controls; the window must stay within the available screen and navigation must remain reachable.
 
 ## Prompt-engineering: denial-template mirroring
 

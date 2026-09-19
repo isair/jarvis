@@ -19,6 +19,15 @@ An OpenAI-compatible user has opted out of the local Ollama stack, so `should_sh
 3. **Platform-aware**: Apple Silicon gets MLX Whisper options. Windows gets hidden-console Ollama serve. macOS opens the Ollama app.
 4. **Safe re-entry**: Running the wizard again never destroys existing config — it only fills in missing values.
 
+## Layout and overflow
+
+Every page provides a scroll viewport for content that exceeds the window.
+`ScrollableWizardPage` wraps ordinary page layouts; pages with a dedicated
+scroll area retain it. Content keeps its minimum usable size, including
+after status text or optional controls appear. Navigation stays outside the
+scrolling content. The initial window size is bounded by the available screen;
+page transitions and model installation do not force a larger window.
+
 ## Page Flow
 
 ```
