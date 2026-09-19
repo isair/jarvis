@@ -150,7 +150,16 @@ function Test-FileSha256 {
         # loudly rather than silently skip the integrity check.
         throw "PyPI did not return a SHA256 digest for $Path"
     }
-    $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLower()
+    # .NET directly: the Microsoft.PowerShell.Utility module is not always
+    # loaded in minimal `-File` hosts, where `Get-FileHash` would be unknown.
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = $sha.ComputeHash($stream)
+    } finally {
+        $stream.Dispose()
+    }
+    $actual = -join ($bytes | ForEach-Object { $_.ToString('x2') })
     if ($actual -ne $Expected.ToLower()) {
         throw "SHA256 mismatch for $Path (expected $Expected, got $actual)"
     }

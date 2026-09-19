@@ -54,7 +54,10 @@ class TestFieldMetadata:
 
     def test_field_types_are_valid(self):
         """All field_type values must be from the allowed set."""
-        valid_types = {"bool", "int", "float", "str", "choice", "device", "list", "password"}
+        valid_types = {
+            "bool", "int", "float", "str", "choice", "device",
+            "list", "password", "mmdevice_capture", "mmdevice_render",
+        }
         for fm in FIELD_METADATA:
             assert fm.field_type in valid_types, (
                 f"Field '{fm.key}' has invalid type '{fm.field_type}'"

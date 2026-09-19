@@ -193,6 +193,19 @@ def _voiced_diff(available: list) -> float:
     return 0.0
 
 
+def _item_sample_len(payload) -> int:
+    """Sample count of a queue item's payload (int16 bytes or float32 array)."""
+    if isinstance(payload, (bytes, bytearray)):
+        return len(payload) // 2
+    size = getattr(payload, "size", None)
+    if isinstance(size, int):
+        return int(size)
+    try:
+        return len(payload)
+    except Exception:
+        return 0
+
+
 class AudioIngress:
     """Bounded microphone queue with a per-channel analyser and evidence lock."""
 
@@ -226,18 +239,6 @@ class AudioIngress:
         #: ``(key) -> str`` exact reason that names the lock.
         self._selected_reason: dict = {}
         #: ``(key) -> int`` monotonic_ns of the lock.
-
-def _item_sample_len(payload) -> int:
-    """Sample count of a queue item's payload (int16 bytes or float32 array)."""
-    if isinstance(payload, (bytes, bytearray)):
-        return len(payload) // 2
-    size = getattr(payload, "size", None)
-    if isinstance(size, int):
-        return int(size)
-    try:
-        return len(payload)
-    except Exception:
-        return 0
         self._selected_at_ns: dict = {}
         #: ``(key, channel) -> total samples`` in the whole current buffer.
         self._window_samples: dict = {}
@@ -725,12 +726,31 @@ def _item_sample_len(payload) -> int:
         data2: Optional[bytes] = None,
         stream: Optional[StreamId] = None,
     ) -> None:
-        """Non-blocking ingest of both channels of one ``VoiceAssistantAudio``."""
+        """Non-blocking ingest of both channels of one ``VoiceAssistantAudio``.
+
+        Two-channel firmware: both blocks land in their own per-channel
+        buffer and the lock chooses one. A single-payload stream carries no
+        second block at all, so that one block *is* the chosen channel —
+        it is delivered immediately through the same fixed-path as a locked
+        two-channel frame, and the sample budget trims it in place.
+        """
         active = stream or self._stream
-        if data:
-            self.push_frame(data, active, AUDIO_CHANNEL_ENHANCED)
-        if data2 is not None and len(data2) > 0:
+        has_two = data2 is not None and len(data2) > 0
+        if has_two:
+            if data:
+                self.push_frame(data, active, AUDIO_CHANNEL_ENHANCED)
             self.push_frame(data2, active, AUDIO_CHANNEL_RAW)
+            return
+        if data:
+            key = self._stream_key(active)
+            if key in self._selected and self._selected.get(key) is not None:
+                ch = int(self._selected[key])
+            elif self._multi is False:
+                ch = AUDIO_CHANNEL_ENHANCED
+            else:
+                configured = (self._config.audio_channel or "enhanced").lower()
+                ch = AUDIO_CHANNEL_RAW if configured == "raw" else AUDIO_CHANNEL_ENHANCED
+            self.push_frame(data, active, int(ch))
 
     def push_local(self, payload: bytes) -> None:
         """Append exactly one ``LocalMicFrame`` (not a satellite 4-field)."""

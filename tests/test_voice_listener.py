@@ -27,6 +27,10 @@ def _create_mock_config(**kwargs):
     mock_cfg.voice_device = kwargs.get("voice_device", None)
     mock_cfg.voice_debug = kwargs.get("voice_debug", False)
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+    # These unit tests exercise the PortAudio lane of ``run()``: force the
+    # documented compat backend so the native engine (when present next to
+    # the package) does not short-circuit the ``sd.*`` expectations.
+    mock_cfg.voice_input_backend = kwargs.get("voice_input_backend", "portaudio_compat")
     return mock_cfg
 
 
@@ -692,7 +696,21 @@ class TestCpuOptimisations:
                     listener._samplerate = 16000
 
                     # Set up state so _finalize_utterance reaches transcription
-                    listener._utterance_frames = [np.zeros(16000, dtype=np.float32)]
+                    # A voiced-looking 1 s clip: the hard speech gate needs a
+                    # non-silent PCM, a >= 200 ms speech span and >= 10 voiced
+                    # 20 ms frames to reach the decoder.
+                    t_idx = np.arange(16000, dtype=np.float32)
+                    audio_frame = (np.sin(2.0 * np.pi * 220.0 * t_idx / 16000.0) * 0.1).astype(np.float32)
+                    listener._frame_samples = 320
+                    listener._utterance_frames = [audio_frame]
+                    listener._frame_state = {
+                        "first_voiced_offset": 0,
+                        "last_voiced_offset": 49,
+                        "voiced_frame_count": 50,
+                        "total_frame_count": 50,
+                        "trailing_silence_frames": 0,
+                        "post_roll_frames": 0,
+                    }
                     listener.echo_detector._utterance_start_time = time.time() - 1.0
                     listener.is_speech_active = True
 

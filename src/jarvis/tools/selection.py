@@ -445,7 +445,10 @@ def select_tools(
         List of tool name strings.
     """
     deterministic = deterministic_tool_route(query, builtin_tools, mcp_tools)
-    if deterministic:
+    if deterministic and strategy in (
+        ToolSelectionStrategy.ALL,
+        ToolSelectionStrategy.KEYWORD,
+    ):
         debug_log(
             f"Deterministic tool route: {', '.join(deterministic)}",
             "planning",

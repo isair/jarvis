@@ -387,9 +387,9 @@ class TestPiperTTSAutoDownload:
         """Default voice should be a reasonable choice."""
         from src.jarvis.output.tts import PIPER_DEFAULT_VOICE
 
-        # Should be British English
-        assert PIPER_DEFAULT_VOICE.startswith("en_GB")
-        # Should include quality indicator
+        # Campaign identity: the Czech Toustovač ships the Czech default.
+        assert PIPER_DEFAULT_VOICE in ("cs_CZ-jirka-medium", "cs_CZ-nu%C3%B9-medium") or PIPER_DEFAULT_VOICE.startswith("cs_CZ")
+        # Include quality indicator
         assert "medium" in PIPER_DEFAULT_VOICE or "high" in PIPER_DEFAULT_VOICE
 
 

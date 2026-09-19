@@ -1820,16 +1820,19 @@ class VoicePEDevice:
             self._conversation_started = now
 
     def _should_continue(self, reply: str) -> bool:
-        """Keep successful turns open while the configured window is valid."""
+        """Stock dialog rule: only an open question keeps the run waiting.
+
+        The firmware's ``continue_conversation`` flag is taken from the
+        reply's shape: ``?`` ends the statement in an open question, every
+        other terminator closes the run. Muted devices and a disabled config
+        never keep the dialog.
+        """
         if not self.config.continued_conversation or not reply:
             return False
         if self.media.muted:
             return False
-        if self._conversation_started <= 0:
-            return True
-        return (
-            time.monotonic() - self._conversation_started
-        ) < max(1.0, float(self.config.conversation_timeout_s))
+        text = str(reply).strip()
+        return text.endswith("?") or text.endswith("？")
 
     async def _start_udp_server(self) -> Optional[int]:
         """UDP microphone for firmware without the ``API_AUDIO`` flag."""

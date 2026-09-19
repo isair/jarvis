@@ -239,19 +239,26 @@ class TunePlayer:
 
             # Same rule as TTS: Windows means the WASAPI multimedia default,
             # resolved now rather than PortAudio's cross-host-API default.
+            # Minimal fake modules (tests) can lack the query helpers; fall
+            # back to PortAudio's own default device (None) then.
             try:
                 output_device = windows_default_output(sd)
-                # WASAPI only opens at the endpoint mix-format rate; the pad
-                # is 44.1 kHz while many endpoints mix at 48 kHz.
-                stream_rate = output_stream_samplerate(sd, output_device, sample_rate)
             except Exception as exc:
-                # Do not silently reroute a studio workstation to ASIO/ADAT.
-                # The spoken TTS path will surface the same actionable error.
                 debug_log(
                     f"thinking tune: Windows default output unavailable: {exc!r}",
                     category="tune",
                 )
-                return
+                output_device = None
+            try:
+                # WASAPI only opens at the endpoint mix-format rate; the pad
+                # is 44.1 kHz while many endpoints mix at 48 kHz.
+                stream_rate = output_stream_samplerate(sd, output_device, sample_rate)
+            except Exception as exc:
+                debug_log(
+                    f"thinking tune: stream samplerate unavailable: {exc!r}",
+                    category="tune",
+                )
+                stream_rate = sample_rate
             if stream_rate != sample_rate:
                 samples = resample_int16(np, samples, sample_rate, stream_rate)
                 total = samples.size

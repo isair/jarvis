@@ -11,6 +11,7 @@ from jarvis.config import (
     DEFAULT_CHAT_MODEL,
     get_supported_model_ids,
     get_default_config,
+    _hardware_compute_kind,
 )
 
 
@@ -108,9 +109,14 @@ class TestDefaultConfigUsesModelConstant:
     """Tests to ensure default config uses the model constants."""
 
     def test_default_config_uses_default_chat_model(self):
-        """get_default_config() should use DEFAULT_CHAT_MODEL for ollama_chat_model."""
+        """get_default_config() uses the per-hardware model ladder.
+
+        On NVIDIA the ladder picks ``qwen3.8:27b``; everywhere else it is
+        ``DEFAULT_CHAT_MODEL`` (``gemma4:e2b``).
+        """
         config = get_default_config()
-        assert config["ollama_chat_model"] == DEFAULT_CHAT_MODEL
+        expected = "qwen3.8:27b" if _hardware_compute_kind() == "nvidia" else DEFAULT_CHAT_MODEL
+        assert config["ollama_chat_model"] == expected
 
     def test_default_config_model_is_supported(self):
         """The default model in config should be a supported model."""

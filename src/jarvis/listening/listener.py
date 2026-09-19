@@ -95,6 +95,18 @@ if TYPE_CHECKING:
     from ..memory.conversation import DialogueMemory
 
 
+def _numeric_or(value: object, fallback: float) -> float:
+    """Return the numeric value of ``value`` or ``fallback``.
+
+    Plain ``float(getattr(mock_cfg, name, fallback))`` is not enough with
+    ``MagicMock`` configs: an unset attribute is an auto-child mock and
+    ``float(child)`` happily produces ``1.0`` instead of the fallback.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return float(fallback)
+
+
 def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
     """Shared Whisper no-speech gate.
 
@@ -1370,7 +1382,16 @@ class VoiceListener(threading.Thread):
         # it -- on single-slot llama.cpp that request queues every later router
         # and answer behind it. Post-TTS/hot-window speech still uses the judge
         # because it needs the echo and conversational-context decision.
-        if self._wake_timestamp is not None and not could_be_hot_window and not is_speaking_now:
+        judge_ready = (
+            self._intent_judge is not None
+            and getattr(self._intent_judge, "available", False)
+        )
+        if (
+            self._wake_timestamp is not None
+            and not could_be_hot_window
+            and not is_speaking_now
+            and not judge_ready
+        ):
             wake_word = getattr(self.cfg, "wake_word", "toustovač")
             aliases = set(getattr(self.cfg, "wake_aliases", [])) | {wake_word}
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
@@ -1974,6 +1995,12 @@ class VoiceListener(threading.Thread):
             # Success pop right after generation, before speech begins.
             self._flash_face_success()
 
+            if satellite_reply:
+                # Satellite turn: Voice PE owns the playback of its own run;
+                # the PC's TTS engine stays free for the next local turn.
+                print("  🔊 Audio queued: Voice PE", flush=True)
+                return
+
             # TTS completion callback for hot window
             def _on_tts_complete():
                 import time as _time
@@ -1992,19 +2019,13 @@ class VoiceListener(threading.Thread):
 
             # Track TTS start for echo detection with actual text
             self.track_tts_start(reply)
-            output_mode = "voice_pe+windows" if satellite_reply else "windows"
             debug_log(
-                f"starting TTS for reply ({len(reply)} chars, output={output_mode})",
+                f"starting TTS for reply ({len(reply)} chars, output=windows)",
                 "voice",
             )
 
             self.tts.speak(reply, completion_callback=_on_tts_complete,
                           duration_callback=_on_duration_known)
-            if satellite_reply:
-                print(
-                    "  🔊 Audio queued: Voice PE + Windows default (WASAPI)",
-                    flush=True,
-                )
         else:
             debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response
@@ -2105,7 +2126,10 @@ class VoiceListener(threading.Thread):
 
         # Frame-grid side (20 ms).
         frame_samples = int(getattr(self, "_frame_samples", 320) or 320) or 320
-        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20)) or 20
+        # Frame duration from the real grid instead of the config knob: with
+        # MagicMock-style configs ``int()`` of a child mock silently yields 1.
+        rate = int(_numeric_or(getattr(self, "_samplerate", 16000) or 16000, 16000)) or 16000
+        frame_ms = max(1, int(round(frame_samples * 1000.0 / max(1, rate))))
         voiced = int(utterance_state.get("voiced_frame_count") or 0)
         first_voiced = utterance_state.get("first_voiced_offset")
         last_voiced = utterance_state.get("last_voiced_offset")
@@ -2415,14 +2439,14 @@ class VoiceListener(threading.Thread):
         both are shown from the same single decision, never two gates. The
         threshold itself never softens.
         """
-        min_avg_logprob = float(
-            getattr(self.cfg, "whisper_min_avg_logprob", -0.7)
+        min_avg_logprob = _numeric_or(
+            getattr(self.cfg, "whisper_min_avg_logprob", None), -0.7
         )
         linear_view = min_avg_logprob + 1.0
         exp_view = math.exp(min_avg_logprob)
         marginal_logprob = min_avg_logprob - 0.1
-        no_speech_threshold = float(
-            getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
+        no_speech_threshold = _numeric_or(
+            getattr(self.cfg, "whisper_no_speech_threshold", None), 0.5
         )
         filtered = []
 
@@ -2638,7 +2662,7 @@ class VoiceListener(threading.Thread):
             # Stamp the identity of the closed stream for the milestone that
             # follows on this same queue.
             self._turn_context = self._sink_context()
-        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        frame_ms = int(_numeric_or(getattr(self.cfg, "vad_frame_ms", None), 20))
         endpoint_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
         frames = max(1, int(endpoint_ms / max(1, frame_ms)))
         samples = int(getattr(self, "_frame_samples", 0) or 0)
@@ -3398,10 +3422,11 @@ class VoiceListener(threading.Thread):
                 print("     â³ Some models still warming — continuing anyway", flush=True)
 
         # Audio parameters
-        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        frame_ms = _numeric_or(getattr(self.cfg, "vad_frame_ms", None), 20)
+        frame_ms = int(frame_ms)
         self._frame_samples = max(1, int(self._samplerate * frame_ms / 1000))
-        pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
-        endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
+        pre_roll_ms = _numeric_or(getattr(self.cfg, "vad_pre_roll_ms", None), 240)
+        endpoint_silence_ms = _numeric_or(getattr(self.cfg, "endpoint_silence_ms", None), 800)
         max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 12000))
         tts_max_utt_ms = int(getattr(self.cfg, "tts_max_utterance_ms", 3000))
 
@@ -3900,7 +3925,7 @@ class VoiceListener(threading.Thread):
             if count == 0:
                 return
             doubles = flat.astype(np.float64)
-            frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+            frame_ms = int(_numeric_or(getattr(self.cfg, "vad_frame_ms", None), 20))
             frame_samples = int(
                 getattr(self, "_frame_samples", 0)
                 or round(self._samplerate * frame_ms / 1000.0)
@@ -4198,7 +4223,7 @@ class VoiceListener(threading.Thread):
             # checkpoints can read without mixing in local-microphone turns.
             self.metrics["last_satellite_segment"] = record
 
-        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        frame_ms = int(_numeric_or(getattr(self.cfg, "vad_frame_ms", None), 20))
         debug_log(
             f"stt_end status={resolved} source={source} "
             f"stream={None if stream is None else tuple(stream)} "
@@ -4361,7 +4386,7 @@ class VoiceListener(threading.Thread):
         # The real speech span, in seconds: first voiced frame to last voiced
         # frame, both from the state machine. The pre-roll head and the endpoint
         # wait are not part of it, so the minimum length is judged on speech.
-        frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        frame_ms = max(1, int(round(self._frame_samples * 1000.0 / max(1, int(self._samplerate)))))
         first_voiced = utterance_state.get("first_voiced_offset")
         last_voiced = utterance_state.get("last_voiced_offset")
         if first_voiced is None or last_voiced is None:
@@ -4433,7 +4458,9 @@ class VoiceListener(threading.Thread):
 
         # Filter short audio on the speech span, not on the stored clip length.
         audio_duration = len(audio) / self._samplerate
-        min_duration = getattr(self.cfg, "whisper_min_audio_duration", 0.15)
+        min_duration = _numeric_or(
+            getattr(self.cfg, "whisper_min_audio_duration", None), 0.15
+        )
         if speech_span_s < min_duration:
             debug_log(
                 f"speech span too short ({speech_span_s:.3f}s < {min_duration}s), "
@@ -4547,10 +4574,11 @@ class VoiceListener(threading.Thread):
                 self._decoder_language_argument = forced_language
                 if forced_language:
                     self._language_source = "forced"
-                    self._last_detected_language = forced_language
+                    detected = forced_language
                 else:
                     self._language_source = "auto"
-                    self._last_detected_language = self._reported_language
+                    detected = self._reported_language
+                self._last_detected_language = detected
 
                 # Filter segments in the log domain — one and the same gate
                 # as the faster-whisper path, just on the MLX dict rows.
@@ -4626,6 +4654,13 @@ class VoiceListener(threading.Thread):
                 # once for this installed backend at model-init time, so the
                 # complete compatible set goes in one call and no per-call retry
                 # can narrow the semantics. `language` is the per-clip value.
+                if not self._transcribe_kwargs:
+                    # A directly-assigned model object (test wiring) skips the
+                    # init-time probe: resolve the same live-signature subset.
+                    self._transcribe_kwargs, _rejected = _resolve_transcribe_kwargs(
+                        getattr(self.model, "transcribe", None),
+                        PREFERRED_TRANSCRIBE_KWARGS,
+                    )
                 with self.transcribe_lock:
                     _language = self._whisper_language_code()
                     segments, _info = self.model.transcribe(
@@ -4643,10 +4678,11 @@ class VoiceListener(threading.Thread):
                 self._decoder_language_argument = _language
                 if _language:
                     self._language_source = "forced"
-                    self._last_detected_language = _language
+                    detected = _language
                 else:
                     self._language_source = "auto"
-                    self._last_detected_language = self._reported_language
+                    detected = self._reported_language
+                self._last_detected_language = detected
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
                 raw_rows = list(segments_list)
@@ -4877,7 +4913,7 @@ class VoiceListener(threading.Thread):
                     - int(utterance_state["first_voiced_offset"])
                     + 1
                 )
-                * int(getattr(self.cfg, "vad_frame_ms", 20))
+                * int(_numeric_or(getattr(self.cfg, "vad_frame_ms", None), 20))
                 / 1000.0,
                 4,
             )

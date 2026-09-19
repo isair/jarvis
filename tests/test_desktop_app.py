@@ -108,7 +108,7 @@ class TestOpenAICompatStartupCheck:
 
         class _Backend:
             def list_models(self, timeout_sec=4.0):
-                return ["m-chat"]
+               return ["m-chat"]
 
         with patch("jarvis.llm.get_llm_backend", return_value=_Backend()):
             assert _check_openai_compat_reachable(cfg) is True
@@ -120,7 +120,7 @@ class TestOpenAICompatStartupCheck:
 
         class _Empty:
             def list_models(self, timeout_sec=4.0):
-                return []
+               return []
 
         with patch("jarvis.llm.get_llm_backend", return_value=_Empty()):
             assert _check_openai_compat_reachable(cfg) is False
@@ -221,8 +221,8 @@ class TestOllamaRuntimeOwnership:
 
         with patch("sys.platform", "darwin"):
             stopped = _stop_owned_ollama_runtime(
-                ownership,
-                command_runner=runner,
+               ownership,
+               command_runner=runner,
             )
 
         assert stopped is True
@@ -282,8 +282,8 @@ class TestRuntimeStatusSnapshot:
             daemon_process=process,
             daemon_thread=None,
             ollama_runtime_ownership=OllamaRuntimeOwnership(
-                started_by_jarvis=True,
-                launch_method="serve",
+               started_by_jarvis=True,
+               launch_method="serve",
             ),
             settings_loader=lambda: self._settings(),
             ollama_checker=lambda: (True, "0.9.1"),
@@ -342,20 +342,20 @@ class TestRuntimeStatusSnapshot:
 
         text = _format_runtime_status(
             RuntimeStatusSnapshot(
-                daemon_state="Listening",
-                daemon_mode="subprocess",
-                daemon_pid=12345,
-                ollama_needed=True,
-                ollama_running=True,
-                ollama_version="0.9.1",
-                ollama_owner="Jarvis",
-                ollama_launch_method="serve",
-                low_power_mode=True,
-                llm_provider="ollama",
-                chat_model="gemma4:e2b",
-                embedding_provider="ollama",
-                embedding_model="nomic-embed-text",
-                mcp_count=2,
+               daemon_state="Listening",
+               daemon_mode="subprocess",
+               daemon_pid=12345,
+               ollama_needed=True,
+               ollama_running=True,
+               ollama_version="0.9.1",
+               ollama_owner="Jarvis",
+               ollama_launch_method="serve",
+               low_power_mode=True,
+               llm_provider="ollama",
+               chat_model="gemma4:e2b",
+               embedding_provider="ollama",
+               embedding_model="nomic-embed-text",
+               mcp_count=2,
             )
         )
 
@@ -622,9 +622,9 @@ class TestModelSupportIntegration:
 
         for model_id in SUPPORTED_CHAT_MODELS:
             with patch("jarvis.config.load_config") as mock_config:
-                mock_config.return_value = {"ollama_chat_model": model_id}
-                result = check_model_support()
-                assert result is None, f"Model {model_id} should be supported"
+               mock_config.return_value = {"ollama_chat_model": model_id}
+               result = check_model_support()
+               assert result is None, f"Model {model_id} should be supported"
 
 
 class TestLogViewerReportIssue:
@@ -1111,9 +1111,9 @@ class TestSingleInstanceLock:
             fh.seek(0)
             content = fh.read().decode().strip()
             assert content == str(existing_pid), (
-                f"Lock file was truncated on open — PID {existing_pid} was lost. "
-                "This reproduces the bug where 'w' mode destroyed the PID before "
-                "the lock attempt completed."
+               f"Lock file was truncated on open — PID {existing_pid} was lost. "
+               "This reproduces the bug where 'w' mode destroyed the PID before "
+               "the lock attempt completed."
             )
         finally:
             fh.close()
@@ -1135,23 +1135,23 @@ class TestSingleInstanceLock:
 
         try:
             with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
-                result = app_module.acquire_single_instance_lock()
+               result = app_module.acquire_single_instance_lock()
 
             assert result is True
             # PID should be readable from a separate handle because the lock
             # is at _LOCK_OFFSET, not at byte 0.
             content = lock_file.read_text().strip()
             assert content == str(os.getpid()), (
-                f"Lock file should contain current PID {os.getpid()}, got {content!r}"
+               f"Lock file should contain current PID {os.getpid()}, got {content!r}"
             )
         finally:
             # Release lock so the file handle is closed
             if app_module._lock_file_handle and app_module._lock_file_handle is not original_handle:
-                try:
-                    app_module._lock_file_handle.close()
-                except Exception:
-                    pass
-                app_module._lock_file_handle = original_handle
+               try:
+                   app_module._lock_file_handle.close()
+               except Exception:
+                   pass
+               app_module._lock_file_handle = original_handle
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific lock test")
     def test_lock_blocks_second_process_and_pid_readable(self, tmp_path):
@@ -1164,7 +1164,7 @@ class TestSingleInstanceLock:
 
         try:
             with patch("desktop_app.app.get_lock_file_path", return_value=lock_file):
-                result = app_module.acquire_single_instance_lock()
+               result = app_module.acquire_single_instance_lock()
             assert result is True
 
             # Child process: try to acquire the same lock and read the PID
@@ -1187,23 +1187,23 @@ except Exception as e:
     print("PID_FAILED=" + str(e))
 '''
             proc = subprocess.run(
-                [sys.executable, "-c", child_code],
-                capture_output=True, text=True, timeout=10,
+               [sys.executable, "-c", child_code],
+               capture_output=True, text=True, timeout=10,
             )
             lines = proc.stdout.strip().splitlines()
             assert "LOCK_BLOCKED" in lines, (
-                f"Child should have been blocked from acquiring lock, got: {lines}"
+               f"Child should have been blocked from acquiring lock, got: {lines}"
             )
             pid_line = [l for l in lines if l.startswith("PID_READ=")]
             assert pid_line, f"Child should have read the PID, got: {lines}"
             assert pid_line[0] == f"PID_READ={os.getpid()}"
         finally:
             if app_module._lock_file_handle and app_module._lock_file_handle is not original_handle:
-                try:
-                    app_module._lock_file_handle.close()
-                except Exception:
-                    pass
-                app_module._lock_file_handle = original_handle
+               try:
+                   app_module._lock_file_handle.close()
+               except Exception:
+                   pass
+               app_module._lock_file_handle = original_handle
 
 
 class TestCudaRecoveryAction:
@@ -1307,10 +1307,10 @@ class TestCudaRecoveryAction:
             target_dir=tmp_path / "cuda",
             executable=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             arguments=[
-                "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", str(tmp_path / "install_cuda.ps1"),
-                "-TargetDir", str(tmp_path / "cuda"),
-                "-LogPath", str(tmp_path / "cuda" / "install.log"),
+               "-NoProfile", "-ExecutionPolicy", "Bypass",
+               "-File", str(tmp_path / "install_cuda.ps1"),
+               "-TargetDir", str(tmp_path / "cuda"),
+               "-LogPath", str(tmp_path / "cuda" / "install.log"),
             ],
         )
         action.script_path.write_text("# placeholder\n", encoding="utf-8")
@@ -1412,23 +1412,17 @@ class TestDaemonSmokeTest:
              patch("jarvis.daemon.create_tts_engine") as mock_tts, \
              patch("jarvis.daemon.VoiceListener") as mock_vl, \
              patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph:
-
-            from tests.conftest import MockConfig
+            from conftest import MockConfig
             mock_load.return_value = MockConfig(db_path=":memory:")
-
             mock_db_instance = MagicMock()
             mock_db.return_value = mock_db_instance
-
             mock_dm_instance = MagicMock()
             mock_dm.return_value = mock_dm_instance
-
             mock_tts_instance = MagicMock()
             mock_tts_instance.enabled = False
             mock_tts.return_value = mock_tts_instance
-
             mock_vl_instance = MagicMock()
             mock_vl.return_value = mock_vl_instance
-
             mock_graph_instance = MagicMock()
             mock_graph_instance.migrate_legacy_shape.return_value = False
             mock_graph.return_value = mock_graph_instance
@@ -1437,6 +1431,7 @@ class TestDaemonSmokeTest:
             captured = io.StringIO()
             with patch("sys.stdout", captured):
                 from jarvis.daemon import main
+
                 main(smoke_test=True)
 
             output = captured.getvalue()
@@ -1466,8 +1461,8 @@ class TestDaemonSmokeTest:
              patch("jarvis.daemon.VoiceListener") as mock_vl, \
              patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph, \
              patch("jarvis.daemon.time.sleep", side_effect=StopBeforeMainLoop()):
+            from conftest import MockConfig
 
-            from tests.conftest import MockConfig
             mock_load.return_value = MockConfig(db_path=":memory:")
 
             mock_db_instance = MagicMock()
@@ -1490,6 +1485,7 @@ class TestDaemonSmokeTest:
             captured = io.StringIO()
             with patch("sys.stdout", captured):
                 from jarvis.daemon import main
+
                 try:
                     main(smoke_test=False)
                 except StopBeforeMainLoop:
@@ -1538,12 +1534,12 @@ class TestDesktopSmokeTest:
 
             captured = io.StringIO()
             with patch("sys.stdout", captured):
-                from desktop_app.app import _smoke_test_main
-                result = _smoke_test_main()
+               from desktop_app.app import _smoke_test_main
+               result = _smoke_test_main()
 
             output = captured.getvalue()
             assert "SMOKE_TEST_PASSED" in output, (
-                f"Expected SMOKE_TEST_PASSED in output, got:\n{output}"
+               f"Expected SMOKE_TEST_PASSED in output, got:\n{output}"
             )
             assert result == 0
 
@@ -1626,7 +1622,7 @@ class TestRuntimeStatusDialog:
             + ["🦙 Ollama"] * 4
             + ["🧠 Models"] * 3
             + ["🔌 MCP"] * 1
-            + ["🛰️ Voice PE"] * 1
+            + ["🛰️ Voice PE"] * 2
         )
 
     def test_format_still_matches_legacy_text_layout(self):

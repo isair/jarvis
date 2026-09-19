@@ -298,7 +298,7 @@ def _runtime_status_rows(snapshot: RuntimeStatusSnapshot) -> list[tuple[str, str
         ),
         ("🔌 MCP", "Configured servers", str(snapshot.mcp_count)),
         ("🛰️ Voice PE", "Status", snapshot.voice_pe),
-        ("🎙️ Clean Mic", "Status", snapshot.virtual_microphone),
+        ("🛰️ Voice PE", "Clean Mic", snapshot.virtual_microphone),
     ]
 
 
@@ -659,9 +659,9 @@ def collect_macos_crash_report(
     missing/empty diagnostics directory, no report newer than the crash
     log, or unparseable content.
     """
-    if sys.platform != "darwin":
-        return None
     try:
+        if sys.platform != "darwin":
+            return None
         if diagnostics_dir is None:
             diagnostics_dir = Path.home() / "Library" / "Logs" / "DiagnosticReports"
         if not diagnostics_dir.is_dir():
@@ -3107,10 +3107,10 @@ def _check_openai_compat_reachable(cfg, timeout_sec: float = 4.0) -> bool:
     isn't running, since (unlike Ollama) Toustovač cannot start it for them."""
     try:
         from jarvis.llm import get_llm_backend
-        # ``is not None`` and not truthiness: a server that answers
-        # ``/v1/models`` with an empty list (LM Studio right after load) IS
-        # reachable, and must not be reported as unreachable.
-        return get_llm_backend(cfg).list_models(timeout_sec=timeout_sec) is not None
+        # A server that answers ``/v1/models`` with an *empty* listing is not
+        # yet able to serve a chat: same as no answer for the user-facing
+        # startup warning. Only a non-empty model list counts as reachable.
+        return bool(get_llm_backend(cfg).list_models(timeout_sec=timeout_sec))
     except Exception:
         return False
 

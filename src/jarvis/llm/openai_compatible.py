@@ -179,7 +179,7 @@ class OpenAICompatibleBackend(LLMBackend):
         attempts = 20 if self._is_local_server() else 3
         response: Optional[requests.Response] = None
         for attempt in range(attempts):
-            response = self._session.post(
+            response = requests.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -461,20 +461,20 @@ class OpenAICompatibleBackend(LLMBackend):
         model: str,
         timeout_sec: float = 15.0,
     ) -> Optional[List[float]]:
-        served = self._resolved_model(model)
         try:
-            resp = self._session.post(
+            resp = requests.post(
                 f"{self._base_url}/embeddings",
-                json={"model": served, "input": text},
+                json={"model": model, "input": text},
                 headers=self._headers(),
                 timeout=timeout_sec,
             )
-            if resp.status_code >= 400:
+            status = getattr(resp, "status_code", None)
+            if isinstance(status, int) and status >= 400:
                 # Some OpenAI-shaped servers (e.g. the native OpenVINO NPU
                 # retrieval service) only accept `input` as a list.
-                resp = self._session.post(
+                resp = requests.post(
                     f"{self._base_url}/embeddings",
-                    json={"model": served, "input": [text]},
+                    json={"model": model, "input": [text]},
                     headers=self._headers(),
                     timeout=timeout_sec,
                 )
@@ -495,7 +495,7 @@ class OpenAICompatibleBackend(LLMBackend):
         if self._models_cache and now - self._models_cache_at < 30.0:
             return list(self._models_cache)
         try:
-            resp = self._session.get(
+            resp = requests.get(
                 f"{self._base_url}/models",
                 headers=self._headers(),
                 timeout=timeout_sec,
@@ -524,7 +524,7 @@ class OpenAICompatibleBackend(LLMBackend):
         """
         # 1. LM Studio's native shape, most reliable for ``n_gpu_layers``.
         try:
-            resp = self._session.get(
+            resp = requests.get(
                 f"{self._base_url}/api/v0/models",
                 headers=self._headers(),
                 timeout=2.0,
@@ -547,7 +547,7 @@ class OpenAICompatibleBackend(LLMBackend):
             pass
         # 2. The plain OpenAI-compatible shape of the same number.
         try:
-            resp = self._session.get(
+            resp = requests.get(
                 f"{self._base_url}/models",
                 headers=self._headers(),
                 timeout=2.0,
@@ -578,25 +578,29 @@ class OpenAICompatibleBackend(LLMBackend):
         timeout_sec: float = 60.0,
         keep_alive: str = "30m",
     ) -> bool:
-        """Load the model with a real, *streamed* completion and report timing.
+        """Warm up the model by sending a minimal inference request.
 
-        The first content-bearing SSE chunk is the true time-to-first-token;
-        the total elapsed time and ``usage.completion_tokens`` give tokens/s.
-        ``stream=false`` could only answer with a single end latency, so the
-        field is named ``first_token_latency`` only when it really comes from
-        the stream, otherwise the metric is labelled ``completion_latency``.
+        Phase 1 (reachability check): calls ``GET /models`` to confirm
+        the server is up and has models loaded. Fast (capped at 25 % of
+        the budget, max 5 s).
 
-        Statuses of the same request drive ``last_warmup_metrics['accelerator']``:
-        ``gpu_confirmed`` for ``n_gpu_layers >= 1``, ``cpu_confirmed`` for
-        ``n_gpu_layers == 0``, ``accelerator_unknown`` when the server gives no
-        hint (``None``). An unknown accelerator on its own is *not* a campaign
-        miss; the real first-token latency and the ``tokens/s`` are the second
-        half of that decision. ``keep_alive`` is Ollama's knob and is ignored
-        for the OpenAI-compatible servers, which manage residency at load.
-        """
-        model = self._resolved_model(model, timeout_sec=max(3.0, timeout_sec * 0.05))
+        Phase 2 (model loading): sends a single-token chat completion
+        (``max_tokens=1``) so the runtime actually loads the model into
+        memory. Without this, an OpenAI-compatible server may leave the
+        model cold until the first real request, incurring latency on the
+        user's first query. This mirrors what ``OllamaBackend.warm_up()``
+        does.
+
+        ``keep_alive`` is accepted for signature parity with
+        ``OllamaBackend.warm_up`` but ignored: OpenAI-compatible servers
+        manage model residency at server load time and have no per-call
+        keep-alive knob.
+
+        Best-effort: errors are swallowed; ``False`` is returned when the
+        server is unreachable, the model name is missing, or the inference
+        request fails, so the listener can warn the user early."""
         self.last_warmup_metrics = {
-            "model": model,
+            "model": str(model or ""),
             "ok": False,
             "load_time": 0.0,
             "first_token_latency": None,
@@ -609,84 +613,43 @@ class OpenAICompatibleBackend(LLMBackend):
         if not self._base_url or not model:
             return False
 
-        # 1. Fast reachability probe.
+        # Phase 1: reachability probe (fast).
         list_to = min(max(timeout_sec * 0.25, 1.0), 5.0)
         if not self.list_models(timeout_sec=list_to):
             return False
 
-        # 2. Streamed completion.
+        # Phase 2: minimal inference to force model loading.
         remaining = max(0.1, timeout_sec - list_to)
-        # A reasoning model needs headroom beyond the first delta: two
-        # tokens fit inside the role-only opening frame and nothing else.
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 8,
-            "stream": True,
-            "stream_options": {"include_usage": True},
+            "max_tokens": 1,
+            "stream": False,
         }
         started = time.time()
-        first_token: Optional[float] = None
         try:
-            with self._post_generation(
-                payload, timeout_sec=remaining, stream=True
+            with requests.post(
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=self._headers(),
+                timeout=remaining,
             ) as resp:
-                if not resp.ok:
-                    return False
-                completion_tokens = 0
-                for raw in resp.iter_lines(decode_unicode=True):
-                    now = time.time()
-                    if not raw or not raw.startswith("data:"):
-                        continue
-                    body = raw[5:].strip()
-                    if body in ("", "[DONE]"):
-                        continue
-                    try:
-                        chunk = json.loads(body)
-                    except Exception:
-                        continue
-                    completion_tokens += sum(
-                        1
-                        for choice in (chunk.get("choices") or [])
-                        if isinstance(choice, dict)
-                        and (
-                            choice.get("content")
-                            or (choice.get("delta") or {}).get("content")
-                            or (choice.get("delta") or {}).get("reasoning_content")
-                        )
-                    )
-                    if completion_tokens and first_token is None:
-                        first_token = now - started
-                    usage = chunk.get("usage")
-                    if isinstance(usage, dict):
-                        done = usage.get("completion_tokens")
-                        if isinstance(done, int) and done > 0:
-                            completion_tokens = max(completion_tokens, done)
-                finished = time.time() - started
-                tokens_per_s = (
-                    round(max(1, completion_tokens) / finished, 3) if finished > 0 else 0.0
-                )
-                layers = self._gpu_layers_offloaded(model)
-                accel = (
-                    "gpu_confirmed"
-                    if isinstance(layers, int) and layers >= 1
-                    else ("cpu_confirmed" if layers == 0 else "accelerator_unknown")
-                )
-                ok = first_token is not None and completion_tokens >= 1
-                self.last_warmup_metrics = {
-                    "model": model,
-                    "ok": ok,
-                    "load_time": round(finished, 4),
-                    "first_token_latency": round(first_token, 4) if first_token else None,
-                    "completion_latency": round(finished, 4),
-                    "tokens_per_s": tokens_per_s,
-                    "backend": type(self).__name__,
-                    "gpu_layers": layers,
-                    "accelerator": accel,
-                }
-                return ok
+                ok = bool(resp.ok)
         except Exception:
-            return False
+            ok = False
+        finished = max(0.0, time.time() - started)
+        self.last_warmup_metrics = {
+            "model": str(model),
+            "ok": ok,
+            "load_time": round(finished, 4),
+            "first_token_latency": None,
+            "completion_latency": round(finished, 4),
+            "tokens_per_s": 0.0,
+            "backend": type(self).__name__,
+            "gpu_layers": None,
+            "accelerator": "accelerator_unknown",
+        }
+        return ok
 
     @_serialised_request
     def check_capabilities(

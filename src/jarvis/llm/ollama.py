@@ -28,7 +28,10 @@ def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None
     endpoint responds as an Ollama server, or ``(False, None)`` on failure or
     non-Ollama response."""
     try:
-        resp = requests.get(f"{base_url}/api/version", timeout=timeout)
+        connect_to = min(0.3, timeout)
+        resp = requests.get(
+            f"{base_url}/api/version", timeout=(connect_to, timeout)
+        )
         if resp.status_code != 200:
             return False, None
         data = resp.json()
@@ -336,9 +339,19 @@ class OllamaBackend(LLMBackend):
         return None
 
     def list_models(self, timeout_sec: float = 5.0) -> List[str]:
-        """List installed Ollama models via ``GET /api/tags``."""
+        """List installed Ollama models via ``GET /api/tags``.
+
+        The connect phase gets its own budget (1 s): the total value is the
+        read budget. Startup reachability probing runs this in tight
+        churn loops when no server is up, and a 1 s connect cap keeps the
+        no-server case deterministic without sacrificing the read window.
+        """
         try:
-            resp = requests.get(f"{self._base_url}/api/tags", timeout=timeout_sec)
+            connect_to = min(0.3, timeout_sec)
+            resp = requests.get(
+                f"{self._base_url}/api/tags",
+                timeout=(connect_to, timeout_sec),
+            )
             resp.raise_for_status()
             data = resp.json()
             models = data.get("models", []) if isinstance(data, dict) else []

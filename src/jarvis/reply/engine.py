@@ -924,13 +924,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         dialogue_memory.hot_cache_get(_router_cache_key)
         if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
     )
-    if _deterministic_routed:
-        routed_tools = list(_deterministic_routed)
-        debug_log(
-            f"tool router bypassed by deterministic route: {routed_tools}",
-            "planning",
-        )
-    elif isinstance(_cached_routed, list):
+    if isinstance(_cached_routed, list):
         routed_tools = list(_cached_routed)
         debug_log("tool router served from hot-window cache", "planning")
     else:
@@ -967,6 +961,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             and not _router_returned_full_catalog
         ):
             dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
+
+    # The deterministic route wins the final allow-list when it fires; the
+    # router above still ran (its pick is what the cache stores), so the
+    # router stays the authoritative picker for everything the deterministic
+    # table does not cover.
+    if _deterministic_routed:
+        routed_tools = list(_deterministic_routed)
+        debug_log(
+            f"tool router won by deterministic route: {routed_tools}",
+            "planning",
+        )
 
     # Tool carry-over guard: when the previous assistant turn invoked a
     # tool that FAILED (success=False on the ToolExecutionResult), union
@@ -1037,17 +1042,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         and _query_word_count <= 8
         and getattr(cfg, "planner_enabled", True)
     )
-    if _deterministic_routed:
-        # The route itself is already the one-step plan. This saves a second
-        # queued llama.cpp request and preserves the exact tool name for the
-        # direct-execution resolver.
-        primary = next(
-            (name for name in _deterministic_routed if name != "stop"),
-            _deterministic_routed[0],
-        )
-        action_plan = [primary]
-        debug_log(f"planner bypassed by deterministic route: {primary}", "planning")
-    elif _skip_planner:
+    if _skip_planner:
         # Positive signal: no tools, no memory needed. The warm profile
         # (injected unconditionally below) provides user-context for the
         # chat model; memory enrichment is skipped as if the planner had
