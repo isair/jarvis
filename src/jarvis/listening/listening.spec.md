@@ -6,8 +6,17 @@ This document outlines the voice listening architecture. The system uses a **tra
 
 ### Capture format and health
 
-The input stream tries the configured sample rate and falls back to the selected
-device's native rate when rejected. Frames always span the configured 10, 20 or
+The input stream tries mono at the configured sample rate. Unsupported channel
+counts or sample rates trigger bounded retries on the same selected input:
+mono, stereo and the device's advertised maximum channel count, at the configured
+and native rates, without duplicate attempts. Access and device-availability
+errors are not retried as format failures. Both the Windows permission probe and
+continuous capture use this negotiation and input selection. Name matching skips
+output-only devices; a missing named microphone produces an actionable error
+rather than silently selecting another input. Multichannel samples are averaged
+to mono before framing and speech detection.
+
+Frames always span the configured 10, 20 or
 30 ms at the actual capture rate; unsupported frame durations use 20 ms. Partial
 callback blocks are retained until a complete frame is available and discarded
 on audio-state resets. WebRTC VAD receives a 16 kHz mono PCM copy, including when

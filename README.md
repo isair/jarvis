@@ -156,6 +156,13 @@ Connect MCP servers for browser automation, Home Assistant, GitHub, databases an
 ## Troubleshooting
 
 <details>
+<summary><strong>Bluetooth microphone will not start</strong></summary>
+
+Select the headset's microphone/input profile in Settings, not its playback device. Jarvis tries compatible mono, stereo and device-native capture formats and converts multichannel input to mono for speech recognition. If it still fails, check that the microphone works in your system's recorder and share the error from Logs; Bluetooth driver/profile limitations can still prevent capture.
+
+</details>
+
+<details>
 <summary><strong>Linux says Listening, but never hears speech</strong></summary>
 
 Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Enable `voice_debug` in Settings for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).

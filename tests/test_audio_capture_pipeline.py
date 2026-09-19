@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from jarvis.listening.listener import VoiceListener
+import jarvis.listening.listener as capture
 
 pytestmark = pytest.mark.unit
 
@@ -112,3 +113,120 @@ def test_callback_exception_is_not_silenced(capsys):
     obj._on_audio(BrokenInput(), 960, None, None)
     obj._check_audio_health(now=6)
     assert 'capture buffer failed' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('rate,channels', [(16000, 2), (48000, 2), (44100, 4), (48000, 1)])
+def test_capture_negotiates_format_on_selected_device(monkeypatch, rate, channels):
+    opened = []
+    stream = object()
+
+    def open_stream(**kwargs):
+        assert kwargs['device'] == 7
+        opened.append((kwargs['samplerate'], kwargs['channels']))
+        if kwargs['channels'] != channels:
+            raise RuntimeError('Invalid number of channels', -9998)
+        if kwargs['samplerate'] != rate:
+            raise RuntimeError('Invalid sample rate', -9997)
+        assert kwargs['blocksize'] == rate * 20 // 1000
+        return stream
+
+    monkeypatch.setattr(capture.sd, 'InputStream', open_stream)
+    def device_info(device=None, **kwargs):
+        assert device == 7
+        return {'max_input_channels': channels, 'default_samplerate': rate}
+    monkeypatch.setattr(capture.sd, 'query_devices', device_info)
+    result, actual_rate, actual_channels = capture._open_input_stream(
+        16000, 20, {'device': 7}, callback=lambda *args: None,
+    )
+    assert result is stream
+    assert (actual_rate, actual_channels) == (rate, channels)
+    assert len(opened) == len(set(opened)) <= 6
+
+
+@pytest.mark.parametrize('failure', ['Microphone access denied', 'Device unavailable', 'Device busy'])
+def test_capture_does_not_retry_non_format_errors(monkeypatch, failure):
+    def open_stream(**kwargs):
+        raise RuntimeError(failure)
+    def unexpected_query(*args, **kwargs):
+        pytest.fail('must not negotiate a permission or device availability failure')
+    monkeypatch.setattr(capture.sd, 'InputStream', open_stream)
+    monkeypatch.setattr(capture.sd, 'query_devices', unexpected_query)
+    with pytest.raises(RuntimeError, match=failure):
+        capture._open_input_stream(16000, 20, {})
+
+
+def test_multichannel_capture_preserves_signal_outside_first_channel():
+    obj = listener(48000)
+    source = np.zeros((obj._frame_samples * 2 + 13, 2), dtype=np.float32)
+    source[:, 1] = np.linspace(-.5, .5, len(source))
+    frames = []
+    for block in np.array_split(source, 7):
+        frames.extend(obj._audio_frames(block))
+    output = np.concatenate(frames + [obj._pending_audio])
+    np.testing.assert_allclose(output, source.mean(axis=1))
+    assert np.max(np.abs(output)) > 0
+
+
+def test_unsupported_device_exhausts_bounded_formats(monkeypatch):
+    attempts = []
+    def reject(**kwargs):
+        attempts.append((kwargs['samplerate'], kwargs['channels']))
+        raise RuntimeError('Invalid number of channels', -9998)
+    monkeypatch.setattr(capture.sd, 'InputStream', reject)
+    def default_input(**kwargs):
+        assert kwargs == {'kind': 'input'}
+        return {'max_input_channels': 4, 'default_samplerate': 48000}
+    monkeypatch.setattr(capture.sd, 'query_devices', default_input)
+    with pytest.raises(RuntimeError, match='Invalid number of channels'):
+        capture._open_input_stream(16000, 20, {})
+    assert len(attempts) == len(set(attempts)) == 6
+
+
+def test_access_failure_during_negotiation_stops_retries(monkeypatch):
+    attempts = []
+    def reject(**kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            raise RuntimeError('Invalid number of channels', -9998)
+        if len(attempts) > 2:
+            pytest.fail('must stop after an access failure')
+        raise RuntimeError('Access denied')
+    monkeypatch.setattr(capture.sd, 'InputStream', reject)
+    monkeypatch.setattr(capture.sd, 'query_devices', lambda **kwargs: {
+        'max_input_channels': 2, 'default_samplerate': 48000,
+    })
+    with pytest.raises(RuntimeError, match='Access denied'):
+        capture._open_input_stream(16000, 20, {})
+
+
+@pytest.mark.parametrize('serialise', [False, True])
+def test_stream_open_lock_policy_includes_retries(monkeypatch, serialise):
+    locked = []
+    class Lock:
+        def __enter__(self):
+            locked.append(True)
+        def __exit__(self, *args):
+            locked.pop()
+    monkeypatch.setattr(capture, 'portaudio_lock', Lock())
+    def open_stream(**kwargs):
+        assert bool(locked) == serialise
+        if kwargs['channels'] == 1:
+            raise RuntimeError('Invalid number of channels', -9998)
+        return 'stream'
+    monkeypatch.setattr(capture.sd, 'InputStream', open_stream)
+    monkeypatch.setattr(capture.sd, 'query_devices', lambda **kwargs: {
+        'max_input_channels': 2, 'default_samplerate': 16000,
+    })
+    assert capture._open_input_stream(16000, 20, {}, serialise=serialise)[0] == 'stream'
+    assert not locked
+
+
+def test_missing_named_input_does_not_record_another_microphone(monkeypatch, capsys):
+    obj = listener()
+    obj.cfg.voice_device = 'Disconnected Headset'
+    monkeypatch.setattr(capture.sd, 'query_devices', lambda: [
+        {'name': 'Built-in Microphone', 'max_input_channels': 1},
+    ])
+    monkeypatch.setattr(capture.sd, 'InputStream', lambda **kwargs: pytest.fail('unexpected capture'))
+    obj.run()
+    assert 'Selected microphone not found' in capsys.readouterr().out
